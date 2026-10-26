@@ -90,6 +90,11 @@ var routeFloors = map[string]floorKind{
 	"POST /api/v1/freeze/engage":  floorCapability,
 	"POST /api/v1/freeze/release": floorCapability,
 
+	// Tag writes (ADR-0050): a human Account at operator or above, decided in
+	// the capability layer behind AuthorizeControl(ControlTagWrite).
+	"POST /api/v1/nodes/{node_id}/tags": floorCapability,
+	"POST /api/v1/tags":                 floorCapability,
+
 	// Identity management (#297; #653: the floor moved into capability.AccountAdmin
 	// behind AuthorizeControl; this surface renders the refusal and re-derives
 	// nothing).

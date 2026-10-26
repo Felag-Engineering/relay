@@ -21,8 +21,8 @@ import (
 // capability/selector_test.go (TestSelectorMatchesStateNeverReadsForgedLabels),
 // beside the Selector code that would otherwise be tempted to read one. The
 // security-lane assertion — state: is never a valid target for a relay:
-// write — is explicitly NOT here; it lands on the write path in #430
-// (ADR-0034, final Consequence).
+// write — is explicitly NOT here; it lands with the write path that engages a
+// quarantine (ADR-0034, final Consequence).
 
 // stateLabelFieldNames are the names a state-label field on Node or Report
 // might plausibly have been given. None of them may exist.

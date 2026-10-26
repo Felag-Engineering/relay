@@ -86,6 +86,42 @@ func TestPlanReportsUnsupportedDistinctFromDeny(t *testing.T) {
 	}
 }
 
+// TestPlan_ResolvesATagSelector: a tag: Selector reaches the execution path,
+// not only the read lane. A Plan over tag:team=payments resolves the tagged
+// Node alone, because ParseSelector accepts the namespace on every surface that
+// dispatches.
+func TestPlan_ResolvesATagSelector(t *testing.T) {
+	reg := registry.NewInMemory()
+	for _, id := range []string{"node-0", "node-1"} {
+		if _, err := reg.Upsert(registry.Report{NodeID: id}); err != nil {
+			t.Fatalf("Upsert(%s): %v", id, err)
+		}
+	}
+	if err := reg.ApplyTagChanges([]registry.TagChange{
+		{NodeID: "node-1", Key: "team", After: registry.TagValue{Set: true, Value: "payments"}},
+	}); err != nil {
+		t.Fatalf("ApplyTagChanges: %v", err)
+	}
+	var log []string
+	conduit := newFakeConduit(&log)
+	conduit.connected["node-0"] = true
+	conduit.connected["node-1"] = true
+	conduit.verdicts["node-1"] = jobs.Verdict{Allowed: true}
+	svc, _, _ := newPlanTestService(t, reg, conduit)
+
+	sel, err := ParseSelector("tag:team=payments")
+	if err != nil {
+		t.Fatalf("ParseSelector: %v", err)
+	}
+	pr, err := svc.Plan(context.Background(), Principal{Account: "alice"}, sel, jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"})
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if pr.Matched != 1 || len(pr.Verdicts) != 1 || pr.Verdicts[0].NodeID != "node-1" {
+		t.Errorf("Plan matched %d with verdicts %+v, want exactly node-1", pr.Matched, pr.Verdicts)
+	}
+}
+
 // TestPlanReturnsPerNodeVerdictsNoJobOrTask is the core acceptance line: a
 // Plan against two connected Nodes (one allow, one deny-with-rule) returns
 // both verdicts and creates NO Job/Task — the repos are never touched.

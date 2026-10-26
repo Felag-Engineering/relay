@@ -1215,6 +1215,55 @@ func TestHandleGetNode_StateLabels(t *testing.T) {
 	})
 }
 
+// TestHandleGetNode_ReturnsTagsAsTheirOwnMap is QRY-40 on the Control API: a
+// Node's tags render as tag_labels, a map of their own that never carries or
+// is carried by the other namespaces, and an empty object when the Node has
+// none.
+func TestHandleGetNode_ReturnsTagsAsTheirOwnMap(t *testing.T) {
+	reg := registry.NewInMemory()
+	for _, id := range []string{"node-tagged", "node-bare"} {
+		if _, err := reg.Upsert(registry.Report{NodeID: id}); err != nil {
+			t.Fatalf("Upsert(%s): %v", id, err)
+		}
+	}
+	if err := reg.ApplyTagChanges([]registry.TagChange{
+		{NodeID: "node-tagged", Key: "team", After: registry.TagValue{Set: true, Value: "payments"}},
+	}); err != nil {
+		t.Fatalf("ApplyTagChanges: %v", err)
+	}
+	lane := newNodeReaderLane(t, reg, &fakeCapabilityAuditSink{}, fixedNow, 0)
+	h := newTestHandler(Deps{NodeReader: lane, Audit: &fakeAuditor{}, Now: fixedNow})
+
+	read := func(id string) (nodeResponse, string) {
+		t.Helper()
+		rec := do(t, h, http.MethodGet, "/api/v1/nodes/"+id, nil)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d; body = %s", rec.Code, rec.Body.String())
+		}
+		var out nodeResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+			t.Fatalf("json.Unmarshal: %v", err)
+		}
+		return out, rec.Body.String()
+	}
+
+	tagged, _ := read("node-tagged")
+	if tagged.TagLabels["team"] != "payments" || len(tagged.TagLabels) != 1 {
+		t.Errorf("tag_labels = %v, want {team: payments}", tagged.TagLabels)
+	}
+	if _, ok := tagged.NodeLabels["team"]; ok {
+		t.Error("a tag leaked into node_labels")
+	}
+	if _, ok := tagged.RelayLabels["team"]; ok {
+		t.Error("a tag leaked into relay_labels")
+	}
+
+	bare, raw := read("node-bare")
+	if bare.TagLabels == nil || len(bare.TagLabels) != 0 || !strings.Contains(raw, `"tag_labels":{}`) {
+		t.Errorf("tag_labels = %#v in %s, want an empty object, not null", bare.TagLabels, raw)
+	}
+}
+
 // TestHandleGetNode_FailsClosedWhenTheReadCannotBeRecorded is the Control
 // API's half of QRY-28's fail-closed proof, and closes the "QRY-17, Control
 // API half" no-row gap: a real *capability.ReadLane over an AuditSink whose

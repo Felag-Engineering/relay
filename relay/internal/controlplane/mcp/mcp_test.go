@@ -233,6 +233,13 @@ func newTestServerWithConcurrency(t *testing.T, accountID string, readCap, mutat
 	}.WithNodeLabels(map[string]string{"env": "prod"})); err != nil {
 		t.Fatalf("seed node B: %v", err)
 	}
+	// Node B carries a tag. Tags are written only by a human Account through
+	// the Control API, so the fixture seeds one the way no MCP session can.
+	if err := reg.ApplyTagChanges([]registry.TagChange{
+		{NodeID: nodeB, Key: "team", After: registry.TagValue{Set: true, Value: "payments"}},
+	}); err != nil {
+		t.Fatalf("seed node B tag: %v", err)
+	}
 
 	policyCache := policyview.New()
 	policyCache.Set(nodeA, policyview.Snapshot{
@@ -555,46 +562,125 @@ func decodeResult(t *testing.T, res *sdkmcp.CallToolResult, out any) {
 	}
 }
 
-// TestMCP_ListNodes_TagSelectorIsRefusedNotEmpty is #560's acceptance at the
-// surface the issue is actually about.
-//
-// Before this, list_nodes advertised tag: in its schema and answered a tag:
-// filter with a successful, EMPTY Node list — which an AI-agent reads as "no Node
-// carries that tag" rather than "this namespace is not implemented". Asserting
-// only that the parser refuses the term would not have caught that, because
-// the defect was that the surface turned a false predicate into a 200.
-//
-// So this asserts the tool ERRORS, and that the message names the namespace
-// and says it is not resolvable yet — an AI-agent that cannot tell
-// "unimplemented" from "matched nothing" is the whole complaint. The message
-// carries no tracker number: an issue number means nothing to the AI-agent
-// reading it, and rots.
-func TestMCP_ListNodes_TagSelectorIsRefusedNotEmpty(t *testing.T) {
+// TestMCP_ListNodes_TagSelectorResolves is QRY-41's tag half on MCP: a tag:
+// term resolves against tag-space alone. node B carries the tag team=payments
+// and the node: label env=prod, node A carries neither.
+func TestMCP_ListNodes_TagSelectorResolves(t *testing.T) {
 	ts := newTestServer(t)
 	session := ts.connect(t)
 
-	res := callTool(t, session, "list_nodes", map[string]any{"selector": "tag:env=prod"})
-	if !res.IsError {
+	ids := func(selector string) []string {
+		t.Helper()
+		res := callTool(t, session, "list_nodes", map[string]any{"selector": selector})
+		if res.IsError {
+			t.Fatalf("list_nodes(%q): %s", selector, toolErrorText(t, res))
+		}
 		var out mcp.ListNodesOutput
 		decodeResult(t, res, &out)
-		t.Fatalf("a tag: selector succeeded with %d Nodes — an empty list here reads as "+
-			"\"no Node carries that tag\", not \"tag: is not implemented\"", len(out.Nodes))
+		var got []string
+		for _, n := range out.Nodes {
+			got = append(got, n.NodeID)
+		}
+		return got
 	}
-	msg := toolErrorText(t, res)
-	for _, want := range []string{"tag:", "not resolvable yet"} {
-		if !strings.Contains(msg, want) {
-			t.Errorf("the refusal does not mention %q, so the caller cannot tell why: %s", want, msg)
+
+	if got := ids("tag:team=payments"); len(got) != 1 || got[0] != ts.nodeB {
+		t.Errorf("list_nodes(tag:team=payments) = %v, want only %s", got, ts.nodeB)
+	}
+	// env=prod is a node: label on node B; tag: never reads node-space.
+	if got := ids("tag:env=prod"); len(got) != 0 {
+		t.Errorf("list_nodes(tag:env=prod) = %v, want none: node B carries env=prod as a node: label, not a tag", got)
+	}
+	if got := ids("node:env=prod, tag:team=payments"); len(got) != 1 || got[0] != ts.nodeB {
+		t.Errorf("list_nodes(node:env=prod, tag:team=payments) = %v, want only %s", got, ts.nodeB)
+	}
+}
+
+// TestMCP_ListNodes_RefusesMalformedBareAndUnknownStateTerms is QRY-42: a
+// malformed term, a bare key and an unknown state: key are refused, never
+// answered with an empty list. A tag: term with no value is one of the
+// malformed terms, not a tag refusal, and a refused Selector writes no read
+// record.
+func TestMCP_ListNodes_RefusesMalformedBareAndUnknownStateTerms(t *testing.T) {
+	for name, selector := range map[string]string{
+		"malformed node term":     "node:role",
+		"malformed tag term":      "tag:team",
+		"bare key":                "role=web",
+		"unknown state: key":      "state:bogus",
+		"empty tag key":           "tag:=payments",
+		"unknown namespace":       "team:x=y",
+		"good term and a bad one": "tag:team=payments, node:role",
+	} {
+		t.Run(name, func(t *testing.T) {
+			ts := newTestServer(t)
+			session := ts.connect(t)
+
+			before := len(auditReadRecords(t, ts))
+			res := callTool(t, session, "list_nodes", map[string]any{"selector": selector})
+			if !res.IsError {
+				var out mcp.ListNodesOutput
+				decodeResult(t, res, &out)
+				t.Fatalf("list_nodes(%q) succeeded with %d Nodes, want a refusal", selector, len(out.Nodes))
+			}
+			// The lane's own error would double the internal package prefix;
+			// list_nodes maps it back to the wrap run_operation and raw_exec use.
+			if msg := toolErrorText(t, res); !strings.HasPrefix(msg, "invalid selector: capability:") {
+				t.Errorf("refusal text = %q, want prefix %q", msg, "invalid selector: capability:")
+			}
+			if after := len(auditReadRecords(t, ts)); after != before {
+				t.Errorf("a refused Selector added %d read records; the trail is not caller storage", after-before)
+			}
+		})
+	}
+}
+
+// TestMCP_NodeReads_ReturnTagsAsTheirOwnMap is QRY-40 on MCP: list_nodes and
+// describe_node return a Node's tags as tag_labels, a map of their own that is
+// never merged into node_labels or relay_labels, and an empty object when the
+// Node has none.
+func TestMCP_NodeReads_ReturnTagsAsTheirOwnMap(t *testing.T) {
+	ts := newTestServer(t)
+	session := ts.connect(t)
+
+	check := func(where string, n mcp.NodeItem) {
+		t.Helper()
+		switch n.NodeID {
+		case ts.nodeB:
+			if n.TagLabels["team"] != "payments" || len(n.TagLabels) != 1 {
+				t.Errorf("%s: node B tag_labels = %v, want {team: payments}", where, n.TagLabels)
+			}
+			if _, ok := n.NodeLabels["team"]; ok {
+				t.Errorf("%s: a tag leaked into node_labels: %v", where, n.NodeLabels)
+			}
+			if _, ok := n.RelayLabels["team"]; ok {
+				t.Errorf("%s: a tag leaked into relay_labels: %v", where, n.RelayLabels)
+			}
+		case ts.nodeA:
+			if n.TagLabels == nil || len(n.TagLabels) != 0 {
+				t.Errorf("%s: node A tag_labels = %#v, want an empty object, not null", where, n.TagLabels)
+			}
 		}
 	}
-	// The lane's own error renders "capability: invalid query filter:
-	// capability: tag: selectors …", doubling the internal package prefix —
-	// list_nodes must map it back to the same "invalid selector: <parse
-	// error>" wrap run_operation/raw_exec already use, so this cannot drift
-	// back to the doubled form silently.
-	const wantPrefix = "invalid selector: capability:"
-	if !strings.HasPrefix(msg, wantPrefix) {
-		t.Errorf("refusal text = %q, want prefix %q (not the doubled "+
-			"\"capability: invalid query filter: capability: …\" lane wrap)", msg, wantPrefix)
+
+	var list mcp.ListNodesOutput
+	decodeResult(t, callTool(t, session, "list_nodes", nil), &list)
+	for _, n := range list.Nodes {
+		check("list_nodes", n)
+	}
+	if len(list.Nodes) != 2 {
+		t.Fatalf("list_nodes returned %d Nodes, want 2", len(list.Nodes))
+	}
+
+	for _, id := range []string{ts.nodeA, ts.nodeB} {
+		var d mcp.DescribeNodeOutput
+		decodeResult(t, callTool(t, session, "describe_node", map[string]any{"node_id": id}), &d)
+		check("describe_node", d.NodeItem)
+	}
+
+	// The wire shape: null never appears for a Node with no tags.
+	raw := resultText(t, callTool(t, session, "list_nodes", map[string]any{"selector": "node:role=web"}))
+	if strings.Contains(raw, `"tag_labels":null`) || !strings.Contains(raw, `"tag_labels":{}`) {
+		t.Errorf("a Node with no tags did not render tag_labels as {}: %s", raw)
 	}
 }
 
@@ -709,7 +795,7 @@ func TestMCP_Outdated(t *testing.T) {
 	})
 }
 
-// TestMCP_ListNodes_ReturnsMatchesInNodeIdOrder is QRY-3's ordering half at
+// TestMCP_ListNodes_ReturnsMatchesInNodeIdOrder is QRY-41's ordering half at
 // the surface the claim names: list_nodes returns the matches in Node-ID
 // order, and this adapter does not re-order what the capability read lane
 // handed it. The lane's own half is capability's
@@ -1170,11 +1256,10 @@ func TestMCP_ReadToolsRecordThroughTheRealLane(t *testing.T) {
 
 // TestMCP_ListNodes_SelectorIsResolvedByTheLane is QRY-28's Selector-routing
 // proof: the lane records the CANONICAL Selector form, not the caller's raw
-// bytes, and a refused tag: Selector (validated before it is recorded)
-// leaves nothing on the trail — the deliberate behaviour change named in the
-// PR body. TestMCP_ListNodes_TagSelectorIsRefusedNotEmpty proves the refusal
-// text itself keeps passing unchanged; this test proves what the lane does
-// to the trail around that same call.
+// bytes, and a refused Selector (validated before it is recorded) leaves
+// nothing on the trail. TestMCP_ListNodes_RefusesMalformedBareAndUnknownStateTerms
+// proves the refusal text itself; this test proves what the lane does to the
+// trail around that same call.
 func TestMCP_ListNodes_SelectorIsResolvedByTheLane(t *testing.T) {
 	ts := newTestServer(t)
 	session := ts.connect(t)
@@ -1195,13 +1280,13 @@ func TestMCP_ListNodes_SelectorIsResolvedByTheLane(t *testing.T) {
 	}
 
 	before := len(auditReadRecords(t, ts))
-	res := callTool(t, session, "list_nodes", map[string]any{"selector": "tag:env=prod"})
+	res := callTool(t, session, "list_nodes", map[string]any{"selector": "node:role"})
 	if !res.IsError {
-		t.Fatal("list_nodes(tag:env=prod): IsError = false, want true")
+		t.Fatal("list_nodes(node:role): IsError = false, want true")
 	}
 	after := len(auditReadRecords(t, ts))
 	if after != before {
-		t.Errorf("a refused tag: Selector left %d new read record(s), want 0 (the lane validates before it records)", after-before)
+		t.Errorf("a refused Selector left %d new read record(s), want 0 (the lane validates before it records)", after-before)
 	}
 }
 

@@ -14,6 +14,7 @@ import (
 
 	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 	"github.com/Felag-Engineering/relay/relay/internal/policyalias"
+	"github.com/Felag-Engineering/relay/relay/internal/registry"
 )
 
 // Kind distinguishes what kind of event a Record describes: a dispatch
@@ -216,6 +217,12 @@ const (
 	// together with the change itself (PolicyAliasAppender).
 	KindPolicyAlias = "policy_alias"
 
+	// KindTagWrite records one tag: label added, replaced or removed on one
+	// Node. NodeID names the Node; Reason carries the key and the old and new
+	// values. It is written only together with the change itself
+	// (TagWriteAppender).
+	KindTagWrite = "tag_write"
+
 	// The Console's human authentication lane
 	// (docs/design/console/12-login.md). Every attempt is recorded, successful
 	// or not — this is the first link in the chain the UI advisory requires
@@ -329,6 +336,7 @@ var allKinds = []string{
 	KindAPITokenMint,
 	KindAPITokenRevoke,
 	KindPolicyAlias,
+	KindTagWrite,
 }
 
 // Kinds returns every Kind this package defines, in declaration order.
@@ -411,6 +419,7 @@ var notAnAuthFailureKinds = []string{
 	KindAPITokenMint,
 	KindAPITokenRevoke,
 	KindPolicyAlias,
+	KindTagWrite,
 }
 
 // AuthFailureKinds is every Kind recording a credential that was submitted
@@ -607,4 +616,17 @@ type Repository interface {
 // policyalias.ErrTaken when another fingerprint carries c.To.
 type PolicyAliasAppender interface {
 	AppendWithPolicyAlias(ctx context.Context, r Record, c policyalias.Change) error
+}
+
+// TagWriteAppender applies a batch of tag changes and appends their records to
+// the hash chain in ONE transaction: nil means every change and every record
+// landed, an error means none did. rs[i] records changes[i]. It is kept off
+// Repository, exactly as PolicyAliasAppender is, so a Repository that cannot
+// make the two atomic simply does not offer it.
+//
+// It returns registry.ErrTagChanged when a tag no longer holds its Before
+// value, registry.ErrTooManyTags when a change would leave a Node over
+// registry.MaxTagsPerNode, and registry.ErrNotFound for an unknown Node.
+type TagWriteAppender interface {
+	AppendWithTagWrite(ctx context.Context, rs []Record, changes []registry.TagChange) error
 }

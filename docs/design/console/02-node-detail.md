@@ -189,8 +189,8 @@ link here and a GET form on Fleet; neither writes anything.
       Policy (D34); the property is structural, not a sentence.
 - [ ] Editing a `tag:` label demands a human Account at `operator` or above and no step-up, and
       is audited with the old and new values (MVP, ADR-0050).
-      **Not implemented (#430).** `tag:` has no storage on the Node record yet, so no chip renders
-      and no control exists.
+      **Not implemented on this screen (#594).** Tags are stored on the Node record and written
+      through the Control API; this screen renders no tag chip and offers no control yet.
 - [x] No surface anywhere writes a `node:` or `state:` label.
 - [x] Facts appear on this page and no other. **Qualified:** the hostname names a fleet row, this
       page's heading and each Compare column, always beside the verified Node ID, never diffed,

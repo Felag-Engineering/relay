@@ -27,7 +27,6 @@ package console
 // the same code. A second, Console-local parser that agreed today would drift.
 
 import (
-	"errors"
 	"maps"
 	"net/http"
 	"net/url"
@@ -100,9 +99,10 @@ type fleetNode struct {
 	// never as an edit affordance — nobody sets these, including admins.
 	States []Label
 
-	// Labels are the declared namespaces: node:, tag:, relay:. Separate from
-	// States because the difference between an observation and a declaration is
-	// the whole point of the namespace model.
+	// Labels are the declared namespaces drawn on this screen: node: and relay:.
+	// Tags are not drawn here yet. Separate from States because the difference
+	// between an observation and a declaration is the whole point of the
+	// namespace model.
 	Labels []Label
 
 	Quarantined bool
@@ -197,10 +197,10 @@ type facetValue struct {
 	// need to stay apart: an observation the Relay derived, versus an
 	// irreversible thing a person did.
 	Fenced string
-	// Targetable is false for a value the Selector parser cannot express yet
-	// (a `tag:` term). Rendered as text rather than a
-	// link, because a filter link that produced a parse error would teach an
-	// operator that the filter box is unreliable.
+	// Targetable is false for a value the Selector parser cannot express (for
+	// example a self-reported value outside the Label allowlist). Rendered as text rather
+	// than a link, because a filter link that produced a parse error would teach
+	// an operator that the filter box is unreliable.
 	Targetable bool
 
 	// key is the map key this value was built from — the FULL self-reported
@@ -967,18 +967,16 @@ func stateChips(ls []nodestate.Label) []Label {
 	return out
 }
 
-// declaredChips returns the labels somebody SET: node:, tag: and relay:.
+// declaredChips returns the labels somebody SET that this screen draws: node:
+// and relay:.
 //
-// `tag:` is DELIBERATELY ABSENT. It has no storage (ADR-0020), so this screen
-// has no source for one, and the honest rendering is none.
-//
-// Tags are not read from a `tag.` key prefix inside the relay-label map. If
-// `tag:` storage ever lands them there, the loop below would render an operator's
-// ad-hoc grouping label as a `relay:` chip — lock glyph, security hue,
-// data-lane="security" — which is the single confusion the four-namespace
-// grammar exists to prevent (invariant 7: `tag:` is never a valid security-lane
-// target). When `tag:` storage lands, split on the prefix HERE, in one place, and assert
-// that a tag never renders with the security lane.
+// `tag:` is DELIBERATELY ABSENT. Tags live in their own map (Node.TagLabels), so
+// the relay loop below can never render one as a `relay:` chip — lock glyph,
+// security hue, data-lane="security" — which is the single confusion the
+// four-namespace grammar exists to prevent (invariant 7: `tag:` is never a valid
+// security-lane target). This screen draws no tag chip; the chip, when it is
+// built, is added HERE, in one place, and must never render with the security
+// lane.
 func declaredChips(n registry.Node) []Label {
 	var out []Label
 	for _, k := range slices.Sorted(maps.Keys(n.NodeLabels)) {
@@ -990,39 +988,21 @@ func declaredChips(n registry.Node) []Label {
 	return out
 }
 
-// parseFleetFilter runs the filter through the real Selector parser, refusing
-// `tag:` — the one namespace it still cannot express — with a message that
-// names the reason.
+// parseFleetFilter runs the filter through the real Selector parser and renders
+// a refusal in this screen's register.
 //
-// `tag:` is in the model (invariant 7, ADR-0020) and not resolvable: it has no
-// storage on registry.Node. The REFUSAL lives in capability.ParseSelector, not
-// here: a surface-local guard is how MCP's list_nodes and this box would
-// drift, one answering the same term with 200 and an empty list while the
-// other refused it. What is left here is rendering: recognise the sentinel and say
-// it in this screen's register, never re-decide it.
-//
-// `state:` is NOT special-cased at all (ADR-0034): it resolves through
-// capability.ParseSelector/Matches exactly like node: and relay:, so a
-// `state:offline` filter narrows the table the same way a facet click does
-// — one resolver, no surface-local evaluation.
+// Every namespace resolves through capability.ParseSelector and Matches, so the
+// filter box and MCP's list_nodes answer the same term the same way and this
+// box evaluates nothing itself. `state:offline` narrows the table the same way
+// a facet click does (ADR-0034) — one resolver, no surface-local evaluation.
 func parseFleetFilter(s string) (capability.Selector, error) {
 	sel, err := capability.ParseSelector(s)
-	switch {
-	case errors.Is(err, capability.ErrSelectorTagUnsupported):
-		// Rendered in this screen's own words: the term DOES carry a prefix, so
-		// the generic arm below would name the wrong problem.
-		return capability.Selector{}, filterErr(tagFilterRefusal)
-	case err != nil:
+	if err != nil {
 		msg := sentenceCase(strings.TrimPrefix(err.Error(), "capability: "))
 		return capability.Selector{}, filterErr(msg + filterTermExample)
 	}
 	return sel, nil
 }
-
-// tagFilterRefusal is the Fleet view's rendering of the capability layer's
-// tag: sentinel. The term does carry a prefix, so the generic parse-error
-// wording would name the wrong problem.
-const tagFilterRefusal = "This Relay cannot filter on tag: labels yet; filter on node:, relay: or state: instead."
 
 // filterTermExample follows any other parse error, so the operator sees the
 // shape a term takes.

@@ -92,6 +92,10 @@ func TestNoSeparatePreflightRouteIsServed(t *testing.T) {
 		"POST /api/v1/freeze/engage":            true,
 		"POST /api/v1/freeze/release":           true,
 
+		// Tag writes.
+		"POST /api/v1/nodes/{node_id}/tags": true,
+		"POST /api/v1/tags":                 true,
+
 		// Identity management (Accounts / API Tokens).
 		"POST /api/v1/accounts":                true,
 		"GET /api/v1/accounts":                 true,

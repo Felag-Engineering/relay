@@ -99,7 +99,52 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 		return true
 	})
 
-	return append(violations, policyAliasViolations(fileName, file)...)
+	violations = append(violations, policyAliasViolations(fileName, file)...)
+	return append(violations, tagInternalWriteViolations(fileName, file)...)
+}
+
+// tagInternalWriteNames are the tag write's internal seams: the unfloored
+// recorder, the audit repository's atomic write, and the in-memory test seeder.
+// This surface reaches a tag write only through its own TagWriter seam, whose
+// method WriteTag is the capability layer's floored entry, so WriteTag is
+// deliberately not in this list.
+var tagInternalWriteNames = map[string]bool{
+	"RecordTagWrite":     true,
+	"AppendWithTagWrite": true,
+	"ApplyTagChanges":    true,
+	"TagWriteRecorder":   true,
+	"TagWriteAppender":   true,
+}
+
+// tagInternalWriteViolations is the tag rule of dispatchViolations,
+// unconditional in every file: the Control API holds the concrete audit
+// repository and audit sink, which offer the tag write without its floor, so
+// naming any of those seams, by selector or as a declared seam method, is a
+// second control path to a tag (invariant 7, invariant 10, ADR-0050).
+func tagInternalWriteViolations(fileName string, file *ast.File) []string {
+	var violations []string
+	ast.Inspect(file, func(n ast.Node) bool {
+		switch v := n.(type) {
+		case *ast.SelectorExpr:
+			if tagInternalWriteNames[v.Sel.Name] {
+				violations = append(violations, fmt.Sprintf(
+					"%s references %s — a tag is written only through the capability layer's TagWriter, whose floor this seam lacks",
+					fileName, v.Sel.Name))
+			}
+		case *ast.InterfaceType:
+			for _, m := range v.Methods.List {
+				for _, name := range m.Names {
+					if tagInternalWriteNames[name.Name] {
+						violations = append(violations, fmt.Sprintf(
+							"%s declares a seam method %s — a tag is written only through the capability layer's TagWriter, whose floor this seam lacks",
+							fileName, name.Name))
+					}
+				}
+			}
+		}
+		return true
+	})
+	return violations
 }
 
 // policyAliasViolations is the Policy alias rule of dispatchViolations,
@@ -254,6 +299,46 @@ type AliasReader interface {
 }
 `,
 			wantSubstr: "declares a seam method PolicyAliases",
+		},
+		{
+			name: "asserting an audit repository to the atomic tag write is refused",
+			src: `package api
+import "github.com/Felag-Engineering/relay/relay/internal/audit"
+func f(x audit.Repository) {
+	_ = x.(audit.TagWriteAppender)
+}
+`,
+			wantSubstr: "references TagWriteAppender",
+		},
+		{
+			name: "a seam declaring the unfloored tag recorder is refused",
+			src: `package api
+import "context"
+type Recorder interface {
+	RecordTagWrite(ctx context.Context) error
+}
+`,
+			wantSubstr: "declares a seam method RecordTagWrite",
+		},
+		{
+			name: "naming the in-memory tag seeder is refused",
+			src: `package api
+func f(x interface{ ApplyTagChanges() }) { x.ApplyTagChanges() }
+`,
+			wantSubstr: "references ApplyTagChanges",
+		},
+		{
+			// WriteTag is the floored capability entry; the TagWriter seam this
+			// package declares names it.
+			name: "declaring and calling the floored WriteTag is allowed",
+			src: `package api
+import "context"
+type TagWriter interface {
+	WriteTag(ctx context.Context) error
+}
+func f(w TagWriter) { _ = w.WriteTag(nil) }
+`,
+			wantSubstr: "",
 		},
 		{
 			// The false-positive guard: this is exactly what execution.go does.

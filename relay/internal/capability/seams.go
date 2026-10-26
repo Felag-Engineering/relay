@@ -9,6 +9,7 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 	"github.com/Felag-Engineering/relay/relay/internal/nodevocab"
 	"github.com/Felag-Engineering/relay/relay/internal/policyview"
+	"github.com/Felag-Engineering/relay/relay/internal/registry"
 )
 
 // ControlAction names one administrative act on the control plane ITSELF —
@@ -98,6 +99,11 @@ const (
 	// admin and human Account only. It takes no step-up, because an alias
 	// gates nothing.
 	ControlPolicyAlias ControlAction = "policy_alias"
+
+	// ControlTagWrite is adding, replacing or removing a tag: label: a human
+	// Account at operator or above. It takes no step-up, because a tag gates
+	// nothing (ADR-0050 decisions 2 and 5).
+	ControlTagWrite ControlAction = "tag_write"
 )
 
 // PolicyAliasSource is the read side of Policy aliases: every alias the Relay
@@ -123,6 +129,28 @@ type PolicyAliasEvent struct {
 	Old         string
 	New         string
 	Asserted    Assertions
+}
+
+// TagWriteRecorder makes a batch of tag changes AND appends their audit records
+// in one transaction: nil means every change and record landed, an error means
+// none did. It is kept off AuditSink, exactly like PolicyAliasRecorder, so a
+// sink that cannot make the two atomic cannot claim to.
+type TagWriteRecorder interface {
+	RecordTagWrite(ctx context.Context, e TagWriteEvent) error
+}
+
+// TagWriteEvent is a batch of tag changes by one Principal. Each change is one
+// audit record, carrying its Node and its old and new value.
+type TagWriteEvent struct {
+	Principal Principal
+	Changes   []registry.TagChange
+	Asserted  Assertions
+}
+
+// TagNodeReader is the read the tag write needs: one Node's current tags.
+// registry.Repository satisfies it.
+type TagNodeReader interface {
+	Get(nodeID string) (registry.Node, bool)
 }
 
 // AccountStore is the Account half of the collaborator accountadmin.go needs:

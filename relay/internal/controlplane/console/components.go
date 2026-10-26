@@ -91,8 +91,8 @@ func (l Label) String() string {
 
 // Tooltip is the term plus the namespace's one writer, shown as the chip's
 // title so a Node's labels name who wrote them without a legend
-// (02-node-detail.md "Labels"). `tag:` is the bare term: no `tag:` label can
-// exist yet, so there is no writer to describe.
+// (02-node-detail.md "Labels"). `tag:` is the bare term: this screen renders no
+// tag chip, so no writer is described for one.
 func (l Label) Tooltip() string {
 	switch l.Namespace {
 	case NamespaceNode:

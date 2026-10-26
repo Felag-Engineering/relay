@@ -1,6 +1,6 @@
 # Query
 
-**Status:** designed, not built, as of `2026-10-18`.
+**Status:** designed, not built, as of `2026-10-25`.
 **Claim prefix:** `QRY`
 
 ## Purpose
@@ -40,15 +40,6 @@ to query, author or alter Policy over the wire; a live hypothetical is `policy-p
 - **QRY-1** Of the registry, Policy-view and vocabulary reads, the Control API exposes exactly
   one, the single-Node read; fleet enumeration, the Policy view and vocabulary discovery are MCP
   and Console only.
-- **QRY-2** A Node read returns Relay's recorded registry state: Node ID; separate `node:` and
-  `relay:` Label maps; self-reported Facts; connection and revocation state; the Policy
-  fingerprint and the template-set fingerprint; daemon version and `outdated` (a field on the
-  Control API, a `state:` Label on MCP); recorded certificate provenance when it exists; and
-  `state:` Labels evaluated at Selector-resolution time, rendered in Selector syntax, never
-  stored.
-- **QRY-3** `list_nodes` accepts an empty Selector or one in the `node:`, `relay:` and `state:`
-  namespaces, resolves it against the registry at one evaluation instant, and returns the
-  matches in Node-ID order with `state:` Labels from that same instant.
 - **QRY-4** `describe_node` and the Control API Node read identify exactly one Node. A
   disconnected Node stays readable from its last registry record; `connected` is the live
   Tunnel state and is never inferred from `last_seen`.
@@ -59,6 +50,16 @@ to query, author or alter Policy over the wire; a live hypothetical is `policy-p
 - **QRY-6** `describe_node` and `list_operations(node_id)` distinguish an absent
   template-vocabulary report from an empty reported vocabulary: a missing report is not
   evidence that a Node has no Template Operations.
+
+- **QRY-40** A Node read returns Relay's recorded registry state: Node ID; separate `node:`,
+  `relay:` and `tag:` Label maps, the last holding the Node's Tags; self-reported Facts; connection
+  and revocation state; the Policy fingerprint and the template-set fingerprint; daemon version and
+  `outdated` (a field on the Control API, a `state:` Label on MCP); recorded certificate provenance
+  when it exists; and `state:` Labels evaluated at Selector-resolution time, rendered in Selector
+  syntax, never stored.
+- **QRY-41** `list_nodes` accepts an empty Selector or one in the `node:`, `relay:`, `tag:` and
+  `state:` namespaces, resolves it against the registry at one evaluation instant, and returns the
+  matches in Node-ID order with `state:` Labels from that same instant.
 
 ### Policy view
 
@@ -122,10 +123,8 @@ to query, author or alter Policy over the wire; a live hypothetical is `policy-p
 ## Refusals
 
 - **QRY-19** An unauthenticated caller receives no query result on any surface.
-- **QRY-20** A malformed Selector, a bare Label key, or a `state:` key outside the closed
-  vocabulary is refused rather than treated as an empty match. A `tag:` term is refused with a
-  recognisable sentinel, because a successful empty response would falsely assert that no Node
-  matched (#430).
+- **QRY-42** A malformed Selector, a bare Label key, or a `state:` key outside the closed vocabulary
+  is refused rather than treated as an empty match.
 - **QRY-21** A well-formed Node ID that is not in the registry is refused as "no such Node" on
   `describe_node`, on `list_operations` and on the Control API, and the refused read is still
   recorded with the ID that was probed.
@@ -157,9 +156,9 @@ to query, author or alter Policy over the wire; a live hypothetical is `policy-p
   A Policy alias is a name the Relay holds for a fingerprint and never sends to a Node: setting
   one writes no Policy (QRY-31).
 - **Invariant 7, ADR-0006, ADR-0020, ADR-0034 and ADR-0050** — Label namespaces stay separate:
-  `node:` and `relay:` are returned as separate maps, `state:` is derived, and `tag:` is refused
-  until it has a writer (QRY-20); once it does, Tags are returned as their own map (QRY-40) and
-  Selectors resolve them (QRY-41). A query has no Label-write authority.
+  `node:`, `relay:` and `tag:` are returned as separate maps (QRY-40), `state:` is derived, and
+  Selectors resolve all four (QRY-41). A Tag is written by a human Account through its own
+  capability action, never by a query (ADR-0050). A query has no Label-write authority.
 - **Invariant 8 and ADR-0007** — wire-reported data follows the protocol contract; a query surface
   never invents a second wire vocabulary. Both *Future work* items change what the daemon
   reports and start in `/proto`.
@@ -177,7 +176,7 @@ to query, author or alter Policy over the wire; a live hypothetical is `policy-p
   asserts Policy drift nor authorises an upgrade.
 - **ADR-0015 and ADR-0021** — the Native vocabulary is golden-guarded and frozen; Template
   vocabulary is local, per-Node and report-only (QRY-11, QRY-12). ADR-0021 decides that the
-  template-set fingerprint travels and the templates do not (QRY-2, QRY-10); both *Future work*
+  template-set fingerprint travels and the templates do not (QRY-40, QRY-10); both *Future work*
   items below would amend it and land only after that amendment.
 - **ADR-0025** — query access is audited, records what it was aimed at, and fails closed when it
   cannot be recorded (QRY-16, QRY-17, QRY-26, QRY-28). Retention and output rules are
@@ -195,9 +194,7 @@ needs the proto gates.
 
 | Claim | Proven by | Seam |
 |---|---|---|
-| QRY-1 | `TestQueryRoutes_TheControlAPIServesNoEnumerationPolicyOrVocabularyRead` (the negative half only, over the Control API's own route table rather than the composed mux, by a route-name heuristic; the positive half rests on QRY-3's, QRY-7's and QRY-11's rows) | API |
-| QRY-2 | `TestMCP_ListNodes_All`, `TestMCP_ListNodes_StateLabels`, `TestHandleGetNode_StateLabels` | MCP, API |
-| QRY-3 | Ordering half, empty Selector only: `TestListNodes_ReturnsMatchesInNodeIdOrder` (lane) and `TestMCP_ListNodes_ReturnsMatchesInNodeIdOrder` (MCP, seeded out of ID order). Rest of the claim: `TestMCP_ListNodes_SelectorFilter`, `TestMCP_ListNodes_All` | capability, MCP |
+| QRY-1 | `TestQueryRoutes_TheControlAPIServesNoEnumerationPolicyOrVocabularyRead` (the negative half only, over the Control API's own route table rather than the composed mux, by a route-name heuristic; the positive half rests on QRY-41's, QRY-7's and QRY-11's rows) | API |
 | QRY-4 | `Connected_IsNotInferredFromLastSeen` in the shared registry conformance suite, run as `TestRepositoryConformance` (in-memory) and `TestSQLiteRegistryConformance` (SQLite store) | registry, store |
 | QRY-5 | `TestDescribeNode_CountsFingerprintPeersAndSkipsEmptyFingerprints` (the lane's arithmetic and empty-fingerprint skip); `TestNode_FingerprintPanelReportsThePeerCounts` (a real lane's counts reach the Node-detail screen); `TestMCP_DescribeNode_ReportsNoFingerprintPeerCounts` (pins today's MCP gap, which is *Future work*, not a prohibition) | capability, Console, MCP |
 | QRY-6 | `TestMCP_ListOperations_PerNode`, `TestMCP_DescribeNode` | MCP |
@@ -213,7 +210,6 @@ needs the proto gates.
 | QRY-16 | `TestListNodes_RecordsTheEnumeration`, `TestDescribeNode_RecordsTheNodeItWasAimedAt` | capability |
 | QRY-17 | `TestRegistryLane_FailsClosedWhenTheReadCannotBeAudited`, `TestRegistryLane_RefusesWithoutARealAuditSink`, `TestHandleGetNode_FailsClosedWhenTheReadCannotBeRecorded` | capability, API |
 | QRY-19 | `TestMCP_RequiresCredential`, `TestConsole_UnauthenticatedIsRefused` | MCP, Console |
-| QRY-20 | `TestMCP_ListNodes_SelectorFilter`, `TestMCP_ListNodes_TagSelectorIsRefusedNotEmpty` | MCP |
 | QRY-21 | `TestDescribeNode_RecordsAProbeForAMissingNode` | capability |
 | QRY-22 | `TestDescribeNode_BoundsTheNodeIdBeforeRecordingIt` | capability |
 | QRY-23 | `TestMCP_DescribeNode` | MCP |
@@ -228,10 +224,13 @@ needs the proto gates.
 | QRY-36 | `TestMCP_CarriesNoPolicyAlias`, `TestControlAPI_CarriesNoPolicyAlias`; write half structural: `TestDispatchViolations_Fixtures` (MCP, API: flags any selector naming a Policy alias) | MCP, API |
 | QRY-37 | `TestPolicyAliasAdmin_TakesNoStepUp`, `TestAuthorizeControl_PolicyAliasIsAdminAndHumanOnly` | capability, authz |
 | QRY-38 | `TestPolicyAliasAdmin_Refusals`, `TestAuthorizeControl_PolicyAliasIsAdminAndHumanOnly`, `TestSetPolicyAlias_StoresTheTrimmedValueAndAcceptsTheLengthBoundary`, `TestClearPolicyAlias_NotSetIsNotAnError`, `TestValidPolicyFingerprint`, `TestNormalizePolicyAlias`, `TestAppendWithPolicyAlias_RefusesAMalformedCall` | capability, authz, store |
+| QRY-40 | `TestMCP_ListNodes_All`, `TestMCP_ListNodes_StateLabels`, `TestHandleGetNode_StateLabels`; the `tag:` map as its own map, empty when a Node has none: `TestMCP_NodeReads_ReturnTagsAsTheirOwnMap`, `TestHandleGetNode_ReturnsTagsAsTheirOwnMap` | MCP, API |
+| QRY-41 | Ordering half, empty Selector only: `TestListNodes_ReturnsMatchesInNodeIdOrder` (lane) and `TestMCP_ListNodes_ReturnsMatchesInNodeIdOrder` (MCP, seeded out of ID order). Rest of the claim: `TestMCP_ListNodes_SelectorFilter`, `TestMCP_ListNodes_All`. The `tag:` namespace, which resolves against tag-space alone: `TestListNodes_ResolvesATagSelector` (lane; also pins Node-ID order under a `tag:` Selector), `TestMCP_ListNodes_TagSelectorResolves`, `TestSelectorMatchesTagReadsOnlyTagLabels` | capability, MCP |
+| QRY-42 | `TestMCP_ListNodes_SelectorFilter` (bare key, unknown `state:` key), `TestMCP_ListNodes_RefusesMalformedBareAndUnknownStateTerms` (malformed, bare, unknown `state:` and unknown-namespace terms, each refused with no read record) | MCP |
 
 Claims with **no row**, and so nothing checking them:
 
-- **QRY-3**, ordering under a *filtered* Selector — Node-ID order is now asserted at the lane and
+- **QRY-41**, ordering under a *filtered* Selector — Node-ID order is now asserted at the lane and
   at MCP, but for the empty Selector only; nothing checks that a Selector-filtered resolution
   preserves it (#681).
 
@@ -252,9 +251,6 @@ Claims with **no row**, and so nothing checking them:
 | QRY-33 | Wherever an alias is rendered, the full fingerprint it names is rendered beside it; an alias is never shown in place of the fingerprint. | MVP |
 | QRY-35 | The Console's Fleet view, Node detail and Compare screen read aliases through the capability read lane, and the Console offers the write to a human `admin` only, from the Fleet view's fingerprint facet and Node detail's Fingerprints panel. | MVP |
 | QRY-39 | No query surface can set Labels, modify Policy, load Templates, refresh a daemon snapshot, issue a Policy verdict or dispatch an Operation: each adapter's structural guard forbids every write seam but the alias write (QRY-29), and every dispatch seam. Replaces QRY-24 when promoted. | After MVP |
-| QRY-40 | A Node read returns Relay's recorded registry state: Node ID; separate `node:`, `relay:` and `tag:` Label maps, the last holding the Node's Tags; self-reported Facts; connection and revocation state; the Policy fingerprint and the template-set fingerprint; daemon version and `outdated` (a field on the Control API, a `state:` Label on MCP); recorded certificate provenance when it exists; and `state:` Labels evaluated at Selector-resolution time, rendered in Selector syntax, never stored. Replaces QRY-2 when promoted. | MVP |
-| QRY-41 | `list_nodes` accepts an empty Selector or one in the `node:`, `relay:`, `tag:` and `state:` namespaces, resolves it against the registry at one evaluation instant, and returns the matches in Node-ID order with `state:` Labels from that same instant. Replaces QRY-3 when promoted. | MVP |
-| QRY-42 | A malformed Selector, a bare Label key, or a `state:` key outside the closed vocabulary is refused rather than treated as an empty match. Replaces QRY-20 when promoted: the `tag:` refusal goes, and QRY-20's proof of that refusal does not carry over. | MVP |
 
 ## Out of scope
 
@@ -317,4 +313,8 @@ alias-change record (QRY-30); it adopts it at its migration.
 
 ## Retired
 
+- **QRY-2** — `2026-10-26` — a Node read returned `node:` and `relay:` maps only; replaced by QRY-40.
+- **QRY-3** — `2026-10-26` — `list_nodes` accepted no `tag:` term; replaced by QRY-41.
+- **QRY-20** — `2026-10-26` — a `tag:` term was refused with a sentinel while Tags had no writer;
+  replaced by QRY-42.
 - **QRY-18** — `2026-09-23` — deleted; QRY-26 … QRY-28 replace it. (#680)

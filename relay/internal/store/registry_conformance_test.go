@@ -1,6 +1,8 @@
 package store
 
 import (
+	"errors"
+	"fmt"
 	"maps"
 	"testing"
 	"time"
@@ -249,4 +251,188 @@ func reopenStore(t *testing.T, st *Store, path string) *Store {
 	}
 	t.Cleanup(func() { re.Close() })
 	return re
+}
+
+// TestRegistryTagConformance is the tag-space half of the shared conformance
+// suite, run against BOTH implementations: a tag is invisible to every
+// Node-report and relay: write, is returned as a copy, and a tag change that is
+// stale, over the cap, for an unknown Node or malformed changes nothing. Each
+// implementation seeds tags through its own atomic write (InMemory's
+// ApplyTagChanges, the store's audit TagWriteAppender), since Repository has no
+// tag method by design.
+func TestRegistryTagConformance(t *testing.T) {
+	type apply func(t *testing.T, changes ...registry.TagChange) error
+	impls := []struct {
+		name string
+		new  func(t *testing.T) (registry.Repository, apply)
+	}{
+		{"InMemory", func(t *testing.T) (registry.Repository, apply) {
+			r := registry.NewInMemory()
+			return r, func(t *testing.T, changes ...registry.TagChange) error { return r.ApplyTagChanges(changes) }
+		}},
+		{"SQLite", func(t *testing.T) (registry.Repository, apply) {
+			st, _ := openTestStore(t)
+			n := 0
+			return st.Registry(), func(t *testing.T, changes ...registry.TagChange) error {
+				n++
+				return writeTags(t, st, fmt.Sprintf("conf%d", n), changes...)
+			}
+		}},
+	}
+
+	set := func(v string) registry.TagValue { return registry.TagValue{Set: true, Value: v} }
+	seed := func(t *testing.T, r registry.Repository, ids ...string) {
+		t.Helper()
+		for _, id := range ids {
+			if _, err := r.Upsert(registry.Report{NodeID: id}); err != nil {
+				t.Fatalf("Upsert %q: %v", id, err)
+			}
+		}
+	}
+	tags := func(t *testing.T, r registry.Repository, id string) map[string]string {
+		t.Helper()
+		n, ok := r.Get(id)
+		if !ok {
+			t.Fatalf("Get %q: not found", id)
+		}
+		return n.TagLabels
+	}
+
+	for _, impl := range impls {
+		t.Run(impl.name, func(t *testing.T) {
+			t.Run("NewNodeHasNonNilEmptyTags", func(t *testing.T) {
+				r, _ := impl.new(t)
+				seed(t, r, "n1")
+				if got := tags(t, r, "n1"); got == nil || len(got) != 0 {
+					t.Errorf("TagLabels = %#v, want a non-nil empty map", got)
+				}
+			})
+
+			t.Run("Upsert_NeverTouchesTags", func(t *testing.T) {
+				r, write := impl.new(t)
+				seed(t, r, "n1")
+				if err := write(t, registry.TagChange{NodeID: "n1", Key: "team", After: set("payments")}); err != nil {
+					t.Fatal(err)
+				}
+				// A reconnect with new Facts and a node: label under the same key.
+				n, err := r.Upsert(registry.Report{
+					NodeID: "n1", Facts: registry.Facts{Hostname: "h2"},
+				}.WithNodeLabels(map[string]string{"team": "forged"}))
+				if err != nil {
+					t.Fatal(err)
+				}
+				want := map[string]string{"team": "payments"}
+				if !maps.Equal(n.TagLabels, want) || !maps.Equal(tags(t, r, "n1"), want) {
+					t.Errorf("TagLabels after a report = %v, want %v", n.TagLabels, want)
+				}
+				if n.NodeLabels["team"] != "forged" {
+					t.Errorf("NodeLabels = %v, want the report's own label under its own namespace", n.NodeLabels)
+				}
+			})
+
+			t.Run("SetRelayLabels_NeverTouchesTags", func(t *testing.T) {
+				r, write := impl.new(t)
+				seed(t, r, "n1")
+				if err := write(t, registry.TagChange{NodeID: "n1", Key: "team", After: set("payments")}); err != nil {
+					t.Fatal(err)
+				}
+				if err := r.SetRelayLabels("n1", map[string]string{"team": "relay-owned"}); err != nil {
+					t.Fatal(err)
+				}
+				if err := r.SetRelayLabels("n1", nil); err != nil {
+					t.Fatal(err)
+				}
+				if got := tags(t, r, "n1"); !maps.Equal(got, map[string]string{"team": "payments"}) {
+					t.Errorf("TagLabels = %v after SetRelayLabels, want untouched", got)
+				}
+			})
+
+			t.Run("Get_ReturnsTagsAsACopy", func(t *testing.T) {
+				r, write := impl.new(t)
+				seed(t, r, "n1")
+				if err := write(t, registry.TagChange{NodeID: "n1", Key: "team", After: set("payments")}); err != nil {
+					t.Fatal(err)
+				}
+				got := tags(t, r, "n1")
+				got["team"] = "mutated"
+				got["extra"] = "x"
+				if again := tags(t, r, "n1"); !maps.Equal(again, map[string]string{"team": "payments"}) {
+					t.Errorf("mutating a returned map reached the registry: %v", again)
+				}
+			})
+
+			t.Run("StaleBeforeChangesNothing", func(t *testing.T) {
+				r, write := impl.new(t)
+				seed(t, r, "n1", "n2")
+				if err := write(t, registry.TagChange{NodeID: "n1", Key: "team", After: set("a")}); err != nil {
+					t.Fatal(err)
+				}
+				err := write(t,
+					registry.TagChange{NodeID: "n2", Key: "team", After: set("ok")},
+					registry.TagChange{NodeID: "n1", Key: "team", Before: set("stale"), After: set("b")})
+				if !errors.Is(err, registry.ErrTagChanged) {
+					t.Fatalf("err = %v, want ErrTagChanged", err)
+				}
+				if got := tags(t, r, "n1"); !maps.Equal(got, map[string]string{"team": "a"}) {
+					t.Errorf("n1 tags = %v, want unchanged", got)
+				}
+				if got := tags(t, r, "n2"); len(got) != 0 {
+					t.Errorf("n2 tags = %v, want the batch rolled back", got)
+				}
+			})
+
+			t.Run("OverTheLimitChangesNothing", func(t *testing.T) {
+				r, write := impl.new(t)
+				seed(t, r, "n1", "n2")
+				var fill []registry.TagChange
+				for i := 0; i < registry.MaxTagsPerNode; i++ {
+					fill = append(fill, registry.TagChange{NodeID: "n1", Key: fmt.Sprintf("k%d", i), After: set("v")})
+				}
+				if err := write(t, fill...); err != nil {
+					t.Fatalf("filling to the cap: %v", err)
+				}
+				err := write(t,
+					registry.TagChange{NodeID: "n2", Key: "fresh", After: set("v")},
+					registry.TagChange{NodeID: "n1", Key: "over", After: set("v")})
+				if !errors.Is(err, registry.ErrTooManyTags) {
+					t.Fatalf("err = %v, want ErrTooManyTags", err)
+				}
+				if got := tags(t, r, "n2"); len(got) != 0 {
+					t.Errorf("n2 tags = %v, want the batch rolled back", got)
+				}
+			})
+
+			t.Run("UnknownNodeChangesNothing", func(t *testing.T) {
+				r, write := impl.new(t)
+				seed(t, r, "n1")
+				err := write(t,
+					registry.TagChange{NodeID: "n1", Key: "team", After: set("a")},
+					registry.TagChange{NodeID: "ghost", Key: "team", After: set("a")})
+				if !errors.Is(err, registry.ErrNotFound) {
+					t.Fatalf("err = %v, want ErrNotFound", err)
+				}
+				if got := tags(t, r, "n1"); len(got) != 0 {
+					t.Errorf("n1 tags = %v, want none", got)
+				}
+			})
+
+			t.Run("MalformedChangeIsRefused", func(t *testing.T) {
+				r, write := impl.new(t)
+				seed(t, r, "n1")
+				for name, c := range map[string]registry.TagChange{
+					"comma in key":   {NodeID: "n1", Key: "a,b", After: set("v")},
+					"space in value": {NodeID: "n1", Key: "k", After: set("a b")},
+					"empty key":      {NodeID: "n1", Key: "", After: set("v")},
+					"non-ascii":      {NodeID: "n1", Key: "k", After: set("\u200b")},
+				} {
+					if err := write(t, c); err == nil {
+						t.Errorf("%s: a malformed tag was written", name)
+					}
+				}
+				if got := tags(t, r, "n1"); len(got) != 0 {
+					t.Errorf("tags = %v after only malformed changes", got)
+				}
+			})
+		})
+	}
 }

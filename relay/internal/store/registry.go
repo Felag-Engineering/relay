@@ -15,7 +15,7 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/registry"
 )
 
-// labelNamespace closes the two stored label namespaces getNode's read-back
+// labelNamespace closes the three stored label namespaces getNode's read-back
 // filter governs. Unexported and local to store: capability.Namespace exists
 // but store must not import capability (a layering inversion the composition
 // root's dependency graph forbids), and internal/metrics must not import
@@ -26,20 +26,30 @@ type labelNamespace int
 const (
 	nsNode labelNamespace = iota
 	nsRelay
+	nsTag
 )
 
 // nLabelNamespaces is the number of labelNamespace values.
-const nLabelNamespaces = 2
+const nLabelNamespaces = 3
 
 // table returns the SQLite table ns is stored in, so fetchLabels and
 // replaceLabels take no free-floating table-name literals and a
 // namespace/table mismatch becomes a compile error at every new call site
 // instead of a typo a reviewer has to catch by eye.
+//
+// It is a total switch: an unknown namespace panics rather than falling through
+// to node_labels, which only the Node's own report may write.
 func (ns labelNamespace) table() string {
-	if ns == nsRelay {
+	switch ns {
+	case nsNode:
+		return "node_labels"
+	case nsRelay:
 		return "relay_labels"
+	case nsTag:
+		return "tag_labels"
+	default:
+		panic(fmt.Sprintf("store: unknown label namespace %d", int(ns)))
 	}
-	return "node_labels"
 }
 
 // nodeCap and minVersion read the configured Node cap and minimum daemon
@@ -59,9 +69,9 @@ func (r *sqliteRegistry) minVersion() string {
 }
 
 // sqliteRegistry implements registry.Repository against the nodes/node_labels/
-// relay_labels tables, mirroring internal/registry.InMemory's semantics
-// exactly (this is the security-relevant part: the two label namespaces are
-// never confused, and Upsert's insert-vs-update distinction is preserved).
+// relay_labels/tag_labels tables, mirroring internal/registry.InMemory's
+// semantics exactly (this is the security-relevant part: the label namespaces
+// are never confused, and Upsert's insert-vs-update distinction is preserved).
 type sqliteRegistry struct {
 	db               *sql.DB
 	maxNodes         func() int    // 0 = unlimited; nil = unlimited
@@ -159,7 +169,8 @@ func (r *sqliteRegistry) Upsert(rep registry.Report) (registry.Node, error) {
 		}
 		// enrolling_token_id and revoked_at are never touched here — provenance
 		// and revocation state are Relay-set/first-write-wins, exactly as
-		// registry.InMemory.Upsert preserves them on the update path.
+		// registry.InMemory.Upsert preserves them on the update path. Nor is
+		// tag_labels: no Upsert statement names it.
 		if err := replaceLabels(ctx, tx, nsNode.table(), rep.NodeID, rep.NodeLabels()); err != nil {
 			return registry.Node{}, err
 		}
@@ -192,7 +203,8 @@ func (r *sqliteRegistry) UpdateLastSeen(nodeID string, at time.Time) error {
 }
 
 // SetRelayLabels replaces the relay-space label set for nodeID. Returns
-// registry.ErrNotFound if the Node is not in the registry.
+// registry.ErrNotFound if the Node is not in the registry. It never names
+// tag_labels.
 func (r *sqliteRegistry) SetRelayLabels(nodeID string, labels map[string]string) error {
 	ctx := context.Background()
 	tx, err := r.db.BeginTx(ctx, nil)
@@ -518,7 +530,7 @@ func countNodes(ctx context.Context, q queryer) (int, error) {
 	return count, nil
 }
 
-// getNode loads one Node record (nodes row + both label tables). Returns
+// getNode loads one Node record (nodes row + the three label tables). Returns
 // (Node{}, false, nil) if nodeID does not exist.
 //
 // declined is threaded as an explicit parameter rather than read off a
@@ -578,6 +590,11 @@ func getNode(ctx context.Context, q queryer, nodeID string, declined *[nLabelNam
 		return registry.Node{}, false, fmt.Errorf("node %q: %w", nodeID, err)
 	}
 	relayLabels = wellFormedLabels(nsRelay, relayLabels, declined)
+	tagLabels, err := fetchLabels(ctx, q, nsTag.table(), nodeID)
+	if err != nil {
+		return registry.Node{}, false, fmt.Errorf("node %q: %w", nodeID, err)
+	}
+	tagLabels = wellFormedLabels(nsTag, tagLabels, declined)
 
 	lastSeenTime, err := parseTime(sql.NullString{String: lastSeen, Valid: true})
 	if err != nil {
@@ -615,6 +632,7 @@ func getNode(ctx context.Context, q queryer, nodeID string, declined *[nLabelNam
 		},
 		NodeLabels:             nodeLabels,
 		RelayLabels:            relayLabels,
+		TagLabels:              tagLabels,
 		LastSeen:               lastSeenTime,
 		CertNotAfter:           certNotAfterTime,
 		EnrolledAt:             enrolledAtTime,
@@ -629,7 +647,7 @@ func getNode(ctx context.Context, q queryer, nodeID string, declined *[nLabelNam
 }
 
 // wellFormedLabels returns a copy of labels containing only the pairs
-// registry.WellFormedLabel accepts. It governs BOTH stored namespaces:
+// registry.WellFormedLabel accepts. It governs all three stored namespaces:
 //
 //   - node_labels: rows written BEFORE the ingress gate existed
 //     (protoconv.ParseNodeLabel) can carry a value that was never validated.
@@ -639,6 +657,9 @@ func getNode(ctx context.Context, q queryer, nodeID string, declined *[nLabelNam
 //     forever — the Console renders every relay_labels entry as a `relay:`
 //     chip (console/fleet.go's declaredChips), lock glyph and security hue,
 //     for a label this Relay's own ingress gate would now refuse.
+//   - tag_labels: no tag row can predate its gate, because the only writer
+//     validates before it writes, so here the filter is defence in depth
+//     against a row written around the gate.
 //
 // WHAT IT DROPS IS WIDER THAN WHAT IS UNMATCHABLE, and that difference is a
 // residual, not a rounding error. WellFormedLabel is deliberately narrower
@@ -657,7 +678,7 @@ func getNode(ctx context.Context, q queryer, nodeID string, declined *[nLabelNam
 // (threat model R13), not a claim that nothing was lost, and it is why
 // docs/operations/enrollment.md tells operators to re-mint before upgrading.
 //
-// A bounded signal sits at this seam, for BOTH namespaces, as two
+// A bounded signal sits at this seam, for every namespace, as two
 // separate things: declined below counts read-back EVENTS, not distinct
 // Labels — one increment per declined pair, per Get, per Node per List, per
 // Hello via Upsert's own read-back — so it is live but says nothing about
@@ -685,7 +706,9 @@ func getNode(ctx context.Context, q queryer, nodeID string, declined *[nLabelNam
 // filter into a delete. STANDING OBLIGATION: a future admin relay-label
 // writer (ADR-0020's incident ladder) must preserve that — it must never
 // read-modify-write over this filtered view, or "decline to serve" silently
-// becomes "delete". "Never write, decline to serve" keeps this fix
+// becomes "delete". The tag writer keeps the obligation by re-checking its
+// Before value against the RAW row inside the transaction: a declined row
+// yields registry.ErrTagChanged and is never deleted. "Never write, decline to serve" keeps this fix
 // unambiguously clear of the Relay-immutability half of invariant 7. A Node
 // whose relay_labels predate this gate, and that never gets a fresh
 // enrollment, keeps serving a filtered view forever — accepted for the same
@@ -714,7 +737,7 @@ func wellFormedLabels(ns labelNamespace, labels map[string]string, declined *[nL
 }
 
 func fetchLabels(ctx context.Context, q queryer, table, nodeID string) (map[string]string, error) {
-	rows, err := q.QueryContext(ctx, fmt.Sprintf(`SELECT key, value FROM %s WHERE node_id = ?`, table), nodeID) // table is one of two fixed literals, never user input
+	rows, err := q.QueryContext(ctx, fmt.Sprintf(`SELECT key, value FROM %s WHERE node_id = ?`, table), nodeID) // table is one of three fixed literals, never user input
 	if err != nil {
 		return nil, fmt.Errorf("query %s: %w", table, err)
 	}
@@ -732,11 +755,11 @@ func fetchLabels(ctx context.Context, q queryer, table, nodeID string) (map[stri
 }
 
 func replaceLabels(ctx context.Context, tx *sql.Tx, table, nodeID string, labels map[string]string) error {
-	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`DELETE FROM %s WHERE node_id = ?`, table), nodeID); err != nil { // table is one of two fixed literals, never user input
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`DELETE FROM %s WHERE node_id = ?`, table), nodeID); err != nil { // table is one of three fixed literals, never user input
 		return fmt.Errorf("clear %s: %w", table, err)
 	}
 	for k, v := range labels {
-		if _, err := tx.ExecContext(ctx, fmt.Sprintf(`INSERT INTO %s (node_id, key, value) VALUES (?, ?, ?)`, table), // table is one of two fixed literals, never user input
+		if _, err := tx.ExecContext(ctx, fmt.Sprintf(`INSERT INTO %s (node_id, key, value) VALUES (?, ?, ?)`, table), // table is one of three fixed literals, never user input
 			nodeID, k, v); err != nil {
 			return fmt.Errorf("insert %s row: %w", table, err)
 		}

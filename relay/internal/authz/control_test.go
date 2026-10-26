@@ -56,6 +56,7 @@ func TestAuthorizeControl_Floors(t *testing.T) {
 		{capability.ControlAPITokenMint, accounts.RoleAdmin},
 		{capability.ControlAPITokenRevoke, accounts.RoleAdmin},
 		{capability.ControlPolicyAlias, accounts.RoleAdmin},
+		{capability.ControlTagWrite, accounts.RoleOperator},
 	}
 
 	for _, tc := range cases {
@@ -226,10 +227,42 @@ func TestAuthorizeControl_CorruptRoleSatisfiesNothing(t *testing.T) {
 		capability.ControlAPITokenMint,
 		capability.ControlAPITokenRevoke,
 		capability.ControlPolicyAlias,
+		capability.ControlTagWrite,
 	} {
 		if err := gate.AuthorizeControl(context.Background(), p, act); err == nil {
 			t.Errorf("AuthorizeControl(%s, role %q) = nil, want a refusal", act, p.Role)
 		}
+	}
+}
+
+// TestAuthorizeControl_TagWriteIsOperatorAndHumanOnly pins the tag write's
+// floor (ADR-0050 decision 2): a human operator or above. A viewer and every
+// machine Account are refused, a machine admin with the human-only reason
+// rather than a role one.
+func TestAuthorizeControl_TagWriteIsOperatorAndHumanOnly(t *testing.T) {
+	gate := NewRoleGate()
+	ctx := context.Background()
+
+	for _, role := range []accounts.Role{accounts.RoleOperator, accounts.RoleAdmin} {
+		if err := gate.AuthorizeControl(ctx, human(role), capability.ControlTagWrite); err != nil {
+			t.Errorf("human %s refused: %v", role, err)
+		}
+	}
+	if err := gate.AuthorizeControl(ctx, human(accounts.RoleViewer), capability.ControlTagWrite); !errors.Is(err, ErrUnauthorized) {
+		t.Errorf("human viewer = %v, want ErrUnauthorized", err)
+	}
+	if err := gate.AuthorizeControl(ctx, machine(accounts.RoleViewer), capability.ControlTagWrite); !errors.Is(err, ErrUnauthorized) {
+		t.Errorf("machine viewer = %v, want ErrUnauthorized", err)
+	}
+	for _, role := range []accounts.Role{accounts.RoleOperator, accounts.RoleAdmin} {
+		err := gate.AuthorizeControl(ctx, machine(role), capability.ControlTagWrite)
+		if !errors.Is(err, ErrUnauthorized) || !strings.Contains(err.Error(), "human-only") {
+			t.Errorf("machine %s = %v, want a human-only ErrUnauthorized", role, err)
+		}
+	}
+	unknownKind := capability.Principal{Account: "x", Role: string(accounts.RoleAdmin)}
+	if err := gate.AuthorizeControl(ctx, unknownKind, capability.ControlTagWrite); !errors.Is(err, ErrUnauthorized) {
+		t.Errorf("unknown-kind admin = %v, want ErrUnauthorized", err)
 	}
 }
 

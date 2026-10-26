@@ -24,13 +24,14 @@ type FactsOutput struct {
 }
 
 // NodeItem is one Node's registry view, rendered by list_nodes and (as the
-// base of) describe_node. NodeLabels and RelayLabels are separate top-level
-// JSON keys — never merged into one map (ADR-0006, invariant 7): a caller
-// must always be able to tell which namespace a label came from.
+// base of) describe_node. NodeLabels, RelayLabels and TagLabels are separate
+// top-level JSON keys — never merged into one map (ADR-0006, invariant 7): a
+// caller must always be able to tell which namespace a label came from.
 type NodeItem struct {
 	NodeID      string            `json:"node_id"`
 	NodeLabels  map[string]string `json:"node_labels"`
 	RelayLabels map[string]string `json:"relay_labels"`
+	TagLabels   map[string]string `json:"tag_labels" jsonschema:"The tag: namespace. Tags are written by a human Account through the Control API and never over MCP."`
 	Facts       FactsOutput       `json:"facts"`
 	LastSeen    string            `json:"last_seen"`
 

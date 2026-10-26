@@ -784,7 +784,7 @@ a dev fleet that lies about itself is worse than one that is legibly limited. (T
 `node:env=prod` and `node:env=staging` are **Node-authored** (set by `RELAY_NODE_LABELS` in the
 compose environment, and forgeable by a compromised Node), while `relay:env=dev` is
 **Relay-authored** at enrollment. They are separate namespaces (invariant 7), and `list_nodes()`
-always returns them as separate maps. (`tag:` selectors are refused at parse, a known gap.)
+always returns them as separate maps. (`tag:` labels are a third map, `tag_labels`, written only by a human Account through the Control API; the demo fleet seeds none.)
 
 ### Selector cardinalities
 

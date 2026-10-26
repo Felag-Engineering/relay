@@ -3,11 +3,11 @@ package registry
 import "unicode/utf8"
 
 // WellFormedLabel reports whether (key, value) is safe to store as a Label in
-// EITHER stored namespace — safe meaning "renders as exactly one Selector
+// EVERY stored namespace — safe meaning "renders as exactly one Selector
 // term, forever" (capability.ParseSelector). The rule is Selector grammar,
 // which does not know or care which namespace it is parsing, so it is the
 // ONE predicate for the question, owned here rather than in protoconv, enroll
-// or the renderer. It currently governs FIVE seams — counted as one per
+// or the renderer. It currently governs EIGHT seams — counted as one per
 // place a value can be REFUSED or DECLINED, which is why the relay-space
 // write side is two of them and the node-space write side is one:
 //
@@ -24,17 +24,24 @@ import "unicode/utf8"
 //     never saw — see "Two write seams, one namespace" below.
 //   - relay-space read-back: store/registry.go's getNode, via
 //     wellFormedLabels(relayLabels) — closes legacy rows the gate never saw.
+//   - tag-space write ingress: capability.ParseTagLabel, from
+//     TagWriter.WriteTag — refuses a tag before any change is built.
+//   - tag-space store write: the store's AppendWithTagWrite and
+//     InMemory.ApplyTagChanges, both via TagChange.Validate — refuses a change
+//     built around the ingress.
+//   - tag-space read-back: store/registry.go's getNode, via
+//     wellFormedLabels(tagLabels) — declines a row written around the gate.
 //
-// There is a sixth CALL SITE of this predicate — store/labelscan.go's
+// There is a further CALL SITE of this predicate — store/labelscan.go's
 // startup scan, plus the relay_labels_declined_total counter at the
-// read-back seams above — but not a sixth SEAM: both are READERS of this
+// read-back seams above — but not a further SEAM: both are READERS of this
 // predicate, reporting what it refuses or declines; neither one itself
-// refuses or declines anything. The count above stays FIVE.
+// refuses or declines anything. The count above stays EIGHT.
 //
-// Why one predicate for two namespaces, not two: `registry` carries no proto
+// Why one predicate for every namespace, not one each: `registry` carries no proto
 // dependency (registry.go's package doc), so a predicate that must be
 // reachable from protoconv (node-space ingress), enroll (relay-space
-// ingress) and internal/store (both namespaces' SQLite read path, which
+// ingress) and internal/store (every namespace's SQLite read path, which
 // re-derives domain values straight from rows with no proto involved) has to
 // live somewhere none of those drag proto into another. registry is that
 // place, and it must stay the ONLY place:
@@ -64,7 +71,7 @@ import "unicode/utf8"
 // which is whitespace or a control character, all of which render as an
 // invisible or blank cell next to a hand-typed separator. "Closing this needs
 // an allowlist, not a wider blocklist" is validFactValue's own conclusion;
-// this predicate is what acts on it, in both stored namespaces.
+// this predicate is what acts on it, in every stored namespace.
 //
 // # The four hazards this rules out, named
 //
@@ -139,9 +146,8 @@ import "unicode/utf8"
 //
 // `state:` is Relay-derived from a closed vocabulary at Selector-resolution
 // time and is never stored (ADR-0034), so it never reaches this predicate.
-// `tag:` has no storage yet; when it is stored it must be validated by THIS
-// predicate, never a new one written to fit — that fork is exactly the drift
-// one predicate exists to prevent.
+// Tag-space is validated by this predicate and no other: a second one written
+// to fit would be exactly the drift one predicate exists to prevent.
 func WellFormedLabel(key, value string) bool {
 	if key == "" {
 		return false

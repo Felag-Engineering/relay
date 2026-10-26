@@ -25,6 +25,7 @@ func nodeItemFromNode(n registry.Node, ev capability.StateEval) NodeItem {
 		NodeID:                 n.NodeID,
 		NodeLabels:             n.NodeLabels,
 		RelayLabels:            n.RelayLabels,
+		TagLabels:              n.TagLabels,
 		Facts:                  FactsOutput(controlplane.RenderFacts(n)),
 		PolicyFingerprint:      n.PolicyFingerprint,
 		TemplateSetFingerprint: n.TemplateSetFingerprint,
@@ -32,6 +33,9 @@ func nodeItemFromNode(n registry.Node, ev capability.StateEval) NodeItem {
 		Outdated:               n.Outdated,
 		Connected:              n.Connected,
 		StateLabels:            controlplane.StateLabels(n, ev),
+	}
+	if item.TagLabels == nil {
+		item.TagLabels = map[string]string{}
 	}
 	item.LastSeen = controlplane.RFC3339(n.LastSeen)
 	item.RevokedAt = controlplane.RFC3339(n.RevokedAt)
@@ -109,16 +113,11 @@ func templateVocabularyOutput(snap nodevocab.Snapshot, reported bool) TemplateVo
 
 // listNodesInput is list_nodes' argument: an optional Selector filter,
 // parsed via capability.ParseSelector — the single source of truth for the
-// "node:key=value"/"relay:key=value"/"state:key[=value]" grammar every
-// Selector-consuming surface shares. Fail-closed: a term with no
-// node:/relay:/state: prefix is a parse error, not a guess.
-//
-// tag: parses as an error too, and the schema below says so. It used
-// to be advertised without a caveat while resolving to nothing, which handed
-// an AI-agent HTTP 200 and an empty list for a namespace that is simply not
-// implemented — a false negative given to the caller least able to notice it.
+// "node:key=value"/"relay:key=value"/"tag:key=value"/"state:key[=value]"
+// grammar every Selector-consuming surface shares. Fail-closed: a term with no
+// node:/relay:/tag:/state: prefix is a parse error, not a guess.
 type listNodesInput struct {
-	Selector string `json:"selector,omitempty" jsonschema:"Selector filter, e.g. 'node:role=web, relay:quarantine=on, state:offline'. Every term must carry a node:, relay:, or state: prefix. tag: is a valid namespace in the model but is NOT resolvable yet — it has no storage until label management lands — so a tag: term is refused outright rather than matching nothing; do not filter on it. state: is a closed, Relay-derived vocabulary (ADR-0034): the boolean markers state:offline, state:outdated, state:template-unloadable, state:cert-expiring, and the facts state:daemon-version=, state:policy-fingerprint=, state:template-fingerprint=. Empty or omitted matches every Node."`
+	Selector string `json:"selector,omitempty" jsonschema:"Selector filter, e.g. 'node:role=web, relay:quarantine=on, tag:team=payments, state:offline'. Every term must carry a node:, relay:, tag: or state: prefix. state: is a closed, Relay-derived vocabulary (ADR-0034): the boolean markers state:offline, state:outdated, state:template-unloadable, state:cert-expiring, and the facts state:daemon-version=, state:policy-fingerprint=, state:template-fingerprint=. Empty or omitted matches every Node."`
 }
 
 // describeNodeInput is describe_node's argument: the exact Node ID.
@@ -134,7 +133,7 @@ func registerNodeTools(srv *sdkmcp.Server, lane ReadLane) {
 	sdkmcp.AddTool(srv, &sdkmcp.Tool{
 		Name: "list_nodes",
 		Description: "List Nodes in the fleet registry, optionally filtered by a Selector " +
-			"(node:/relay:/state: label predicates; tag: is refused until label management lands). node: and relay: labels are returned as " +
+			"(node:/relay:/tag:/state: label predicates). node:, relay: and tag: labels are returned as " +
 			"separate maps, never merged; state: labels are Relay-derived and returned as " +
 			"state_labels, in Selector syntax with the state: prefix. `outdated` flags Nodes below " +
 			"the Relay's configured minimum daemon version (ADR-0014); always false when no " +

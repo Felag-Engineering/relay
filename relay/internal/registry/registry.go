@@ -1,12 +1,15 @@
 // Package registry keeps the Relay's live view of the Node fleet: identity,
 // Facts, labels, last-seen timestamps, and enrollment-token provenance.
 //
-// Label authority is structural, not conventional. The two namespaces —
-// node: (node-rooted, Relay-immutable) and relay: (Relay-set, Node-immutable) —
-// are stored in two disjoint maps and written by two disjoint methods. There is
-// no code path through which a Node report can write relay-space labels, and no
-// code path through which the Relay can overwrite node-space labels via
-// SetRelayLabels.
+// Label authority is structural, not conventional. The three stored
+// namespaces — node: (node-rooted, Relay-immutable), relay: (Relay-set,
+// Node-immutable) and tag: (human-written, Node-immutable) — are stored in
+// three disjoint maps. node: is written only by Upsert, relay: only by
+// SetRelayLabels, tag: only by the store's atomic tag write
+// (audit.TagWriteAppender) and, for tests, InMemory.ApplyTagChanges. Report
+// carries no tag field and Repository has no tag method, so no code path lets
+// a Node report write relay-space or tag-space labels, and none lets the Relay
+// overwrite node-space labels via SetRelayLabels.
 package registry
 
 import (
@@ -67,14 +70,15 @@ type Facts struct {
 // Node is the stored record for a managed Node. Returned by Get and List.
 //
 // NodeLabels holds node-space labels (bare keys, namespace tracked by which map).
-// RelayLabels holds relay-space labels. Each is written exclusively by its own
-// method on Repository; neither can reach the other's map.
+// RelayLabels holds relay-space labels, and TagLabels tag-space labels. Each map
+// is written exclusively by its own writer; none can reach another's map.
 type Node struct {
 	NodeID            string
 	CertFingerprint   string // cert identity used for Node authentication
 	Facts             Facts
 	NodeLabels        map[string]string // node: namespace, bare keys; node-rooted, Relay-immutable
 	RelayLabels       map[string]string // relay: namespace, bare keys; Relay-set, Node-immutable
+	TagLabels         map[string]string // tag: namespace, bare keys; written only by a human Account through the capability layer (ADR-0050); Node-immutable
 	LastSeen          time.Time
 	EnrollingTokenID  string // provenance: the Enrollment Token ID used at first enrollment
 	PolicyFingerprint string // SHA-256 hex of the Node's loaded Policy, reported on Hello; report-only drift signal — the Relay never sets Policy (ADR-0002)
@@ -208,9 +212,10 @@ type Certificate struct {
 	NotAfter time.Time
 }
 
-// Report is the input to Upsert. It deliberately carries no relay-label field —
-// this is the structural half of the node-side immutability boundary. A relay-daemon
-// can never supply relay-space labels through this type, regardless of what it sends.
+// Report is the input to Upsert. It deliberately carries no relay-label field and
+// no tag field — this is the structural half of the node-side immutability
+// boundary. A relay-daemon can never supply relay-space or tag-space labels
+// through this type, regardless of what it sends.
 //
 // nodeLabels is unexported on purpose: the ONLY way to populate it is
 // WithNodeLabels, so `rep.NodeLabels = someMap` — the bare field assignment
@@ -273,7 +278,7 @@ type Repository interface {
 	// PolicyFingerprint, DaemonVersion, and TemplateSetFingerprint are
 	// overwritten on both INSERT and UPDATE (like Facts and NodeLabels), so
 	// each (re)connect refreshes the stored values to what the Node currently
-	// reports. RelayLabels and
+	// reports. RelayLabels, TagLabels and
 	// EnrollingTokenID provenance are never touched.
 	Upsert(r Report) (Node, error)
 
@@ -285,7 +290,7 @@ type Repository interface {
 	// map becomes the complete new set — this is a replace, not a merge. Calling
 	// with an empty or partial map replaces the whole relay: label set; a future
 	// admin layer must not partially call it and accidentally lift a quarantine.
-	// Facts and NodeLabels are never touched by this method. Returns ErrNotFound
+	// Facts, NodeLabels and TagLabels are never touched by this method. Returns ErrNotFound
 	// if the Node is not in the registry.
 	SetRelayLabels(nodeID string, labels map[string]string) error
 

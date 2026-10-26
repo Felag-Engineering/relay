@@ -104,7 +104,7 @@ func violatesQRY1(r Route) string {
 // vocabulary data under a name matching none of those tokens and not under
 // /api/v1/nodes is not caught. QRY-1's positive half — that fleet enumeration,
 // the Policy view and vocabulary discovery are MCP and Console only — is not
-// asserted here; the MCP and Console presence rests on QRY-3's, QRY-7's and
+// asserted here; the MCP and Console presence rests on QRY-41's, QRY-7's and
 // QRY-11's own rows.
 func TestQueryRoutes_TheControlAPIServesNoEnumerationPolicyOrVocabularyRead(t *testing.T) {
 	// Armed: each of violatesQRY1's three branches is breached by at least one
