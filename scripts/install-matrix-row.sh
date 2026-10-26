@@ -204,6 +204,15 @@ pkg_installed() {
   fi
 }
 
+# deb_known <name>: dpkg still holds a record of the package, installed or removed with its
+# configuration (rc). A package with no conffile and no maintainer script leaves none on
+# remove, and apt-get cannot purge what dpkg does not know.
+deb_known() {
+  local status
+  status=$(dpkg-query -W -f '${db:Status-Status}' "$1" 2>/dev/null) || return 1
+  [ -n "$status" ] && [ "$status" != not-installed ]
+}
+
 installed_version() {
   if is_deb; then
     dpkg-query -W -f '${Version}' "$1" 2>/dev/null
@@ -730,8 +739,10 @@ purge_took_what_it_created() {
 
 phase_purge() {
   if is_deb; then
+    # relay-read ships no conffile and no maintainer script, so remove left dpkg no record
+    # of it; relay-daemon and relay keep theirs (their postrm runs the purge).
     local names=(relay-daemon relay)
-    if have_catalog; then names=(relay-daemon relay-read relay); fi
+    if have_catalog && deb_known relay-read; then names=(relay-daemon relay-read relay); fi
     precondition "purge the packages" pm_purge "${names[@]}"
     check DI-31 "purge removes the Policy, env file, state and marker the package created" purge_took_what_it_created
     check DI-31 "purge names the Policy directory it left in place" grep_log 'policy.d' purge
