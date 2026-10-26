@@ -3,7 +3,7 @@ package auditsink
 import (
 	"context"
 	"errors"
-	"strings"
+	"fmt"
 	"testing"
 	"time"
 
@@ -204,7 +204,7 @@ func TestRecordTagWrite_MapsStoreConflictsToCapabilitySentinels(t *testing.T) {
 	}
 	var fill []registry.TagChange
 	for i := 0; i < registry.MaxTagsPerNode; i++ {
-		fill = append(fill, registry.TagChange{NodeID: "n1", Key: "k" + strings.Repeat("x", i), After: set("v")})
+		fill = append(fill, registry.TagChange{NodeID: "n1", Key: fmt.Sprintf("k%d", i), After: set("v")})
 	}
 	err = sink.RecordTagWrite(ctx, event(fill...))
 	if !errors.Is(err, capability.ErrTooManyTags) {
