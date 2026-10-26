@@ -15,13 +15,15 @@ import (
 // TimeoutSeconds <= 0) so a resend for a Task that is genuinely still running
 // on the daemon has time to return its real (or benign already-processed,
 // per dedup.rs) Result before the bound trips — while still guaranteeing
-// that an orphaned waiter (see the concurrent-reconnect race below) always
-// returns rather than leaking forever.
+// that a resend whose Result never comes always returns rather than leaking
+// forever.
 const reconcileDispatchTimeout = 35 * time.Second
 
 // Reconciler recovers in-flight Tasks after a Relay restart or a Node
-// reconnect (ADR-0004's at-most-once-across-restart discipline). It is
-// separate from Router so Router stays transport-only.
+// reconnect (ADR-0004's at-most-once-across-restart discipline): it re-sends
+// them for their result on connect, and ResolveOffline resolves them when
+// their Node goes offline. It is separate from Router so Router stays
+// transport-only.
 //
 // Resend-for-result is safe ONLY because the relay-daemon dedups Task
 // execution by task_id (ADR-0004): on a duplicate task_id the daemon does
@@ -69,17 +71,16 @@ func NewReconciler(tasks jobs.TaskRepository, conduit *Router) *Reconciler {
 // firing on every registration including reconnects.
 //
 // Concurrent-reconnect guard: onConnect fires on every Register call, so a
-// flapping nodeID can trigger two overlapping ReconcileNode goroutines. Both
-// resending the same task_id would register two waiters for one task_id in
-// Router's flat waiters map — the second overwrites the first, orphaning the
-// first Dispatch call (it can never receive a Result; it can only time out).
-// This cannot cause double-EXECUTION (the daemon's dedup still holds), but it
-// would leak a goroutine and skip a Resolve. Two mitigations: (a) every
-// Dispatch call here runs under a bounded ctx (reconcileDispatchTimeout), so
-// an orphaned call is guaranteed to return rather than hang; (b) this guard
-// (inProgress, keyed by nodeID) makes a second concurrent ReconcileNode call
-// for the same nodeID a no-op, so only one reconcile drives that nodeID's
-// Dispatch calls at a time.
+// flapping nodeID can trigger two overlapping ReconcileNode goroutines, each
+// resending the same task_id. The Router keeps every caller waiting on a task
+// ID, so neither is orphaned, but the duplicate resends are wasted work. Two
+// bounds: (a) every Dispatch call here runs under a bounded ctx
+// (reconcileDispatchTimeout), so a call whose Result never comes returns
+// rather than hangs; (b) this guard (inProgress, keyed by nodeID) makes a
+// second concurrent ReconcileNode call for the same nodeID a no-op, so only
+// one reconcile drives that nodeID's Dispatch calls at a time. A live
+// worker's Dispatch of the same Task can still wait beside a resend, and both
+// are woken by the one Result.
 func (r *Reconciler) ReconcileNode(ctx context.Context, nodeID string) error {
 	r.mu.Lock()
 	if r.inProgress[nodeID] {
@@ -106,6 +107,54 @@ func (r *Reconciler) ReconcileNode(ctx context.Context, nodeID string) error {
 		}
 		if err := r.reconcileTask(ctx, nodeID, task); err != nil {
 			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// ResolveOffline resolves every in-flight (Dispatched, no Result) Task
+// belonging to nodeID with jobs.NodeOfflineResult: the Node's stream ended, no
+// result arrived, and whether the Task ran is unknown. It is ReconcileNode's
+// dual and sends nothing. A Task it resolves leaves InFlight(), so no later
+// ReconcileNode re-sends it: a Task the Node never received must not run for
+// the first time minutes or hours later (invariant 4, ADR-0004).
+//
+// skip holds the IDs of Tasks whose TaskResult was already delivered to a
+// waiting Dispatch call that has not yet settled it (jobs.Settlement). Those
+// Tasks are left for that call to resolve with the real result, so the
+// offline resolution never overwrites a result that arrived.
+//
+// ErrInvalidTaskState and ErrTaskNotFound are tolerated, as in reconcileTask:
+// they mean a worker or a reconcile resolved the Task first. Any other error
+// is joined and returned; the Task then stays Dispatched and falls back to
+// re-send-for-result on the Node's next connect.
+func (r *Reconciler) ResolveOffline(ctx context.Context, nodeID string, skip map[string]struct{}) error {
+	inFlight, err := r.tasks.InFlight(ctx)
+	if err != nil {
+		return fmt.Errorf("dispatch: resolve offline node %q: list in-flight tasks: %w", nodeID, err)
+	}
+
+	var errs []error
+	for _, task := range inFlight {
+		if task.NodeID != nodeID {
+			continue
+		}
+		if _, delivered := skip[task.ID]; delivered {
+			continue
+		}
+		res := jobs.NodeOfflineResult()
+		if _, err := task.Transition(jobs.TaskEvent{Kind: jobs.TaskEventResolve, Result: res}, r.now()); err != nil {
+			if errors.Is(err, jobs.ErrInvalidTaskState) {
+				continue
+			}
+			errs = append(errs, fmt.Errorf("dispatch: resolve offline task %q: %w", task.ID, err))
+			continue
+		}
+		if err := r.tasks.Resolve(ctx, task.ID, res); err != nil {
+			if errors.Is(err, jobs.ErrInvalidTaskState) || errors.Is(err, jobs.ErrTaskNotFound) {
+				continue
+			}
+			errs = append(errs, fmt.Errorf("dispatch: resolve offline task %q: %w", task.ID, err))
 		}
 	}
 	return errors.Join(errs...)
@@ -138,7 +187,12 @@ func (r *Reconciler) reconcileTask(ctx context.Context, nodeID string, task jobs
 		}
 		return cur.State != jobs.DispatchStateDispatched
 	}
-	res, err := r.conduit.Dispatch(jobs.WithSendGuard(dctx, guard), nodeID, task)
+	// The deferred Settle runs after the Resolve below, so a result the Router
+	// delivered to this reconcile stays protected from the offline resolution
+	// until this reconcile has persisted it.
+	sendCtx, settlement := jobs.WithSettlement(jobs.WithSendGuard(dctx, guard))
+	defer settlement.Settle()
+	res, err := r.conduit.Dispatch(sendCtx, nodeID, task)
 	if errors.Is(err, jobs.ErrSendWithheld) {
 		if readErr != nil {
 			return fmt.Errorf("dispatch: reconcile task %q on node %q: re-read before resend: %w", task.ID, nodeID, readErr)
@@ -148,6 +202,12 @@ func (r *Reconciler) reconcileTask(ctx context.Context, nodeID string, task jobs
 		return nil
 	}
 	if err != nil {
+		// A Node that drops mid-reconcile has its in-flight Tasks resolved
+		// offline (ResolveOffline). A Task already out of Dispatched is done,
+		// not a reconcile failure.
+		if cur, getErr := r.tasks.Get(ctx, task.ID); getErr == nil && cur.State != jobs.DispatchStateDispatched {
+			return nil
+		}
 		return fmt.Errorf("dispatch: reconcile task %q on node %q: %w", task.ID, nodeID, err)
 	}
 

@@ -41,8 +41,8 @@ pub const FLUSH_CONFIRM_BUDGET: Duration = Duration::from_secs(3);
 
 /// Parses the shutdown grace period from an optional env-var string.
 ///
-/// Mirrors `main::parse_interval_secs`: any positive integer -> that many
-/// seconds; absent, unparsable, or zero -> [`DEFAULT_GRACE_SECS`].
+/// Any positive integer -> that many seconds; absent, unparsable, or zero ->
+/// [`DEFAULT_GRACE_SECS`].
 fn parse_grace_secs(raw: Option<&str>) -> Duration {
     let secs = raw
         .and_then(|s| s.parse::<u64>().ok())

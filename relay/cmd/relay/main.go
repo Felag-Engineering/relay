@@ -880,11 +880,13 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 	// AccountAdmin, read lane and Approvals above are still built, and
 	// SIGUSR1/2 drives freezeControl.
 
-	srv := grpc.NewServer(
+	serverOpts := []grpc.ServerOption{
 		grpc.Creds(creds),
 		grpc.ChainStreamInterceptor(transport.StreamServerInterceptor(certless, denylist)),
 		grpc.ChainUnaryInterceptor(transport.UnaryServerInterceptor(certless, denylist)),
-	)
+	}
+	serverOpts = append(serverOpts, transport.KeepaliveServerOptions(transport.ProductionKeepalive())...)
+	srv := grpc.NewServer(serverOpts...)
 	relayv1.RegisterTunnelServer(srv, ts)
 	relayv1.RegisterEnrollmentServer(srv, enrollSrv)
 

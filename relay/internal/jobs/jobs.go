@@ -101,6 +101,30 @@ const VersionRefusedMessage = "capability: dispatch refused: this Node's relay-d
 	"the Relay's configured minimum (ADR-0014); the Task was never sent. Upgrade the daemon on this Node " +
 	"through your config-management / IaC pipeline — the Relay never pushes binaries."
 
+// NodeOfflineMessage is the Relay-authored reason recorded as the Stderr of a
+// Task that was in flight to a Node when the Node went offline. The Task WAS
+// dispatched and may have run, so the text claims no more than the Relay
+// knows: no result arrived. It is Relay-synthesized, not daemon output.
+const NodeOfflineMessage = "dispatch: no result: this Task's Node went offline while the Task was in flight " +
+	"(its stream to the Relay ended: missed heartbeats, a dead link or a disconnect), so whether it ran is " +
+	"unknown. The Relay does not re-send it (ADR-0004); check the Node and re-target if the work is still needed."
+
+// NodeOfflineResult is the Result of a Task in flight to a Node that went
+// offline: a failure with no exit status (-1, the no-exit-status sentinel the
+// protocol-violation path also uses) and NodeOfflineMessage. It is
+// Relay-synthesized, written by the capability layer and by the dispatch
+// Reconciler, so it is defined once here.
+func NodeOfflineResult() Result {
+	return Result{Outcome: OutcomeFailure, ExitCode: -1, Stderr: []byte(NodeOfflineMessage)}
+}
+
+// ErrStreamReplaced is returned by a Conduit's Dispatch, wrapped, when the
+// Node's Tunnel stream ended because a newer stream replaced it. The Node is
+// not offline: the Task stays in flight, and the new stream's reconnect
+// re-sends it for its result (the relay-daemon dedups by task_id, ADR-0004).
+// The caller therefore must not resolve the Task as node-offline.
+var ErrStreamReplaced = errors.New("jobs: the node's stream was replaced by a newer one")
+
 // ViolationRule names the specific way a relay-daemon's TaskResult broke the
 // wire contract: what dispatch.result() refuses at the wire boundary,
 // before a Result is ever persisted or a Task resolved with what the daemon

@@ -308,7 +308,8 @@ func (h *holdingConduit) Dispatch(ctx context.Context, nodeID string, task jobs.
 // behind the dispatch bound is never dispatched.
 func TestDispatchWiring_ACancelDuringFanOutWithholdsUnsentTasksThroughTheRealRouter(t *testing.T) {
 	tasks, st := testTaskRepositoryWithStore(t)
-	router, _, _ := newDispatchStack(tasks, nil, nil)
+	reads := newSignalInFlight(tasks)
+	router, _, _ := newDispatchStack(reads, nil, nil)
 
 	var mu sync.Mutex
 	requested := map[string]string{} // task ID -> node ID, TaskRequests that reached a Tunnel
@@ -337,6 +338,7 @@ func TestDispatchWiring_ACancelDuringFanOutWithholdsUnsentTasksThroughTheRealRou
 			return nil
 		})
 	}
+	reads.awaitReads(t, 3)
 
 	hold := &holdingConduit{Router: router, held: make(chan string, 1), release: make(chan struct{})}
 	q := auditquery.New(st.AuditQueries(), st.JobQueries())
@@ -573,4 +575,234 @@ func (denyApprovalDecisions) AuthorizeApprovalDecision(context.Context, capabili
 // these blast caps; zero takes the package default, as BlastCap clamps it.
 func blastCaps(readCap, mutateCap int) *capability.StaticOperatorSettings {
 	return &capability.StaticOperatorSettings{S: capability.OperatorSettings{ReadBlastCap: readCap, MutateBlastCap: mutateCap}}
+}
+
+// signalInFlight wraps a TaskRepository to signal each InFlight read once it
+// has returned. Every registration runs a reconcile on its own goroutine, and
+// a test that seeds Dispatched Tasks while that reconcile has not yet read the
+// in-flight set races it: the reconcile re-sends the Tasks beside the test's
+// own callers. Waiting for the read first makes the test's callers the only
+// senders.
+type signalInFlight struct {
+	jobs.TaskRepository
+	read chan struct{}
+}
+
+func newSignalInFlight(tasks jobs.TaskRepository) *signalInFlight {
+	return &signalInFlight{TaskRepository: tasks, read: make(chan struct{}, 64)}
+}
+
+func (s *signalInFlight) InFlight(ctx context.Context) ([]jobs.Task, error) {
+	got, err := s.TaskRepository.InFlight(ctx)
+	select {
+	case s.read <- struct{}{}:
+	default:
+	}
+	return got, err
+}
+
+// awaitReads waits for n InFlight reads.
+func (s *signalInFlight) awaitReads(t *testing.T, n int) {
+	t.Helper()
+	for range n {
+		select {
+		case <-s.read:
+		case <-time.After(5 * time.Second):
+			t.Fatal("timeout waiting for a registration's reconcile to read the in-flight set")
+		}
+	}
+}
+
+// A Node whose stream ends resolves the Tasks in flight to it as failures with
+// the node-offline message, leaves alone a Task whose real result had already
+// arrived, and never re-sends either on the Node's next connect (invariant 4).
+func TestDispatchWiring_InFlightTaskResolvesWhenNodeStreamEndsAndIsNeverResent(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	repo, st := testTaskRepositoryWithStore(t)
+	tasks := newSignalInFlight(repo)
+	router, _, sink := newDispatchStack(tasks, nil, nil)
+
+	now := time.Now().UTC()
+	if err := st.Jobs().CreateJob(ctx, jobs.Job{ID: "job-1", CreatedAt: now}); err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	if err := st.Jobs().AddStage(ctx, jobs.Stage{ID: "stage-1", JobID: "job-1", Index: 0}); err != nil {
+		t.Fatalf("AddStage: %v", err)
+	}
+
+	sentCh := make(chan *relayv1.RelayMessage, 8)
+	unregister := sink.register("node-1", func(msg *relayv1.RelayMessage) error {
+		sentCh <- msg
+		return nil
+	})
+	// The connect's reconcile reads the in-flight set before any Task exists,
+	// so the test's own calls below are the only senders.
+	tasks.awaitReads(t, 1)
+
+	action := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead}
+	seeded := []jobs.Task{
+		{ID: "task-silent", JobID: "job-1", StageID: "stage-1", NodeID: "node-1", Action: action, CreatedAt: now},
+		{ID: "task-answered", JobID: "job-1", StageID: "stage-1", NodeID: "node-1", Action: action, CreatedAt: now},
+	}
+	settlements := map[string]*jobs.Settlement{}
+	var dispatched sync.WaitGroup
+	for _, task := range seeded {
+		if err := tasks.CreateTask(ctx, task); err != nil {
+			t.Fatalf("CreateTask(%s): %v", task.ID, err)
+		}
+		if err := tasks.MarkDispatched(ctx, task.ID, now); err != nil {
+			t.Fatalf("MarkDispatched(%s): %v", task.ID, err)
+		}
+		// Each call carries a Settlement, as the capability engine's does.
+		dctx, settlement := jobs.WithSettlement(ctx)
+		settlements[task.ID] = settlement
+		dispatched.Add(1)
+		go func() {
+			defer dispatched.Done()
+			_, _ = router.Dispatch(dctx, "node-1", task)
+		}()
+	}
+	for range seeded {
+		select {
+		case <-sentCh:
+		case <-time.After(2 * time.Second):
+			t.Fatal("timeout waiting for the Router to send a Task")
+		}
+	}
+
+	// task-answered's result arrives, then the stream ends.
+	sink.deliver("node-1", &relayv1.TaskResult{TaskId: "task-answered", Outcome: relayv1.Outcome_OUTCOME_SUCCESS})
+	unregister()
+	dispatched.Wait()
+	settlements["task-silent"].Settle()
+
+	silent, err := tasks.Get(ctx, "task-silent")
+	if err != nil {
+		t.Fatalf("Get(task-silent): %v", err)
+	}
+	if silent.State != jobs.DispatchStateResolved || silent.Outcome != jobs.OutcomeFailure ||
+		silent.ExitCode != -1 || string(silent.Stderr) != jobs.NodeOfflineMessage {
+		t.Errorf("task-silent = %+v, want Resolved failure, exit -1, the node-offline message", silent)
+	}
+	answered, err := tasks.Get(ctx, "task-answered")
+	if err != nil {
+		t.Fatalf("Get(task-answered): %v", err)
+	}
+	if answered.State != jobs.DispatchStateDispatched {
+		t.Errorf("task-answered = %+v, want it left Dispatched for its worker to resolve with the real result", answered)
+	}
+
+	// Its worker resolves it with the real result, as the capability engine
+	// does, and then settles.
+	if err := tasks.Resolve(ctx, "task-answered", jobs.Result{Outcome: jobs.OutcomeSuccess}); err != nil {
+		t.Fatalf("Resolve(task-answered): %v", err)
+	}
+	settlements["task-answered"].Settle()
+
+	// The Node reconnects: onConnect runs the Reconciler, which must send nothing.
+	reconnected := make(chan *relayv1.RelayMessage, 8)
+	unregisterAgain := sink.register("node-1", func(msg *relayv1.RelayMessage) error {
+		reconnected <- msg
+		return nil
+	})
+	defer unregisterAgain()
+	select {
+	case msg := <-reconnected:
+		t.Fatalf("reconnect sent %v for a Task already resolved", msg)
+	case <-time.After(500 * time.Millisecond):
+	}
+}
+
+// seedDispatchedTask stores a Job with one Stage and one Task for nodeID, and
+// marks the Task Dispatched, as a worker that has begun to send it leaves it.
+func seedDispatchedTask(t *testing.T, st *store.Store, tasks jobs.TaskRepository, nodeID, taskID string) jobs.Task {
+	t.Helper()
+	ctx := context.Background()
+	now := time.Now().UTC()
+	if err := st.Jobs().CreateJob(ctx, jobs.Job{ID: "job-" + taskID, CreatedAt: now}); err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	if err := st.Jobs().AddStage(ctx, jobs.Stage{ID: "stage-" + taskID, JobID: "job-" + taskID, Index: 0}); err != nil {
+		t.Fatalf("AddStage: %v", err)
+	}
+	task := jobs.Task{
+		ID: taskID, JobID: "job-" + taskID, StageID: "stage-" + taskID, NodeID: nodeID, CreatedAt: now,
+		Action: jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead},
+	}
+	if err := tasks.CreateTask(ctx, task); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if err := tasks.MarkDispatched(ctx, taskID, now); err != nil {
+		t.Fatalf("MarkDispatched: %v", err)
+	}
+	return task
+}
+
+// A result that arrived is not replaced by the offline resolution however long
+// its persistence takes: the protection lasts until the caller settles the
+// Task, with no time horizon. The stream ends while the real result is not yet
+// written; the Task is left alone, and the real result then lands.
+func TestDispatchWiring_DeliveredResultSurvivesTeardownUntilItIsPersisted(t *testing.T) {
+	ctx := context.Background()
+	repo, st := testTaskRepositoryWithStore(t)
+	tasks := newSignalInFlight(repo)
+	router, _, sink := newDispatchStack(tasks, nil, nil)
+
+	sent := make(chan *relayv1.RelayMessage, 4)
+	unregister := sink.register("node-1", func(msg *relayv1.RelayMessage) error {
+		sent <- msg
+		return nil
+	})
+	tasks.awaitReads(t, 1)
+	task := seedDispatchedTask(t, st, tasks, "node-1", "task-1")
+
+	type outcome struct {
+		res jobs.Result
+		err error
+	}
+	returned := make(chan outcome, 1)
+	dctx, settlement := jobs.WithSettlement(ctx)
+	go func() {
+		res, err := router.Dispatch(dctx, "node-1", task)
+		returned <- outcome{res, err}
+	}()
+	select {
+	case <-sent:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for the Router to send the Task")
+	}
+	sink.deliver("node-1", &relayv1.TaskResult{TaskId: "task-1", Outcome: relayv1.Outcome_OUTCOME_SUCCESS})
+	var got outcome
+	select {
+	case got = <-returned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Dispatch did not return the delivered result")
+	}
+	if got.err != nil || got.res.Outcome != jobs.OutcomeSuccess {
+		t.Fatalf("Dispatch = (%+v, %v), want the delivered success", got.res, got.err)
+	}
+
+	// The caller has the result but has not written it; the stream ends.
+	unregister()
+	stored, err := tasks.Get(ctx, "task-1")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if stored.State != jobs.DispatchStateDispatched {
+		t.Fatalf("task = %+v, want it left Dispatched for the caller's write, not resolved offline", stored)
+	}
+
+	// The caller's write lands, then it settles.
+	if err := tasks.Resolve(ctx, "task-1", got.res); err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	settlement.Settle()
+	stored, err = tasks.Get(ctx, "task-1")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if stored.State != jobs.DispatchStateResolved || stored.Outcome != jobs.OutcomeSuccess {
+		t.Errorf("task = %+v, want Resolved with the real success result", stored)
+	}
 }

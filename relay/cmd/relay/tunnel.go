@@ -6,8 +6,10 @@ import (
 	"io"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/Felag-Engineering/relay/relay/internal/dispatch"
 	"github.com/Felag-Engineering/relay/relay/internal/nodevocab"
 	"github.com/Felag-Engineering/relay/relay/internal/policyview"
 	"github.com/Felag-Engineering/relay/relay/internal/protoconv"
@@ -29,15 +31,99 @@ import (
 // the control plane is disabled (execution off).
 //
 // register is called after the Ping handshake completes; it records the
-// outbound send function for the node and returns a cleanup func. deliver is
-// called when a TaskResult arrives on the inbound stream. deliverVerdict is
-// called when a PolicyVerdict arrives on the inbound stream (the daemon's
+// outbound send function for the node and returns a cleanup func; the options
+// say how the registration ends (dispatch.WithLiveStreamCheck). streamEnded is
+// called instead, at teardown, by a stream that never registered; live says
+// whether any stream still claims the Node (dispatch.Router.StreamEnded).
+// deliver is called when a TaskResult arrives on the inbound stream.
+// deliverVerdict is called when a PolicyVerdict arrives on the inbound stream (the daemon's
 // answer to a PolicyQuery; ADR-0011 — the Relay only reads it, never evaluates
 // Policy itself).
 type taskSink interface {
-	register(nodeID string, send func(*relayv1.RelayMessage) error) (unregister func())
+	register(nodeID string, send func(*relayv1.RelayMessage) error, opts ...dispatch.RegisterOption) (unregister func())
+	streamEnded(nodeID string, live func() bool)
 	deliver(nodeID string, result *relayv1.TaskResult)
 	deliverVerdict(nodeID string, verdict *relayv1.PolicyVerdict)
+}
+
+// heartbeatInterval is the relay-daemon's built-in heartbeat period. It is not
+// a setting: the daemon's HEARTBEAT_INTERVAL carries the same value, and
+// TestLivenessConstants_AgreeWithTheDaemon pins the two together.
+const heartbeatInterval = 60 * time.Second
+
+// missedHeartbeatAllowance is how many heartbeat intervals may pass with no
+// Heartbeat before the Relay marks a Node offline and closes its stream. Three
+// tolerates a late or lost heartbeat, and the daemon's jitter, without a
+// false offline.
+const missedHeartbeatAllowance = 3
+
+// streamClaims records, per Node, which Tunnel streams are live, so that only
+// the end of a Node's last live stream marks it offline. A Node that
+// reconnects while its old stream is still tearing down has two streams at
+// once, and the old stream's end must never clear the connectedness the new
+// stream set: that is node-connection's "closing a replaced stream never marks
+// the Node offline", for the registry's connected flag. Equally, a new stream
+// that fails before it is established must not clear the connectedness of an
+// older stream still live. The Router asks the same question (anyLive) at a
+// stream's end, to learn whether the Node is offline. The zero value is ready
+// for use.
+//
+// The mutex is held across the registry write on purpose. The last-claim check
+// and the write must be atomic against a newer stream's open, or an old stream
+// could decide it is the last, lose the CPU to the new stream's
+// SetConnected(true), then write false over it. SetConnected is in-memory and
+// its event publication does not block, so the critical section stays short.
+// anyLive is called with the Router's lock held, so nothing holding
+// streamClaims.mu may call into the Router.
+type streamClaims struct {
+	mu   sync.Mutex
+	next uint64
+	live map[string]map[uint64]struct{}
+}
+
+// open records a new live stream for nodeID, marks the Node connected, and
+// returns the stream's generation. A uint64 generation, not a pointer, is the
+// identity: Go does not promise distinct pointers to distinct zero-size values.
+func (c *streamClaims) open(reg registry.Repository, nodeID string) uint64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.live == nil {
+		c.live = make(map[string]map[uint64]struct{})
+	}
+	c.next++
+	if c.live[nodeID] == nil {
+		c.live[nodeID] = make(map[uint64]struct{})
+	}
+	c.live[nodeID][c.next] = struct{}{}
+	if reg != nil {
+		reg.SetConnected(nodeID, true)
+	}
+	return c.next
+}
+
+// close ends the claim gen. If it was nodeID's last live stream it marks the
+// Node not connected and reports true; while another stream is live it is a
+// no-op on the registry and reports false.
+func (c *streamClaims) close(reg registry.Repository, nodeID string, gen uint64) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	streams := c.live[nodeID]
+	delete(streams, gen)
+	if len(streams) > 0 {
+		return false
+	}
+	delete(c.live, nodeID)
+	if reg != nil {
+		reg.SetConnected(nodeID, false)
+	}
+	return true
+}
+
+// anyLive reports whether any stream for nodeID is live.
+func (c *streamClaims) anyLive(nodeID string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.live[nodeID]) > 0
 }
 
 type tunnelServer struct {
@@ -60,6 +146,22 @@ type tunnelServer struct {
 	// execution), by installDevHarness in a devharness-tagged build, or
 	// injected directly by tests; nil when the control plane is disabled.
 	sink taskSink
+
+	// heartbeatDeadline is how long a stream may go without a Heartbeat before
+	// the Relay closes it. Zero means missedHeartbeatAllowance heartbeat
+	// intervals; only tests set it, and no setting exists.
+	heartbeatDeadline time.Duration
+
+	// claims tracks each Node's live streams. See streamClaims.
+	claims streamClaims
+}
+
+// livenessDeadline is how long a stream may go without a Heartbeat.
+func (s *tunnelServer) livenessDeadline() time.Duration {
+	if s.heartbeatDeadline > 0 {
+		return s.heartbeatDeadline
+	}
+	return missedHeartbeatAllowance * heartbeatInterval
 }
 
 func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[relayv1.DaemonMessage, relayv1.RelayMessage]) error {
@@ -118,19 +220,43 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[relayv1.DaemonMessag
 	// Mark the Node connected for as long as this stream lives.
 	//
 	// This is the seam that makes "connected now?" a fact the registry holds
-	// rather than a guess from LastSeen. The defer is what makes it true in the
-	// direction that matters: a stream close flips the answer immediately,
-	// however the stream ended — clean shutdown, network drop, revocation
-	// teardown, or panic — instead of leaving a Node reading green until a
-	// heartbeat timeout that nothing here enforces.
+	// rather than a guess from LastSeen. The deferred teardown is what makes it
+	// true in the direction that matters: the close of the Node's last live
+	// stream flips the answer immediately, however it ended — clean
+	// shutdown, network drop, missed heartbeats, revocation teardown, or
+	// panic.
 	//
-	// Registered BEFORE the Upsert so there is no window in which a Node is in
+	// Claimed BEFORE the Upsert so there is no window in which a Node is in
 	// the registry but not yet marked connected; a reader landing in that gap
 	// would see a Node that is plainly here as offline.
-	if s.reg != nil {
-		s.reg.SetConnected(nodeID, true)
-		defer s.reg.SetConnected(nodeID, false)
-	}
+	gen := s.claims.open(s.reg, nodeID)
+
+	// The teardown order is load-bearing. The claim ends first, clearing
+	// connectedness only if this was the Node's last live stream, so a
+	// reconnect during the offline resolution sets it after the clear and the
+	// Node reads connected throughout. Only then does the Router learn the
+	// stream ended: a registration's unregister removes the conn, and a stream
+	// that never registered reports its end (streamEnded). Either way the
+	// Router decides whether the Node is now offline, asking the claims
+	// whether any stream is still live, and if it is offline resolves the
+	// Tasks in flight to it and fails the waiters. The revocation release,
+	// deferred earlier, runs last.
+	//
+	// A stream that ends while another holds the Node leaves the Node to that
+	// one: it may register and re-send the Tasks in flight for their result,
+	// or it too may end, and the last stream to end runs the offline
+	// resolution whether or not it ever registered.
+	var unregister func()
+	live := func() bool { return s.claims.anyLive(nodeID) }
+	defer func() {
+		s.claims.close(s.reg, nodeID, gen)
+		switch {
+		case unregister != nil:
+			unregister()
+		case s.sink != nil:
+			s.sink.streamEnded(nodeID, live)
+		}
+	}()
 
 	// Record the Node's identity, facts, and node: labels in the registry.
 	// CertFingerprint is recomputed from the verified leaf so the Upsert does
@@ -192,10 +318,24 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[relayv1.DaemonMessag
 	// Register the outbound send function with the sink (if set). Nil, and
 	// this block a zero-cost no-op, when the control plane is disabled
 	// (execution off); the real production sink when it's enabled.
+	//
+	// A newer registration for the Node displaces this one, and this stream
+	// then ends: it will never register again, and left live it would hold
+	// the Node, so the newer stream's end could not find the Node offline.
+	displaced := make(chan struct{})
+	var displaceOnce sync.Once
 	if s.sink != nil {
-		unregister := s.sink.register(nodeID, stream.Send)
-		defer unregister()
+		unregister = s.sink.register(nodeID, stream.Send, dispatch.WithLiveStreamCheck(live),
+			dispatch.WithOnDisplaced(func() { displaceOnce.Do(func() { close(displaced) }) }))
 	}
+
+	// The Node is connected while its Heartbeats arrive within the deadline.
+	// The clock starts once registration completes, so a registration that
+	// waits behind the previous stream's offline resolution never counts
+	// against it. Only a Heartbeat resets it.
+	deadline := s.livenessDeadline()
+	timer := time.NewTimer(deadline)
+	defer timer.Stop()
 
 	// Run Recv in a goroutine so the select below can observe cctx cancellation.
 	// grpc.ServerStream.Recv() does not unblock when a derived context is
@@ -227,6 +367,13 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[relayv1.DaemonMessag
 		select {
 		case <-cctx.Done():
 			return status.Error(codes.Unauthenticated, "node revoked")
+		case <-displaced:
+			slog.Info("node stream replaced by a newer stream for the same node; closing it", "node_id", nodeID)
+			return status.Error(codes.Aborted, "replaced by a newer stream for this node")
+		case <-timer.C:
+			slog.Warn("node offline: no heartbeat within the missed-heartbeat allowance; closing its stream",
+				"node_id", nodeID, "deadline", deadline)
+			return status.Errorf(codes.Unavailable, "no heartbeat within %s", deadline)
 		case err := <-recvErr:
 			if err == io.EOF { //nolint:errorlint // grpc-go returns io.EOF unwrapped from Recv at a clean end of stream
 				return nil
@@ -235,6 +382,7 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[relayv1.DaemonMessag
 		case m := <-recvMsg:
 			if hb := m.GetHeartbeat(); hb != nil {
 				slog.Debug("heartbeat", "unix_millis", hb.UnixMillis)
+				timer.Reset(deadline)
 				if s.reg != nil {
 					if err := s.reg.UpdateLastSeen(nodeID, time.Now()); err != nil {
 						slog.Warn("update last-seen failed", "node_id", nodeID, "err", err)

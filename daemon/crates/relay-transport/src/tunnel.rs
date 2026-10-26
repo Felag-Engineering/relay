@@ -35,6 +35,26 @@ pub async fn connect_mtls(
 }
 
 // ---------------------------------------------------------------------------
+// HTTP/2 keepalive
+// ---------------------------------------------------------------------------
+
+/// HTTP/2 keepalive ping interval on the channel to the Relay, so the daemon
+/// notices a dead link underneath its Tunnel and reconnects.
+///
+/// hyper schedules a ping this long after the last DATA, headers or its own
+/// pong; the Relay's pings do not reset it. The interval must stay at least
+/// twice the Relay's ping-enforcement minimum (30 s), or the Relay answers the
+/// daemon's pings with GOAWAY.
+pub const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(60);
+/// How long the daemon waits for a keepalive ping's acknowledgement before it
+/// treats the link as dead. It is longer than the Relay's whole detection
+/// window (30 s + 20 s), so on a silent dead link the Relay closes its stream
+/// first and the Node's in-flight Tasks resolve before the daemon reconnects.
+/// Correctness does not depend on that order; only which defined outcome a
+/// Task gets does.
+pub const KEEPALIVE_TIMEOUT: Duration = Duration::from_secs(60);
+
+// ---------------------------------------------------------------------------
 // Reconnect backoff
 // ---------------------------------------------------------------------------
 
@@ -211,6 +231,15 @@ mod tests {
     use std::sync::Arc;
     use tokio::net::TcpListener;
     use tokio::time::Duration;
+
+    /// The Relay enforces a 30 s minimum ping interval and detects a dead link within
+    /// 30 s + 20 s. Mirrors the Go contract test in `relay/cmd/relay`, so a
+    /// Rust-only edit fails here too.
+    #[test]
+    fn keepalive_interval_clears_relay_ping_enforcement() {
+        assert!(KEEPALIVE_INTERVAL >= Duration::from_secs(60));
+        assert!(KEEPALIVE_TIMEOUT >= Duration::from_secs(55));
+    }
 
     /// Generate a self-signed cert+key pair with the given DNS SAN via rcgen.
     fn make_self_signed(san: &str) -> (String, String) {

@@ -2,13 +2,19 @@ package main
 
 import (
 	"context"
+	"errors"
+	"io"
 	"net"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/Felag-Engineering/relay/relay/internal/capability"
+	"github.com/Felag-Engineering/relay/relay/internal/dispatch"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/relay/relay/internal/nodestate"
 	"github.com/Felag-Engineering/relay/relay/internal/policyview"
 	"github.com/Felag-Engineering/relay/relay/internal/registry"
 	relayv1 "github.com/Felag-Engineering/relay/relay/internal/relay/v1"
@@ -737,5 +743,679 @@ func TestTunnelOpen_PolicySnapshotCapturesIntoCache(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("timeout: PolicySnapshot was not captured into the policyview.Cache")
+	}
+}
+
+// openNodeStream opens a Tunnel stream, sends Hello and waits for the Ping, so
+// the Node is registered (and marked connected) when it returns.
+func openNodeStream(ctx context.Context, t *testing.T, conn *grpc.ClientConn, nodeID string) grpc.BidiStreamingClient[relayv1.DaemonMessage, relayv1.RelayMessage] {
+	t.Helper()
+	stream, err := relayv1.NewTunnelClient(conn).Open(ctx)
+	if err != nil {
+		t.Fatalf("open stream: %v", err)
+	}
+	if err := stream.Send(&relayv1.DaemonMessage{
+		Body: &relayv1.DaemonMessage_Hello{Hello: &relayv1.Hello{NodeId: nodeID}},
+	}); err != nil {
+		t.Fatalf("send hello: %v", err)
+	}
+	msg, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("recv ping: %v", err)
+	}
+	if msg.GetPing() == nil {
+		t.Fatalf("expected Ping, got %T", msg.Body)
+	}
+	return stream
+}
+
+// nodeMarkedOffline reports whether the registry's record of nodeID carries the
+// state:offline marker, the way every surface derives it.
+func nodeMarkedOffline(t *testing.T, reg registry.Repository, nodeID string) bool {
+	t.Helper()
+	n, ok := reg.Get(nodeID)
+	if !ok {
+		t.Fatalf("node %q not in the registry", nodeID)
+	}
+	for _, m := range nodestate.Markers(nodestate.Input{Node: n}) {
+		if m.Key == string(nodestate.MarkerOffline) {
+			return true
+		}
+	}
+	return false
+}
+
+func waitUntil(t *testing.T, what string, within time.Duration, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(within)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timeout waiting for %s", what)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func TestTunnelServer_DefaultDeadlineIsThreeHeartbeatIntervals(t *testing.T) {
+	if got, want := (&tunnelServer{}).livenessDeadline(), 3*60*time.Second; got != want {
+		t.Fatalf("default liveness deadline = %v, want %v", got, want)
+	}
+}
+
+// A Node that sends no Heartbeat within the deadline is closed with
+// Unavailable, marked offline, and its last_seen stays the last heartbeat.
+func TestTunnelOpen_MissedHeartbeatsMarkOfflineAndCloseStream(t *testing.T) {
+	const nodeID = "node-missed-hb"
+	oldTime := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	reg := registry.NewInMemory(registry.WithClock(func() time.Time { return oldTime }))
+	srv := grpc.NewServer(grpc.StreamInterceptor(injectNodeIDInterceptor(nodeID)))
+	relayv1.RegisterTunnelServer(srv, &tunnelServer{reg: reg, heartbeatDeadline: 200 * time.Millisecond})
+	conn := newBufconnConn(t, srv)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	stream := openNodeStream(ctx, t, conn, nodeID)
+
+	if n, _ := reg.Get(nodeID); !n.Connected {
+		t.Fatal("node not connected after Hello")
+	}
+	if nodeMarkedOffline(t, reg, nodeID) {
+		t.Fatal("a connected node carries the offline marker")
+	}
+
+	_, err := stream.Recv()
+	if got := status.Code(err); got != codes.Unavailable {
+		t.Fatalf("Recv after the deadline = %v, want code Unavailable", err)
+	}
+	waitUntil(t, "node marked not connected", 5*time.Second, func() bool {
+		n, _ := reg.Get(nodeID)
+		return !n.Connected
+	})
+	if !nodeMarkedOffline(t, reg, nodeID) {
+		t.Fatal("a node that missed its heartbeats does not carry the offline marker")
+	}
+	if n, _ := reg.Get(nodeID); !n.LastSeen.Equal(oldTime) {
+		t.Fatalf("LastSeen = %v, want it left at the last heartbeat (%v)", n.LastSeen, oldTime)
+	}
+}
+
+func TestTunnelOpen_HeartbeatsWithinDeadlineKeepNodeConnected(t *testing.T) {
+	const nodeID = "node-steady-hb"
+	reg := registry.NewInMemory()
+	srv := grpc.NewServer(grpc.StreamInterceptor(injectNodeIDInterceptor(nodeID)))
+	relayv1.RegisterTunnelServer(srv, &tunnelServer{reg: reg, heartbeatDeadline: time.Second})
+	conn := newBufconnConn(t, srv)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	stream := openNodeStream(ctx, t, conn, nodeID)
+
+	recvDone := make(chan error, 1)
+	go func() {
+		_, err := stream.Recv()
+		recvDone <- err
+	}()
+
+	// Three times the deadline, so only the heartbeats can be keeping it open;
+	// the deadline is wide enough that a slow -race run does not trip it.
+	end := time.Now().Add(3 * time.Second)
+	for time.Now().Before(end) {
+		if err := stream.Send(&relayv1.DaemonMessage{
+			Body: &relayv1.DaemonMessage_Heartbeat{Heartbeat: &relayv1.Heartbeat{UnixMillis: time.Now().UnixMilli()}},
+		}); err != nil {
+			t.Fatalf("send heartbeat: %v", err)
+		}
+		select {
+		case err := <-recvDone:
+			t.Fatalf("stream closed while heartbeats were arriving: %v", err)
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+	if n, _ := reg.Get(nodeID); !n.Connected {
+		t.Fatal("node not connected while its heartbeats arrive within the deadline")
+	}
+}
+
+// Only a Heartbeat is liveness evidence: other traffic never extends the
+// deadline.
+func TestTunnelOpen_OnlyHeartbeatsResetTheDeadline(t *testing.T) {
+	const nodeID = "node-chatty"
+	reg := registry.NewInMemory()
+	srv := grpc.NewServer(grpc.StreamInterceptor(injectNodeIDInterceptor(nodeID)))
+	relayv1.RegisterTunnelServer(srv, &tunnelServer{reg: reg, heartbeatDeadline: 300 * time.Millisecond})
+	conn := newBufconnConn(t, srv)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	stream := openNodeStream(ctx, t, conn, nodeID)
+
+	recvDone := make(chan error, 1)
+	go func() {
+		_, err := stream.Recv()
+		recvDone <- err
+	}()
+	for {
+		select {
+		case err := <-recvDone:
+			if got := status.Code(err); got != codes.Unavailable {
+				t.Fatalf("stream ended with %v, want code Unavailable", err)
+			}
+			return
+		case <-time.After(50 * time.Millisecond):
+			_ = stream.Send(&relayv1.DaemonMessage{
+				Body: &relayv1.DaemonMessage_TaskResult{TaskResult: &relayv1.TaskResult{TaskId: "no-such-task"}},
+			})
+		case <-ctx.Done():
+			t.Fatal("stream never closed although only TaskResults arrived")
+		}
+	}
+}
+
+// registerSignalSink wraps a taskSink to say when a register call has
+// returned and when its unregister has fully run.
+type registerSignalSink struct {
+	taskSink
+	registered   chan struct{}
+	unregistered chan struct{}
+}
+
+func newRegisterSignalSink(inner taskSink) *registerSignalSink {
+	return &registerSignalSink{
+		taskSink:     inner,
+		registered:   make(chan struct{}, 8),
+		unregistered: make(chan struct{}, 8),
+	}
+}
+
+func (s *registerSignalSink) register(nodeID string, send func(*relayv1.RelayMessage) error, opts ...dispatch.RegisterOption) func() {
+	unregister := s.taskSink.register(nodeID, send, opts...)
+	s.registered <- struct{}{}
+	return func() {
+		unregister()
+		s.unregistered <- struct{}{}
+	}
+}
+
+func awaitSignal(t *testing.T, what string, ch <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timeout waiting for %s", what)
+	}
+}
+
+// The end of a replaced stream never marks the live Node offline: the registry
+// keeps the Node connected for as long as its newer stream lives.
+func TestTunnelOpen_ReplacedStreamEndDoesNotMarkLiveNodeOffline(t *testing.T) {
+	const nodeID = "node-replaced"
+
+	run := func(t *testing.T, sink *registerSignalSink) registry.Repository {
+		reg := registry.NewInMemory()
+		// handlerDone fires as each Open handler returns, deferred teardown
+		// included, so the test waits on A's teardown having run rather than
+		// on a delay.
+		handlerDone := make(chan struct{}, 2)
+		inject := injectNodeIDInterceptor(nodeID)
+		srv := grpc.NewServer(grpc.StreamInterceptor(func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+			defer func() { handlerDone <- struct{}{} }()
+			return inject(srv, ss, info, handler)
+		}))
+		ts := &tunnelServer{reg: reg}
+		if sink != nil {
+			ts.sink = sink
+		}
+		relayv1.RegisterTunnelServer(srv, ts)
+		conn := newBufconnConn(t, srv)
+
+		ctxA, cancelA := context.WithCancel(context.Background())
+		defer cancelA()
+		ctxB, cancelB := context.WithCancel(context.Background())
+		defer cancelB()
+
+		openNodeStream(ctxA, t, conn, nodeID)
+		if sink != nil {
+			awaitSignal(t, "stream A to register", sink.registered)
+		}
+		openNodeStream(ctxB, t, conn, nodeID)
+		if sink != nil {
+			awaitSignal(t, "stream B to register", sink.registered)
+		}
+
+		cancelA()
+		awaitSignal(t, "stream A's handler to return", handlerDone)
+		if sink != nil {
+			awaitSignal(t, "stream A's teardown", sink.unregistered)
+		}
+
+		if n, _ := reg.Get(nodeID); !n.Connected {
+			t.Fatal("the end of a replaced stream marked the live node not connected")
+		}
+		if nodeMarkedOffline(t, reg, nodeID) {
+			t.Fatal("the end of a replaced stream marked the live node offline")
+		}
+		return reg
+	}
+
+	t.Run("claim alone", func(t *testing.T) {
+		run(t, nil)
+	})
+
+	t.Run("with a router", func(t *testing.T) {
+		var offlineCalls atomic.Int32
+		router := dispatch.NewRouter(nil, nil, dispatch.WithOnOffline(func(string, map[string]struct{}) {
+			offlineCalls.Add(1)
+		}))
+		run(t, newRegisterSignalSink(routerSink{r: router}))
+		if got := offlineCalls.Load(); got != 0 {
+			t.Fatalf("offline hook ran %d times for a replaced registration, want 0", got)
+		}
+	})
+}
+
+// A Node that reconnects while the offline resolution of its previous stream
+// is still running reads connected throughout, and stays connected after.
+func TestTunnelOpen_ReconnectDuringOfflineResolutionStaysConnected(t *testing.T) {
+	const nodeID = "node-flap"
+	reg := registry.NewInMemory()
+	entered := make(chan struct{}, 1)
+	release := make(chan struct{})
+	router := dispatch.NewRouter(nil, nil, dispatch.WithOnOffline(func(string, map[string]struct{}) {
+		entered <- struct{}{}
+		<-release
+	}))
+	sink := newRegisterSignalSink(routerSink{r: router})
+
+	srv := grpc.NewServer(grpc.StreamInterceptor(injectNodeIDInterceptor(nodeID)))
+	relayv1.RegisterTunnelServer(srv, &tunnelServer{reg: reg, sink: sink})
+	conn := newBufconnConn(t, srv)
+
+	ctxA, cancelA := context.WithCancel(context.Background())
+	defer cancelA()
+	ctxB, cancelB := context.WithCancel(context.Background())
+	defer cancelB()
+
+	openNodeStream(ctxA, t, conn, nodeID)
+	awaitSignal(t, "stream A to register", sink.registered)
+
+	cancelA()
+	awaitSignal(t, "the offline resolution to start", entered)
+	if n, _ := reg.Get(nodeID); n.Connected {
+		t.Fatal("node reads connected while its stream's offline resolution runs")
+	}
+
+	// B's Ping is sent before it registers, so it arrives while Register waits
+	// behind the offline resolution.
+	openNodeStream(ctxB, t, conn, nodeID)
+	if n, _ := reg.Get(nodeID); !n.Connected {
+		t.Fatal("reconnected node does not read connected")
+	}
+	if router.Connected(nodeID) {
+		t.Fatal("the new registration was not held behind the offline resolution")
+	}
+
+	close(release)
+	waitUntil(t, "the new registration", 5*time.Second, func() bool { return router.Connected(nodeID) })
+	awaitSignal(t, "stream A's teardown", sink.unregistered)
+	if n, _ := reg.Get(nodeID); !n.Connected {
+		t.Fatal("the old stream's teardown marked the reconnected node not connected")
+	}
+	if nodeMarkedOffline(t, reg, nodeID) {
+		t.Fatal("the reconnected node carries the offline marker")
+	}
+}
+
+// holdSecondRegister wraps a registerSignalSink so the second register call
+// pauses, signalling held, until release is closed. It stops a replacement
+// stream between its claim on the Node and its Router registration.
+type holdSecondRegister struct {
+	*registerSignalSink
+	calls   atomic.Int32
+	held    chan struct{}
+	release chan struct{}
+}
+
+func (s *holdSecondRegister) register(nodeID string, send func(*relayv1.RelayMessage) error, opts ...dispatch.RegisterOption) func() {
+	if s.calls.Add(1) == 2 {
+		s.held <- struct{}{}
+		<-s.release
+	}
+	return s.registerSignalSink.register(nodeID, send, opts...)
+}
+
+// A stream that ends after a newer one has claimed the Node but before that one
+// has registered with the Router must not resolve its Tasks as node-offline:
+// the Node is reconnecting. The Task stays Dispatched, the replacement's
+// registration re-sends it for its result, and the real result the replacement
+// delivers is the one recorded.
+func TestTunnelOpen_OldStreamEndingBeforeTheReplacementRegistersRunsNoOfflineResolution(t *testing.T) {
+	const nodeID = "node-handover"
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	tasks, st := testTaskRepositoryWithStore(t)
+	// The production stack, except that the first connect does not reconcile:
+	// the test sends the Task on stream A itself.
+	var reconciler *dispatch.Reconciler
+	var connects atomic.Int32
+	router := dispatch.NewRouter(func(id string) {
+		if connects.Add(1) > 1 {
+			_ = reconciler.ReconcileNode(ctx, id)
+		}
+	}, nil, dispatch.WithOnOffline(func(id string, delivered map[string]struct{}) {
+		_ = reconciler.ResolveOffline(ctx, id, delivered)
+	}))
+	reconciler = dispatch.NewReconciler(tasks, router)
+	reg := registry.NewInMemory()
+	sink := &holdSecondRegister{
+		registerSignalSink: newRegisterSignalSink(routerSink{r: router}),
+		held:               make(chan struct{}, 1),
+		release:            make(chan struct{}),
+	}
+
+	task := seedDispatchedTask(t, st, tasks, nodeID, "task-1")
+
+	srv := grpc.NewServer(grpc.StreamInterceptor(injectNodeIDInterceptor(nodeID)))
+	relayv1.RegisterTunnelServer(srv, &tunnelServer{reg: reg, sink: sink})
+	conn := newBufconnConn(t, srv)
+
+	ctxA, cancelA := context.WithCancel(ctx)
+	defer cancelA()
+	ctxB, cancelB := context.WithCancel(ctx)
+	defer cancelB()
+
+	streamA := openNodeStream(ctxA, t, conn, nodeID)
+	awaitSignal(t, "stream A to register", sink.registered)
+
+	dispatched := make(chan error, 1)
+	go func() {
+		_, err := router.Dispatch(ctx, nodeID, task)
+		dispatched <- err
+	}()
+	if msg, err := streamA.Recv(); err != nil || msg.GetTask().GetTaskId() != task.ID {
+		t.Fatalf("stream A received (%v, %v), want the Task", msg, err)
+	}
+
+	// B claims the Node and is held before its Router registration.
+	streamB := openNodeStream(ctxB, t, conn, nodeID)
+	awaitSignal(t, "stream B to reach its registration", sink.held)
+
+	cancelA()
+	awaitSignal(t, "stream A's teardown", sink.unregistered)
+
+	select {
+	case err := <-dispatched:
+		if !errors.Is(err, jobs.ErrStreamReplaced) {
+			t.Errorf("Dispatch error = %v, want jobs.ErrStreamReplaced", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Dispatch did not return after stream A ended")
+	}
+	if got, err := tasks.Get(ctx, task.ID); err != nil || got.State != jobs.DispatchStateDispatched {
+		t.Fatalf("task = %+v (%v), want it still Dispatched: the Node is reconnecting, not offline", got, err)
+	}
+	if n, _ := reg.Get(nodeID); !n.Connected {
+		t.Fatal("the old stream's end marked the reconnecting node not connected")
+	}
+
+	// B registers, its reconnect re-sends the Task for its result, and the real
+	// result it delivers is recorded.
+	close(sink.release)
+	awaitSignal(t, "stream B to register", sink.registered)
+	if msg, err := streamB.Recv(); err != nil || msg.GetTask().GetTaskId() != task.ID {
+		t.Fatalf("stream B received (%v, %v), want the Task re-sent for its result", msg, err)
+	}
+	if err := streamB.Send(&relayv1.DaemonMessage{Body: &relayv1.DaemonMessage_TaskResult{
+		TaskResult: &relayv1.TaskResult{TaskId: task.ID, Outcome: relayv1.Outcome_OUTCOME_SUCCESS},
+	}}); err != nil {
+		t.Fatalf("send TaskResult: %v", err)
+	}
+	waitUntil(t, "the real result to be recorded", 5*time.Second, func() bool {
+		got, err := tasks.Get(ctx, task.ID)
+		return err == nil && got.State == jobs.DispatchStateResolved && got.Outcome == jobs.OutcomeSuccess
+	})
+
+	cancelB()
+	awaitSignal(t, "stream B's teardown", sink.unregistered)
+}
+
+// failingPingStream is a server stream whose first Send, the handler's Ping,
+// signals held, waits for release and then fails: the stream has claimed its
+// Node and ends before it registers with the Router.
+type failingPingStream struct {
+	grpc.ServerStream
+	held    chan<- struct{}
+	release <-chan struct{}
+}
+
+func (s *failingPingStream) SendMsg(any) error {
+	s.held <- struct{}{}
+	<-s.release
+	return errors.New("test: the Ping write failed")
+}
+
+// A replacement stream that claims the Node and then fails before its Router
+// registration leaves the Node offline. The stream it replaced deferred its
+// Tasks to it, so the replacement's end resolves them as node-offline: they
+// are never left Dispatched for a later connect to send, possibly for the
+// first time (invariant 4).
+func TestTunnelOpen_AReplacementThatFailsBeforeRegisteringResolvesTheTasksInFlight(t *testing.T) {
+	const nodeID = "node-failed-handover"
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	repo, st := testTaskRepositoryWithStore(t)
+	tasks := newSignalInFlight(repo)
+	router, _, inner := newDispatchStack(tasks, nil, nil)
+	sink := newRegisterSignalSink(inner)
+	reg := registry.NewInMemory()
+
+	var streams atomic.Int32
+	held := make(chan struct{}, 1)
+	release := make(chan struct{})
+	inject := injectNodeIDInterceptor(nodeID)
+	srv := grpc.NewServer(grpc.StreamInterceptor(func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+		if streams.Add(1) == 2 {
+			ss = &failingPingStream{ServerStream: ss, held: held, release: release}
+		}
+		return inject(srv, ss, info, handler)
+	}))
+	relayv1.RegisterTunnelServer(srv, &tunnelServer{reg: reg, sink: sink})
+	conn := newBufconnConn(t, srv)
+
+	ctxA, cancelA := context.WithCancel(ctx)
+	defer cancelA()
+	streamA := openNodeStream(ctxA, t, conn, nodeID)
+	awaitSignal(t, "stream A to register", sink.registered)
+	tasks.awaitReads(t, 1)
+
+	task := seedDispatchedTask(t, st, tasks, nodeID, "task-1")
+	dctx, settlement := jobs.WithSettlement(ctx)
+	defer settlement.Settle()
+	dispatched := make(chan error, 1)
+	go func() {
+		_, err := router.Dispatch(dctx, nodeID, task)
+		dispatched <- err
+	}()
+	if msg, err := streamA.Recv(); err != nil || msg.GetTask().GetTaskId() != task.ID {
+		t.Fatalf("stream A received (%v, %v), want the Task", msg, err)
+	}
+
+	// B claims the Node and is held in its Ping, before its registration.
+	streamB, err := relayv1.NewTunnelClient(conn).Open(ctx)
+	if err != nil {
+		t.Fatalf("open stream B: %v", err)
+	}
+	if err := streamB.Send(&relayv1.DaemonMessage{
+		Body: &relayv1.DaemonMessage_Hello{Hello: &relayv1.Hello{NodeId: nodeID}},
+	}); err != nil {
+		t.Fatalf("send hello on B: %v", err)
+	}
+	awaitSignal(t, "stream B to reach its Ping", held)
+
+	// A ends while B holds the Node: its Task waits for B.
+	cancelA()
+	awaitSignal(t, "stream A's teardown", sink.unregistered)
+	select {
+	case err := <-dispatched:
+		if !errors.Is(err, jobs.ErrStreamReplaced) {
+			t.Errorf("Dispatch error = %v, want jobs.ErrStreamReplaced", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("Dispatch did not return after stream A ended")
+	}
+	if got, err := tasks.Get(ctx, task.ID); err != nil || got.State != jobs.DispatchStateDispatched {
+		t.Fatalf("task = %+v (%v), want it Dispatched while B holds the Node", got, err)
+	}
+
+	// B's Ping fails, so B ends without ever registering.
+	close(release)
+	waitUntil(t, "the Task to be resolved node-offline", 5*time.Second, func() bool {
+		got, err := tasks.Get(ctx, task.ID)
+		return err == nil && got.State == jobs.DispatchStateResolved
+	})
+	got, err := tasks.Get(ctx, task.ID)
+	if err != nil || got.Outcome != jobs.OutcomeFailure || got.ExitCode != -1 || string(got.Stderr) != jobs.NodeOfflineMessage {
+		t.Fatalf("task = %+v (%v), want Resolved failure, exit -1, the node-offline message", got, err)
+	}
+	if n, _ := reg.Get(nodeID); n.Connected {
+		t.Error("the node reads connected after its last stream ended")
+	}
+	// The offline resolution's own read of the in-flight set.
+	tasks.awaitReads(t, 1)
+
+	// The Node's next connect sends nothing.
+	ctxC, cancelC := context.WithCancel(ctx)
+	defer cancelC()
+	streamC := openNodeStream(ctxC, t, conn, nodeID)
+	awaitSignal(t, "stream C to register", sink.registered)
+	tasks.awaitReads(t, 1)
+	received := make(chan *relayv1.RelayMessage, 1)
+	go func() {
+		if msg, err := streamC.Recv(); err == nil {
+			received <- msg
+		}
+	}()
+	select {
+	case msg := <-received:
+		t.Fatalf("reconnect sent %v for a Task already resolved", msg)
+	case <-time.After(500 * time.Millisecond):
+	}
+}
+
+// A new stream that fails before registering never marks offline a Node whose
+// older stream is still live and registered.
+func TestTunnelOpen_ANewStreamThatFailsBeforeRegisteringLeavesALiveNodeConnected(t *testing.T) {
+	const nodeID = "node-failed-newcomer"
+	var offlineCalls atomic.Int32
+	router := dispatch.NewRouter(nil, nil, dispatch.WithOnOffline(func(string, map[string]struct{}) { offlineCalls.Add(1) }))
+	sink := newRegisterSignalSink(routerSink{r: router})
+	reg := registry.NewInMemory()
+
+	var streams atomic.Int32
+	held := make(chan struct{}, 1)
+	release := make(chan struct{})
+	handlerDone := make(chan struct{}, 2)
+	inject := injectNodeIDInterceptor(nodeID)
+	srv := grpc.NewServer(grpc.StreamInterceptor(func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+		defer func() { handlerDone <- struct{}{} }()
+		if streams.Add(1) == 2 {
+			ss = &failingPingStream{ServerStream: ss, held: held, release: release}
+		}
+		return inject(srv, ss, info, handler)
+	}))
+	relayv1.RegisterTunnelServer(srv, &tunnelServer{reg: reg, sink: sink})
+	conn := newBufconnConn(t, srv)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	openNodeStream(ctx, t, conn, nodeID)
+	awaitSignal(t, "stream A to register", sink.registered)
+
+	streamB, err := relayv1.NewTunnelClient(conn).Open(ctx)
+	if err != nil {
+		t.Fatalf("open stream B: %v", err)
+	}
+	if err := streamB.Send(&relayv1.DaemonMessage{
+		Body: &relayv1.DaemonMessage_Hello{Hello: &relayv1.Hello{NodeId: nodeID}},
+	}); err != nil {
+		t.Fatalf("send hello on B: %v", err)
+	}
+	awaitSignal(t, "stream B to reach its Ping", held)
+	close(release)
+	awaitSignal(t, "stream B's handler to return", handlerDone)
+
+	if n, _ := reg.Get(nodeID); !n.Connected {
+		t.Fatal("a failed new stream marked the live node not connected")
+	}
+	if !router.Connected(nodeID) {
+		t.Fatal("a failed new stream removed the live registration")
+	}
+	if got := offlineCalls.Load(); got != 0 {
+		t.Fatalf("offline hook ran %d times while the node's older stream was live, want 0", got)
+	}
+}
+
+// A newer registration for the Node ends the stream it displaced, so that
+// stream can never hold the Node. When the newer stream then ends, the Node is
+// offline and the Tasks in flight on it resolve node-offline, rather than
+// staying Dispatched for as long as the displaced stream keeps heartbeating.
+func TestTunnelOpen_ANewerRegistrationEndsTheStreamItDisplaced(t *testing.T) {
+	const nodeID = "node-displaced"
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	repo, st := testTaskRepositoryWithStore(t)
+	tasks := newSignalInFlight(repo)
+	router, _, inner := newDispatchStack(tasks, nil, nil)
+	sink := newRegisterSignalSink(inner)
+	reg := registry.NewInMemory()
+
+	srv := grpc.NewServer(grpc.StreamInterceptor(injectNodeIDInterceptor(nodeID)))
+	relayv1.RegisterTunnelServer(srv, &tunnelServer{reg: reg, sink: sink})
+	conn := newBufconnConn(t, srv)
+
+	streamA := openNodeStream(ctx, t, conn, nodeID)
+	awaitSignal(t, "stream A to register", sink.registered)
+	ctxB, cancelB := context.WithCancel(ctx)
+	defer cancelB()
+	streamB := openNodeStream(ctxB, t, conn, nodeID)
+	awaitSignal(t, "stream B to register", sink.registered)
+
+	// A, still heartbeating from the daemon's side, is closed by the Relay.
+	if err := streamA.Send(&relayv1.DaemonMessage{
+		Body: &relayv1.DaemonMessage_Heartbeat{Heartbeat: &relayv1.Heartbeat{UnixMillis: time.Now().UnixMilli()}},
+	}); err != nil && !errors.Is(err, io.EOF) {
+		t.Fatalf("heartbeat on A: %v", err)
+	}
+	if _, err := streamA.Recv(); status.Code(err) != codes.Aborted {
+		t.Fatalf("stream A ended with %v, want code Aborted", err)
+	}
+	awaitSignal(t, "stream A's teardown", sink.unregistered)
+
+	// A reconcile of B that re-sends the Task beside this Dispatch changes
+	// nothing below: either send is answered by B's end.
+	task := seedDispatchedTask(t, st, tasks, nodeID, "task-1")
+	dctx, settlement := jobs.WithSettlement(ctx)
+	defer settlement.Settle()
+	dispatched := make(chan error, 1)
+	go func() {
+		_, err := router.Dispatch(dctx, nodeID, task)
+		dispatched <- err
+	}()
+	if msg, err := streamB.Recv(); err != nil || msg.GetTask().GetTaskId() != task.ID {
+		t.Fatalf("stream B received (%v, %v), want the Task", msg, err)
+	}
+
+	cancelB()
+	awaitSignal(t, "stream B's teardown", sink.unregistered)
+	select {
+	case <-dispatched:
+	case <-ctx.Done():
+		t.Fatal("Dispatch did not return after stream B ended")
+	}
+	got, err := tasks.Get(ctx, task.ID)
+	if err != nil || got.State != jobs.DispatchStateResolved || string(got.Stderr) != jobs.NodeOfflineMessage {
+		t.Fatalf("task = %+v (%v), want Resolved with the node-offline message", got, err)
+	}
+	if n, _ := reg.Get(nodeID); n.Connected {
+		t.Error("the node reads connected after its last stream ended")
 	}
 }

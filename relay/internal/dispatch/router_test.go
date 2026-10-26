@@ -373,8 +373,7 @@ func TestRouter_CallerAfterASentCallerNeverConsultsItsGuard(t *testing.T) {
 	defer unregister()
 	task := jobs.Task{ID: "task-1", NodeID: "node-1"}
 
-	firstCtx, cancelFirst := context.WithCancel(jobs.WithSendGuard(context.Background(), func() bool { return false }))
-	defer cancelFirst()
+	firstCtx := jobs.WithSendGuard(context.Background(), func() bool { return false })
 	firstDone := make(chan error, 1)
 	go func() {
 		_, err := r.Dispatch(firstCtx, "node-1", task)
@@ -393,7 +392,7 @@ func TestRouter_CallerAfterASentCallerNeverConsultsItsGuard(t *testing.T) {
 	}()
 	waitUntil(t, time.Second, func() bool { return send.len() == 2 })
 
-	// The second call's waiter replaced the first's, so it gets the Result.
+	// The one Result wakes both callers.
 	r.Deliver("node-1", &relayv1.TaskResult{TaskId: "task-1", Outcome: relayv1.Outcome_OUTCOME_SUCCESS})
 	if err := <-secondDone; err != nil {
 		t.Fatalf("second Dispatch: %v", err)
@@ -401,9 +400,8 @@ func TestRouter_CallerAfterASentCallerNeverConsultsItsGuard(t *testing.T) {
 	if secondGuardCalls != 0 {
 		t.Errorf("second caller's guard called %d times, want 0", secondGuardCalls)
 	}
-	cancelFirst()
-	if err := <-firstDone; !errors.Is(err, context.Canceled) {
-		t.Errorf("first Dispatch error = %v, want context.Canceled", err)
+	if err := <-firstDone; err != nil {
+		t.Errorf("first Dispatch error = %v, want the delivered result", err)
 	}
 }
 
@@ -1369,5 +1367,610 @@ func TestNewRouter_RealViolationRecorderDoesNotWarn(t *testing.T) {
 
 	if strings.Contains(buf.String(), "will not record protocol violations durably") {
 		t.Errorf("NewRouter with a real ViolationRecorder logged the nil-recorder warning; log:\n%s", buf.String())
+	}
+}
+
+// The offline hook runs when the Node's current registration ends, after the
+// conn is removed and before a blocked Dispatch is released with
+// ErrNodeDisconnected, so the caller reads a store the hook has already
+// written.
+func TestRouter_CurrentRegistrationEndRunsOfflineHookBeforeWaitersFail(t *testing.T) {
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var connectedInHook atomic.Bool
+	var r *Router
+	r = NewRouter(nil, nil, WithOnOffline(func(nodeID string, _ map[string]struct{}) {
+		if nodeID != "node-1" {
+			t.Errorf("hook nodeID = %q, want node-1", nodeID)
+		}
+		connectedInHook.Store(r.Connected(nodeID))
+		close(entered)
+		<-release
+	}))
+	send := &recordingSend{}
+	unregister := r.Register("node-1", send.send)
+
+	dispatched := make(chan error, 1)
+	go func() {
+		_, err := r.Dispatch(context.Background(), "node-1", jobs.Task{ID: "task-1", NodeID: "node-1"})
+		dispatched <- err
+	}()
+	waitUntil(t, time.Second, func() bool { return send.len() == 1 })
+
+	unregisterDone := make(chan struct{})
+	go func() {
+		unregister()
+		close(unregisterDone)
+	}()
+	<-entered
+
+	select {
+	case err := <-dispatched:
+		t.Fatalf("Dispatch returned (%v) while the offline hook was still running", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if connectedInHook.Load() {
+		t.Error("the Node still reads connected inside the offline hook")
+	}
+
+	close(release)
+	select {
+	case err := <-dispatched:
+		if !errors.Is(err, ErrNodeDisconnected) {
+			t.Errorf("Dispatch error = %v, want ErrNodeDisconnected", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Dispatch did not return after the offline hook finished")
+	}
+	<-unregisterDone
+}
+
+// A replaced registration's end is not the Node going offline: a newer
+// registration already holds the slot, so the hook does not run.
+func TestRouter_ReplacedRegistrationEndDoesNotRunOfflineHook(t *testing.T) {
+	var calls atomic.Int32
+	r := NewRouter(nil, nil, WithOnOffline(func(string, map[string]struct{}) { calls.Add(1) }))
+	unregisterOld := r.Register("node-1", (&recordingSend{}).send)
+	unregisterNew := r.Register("node-1", (&recordingSend{}).send)
+
+	unregisterOld()
+	if got := calls.Load(); got != 0 {
+		t.Fatalf("offline hook ran %d times for a replaced registration, want 0", got)
+	}
+	if !r.Connected("node-1") {
+		t.Fatal("the replaced registration's end disconnected the live one")
+	}
+
+	unregisterNew()
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("offline hook ran %d times after the current registration ended, want 1", got)
+	}
+}
+
+// While a Node's offline hook runs, a new registration for it waits: otherwise
+// the hook could resolve a Task sent on the new registration.
+func TestRouter_RegisterWaitsForOfflineHook(t *testing.T) {
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var blocked atomic.Bool
+	r := NewRouter(nil, nil, WithOnOffline(func(nodeID string, _ map[string]struct{}) {
+		if nodeID != "node-1" || !blocked.CompareAndSwap(false, true) {
+			return
+		}
+		close(entered)
+		<-release
+	}))
+	unregister := r.Register("node-1", (&recordingSend{}).send)
+
+	go unregister()
+	<-entered
+
+	registered := make(chan func(), 1)
+	go func() { registered <- r.Register("node-1", (&recordingSend{}).send) }()
+
+	select {
+	case <-registered:
+		t.Fatal("Register returned while the Node's offline hook was running")
+	case <-time.After(50 * time.Millisecond):
+	}
+	if r.Connected("node-1") {
+		t.Fatal("the Node reads connected while its offline hook runs")
+	}
+
+	// Another Node is never held behind it.
+	other := r.Register("node-2", (&recordingSend{}).send)
+	other()
+
+	close(release)
+	select {
+	case unregisterNew := <-registered:
+		unregisterNew()
+	case <-time.After(2 * time.Second):
+		t.Fatal("Register did not return after the offline hook finished")
+	}
+}
+
+// A hook that panics still fails the registration's waiters and releases a
+// waiting Register, so neither hangs behind it.
+func TestRouter_PanickingOfflineHookStillFailsWaitersAndReleasesRegister(t *testing.T) {
+	r := NewRouter(nil, nil, WithOnOffline(func(string, map[string]struct{}) { panic("hook failed") }))
+	send := &recordingSend{}
+	unregister := r.Register("node-1", send.send)
+
+	dispatched := make(chan error, 1)
+	go func() {
+		_, err := r.Dispatch(context.Background(), "node-1", jobs.Task{ID: "task-1", NodeID: "node-1"})
+		dispatched <- err
+	}()
+	waitUntil(t, time.Second, func() bool { return send.len() == 1 })
+
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Error("the hook's panic did not propagate")
+			}
+		}()
+		unregister()
+	}()
+
+	select {
+	case err := <-dispatched:
+		if !errors.Is(err, ErrNodeDisconnected) {
+			t.Errorf("Dispatch error = %v, want ErrNodeDisconnected", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Dispatch hung behind a panicking offline hook")
+	}
+
+	registered := make(chan func(), 1)
+	go func() { registered <- r.Register("node-1", (&recordingSend{}).send) }()
+	select {
+	case unregisterNew := <-registered:
+		// The hook panics again for this registration; the test is done with it.
+		defer func() { _ = recover() }()
+		unregisterNew()
+	case <-time.After(2 * time.Second):
+		t.Fatal("Register hung behind a panicking offline hook")
+	}
+}
+
+// The hook is told which Tasks already had their TaskResult delivered to a
+// caller that has not settled it, so it never overwrites a result that
+// arrived before the stream ended. A caller with no Settlement persists
+// nothing, and its delivery is not held.
+func TestRouter_OfflineHookReceivesTheTasksAlreadyDelivered(t *testing.T) {
+	var got map[string]struct{}
+	r := NewRouter(nil, nil, WithOnOffline(func(_ string, delivered map[string]struct{}) { got = delivered }))
+	send := &recordingSend{}
+	unregister := r.Register("node-1", send.send)
+
+	dispatched := make(chan error, 3)
+	for _, id := range []string{"task-delivered", "task-pending"} {
+		ctx, settlement := jobs.WithSettlement(context.Background())
+		defer settlement.Settle()
+		go func() {
+			_, err := r.Dispatch(ctx, "node-1", jobs.Task{ID: id, NodeID: "node-1"})
+			dispatched <- err
+		}()
+	}
+	go func() {
+		_, err := r.Dispatch(context.Background(), "node-1", jobs.Task{ID: "task-unsettleable", NodeID: "node-1"})
+		dispatched <- err
+	}()
+	waitUntil(t, time.Second, func() bool { return send.len() == 3 })
+	r.Deliver("node-1", &relayv1.TaskResult{TaskId: "task-unsettleable", Outcome: relayv1.Outcome_OUTCOME_SUCCESS})
+	<-dispatched
+
+	r.Deliver("node-1", &relayv1.TaskResult{TaskId: "task-delivered", Outcome: relayv1.Outcome_OUTCOME_SUCCESS})
+	unregister()
+
+	if _, ok := got["task-delivered"]; !ok {
+		t.Errorf("delivered = %v, want it to hold task-delivered", got)
+	}
+	if _, ok := got["task-pending"]; ok {
+		t.Errorf("delivered = %v, must not hold a Task with no delivered result", got)
+	}
+	if _, ok := got["task-unsettleable"]; ok {
+		t.Errorf("delivered = %v, must not hold a delivery to a caller with no Settlement", got)
+	}
+	for range 2 {
+		<-dispatched
+	}
+}
+
+// A result for a Task sent on a replaced stream can arrive on its replacement.
+// The delivery is held whichever registration ends later, so its offline hook
+// never overwrites it.
+func TestRouter_DeliveryOnAReplacingStreamIsInItsSkipSet(t *testing.T) {
+	var got map[string]struct{}
+	r := NewRouter(nil, nil, WithOnOffline(func(_ string, delivered map[string]struct{}) { got = delivered }))
+	oldSend := &recordingSend{}
+	r.Register("node-1", oldSend.send)
+
+	dispatched := make(chan error, 1)
+	ctx, settlement := jobs.WithSettlement(context.Background())
+	defer settlement.Settle()
+	go func() {
+		_, err := r.Dispatch(ctx, "node-1", jobs.Task{ID: "task-1", NodeID: "node-1"})
+		dispatched <- err
+	}()
+	waitUntil(t, time.Second, func() bool { return oldSend.len() == 1 })
+
+	unregisterNew := r.Register("node-1", (&recordingSend{}).send)
+	r.Deliver("node-1", &relayv1.TaskResult{TaskId: "task-1", Outcome: relayv1.Outcome_OUTCOME_SUCCESS})
+	if err := <-dispatched; err != nil {
+		t.Fatalf("Dispatch error = %v, want nil", err)
+	}
+	unregisterNew()
+
+	if _, ok := got["task-1"]; !ok {
+		t.Errorf("delivered = %v, want the later registration's skip set to hold task-1", got)
+	}
+}
+
+// deliverResult runs one Dispatch of id on node-1 to the point of a delivered
+// result, and returns once Dispatch has returned it.
+func deliverResult(t *testing.T, r *Router, id string) *jobs.Settlement {
+	t.Helper()
+	ctx, settlement := jobs.WithSettlement(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := r.Dispatch(ctx, "node-1", jobs.Task{ID: id, NodeID: "node-1"})
+		done <- err
+	}()
+	waitUntil(t, time.Second, func() bool {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		_, ok := r.waiters[id]
+		return ok
+	})
+	r.Deliver("node-1", &relayv1.TaskResult{TaskId: id, Outcome: relayv1.Outcome_OUTCOME_SUCCESS})
+	if err := <-done; err != nil {
+		t.Fatalf("Dispatch(%s) = %v", id, err)
+	}
+	return settlement
+}
+
+// A delivered result stays protected from the offline resolution until its
+// caller settles it, however long that takes: the set has no time horizon. A
+// settled entry is removed, so the set holds only the results that arrived and
+// are not yet persisted.
+func TestRouter_DeliveredResultIsProtectedUntilSettled(t *testing.T) {
+	var got map[string]struct{}
+	r := NewRouter(nil, nil, WithOnOffline(func(_ string, delivered map[string]struct{}) { got = delivered }))
+	unregister := r.Register("node-1", (&recordingSend{}).send)
+
+	deliverResult(t, r, "task-unsettled")
+	deliverResult(t, r, "task-settled").Settle()
+	// A Settlement that received nothing releases nothing.
+	_, idle := jobs.WithSettlement(context.Background())
+	idle.Settle()
+
+	unregister()
+
+	if _, ok := got["task-unsettled"]; !ok {
+		t.Errorf("delivered = %v, want task-unsettled still protected", got)
+	}
+	if _, ok := got["task-settled"]; ok {
+		t.Errorf("delivered = %v, want task-settled removed once settled", got)
+	}
+}
+
+// A registration whose stream a newer one has claimed is removed and its
+// waiters fail, but the offline hook does not run: the Node is not offline.
+// The waiter learns it is a replaced stream, not an offline Node.
+func TestRouter_SupersededRegistrationEndRunsNoOfflineHook(t *testing.T) {
+	var calls atomic.Int32
+	r := NewRouter(nil, nil, WithOnOffline(func(string, map[string]struct{}) { calls.Add(1) }))
+	var replacementLive atomic.Bool
+	send := &recordingSend{}
+	unregister := r.Register("node-1", send.send, WithLiveStreamCheck(replacementLive.Load))
+
+	dispatched := make(chan error, 1)
+	go func() {
+		_, err := r.Dispatch(context.Background(), "node-1", jobs.Task{ID: "task-1", NodeID: "node-1"})
+		dispatched <- err
+	}()
+	waitUntil(t, time.Second, func() bool { return send.len() == 1 })
+
+	replacementLive.Store(true)
+	unregister()
+
+	if got := calls.Load(); got != 0 {
+		t.Fatalf("offline hook ran %d times for a superseded registration, want 0", got)
+	}
+	if r.Connected("node-1") {
+		t.Error("the superseded registration still reads connected")
+	}
+	select {
+	case err := <-dispatched:
+		if !errors.Is(err, ErrNodeDisconnected) || !errors.Is(err, jobs.ErrStreamReplaced) {
+			t.Errorf("Dispatch error = %v, want ErrNodeDisconnected and jobs.ErrStreamReplaced", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Dispatch hung behind a superseded registration")
+	}
+
+	// Registering is not held behind any offline resolution.
+	registered := make(chan func(), 1)
+	go func() { registered <- r.Register("node-1", (&recordingSend{}).send) }()
+	select {
+	case unregisterNew := <-registered:
+		unregisterNew()
+	case <-time.After(2 * time.Second):
+		t.Fatal("Register waited behind a superseded registration")
+	}
+}
+
+// A registration the Node's newer one replaced in the Router tells its waiters
+// the same: the Node is not offline.
+func TestRouter_ReplacedRegistrationFailsItsWaitersWithErrStreamReplaced(t *testing.T) {
+	r := NewRouter(nil, nil)
+	send := &recordingSend{}
+	unregisterOld := r.Register("node-1", send.send)
+
+	dispatched := make(chan error, 1)
+	go func() {
+		_, err := r.Dispatch(context.Background(), "node-1", jobs.Task{ID: "task-1", NodeID: "node-1"})
+		dispatched <- err
+	}()
+	waitUntil(t, time.Second, func() bool { return send.len() == 1 })
+
+	unregisterNew := r.Register("node-1", (&recordingSend{}).send)
+	defer unregisterNew()
+	unregisterOld()
+
+	if err := <-dispatched; !errors.Is(err, jobs.ErrStreamReplaced) {
+		t.Errorf("Dispatch error = %v, want jobs.ErrStreamReplaced", err)
+	}
+}
+
+// A registration that ends with the Node offline fails its waiters with a
+// plain ErrNodeDisconnected, never ErrStreamReplaced.
+func TestRouter_OfflineRegistrationEndIsNotAReplacedStream(t *testing.T) {
+	r := NewRouter(nil, nil, WithOnOffline(func(string, map[string]struct{}) {}))
+	send := &recordingSend{}
+	unregister := r.Register("node-1", send.send, WithLiveStreamCheck(func() bool { return false }))
+
+	dispatched := make(chan error, 1)
+	go func() {
+		_, err := r.Dispatch(context.Background(), "node-1", jobs.Task{ID: "task-1", NodeID: "node-1"})
+		dispatched <- err
+	}()
+	waitUntil(t, time.Second, func() bool { return send.len() == 1 })
+
+	unregister()
+
+	err := <-dispatched
+	if !errors.Is(err, ErrNodeDisconnected) || errors.Is(err, jobs.ErrStreamReplaced) {
+		t.Errorf("Dispatch error = %v, want ErrNodeDisconnected only", err)
+	}
+}
+
+// Two callers can wait on one Task at once: a worker's Dispatch and a
+// Reconciler resend on the Node's registration. Each is woken by the Task's
+// Result, and each by its registration's end: a later caller never displaces
+// an earlier one's waiter, which would leave the earlier blocked for as long
+// as its context lives, forever on a context with no deadline.
+func TestRouter_EveryCallerWaitingOnOneTaskIsWoken(t *testing.T) {
+	for _, end := range []string{"result", "registration end"} {
+		t.Run(end, func(t *testing.T) {
+			r := NewRouter(nil, nil, WithOnOffline(func(string, map[string]struct{}) {}))
+			send := &recordingSend{}
+			unregister := r.Register("node-1", send.send)
+			defer unregister()
+
+			task := jobs.Task{ID: "task-1", NodeID: "node-1"}
+			returned := make(chan error, 2)
+			for range 2 {
+				go func() {
+					_, err := r.Dispatch(context.Background(), "node-1", task)
+					returned <- err
+				}()
+			}
+			waitUntil(t, time.Second, func() bool { return send.len() == 2 })
+
+			if end == "result" {
+				r.Deliver("node-1", &relayv1.TaskResult{TaskId: task.ID, Outcome: relayv1.Outcome_OUTCOME_SUCCESS})
+			} else {
+				unregister()
+			}
+			for i := range 2 {
+				select {
+				case err := <-returned:
+					if end == "result" && err != nil {
+						t.Errorf("Dispatch %d = %v, want the delivered result", i, err)
+					}
+					if end != "result" && !errors.Is(err, ErrNodeDisconnected) {
+						t.Errorf("Dispatch %d = %v, want ErrNodeDisconnected", i, err)
+					}
+				case <-time.After(2 * time.Second):
+					t.Fatalf("Dispatch %d was never woken by the %s", i, end)
+				}
+			}
+			r.mu.Lock()
+			defer r.mu.Unlock()
+			if len(r.waiters) != 0 {
+				t.Errorf("waiters = %v, want none left", r.waiters)
+			}
+		})
+	}
+}
+
+// A replacement stream that claims the Node and then ends before it registers
+// leaves the Node offline. The registration it replaced deferred to it, so its
+// end, reported by StreamEnded, is what resolves the Tasks in flight.
+func TestRouter_AReplacementThatEndsUnregisteredRunsTheOfflineHook(t *testing.T) {
+	var calls atomic.Int32
+	r := NewRouter(nil, nil, WithOnOffline(func(string, map[string]struct{}) { calls.Add(1) }))
+	var live atomic.Bool
+	send := &recordingSend{}
+	unregister := r.Register("node-1", send.send, WithLiveStreamCheck(live.Load))
+
+	dispatched := make(chan error, 1)
+	go func() {
+		_, err := r.Dispatch(context.Background(), "node-1", jobs.Task{ID: "task-1", NodeID: "node-1"})
+		dispatched <- err
+	}()
+	waitUntil(t, time.Second, func() bool { return send.len() == 1 })
+
+	// The replacement has claimed the Node; the old registration ends.
+	live.Store(true)
+	unregister()
+	if err := <-dispatched; !errors.Is(err, jobs.ErrStreamReplaced) {
+		t.Fatalf("Dispatch error = %v, want jobs.ErrStreamReplaced", err)
+	}
+	if got := calls.Load(); got != 0 {
+		t.Fatalf("offline hook ran %d times while the replacement held the Node, want 0", got)
+	}
+
+	// The replacement ends before registering.
+	live.Store(false)
+	r.StreamEnded("node-1", live.Load)
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("offline hook ran %d times after the last stream ended, want 1", got)
+	}
+}
+
+// StreamEnded resolves nothing while the Node is still held: by a
+// registration, or by another live stream.
+func TestRouter_StreamEndedWhileTheNodeIsHeldRunsNoOfflineHook(t *testing.T) {
+	var calls atomic.Int32
+	r := NewRouter(nil, nil, WithOnOffline(func(string, map[string]struct{}) { calls.Add(1) }))
+
+	r.StreamEnded("node-1", func() bool { return true })
+	unregister := r.Register("node-1", (&recordingSend{}).send)
+	r.StreamEnded("node-1", func() bool { return false })
+	if got := calls.Load(); got != 0 {
+		t.Fatalf("offline hook ran %d times for a held Node, want 0", got)
+	}
+	unregister()
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("offline hook ran %d times at the registration's end, want 1", got)
+	}
+}
+
+// A caller that received no result cannot end the protection of a result
+// delivered to another caller of the same Task. The stale worker on a
+// replaced registration settles after the successor's resend has received the
+// real result; the successor's end still leaves that Task to its caller.
+func TestRouter_AStaleCallerCannotReleaseAResultDeliveredToAnother(t *testing.T) {
+	var skip map[string]struct{}
+	r := NewRouter(nil, nil, WithOnOffline(func(_ string, delivered map[string]struct{}) { skip = delivered }))
+	task := jobs.Task{ID: "task-1", NodeID: "node-1"}
+
+	sendA := &recordingSend{}
+	unregisterA := r.Register("node-1", sendA.send)
+	staleCtx, stale := jobs.WithSettlement(context.Background())
+	staleDone := make(chan error, 1)
+	go func() {
+		_, err := r.Dispatch(staleCtx, "node-1", task)
+		staleDone <- err
+	}()
+	waitUntil(t, time.Second, func() bool { return sendA.len() == 1 })
+
+	// B replaces A; the worker on A learns its stream was replaced.
+	sendB := &recordingSend{}
+	unregisterB := r.Register("node-1", sendB.send)
+	unregisterA()
+	if err := <-staleDone; !errors.Is(err, jobs.ErrStreamReplaced) {
+		t.Fatalf("stale Dispatch error = %v, want jobs.ErrStreamReplaced", err)
+	}
+
+	// B's resend receives the real result, not yet persisted.
+	freshCtx, fresh := jobs.WithSettlement(context.Background())
+	freshDone := make(chan error, 1)
+	go func() {
+		_, err := r.Dispatch(freshCtx, "node-1", task)
+		freshDone <- err
+	}()
+	waitUntil(t, time.Second, func() bool { return sendB.len() == 1 })
+	r.Deliver("node-1", &relayv1.TaskResult{TaskId: task.ID, Outcome: relayv1.Outcome_OUTCOME_SUCCESS})
+	if err := <-freshDone; err != nil {
+		t.Fatalf("fresh Dispatch error = %v, want the delivered result", err)
+	}
+
+	// The stale worker's deferred settle runs, then B ends with the Node offline.
+	stale.Settle()
+	unregisterB()
+	if _, ok := skip[task.ID]; !ok {
+		t.Fatalf("offline hook skip set = %v, want %s left to the caller holding its real result", skip, task.ID)
+	}
+
+	fresh.Settle()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.held) != 0 {
+		t.Errorf("held = %v, want it empty once the result's caller settled", r.held)
+	}
+}
+
+// A result delivered on one registration stays protected when a later
+// registration for the same Node is the one whose end finds the Node offline.
+func TestRouter_ADeliveredResultIsProtectedAcrossRegistrations(t *testing.T) {
+	var skip map[string]struct{}
+	r := NewRouter(nil, nil, WithOnOffline(func(_ string, delivered map[string]struct{}) { skip = delivered }))
+	unregisterA := r.Register("node-1", (&recordingSend{}).send)
+	settlement := deliverResult(t, r, "task-1")
+
+	unregisterB := r.Register("node-1", (&recordingSend{}).send)
+	unregisterA()
+	unregisterB()
+	if _, ok := skip["task-1"]; !ok {
+		t.Fatalf("offline hook skip set = %v, want task-1, whose result arrived on the earlier registration", skip)
+	}
+	settlement.Settle()
+}
+
+// One forged TaskResult that wakes two callers of the same Task is one
+// protocol violation: exactly one durable event, while both callers get the
+// Relay-authored failure.
+func TestDispatch_AForgedResultWakingTwoCallersIsRecordedOnce(t *testing.T) {
+	fake := &fakeViolationRecorder{}
+	r := NewRouter(nil, fake)
+	send := &recordingSend{}
+	unregister := r.Register("node-1", send.send)
+	defer unregister()
+
+	task := jobs.Task{ID: "task-1", JobID: "job-1", NodeID: "node-1"}
+	results := make(chan jobs.Result, 2)
+	for range 2 {
+		go func() {
+			res, _ := r.Dispatch(context.Background(), "node-1", task)
+			results <- res
+		}()
+	}
+	waitUntil(t, time.Second, func() bool { return send.len() == 2 })
+
+	r.Deliver("node-1", &relayv1.TaskResult{TaskId: "task-1", Outcome: relayv1.Outcome_OUTCOME_VERSION_REFUSED})
+	for range 2 {
+		select {
+		case res := <-results:
+			if res.Outcome != jobs.OutcomeFailure || res.ExitCode != -1 {
+				t.Errorf("Dispatch result = %+v, want the Relay-authored failure", res)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("a caller was not woken by the forged result")
+		}
+	}
+	if got := len(fake.recorded()); got != 1 {
+		t.Fatalf("recorded %d protocol violation events, want exactly 1", got)
+	}
+}
+
+// A registration displaced by a newer one for the same Node is told, once,
+// so its caller can end that stream; the newer one is not.
+func TestRouter_ADisplacedRegistrationIsTold(t *testing.T) {
+	r := NewRouter(nil, nil)
+	var oldTold, newTold atomic.Int32
+	unregisterOld := r.Register("node-1", (&recordingSend{}).send, WithOnDisplaced(func() { oldTold.Add(1) }))
+	unregisterNew := r.Register("node-1", (&recordingSend{}).send, WithOnDisplaced(func() { newTold.Add(1) }))
+	unregisterOld()
+	if got := oldTold.Load(); got != 1 {
+		t.Fatalf("displaced registration told %d times, want 1", got)
+	}
+	unregisterNew()
+	if got := newTold.Load(); got != 0 {
+		t.Fatalf("current registration told %d times at its own end, want 0", got)
 	}
 }

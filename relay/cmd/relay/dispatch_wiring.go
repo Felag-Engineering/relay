@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	"github.com/Felag-Engineering/relay/relay/internal/auditsink"
 	"github.com/Felag-Engineering/relay/relay/internal/dispatch"
@@ -75,8 +76,12 @@ type routerSink struct {
 	r *dispatch.Router
 }
 
-func (s routerSink) register(nodeID string, send func(*relayv1.RelayMessage) error) (unregister func()) {
-	return s.r.Register(nodeID, send)
+func (s routerSink) register(nodeID string, send func(*relayv1.RelayMessage) error, opts ...dispatch.RegisterOption) (unregister func()) {
+	return s.r.Register(nodeID, send, opts...)
+}
+
+func (s routerSink) streamEnded(nodeID string, live func() bool) {
+	s.r.StreamEnded(nodeID, live)
 }
 
 func (s routerSink) deliver(nodeID string, result *relayv1.TaskResult) {
@@ -87,9 +92,14 @@ func (s routerSink) deliverVerdict(nodeID string, verdict *relayv1.PolicyVerdict
 	s.r.DeliverVerdict(nodeID, verdict)
 }
 
+// offlineResolveBudget bounds the offline sweep. A reconnecting Node's
+// Register waits behind that sweep, so it is also the longest that wait lasts.
+const offlineResolveBudget = 30 * time.Second
+
 // newDispatchStack builds the Router + Reconciler + taskSink triple: a Node
-// (re)connecting fires the Reconciler's restart-recovery (ADR-0004) via
-// Router's onConnect hook.
+// (re)connecting fires the Reconciler's re-send-for-result (ADR-0004) via
+// Router's onConnect hook, and a Node going offline resolves the Tasks in
+// flight to it via Router's offline hook.
 //
 // violations is passed straight through to NewRouter, which requires it
 // positionally; see that doc comment for why nil is a supported mode.
@@ -104,7 +114,13 @@ func newDispatchStack(tasks jobs.TaskRepository, violations dispatch.ViolationRe
 		if err := reconciler.ReconcileNode(context.Background(), nodeID); err != nil {
 			logctx.Or(logger).Error("reconcile on connect failed", "node_id", nodeID, "err", err)
 		}
-	}, violations, dispatch.WithLogger(logger))
+	}, violations, dispatch.WithLogger(logger), dispatch.WithOnOffline(func(nodeID string, delivered map[string]struct{}) {
+		ctx, cancel := context.WithTimeout(context.Background(), offlineResolveBudget)
+		defer cancel()
+		if err := reconciler.ResolveOffline(ctx, nodeID, delivered); err != nil {
+			logctx.Or(logger).Error("resolve in-flight tasks on offline failed", "node_id", nodeID, "err", err)
+		}
+	}))
 	reconciler = dispatch.NewReconciler(tasks, router)
 
 	return router, reconciler, routerSink{r: router}

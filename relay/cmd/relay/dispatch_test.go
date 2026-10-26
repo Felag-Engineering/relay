@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Felag-Engineering/relay/relay/internal/dispatch"
 	relayv1 "github.com/Felag-Engineering/relay/relay/internal/relay/v1"
 )
 
@@ -40,7 +41,7 @@ func newDispatcher() *dispatcher {
 
 // register implements taskSink. Called by tunnelServer.Open after Ping is sent.
 // Returns an unregister cleanup func (called on stream teardown).
-func (d *dispatcher) register(nodeID string, send func(*relayv1.RelayMessage) error) func() {
+func (d *dispatcher) register(nodeID string, send func(*relayv1.RelayMessage) error, _ ...dispatch.RegisterOption) func() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.senders[nodeID] = send
@@ -56,6 +57,9 @@ func (d *dispatcher) register(nodeID string, send func(*relayv1.RelayMessage) er
 		delete(d.senders, nodeID)
 	}
 }
+
+// streamEnded implements taskSink: this fake resolves nothing.
+func (d *dispatcher) streamEnded(string, func() bool) {}
 
 // deliver implements taskSink. Called by tunnelServer.Open when a TaskResult
 // arrives on the inbound stream. Buffered channel (32) avoids blocking the
