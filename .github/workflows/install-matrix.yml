@@ -150,16 +150,21 @@ jobs:
       matrix:
         # BEGIN DI-33 platforms: scripts/install-matrix-platforms.sh holds this list equal to DI-33's.
         platform:
-          - { id: ubuntu-24.04, distribution: "Ubuntu", release: "24.04", family: deb, privileged: false, fips: false }
-          - { id: ubuntu-26.04, distribution: "Ubuntu", release: "26.04", family: deb, privileged: false, fips: false }
-          - { id: debian-13, distribution: "Debian", release: "13", family: deb, privileged: false, fips: false }
-          - { id: rocky-10, distribution: "Rocky Linux", release: "10", family: rpm, privileged: false, fips: true }
+          - { id: ubuntu-24.04, distribution: "Ubuntu", release: "24.04", family: deb, privileged: true, fips: false }
+          - { id: ubuntu-26.04, distribution: "Ubuntu", release: "26.04", family: deb, privileged: true, fips: false }
+          - { id: debian-13, distribution: "Debian", release: "13", family: deb, privileged: true, fips: false }
+          - { id: rocky-10, distribution: "Rocky Linux", release: "10", family: rpm, privileged: true, fips: true }
           - { id: amazonlinux-2023, distribution: "Amazon Linux", release: "2023", family: rpm, privileged: false, fips: false }
         arch: [x86_64, aarch64]
         # END DI-33 platforms
         # A row's `privileged` starts false and is flipped to true only where CI shows that
         # platform's systemd refusing to boot or run the units without it, with a comment
         # here naming the refusal.
+        # ubuntu-24.04, ubuntu-26.04, debian-13 and rocky-10 (systemd 255, 259, 257 and 257):
+        # without it, every start of relay.service and relay-daemon.service fails with
+        # "Failed to keep CAP_SYS_ADMIN: Operation not permitted" and status 217/USER, which
+        # Docker's default capability set cannot satisfy and a real host's PID 1 can.
+        # amazonlinux-2023 (systemd 252) runs the units unprivileged.
         include:
           - { arch: x86_64, runner: ubuntu-24.04 }
           - { arch: aarch64, runner: ubuntu-24.04-arm }

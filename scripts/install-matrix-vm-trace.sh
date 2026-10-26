@@ -261,7 +261,8 @@ allowed_args = [["$DUMMY_UNIT"]]
 
 [[operation]]
 name = "pkg.install"
-allowed_args = [["hello"]]
+# Exactly `hello`, unversioned: the daemon sends "" as the version when none is requested.
+allowed_args = [["hello"], [""]]
 
 [raw_exec]
 allow = ["^/usr/bin/true\$"]
