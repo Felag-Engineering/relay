@@ -399,7 +399,10 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 		slog.Warn("declined-label startup scan failed", "err", err)
 	}
 	// The same signal for the self-reported fields getNode declines on read
-	// (the Policy fingerprint, Facts, and the rest), on the same terms.
+	// (the Policy fingerprint, Facts, and the rest), on the same terms and
+	// within the same budget: O(Nodes), after the label scan. A label scan
+	// that spends the budget leaves this one to fail, which warns and
+	// continues like the label scan's own failure.
 	if _, err := st.ScanDeclinedSelfReports(scanCtx); err != nil {
 		slog.Warn("declined self-report startup scan failed", "err", err)
 	}

@@ -25,7 +25,7 @@ func TestReadLane_NeverServesAStoredMalformedSelfReport(t *testing.T) {
 	reg := st.Registry()
 
 	badPolicy := strings.ToUpper(strings.Repeat("a", 64))
-	badHost := "web‮01"
+	badHost := "web\u202e01"
 	longValue := strings.Repeat("v", registry.MaxLabelValueLen+1)
 	if _, err := reg.Upsert(registry.Report{
 		NodeID:            "node-forged",

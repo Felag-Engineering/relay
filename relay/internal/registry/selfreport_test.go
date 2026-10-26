@@ -109,7 +109,7 @@ func TestDeclineMalformedSelfReport(t *testing.T) {
 	}
 
 	bad := SelfReport{
-		Facts: Facts{Hostname: "web‮01", OS: "linux os", Kernel: strings.Repeat("k", 254), Arch: "x86_64",
+		Facts: Facts{Hostname: "web\u202e01", OS: "linux os", Kernel: strings.Repeat("k", 254), Arch: "x86_64",
 			IPAddresses: []string{"10.0.0.1", "fe80::1%eth0"}},
 		PolicyFingerprint:      strings.ToUpper(strings.Repeat("a", 64)),
 		TemplateSetFingerprint: "tmpl-1",

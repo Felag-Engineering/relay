@@ -165,7 +165,7 @@ func RunRepositoryConformance(t *testing.T, newRepo Factory) {
 			},
 			{
 				name: "hostname with U+202E",
-				seed: func(r *registry.Report) { r.Facts.Hostname = "web‮10" },
+				seed: func(r *registry.Report) { r.Facts.Hostname = "web\u202e10" },
 				want: func(r *registry.Report) { r.Facts.Hostname = "" },
 			},
 			{

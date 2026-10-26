@@ -11,7 +11,7 @@ import (
 // This file is the one-shot boot answer to "which Nodes carry a stored Label
 // this Relay will no longer serve" (threat model R13). getNode's
 // read-back filter (registry.go's wellFormedLabels) silently drops a pair
-// registry.WellFormedLabel refuses, and does so on every read — Get, List,
+// its namespace's predicate (labelNamespace.wellFormed) refuses, and does so on every read — Get, List,
 // and Upsert's own read-back — which is exactly why a per-read log line is
 // the wrong shape: List alone would re-log N lines per fleet listing,
 // forever, for state that never changes on its own. A scan run once per

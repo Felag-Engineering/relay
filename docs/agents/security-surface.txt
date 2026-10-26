@@ -136,7 +136,7 @@ relay/cmd/relay/reload*.go
 daemon/src/join*.rs
 daemon/src/join/**
 
-# Added 2026-10-26 (owner decision, #1182): the one proto-aware ingress seam. It holds
+# Added 2026-10-26 (owner decision, #1182): the one proto-aware ingress seam. It applies
 # every bound on what a Node reports about itself at Hello and Enroll, and the node:
 # namespace gate of invariant 7, so a change that loosens one must escalate.
 relay/internal/protoconv/**

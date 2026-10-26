@@ -116,8 +116,7 @@ const (
 	FactTemplateFingerprint Fact = "template-fingerprint"
 )
 
-// TemplateUnloadable is the literal the daemon reports in place of a
-// template-set fingerprint when its local set failed to load (ADR-0021).
+// TemplateUnloadable is registry.TemplateUnloadable; see its doc.
 const TemplateUnloadable = registry.TemplateUnloadable
 
 // Label is one derived `state:` term.
