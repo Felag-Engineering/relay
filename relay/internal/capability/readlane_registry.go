@@ -258,7 +258,7 @@ type NodeListing struct {
 // CANONICAL form (sel.String()), not the caller's bytes — the same
 // precedent NoNodesMatchedError sets.
 //
-// Node-ID ordering within Nodes (QRY-3) comes from registry.InMemory.List
+// Node-ID ordering within Nodes (QRY-41) comes from registry.InMemory.List
 // and is preserved by Selector.Resolve, so no surface needs to sort again.
 func (l *ReadLane) ListNodes(ctx context.Context, p Principal, selector string) (NodeListing, error) {
 	if err := l.registryReadable(); err != nil {

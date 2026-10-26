@@ -795,7 +795,7 @@ func TestMCP_Outdated(t *testing.T) {
 	})
 }
 
-// TestMCP_ListNodes_ReturnsMatchesInNodeIdOrder is QRY-3's ordering half at
+// TestMCP_ListNodes_ReturnsMatchesInNodeIdOrder is QRY-41's ordering half at
 // the surface the claim names: list_nodes returns the matches in Node-ID
 // order, and this adapter does not re-order what the capability read lane
 // handed it. The lane's own half is capability's

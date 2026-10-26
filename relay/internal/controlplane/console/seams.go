@@ -175,7 +175,7 @@ type QueryReader interface {
 	// The registry half. ListNodes resolves and
 	// records selector (the empty string means the whole fleet — the
 	// Console's fleet filter is a facet over the page it already read, not a
-	// Selector; Selector-scoped enumeration is MCP's, QRY-3). DescribeNode is
+	// Selector; Selector-scoped enumeration is MCP's, QRY-41). DescribeNode is
 	// one Node plus its fingerprint peer counts and its DISPLAY-ONLY Policy
 	// view, which the lane computes so a single-Node screen never has to
 	// enumerate the fleet or hold a second cache to render it.
