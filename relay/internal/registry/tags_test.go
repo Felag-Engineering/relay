@@ -42,6 +42,7 @@ func TestTagChange_Validate(t *testing.T) {
 		{NodeID: "n", Key: "team", Before: set("a"), After: set("b")},
 		{NodeID: "n", Key: "team", Before: set("a")},
 		{NodeID: "n", Key: "team", After: set("")},
+		{NodeID: "n", Key: strings.Repeat("k", registry.MaxTagKeyLen), After: set(strings.Repeat("v", registry.MaxTagValueLen))},
 	}
 	for _, c := range ok {
 		if err := c.Validate(); err != nil {
@@ -58,6 +59,8 @@ func TestTagChange_Validate(t *testing.T) {
 		"colon in value": {NodeID: "n", Key: "k", After: set("a:b")},
 		"non-ascii":      {NodeID: "n", Key: "k", After: set("a\u200b")},
 		"bad before":     {NodeID: "n", Key: "k", Before: set("a b")},
+		"key too long":   {NodeID: "n", Key: strings.Repeat("k", registry.MaxTagKeyLen+1), After: set("a")},
+		"value too long": {NodeID: "n", Key: "k", After: set(strings.Repeat("v", registry.MaxTagValueLen+1))},
 	}
 	for name, c := range bad {
 		if err := c.Validate(); err == nil {

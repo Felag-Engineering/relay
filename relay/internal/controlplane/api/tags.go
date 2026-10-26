@@ -122,6 +122,7 @@ func writeTag(w http.ResponseWriter, r *http.Request, d Deps, p capability.Princ
 var tagBadRequests = []error{
 	capability.ErrTagNamespaceRequired,
 	capability.ErrTagMalformed,
+	capability.ErrTagTooLong,
 	capability.ErrTagAddNeedsAValue,
 	capability.ErrTagRemoveNamesAKey,
 	capability.ErrTagOpUnknown,

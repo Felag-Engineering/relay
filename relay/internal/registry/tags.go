@@ -12,6 +12,14 @@ import (
 // ADR-0050 decision 1).
 const MaxTagsPerNode = 64
 
+// MaxTagKeyLen and MaxTagValueLen bound a tag's key and value in bytes, so a
+// write cannot grow every Node record, the audit chain and each Node read
+// without limit. They apply to tag: only (ADR-0050).
+const (
+	MaxTagKeyLen   = 63
+	MaxTagValueLen = 255
+)
+
 // ErrTagChanged is returned by an atomic tag write when a tag no longer holds
 // the value the caller read. Nothing is written.
 var ErrTagChanged = errors.New("registry: a tag changed since it was read")
@@ -38,8 +46,9 @@ type TagChange struct {
 }
 
 // Validate refuses a change that could not be stored or that changes nothing.
-// It applies WellFormedLabel, the one predicate for every stored Label, and no
-// other, to whichever side is set. The store and InMemory both call it.
+// It applies WellFormedLabel, the one predicate for every stored Label, and the
+// tag length bounds, to whichever side is set. The store and InMemory both call
+// it.
 func (c TagChange) Validate() error {
 	if c.NodeID == "" {
 		return ErrEmptyNodeID
@@ -53,6 +62,9 @@ func (c TagChange) Validate() error {
 	for _, side := range []TagValue{c.Before, c.After} {
 		if side.Set && !WellFormedLabel(c.Key, side.Value) {
 			return fmt.Errorf("registry: tag %q is not well formed", c.Key)
+		}
+		if side.Set && (len(c.Key) > MaxTagKeyLen || len(side.Value) > MaxTagValueLen) {
+			return fmt.Errorf("registry: a tag's key is at most %d bytes and its value at most %d", MaxTagKeyLen, MaxTagValueLen)
 		}
 	}
 	return nil

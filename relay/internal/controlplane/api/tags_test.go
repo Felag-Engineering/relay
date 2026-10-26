@@ -141,6 +141,7 @@ func TestTagRoutes_RenderRefusals(t *testing.T) {
 		{"forbidden", authzDenied("writing a tag requires role \"operator\", has \"viewer\""), http.StatusForbidden, "writing a tag requires"},
 		{"namespace", capability.ErrTagNamespaceRequired, http.StatusBadRequest, "only a tag: label"},
 		{"malformed", capability.ErrTagMalformed, http.StatusBadRequest, "key must be non-empty"},
+		{"too long", capability.ErrTagTooLong, http.StatusBadRequest, "at most 63 characters"},
 		{"add needs a value", capability.ErrTagAddNeedsAValue, http.StatusBadRequest, "tag:key=value"},
 		{"remove names a key", capability.ErrTagRemoveNamesAKey, http.StatusBadRequest, "tag:key, with no value"},
 		{"unknown op", capability.ErrTagOpUnknown, http.StatusBadRequest, "add or remove"},

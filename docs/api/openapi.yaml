@@ -714,7 +714,9 @@ paths:
         `state:` label is refused with 400, and the `tag:` prefix is mandatory.
         A tag's key and value follow the stored-Label allowlist exactly: the key
         non-empty, and every byte of key and value one of `A-Z a-z 0-9 . _ -`
-        (an empty value is allowed). A Node carries at most 64 tags.
+        (an empty value is allowed). A key is at most 63 characters and a value
+        at most 255; a longer one is refused with 400, never truncated. A Node
+        carries at most 64 tags.
 
         Each Node that changes gets one audit record naming the Account, the
         Node and the old and new values, committed in the same transaction as the
@@ -769,7 +771,9 @@ paths:
         `state:` label is refused with 400, and the `tag:` prefix is mandatory.
         A tag's key and value follow the stored-Label allowlist exactly: the key
         non-empty, and every byte of key and value one of `A-Z a-z 0-9 . _ -`
-        (an empty value is allowed). A Node carries at most 64 tags.
+        (an empty value is allowed). A key is at most 63 characters and a value
+        at most 255; a longer one is refused with 400, never truncated. A Node
+        carries at most 64 tags.
 
         Each Node that changes gets one audit record naming the Account, the
         Node and the old and new values, committed in the same transaction as the

@@ -20,6 +20,7 @@ var (
 	ErrTagsUnavailable      = errors.New("capability: tag writes are not configured on this Relay")
 	ErrTagNamespaceRequired = errors.New("capability: only a tag: label is written on request; node:, relay: and state: labels never are (invariant 7)")
 	ErrTagMalformed         = errors.New("capability: a tag's key must be non-empty, and its key and value may hold only A-Z, a-z, 0-9, '.', '_' and '-'")
+	ErrTagTooLong           = fmt.Errorf("capability: a tag's key is at most %d characters and its value at most %d", registry.MaxTagKeyLen, registry.MaxTagValueLen)
 	ErrTagAddNeedsAValue    = errors.New("capability: adding a tag names tag:key=value")
 	ErrTagRemoveNamesAKey   = errors.New("capability: removing a tag names tag:key, with no value")
 	ErrTagOpUnknown         = errors.New("capability: a tag write is add or remove")
@@ -79,8 +80,8 @@ type TagWriteResult struct {
 // value, so no surface parses a tag itself. The exact-case "tag:" prefix is
 // required, which refuses node:, relay: and state: labels, bare terms and
 // "TAG:" alike. The key and value must pass registry.WellFormedLabel, the one
-// predicate for every stored Label; nothing is sanitised. A remove returns an
-// empty value.
+// predicate for every stored Label, and the tag length bounds; nothing is
+// sanitised or truncated. A remove returns an empty value.
 func ParseTagLabel(op TagOp, s string) (key, value string, err error) {
 	if op != TagAdd && op != TagRemove {
 		return "", "", ErrTagOpUnknown
@@ -102,6 +103,9 @@ func ParseTagLabel(op TagOp, s string) (key, value string, err error) {
 	}
 	if !registry.WellFormedLabel(key, value) {
 		return "", "", ErrTagMalformed
+	}
+	if len(key) > registry.MaxTagKeyLen || len(value) > registry.MaxTagValueLen {
+		return "", "", ErrTagTooLong
 	}
 	return key, value, nil
 }
