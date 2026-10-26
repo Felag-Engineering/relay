@@ -26,9 +26,10 @@
 //!   identity private key and the environment file. Reading a file that holds no
 //!   secret is never a finding.
 //! - **Writes** — the Raw Exec shapes — are probed against the whole packaged
-//!   trust root by exact path: the Policy file and directory, the environment
-//!   file, the state directory's key, certificate, CA bundle and persisted
-//!   address, the template root, the binary and the unit files.
+//!   trust root by exact path: the Policy file, the directory holding it, the
+//!   Policy directory (`policy.d`), the environment file, the state directory's
+//!   key, certificate, CA bundle and persisted address, the template root, the
+//!   binary and the unit files.
 //!
 //! # How it decides: probes through the live engine, never a second matcher
 //!
@@ -44,9 +45,11 @@
 //!
 //! A finding is **proof** that a self-referential action is permitted. The
 //! absence of findings is **not** proof of the converse: write probes name
-//! exact paths, so a drop-in or Policy fragment under another name is not
-//! tried, and the probe set covers the plausible shapes (edit in place,
-//! overwrite, copy over, remove, redirect, permission change, symlink) while a
+//! exact paths, so a drop-in or a Policy fragment under some name inside
+//! `policy.d` is not tried (the `policy.d` probe names the directory itself;
+//! the control is a `[raw_exec]` deny over the Policy directory), and the probe
+//! set covers the plausible shapes (edit in place, overwrite, copy over,
+//! remove, redirect, permission change, symlink) while a
 //! sufficiently creative command could reach the same files in a shape not
 //! probed (residual R38 in `docs/security/threat-model.md`). It is a foot-gun
 //! detector, defense-in-depth *under* the mount-namespace protection — not a
@@ -105,6 +108,7 @@ struct Target {
 /// mutate.
 struct Roots {
     policy_path: PathBuf,
+    policy_dir: PathBuf,
     state_dir: PathBuf,
     template_dir: PathBuf,
     /// The running binary, when it is known.
@@ -128,10 +132,17 @@ fn targets_at(roots: &Roots) -> Vec<Target> {
         targets.push(Target {
             path: dir.to_path_buf(),
             read: None,
-            write: "this daemon's Policy directory — replacing or removing it replaces the \
-                    Policy (ADR-0002)",
+            write: "the directory holding this daemon's Policy file and Policy directory — \
+                    replacing or removing it replaces the Policy (ADR-0002)",
         });
     }
+    targets.push(Target {
+        path: roots.policy_dir.clone(),
+        read: None,
+        write: "this daemon's Policy directory — a rule that can write into it adds, \
+                replaces or removes a Policy fragment, which lets the wire rewrite the \
+                wire's own gate (ADR-0002)",
+    });
 
     targets.extend([
         Target {
@@ -258,6 +269,7 @@ pub fn lint(policy: &Policy, path_slot_ops: &[String]) -> Vec<LintFinding> {
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from(DEFAULT_POLICY_PATH));
     let roots = Roots {
+        policy_dir: config::policy_dir_beside(&policy_path),
         policy_path,
         state_dir: state_dir_from_env(),
         template_dir: config::template_dir_from_env(),
@@ -370,6 +382,7 @@ allow = ["^/usr/bin/sed .*$"]
     fn packaged() -> Roots {
         Roots {
             policy_path: PathBuf::from(DEFAULT_POLICY_PATH),
+            policy_dir: PathBuf::from("/etc/relay-daemon/policy.d"),
             state_dir: PathBuf::from("/var/lib/relay-daemon"),
             template_dir: PathBuf::from("/etc/relay-daemon/templates.d"),
             exe: Some(PathBuf::from(FAKE_EXE)),
@@ -688,6 +701,7 @@ allowed_args = [["*"]]
         let expected = [
             DEFAULT_POLICY_PATH,
             "/etc/relay-daemon",
+            "/etc/relay-daemon/policy.d",
             ENV_FILE,
             "/var/lib/relay-daemon/key.pem",
             "/var/lib/relay-daemon/cert.pem",

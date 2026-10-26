@@ -120,7 +120,8 @@ if root_only_dir "$ETC"; then
   etc_ok=yes
   # The Policy directory's prior existence is read from the marker preinst wrote before
   # anything was unpacked. With no marker the answer is unknown, and no Policy is placed: a
-  # Node with no Policy file is deny-all, never wider (DI-20).
+  # Node with no Policy file runs only the fragments it already holds, or deny-all with none,
+  # never wider (DI-20).
   if [ "$have_marker" = yes ] && ! marked "existed policy-dir" && ! exists "$POLICY"; then
     if place "$POLICY" 0644 "$SHARE/policy.default.toml"; then
       record policy

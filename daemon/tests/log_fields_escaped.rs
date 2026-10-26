@@ -127,11 +127,51 @@ const LOCAL_FIELDS: &[LocalField] = &[
     ),
     (
         "src/main.rs",
-        "error",
-        "%e",
+        "dir",
+        "%dir.display()",
         "policy load failed; using deny-all policy (fail closed)",
         1,
-        "PolicyError from the local root-owned Policy file",
+        "the Policy directory, derived beside the operator-set Policy path; never wire data",
+    ),
+    (
+        "src/main.rs",
+        "dir",
+        "%dir.display()",
+        "policy loaded",
+        1,
+        "the Policy directory, derived beside the operator-set Policy path; never wire data",
+    ),
+    (
+        "src/main.rs",
+        "dir",
+        "%dir.display()",
+        "no policy file; composing the Policy directory's fragments alone",
+        1,
+        "the Policy directory, derived beside the operator-set Policy path; never wire data",
+    ),
+    (
+        "src/main.rs",
+        "dir",
+        "%dir.display()",
+        "policy fragment or Policy directory refused; refusing to start (fail closed)",
+        1,
+        "the Policy directory, derived beside the operator-set Policy path; never wire data",
+    ),
+    (
+        "src/main.rs",
+        "error",
+        "?e.to_string()",
+        "policy load failed; using deny-all policy (fail closed)",
+        1,
+        "PolicyError from the local root-owned Policy file or Policy directory, Debug-escaped onto one line so a multi-line TOML error keeps its reason on it; a fragment's file name is Debug-escaped in its Display",
+    ),
+    (
+        "src/main.rs",
+        "error",
+        "%e",
+        "policy fragment or Policy directory refused; refusing to start (fail closed)",
+        1,
+        "a PolicyError refusal from the local root-owned Policy directory; a fragment's file name, from that root-owned directory, is Debug-escaped in its Display",
     ),
     (
         "src/main.rs",
@@ -139,7 +179,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "%p.fingerprint()",
         "policy loaded",
         1,
-        "local SHA-256 hex of the Policy file",
+        "local SHA-256 hex over the Policy file and its fragments",
     ),
     (
         "src/main.rs",
@@ -160,18 +200,34 @@ const LOCAL_FIELDS: &[LocalField] = &[
     (
         "src/main.rs",
         "path",
-        "%config.policy_path.display()",
+        "%path.display()",
         "policy load failed; using deny-all policy (fail closed)",
         1,
-        "operator-set Policy path",
+        "operator-set Policy path (RELAY_POLICY_PATH)",
     ),
     (
         "src/main.rs",
         "path",
-        "%config.policy_path.display()",
+        "%path.display()",
         "policy loaded",
         1,
-        "operator-set Policy path",
+        "operator-set Policy path (RELAY_POLICY_PATH)",
+    ),
+    (
+        "src/main.rs",
+        "path",
+        "%path.display()",
+        "no policy file; composing the Policy directory's fragments alone",
+        1,
+        "operator-set Policy path (RELAY_POLICY_PATH)",
+    ),
+    (
+        "src/main.rs",
+        "path",
+        "%path.display()",
+        "policy fragment or Policy directory refused; refusing to start (fail closed)",
+        1,
+        "operator-set Policy path (RELAY_POLICY_PATH)",
     ),
     (
         "src/main.rs",
@@ -982,7 +1038,7 @@ fn scan_sees_the_daemons_log_sites() {
     assert!(files >= 8, "only {files} files with log sites seen");
 }
 
-/// Today: 43 production sites in 9 files. A few below, so a broken matcher or an
+/// Today: 44 production sites in 9 files. A few below, so a broken matcher or an
 /// over-eager stripper cannot pass vacuously.
 const SITE_FLOOR: usize = 40;
 

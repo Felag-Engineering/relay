@@ -30,8 +30,10 @@
 
 use std::fmt;
 use std::fmt::Write as _;
+use std::fs;
 use std::io::Read;
 use std::ops::Range;
+use std::os::unix::fs::MetadataExt as _;
 use std::path::Path;
 
 use regex::Regex;
@@ -67,10 +69,15 @@ mod ban_probe;
 
 /// Top-level Policy file as deserialized from TOML.
 ///
+/// Every on-disk struct rejects an unknown key, so a mistyped table such as
+/// `[[denny]]` is a parse error and the whole Policy is deny-all, never an
+/// empty rule that leaves an allow standing.
+///
 /// All fields default to empty so a minimal file (e.g. just `[raw_exec]`) is
 /// valid. The `Default` derive is required because the containing struct uses
 /// `#[serde(default)]` on nested-struct fields.
 #[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 struct PolicyFile {
     #[serde(default)]
     operation: Vec<toml::Spanned<OperationRuleRaw>>,
@@ -86,6 +93,7 @@ struct PolicyFile {
 /// `"*"` at any inner position matches any value (wildcard). An empty outer
 /// list means the operation is allowed with zero arguments.
 #[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 struct OperationRuleRaw {
     name: String,
     #[serde(default)]
@@ -99,6 +107,7 @@ struct OperationRuleRaw {
 /// positions beyond what is listed are vacuously satisfied (more-restrictive
 /// deny-beats-allow reading; see module doc).
 #[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 struct DenyRuleRaw {
     name: String,
     #[serde(default)]
@@ -114,6 +123,7 @@ struct DenyRuleRaw {
 /// and each canonical element (the joined command re-split on whitespace —
 /// ADR-0019).
 #[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 struct RawExecRaw {
     #[serde(default)]
     allow: Vec<toml::Spanned<String>>,
@@ -146,6 +156,8 @@ pub struct Policy {
     raw_allow: Vec<CompiledRe>,
     raw_deny: Vec<CompiledRe>,
     fingerprint: String,
+    /// Composed from fragments alone, with no Policy file (DI-20).
+    without_policy_file: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -303,31 +315,184 @@ pub enum PolicyError {
         source: regex::Error,
         hint: String,
     },
+
+    /// A Policy fragment is a symlink; the daemon refuses to start.
+    #[error("Policy fragment {name:?} is a symlink; refusing to start (fail closed)")]
+    FragmentSymlink { name: String },
+
+    /// A Policy fragment is not a regular file; the daemon refuses to start.
+    #[error("Policy fragment {name:?} is not a regular file; refusing to start (fail closed)")]
+    FragmentNotRegularFile { name: String },
+
+    /// A Policy fragment is group- or world-writable; the daemon refuses to
+    /// start.
+    #[error("Policy fragment {name:?} is group/world-writable (mode {mode:#o}); refusing to start (fail closed)")]
+    FragmentInsecurePermissions { name: String, mode: u32 },
+
+    /// A Policy fragment is owned by neither root nor the daemon's euid; the
+    /// daemon refuses to start.
+    #[error("Policy fragment {name:?} is owned by uid {uid}, not root or the daemon euid; refusing to start (fail closed)")]
+    FragmentInsecureOwner { name: String, uid: u32 },
+
+    /// A Policy fragment could not be opened or read (non-UTF-8 content
+    /// included). The whole Policy is deny-all.
+    #[error("Policy fragment {name:?} could not be read: {source}")]
+    FragmentUnreadable {
+        name: String,
+        #[source]
+        source: std::io::Error,
+    },
+
+    /// A Policy fragment failed to parse or compile. The whole Policy is
+    /// deny-all.
+    #[error("Policy fragment {name:?} is invalid: {source}")]
+    FragmentInvalid {
+        name: String,
+        #[source]
+        source: Box<PolicyError>,
+    },
+
+    /// A Policy fragment's file name is not UTF-8. The whole Policy is
+    /// deny-all.
+    #[error("a Policy fragment's file name is not UTF-8: {name:?}")]
+    FragmentName { name: std::ffi::OsString },
+
+    /// The Policy directory is a symlink; the daemon refuses to start.
+    #[error("the Policy directory is a symlink; refusing to start (fail closed)")]
+    PolicyDirectorySymlink,
+
+    /// The Policy directory is not a directory; the daemon refuses to start.
+    #[error("the Policy directory is not a directory; refusing to start (fail closed)")]
+    PolicyDirectoryNotADirectory,
+
+    /// The Policy directory is group- or world-writable; the daemon refuses to
+    /// start. Whoever can write it can remove a root-owned deny fragment.
+    #[error("the Policy directory is group/world-writable (mode {mode:#o}); refusing to start (fail closed)")]
+    PolicyDirectoryInsecurePermissions { mode: u32 },
+
+    /// The Policy directory is owned by neither root nor the daemon's euid; the
+    /// daemon refuses to start.
+    #[error("the Policy directory is owned by uid {uid}, not root or the daemon euid; refusing to start (fail closed)")]
+    PolicyDirectoryInsecureOwner { uid: u32 },
+
+    /// The Policy directory could not be listed. The whole Policy is deny-all.
+    #[error("the Policy directory could not be read: {0}")]
+    PolicyDirectoryIo(#[source] std::io::Error),
+}
+
+impl PolicyError {
+    /// Whether the daemon must refuse to start on this error rather than run
+    /// deny-all: a fragment that is a symlink, not a regular file or insecure,
+    /// and an insecure Policy directory. Every Policy-file error, and a
+    /// fragment or directory that merely cannot be read or parsed, leaves the
+    /// daemon running deny-all (fail closed). The match has no wildcard arm, so
+    /// a new variant has to be classified here.
+    pub fn refuses_start(&self) -> bool {
+        match self {
+            PolicyError::FragmentSymlink { .. }
+            | PolicyError::FragmentNotRegularFile { .. }
+            | PolicyError::FragmentInsecurePermissions { .. }
+            | PolicyError::FragmentInsecureOwner { .. }
+            | PolicyError::PolicyDirectorySymlink
+            | PolicyError::PolicyDirectoryNotADirectory
+            | PolicyError::PolicyDirectoryInsecurePermissions { .. }
+            | PolicyError::PolicyDirectoryInsecureOwner { .. } => true,
+            PolicyError::InsecurePermissions { .. }
+            | PolicyError::InsecureOwner { .. }
+            | PolicyError::SymlinkPath
+            | PolicyError::NotRegularFile
+            | PolicyError::Io(_)
+            | PolicyError::Parse(_)
+            | PolicyError::InvalidRegex { .. }
+            | PolicyError::FragmentUnreadable { .. }
+            | PolicyError::FragmentInvalid { .. }
+            | PolicyError::FragmentName { .. }
+            | PolicyError::PolicyDirectoryIo(_) => false,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
 // Parse API (pure, no filesystem access)
 // ---------------------------------------------------------------------------
 
-/// Compute the SHA-256 fingerprint of raw Policy file bytes.
+/// The Policy file's label in the set fingerprint, whatever its configured name.
+const POLICY_FILE_LABEL: &str = "policy.toml";
+
+/// Domain tag opening the set fingerprint's stream, so it cannot collide with
+/// the SHA-256 of a lone Policy file.
+const FINGERPRINT_DOMAIN: &[u8] = b"relay-policy-set-v1\n";
+
+/// One Policy fragment: its file name in the Policy directory and its text.
+#[derive(Debug, Clone)]
+pub struct Fragment {
+    pub name: String,
+    pub text: String,
+}
+
+/// Compute the Policy fingerprint of a Policy file and its fragments.
 ///
 /// Returns a 64-character lowercase-hex string with no prefix — the same
-/// format used for cert fingerprints in `transport.go`.
+/// format used for cert fingerprints in `transport.go`. `fragments` must
+/// already be in composition order (file name, byte order).
 ///
-/// **Canonical form:** the fingerprint is over the **raw file bytes**, not a
+/// **Canonical form:** the fingerprint is over the **raw bytes**, not a
 /// canonicalized or compiled form. Consequences:
 /// - Identical bytes → identical fingerprint (strict byte-identity).
 /// - Cosmetic edits (whitespace, comments, key reorder) **change** the
-///   fingerprint — intended; policy-as-code pushes the same file everywhere,
+///   fingerprint — intended; policy-as-code pushes the same files everywhere,
 ///   so byte-identity is exactly the drift signal an operator needs.
 /// - An empty / deny-all Policy produces the SHA-256 of the empty string:
 ///   `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`.
 ///
+/// **A Policy file and no fragment** (the Policy directory is absent or
+/// empty): the SHA-256 of the Policy file's raw bytes alone, so a Node without
+/// fragments reports what `sha256sum` of its Policy file prints.
+///
+/// **Otherwise** (one or more fragments, or no Policy file): the SHA-256 of a
+/// stream that opens with [`FINGERPRINT_DOMAIN`] and then holds one record per
+/// source present, the Policy file first when there is one, then each fragment
+/// in order: `<label> NUL <byte length in decimal ASCII> LF <raw bytes>`. The
+/// label is `policy.toml` for the Policy file and `policy.d/<file name>` for a
+/// fragment. With no Policy file its record is absent, not empty, so a missing
+/// Policy file and an empty one fingerprint differently. Records are
+/// length-prefixed and a file name cannot hold NUL, so the encoding is
+/// injective. It cannot collide with the raw-bytes form, because a parsed
+/// Policy is valid TOML: a stream with a record holds a NUL, which TOML cannot,
+/// and one with none is the domain tag alone, which is not TOML either. Fragment
+/// file names are part of the fingerprint, so a stray or renamed file shows as
+/// drift; the Policy file's name and the directory paths are not.
+///
 /// The TOML serializer is excluded from the daemon binary for musl size
 /// (ADR-0007); re-adding it plus a stable field-ordering round-trip for
 /// canonicalization adds weight on a security-adjacent path for no gain.
-fn policy_fingerprint(bytes: &[u8]) -> String {
-    let digest = ring::digest::digest(&ring::digest::SHA256, bytes);
+fn policy_fingerprint(policy_file: Option<&str>, fragments: &[&Fragment]) -> String {
+    let digest = match policy_file {
+        Some(policy_file) if fragments.is_empty() => {
+            ring::digest::digest(&ring::digest::SHA256, policy_file.as_bytes())
+        }
+        _ => {
+            let mut ctx = ring::digest::Context::new(&ring::digest::SHA256);
+            ctx.update(FINGERPRINT_DOMAIN);
+            let mut record = |label: &str, bytes: &[u8]| {
+                ctx.update(label.as_bytes());
+                ctx.update(b"\0");
+                ctx.update(bytes.len().to_string().as_bytes());
+                ctx.update(b"\n");
+                ctx.update(bytes);
+            };
+            if let Some(policy_file) = policy_file {
+                record(POLICY_FILE_LABEL, policy_file.as_bytes());
+            }
+            for fragment in fragments {
+                record(
+                    &format!("{POLICY_DIR_NAME}/{}", fragment.name),
+                    fragment.text.as_bytes(),
+                );
+            }
+            ctx.finish()
+        }
+    };
     let mut s = String::with_capacity(64);
     for b in digest.as_ref() {
         write!(&mut s, "{b:02x}").expect("write to String is infallible");
@@ -337,14 +502,73 @@ fn policy_fingerprint(bytes: &[u8]) -> String {
 
 /// Parse and compile a Policy from a TOML string.
 ///
-/// Pure function — no filesystem access. Used by `load_policy` and directly
-/// by tests (which supply the fixture via `include_str!`).
+/// Pure function — no filesystem access. Used directly by tests (which supply
+/// the fixture via `include_str!`). It is [`compose`] with no fragments.
 ///
 /// Fails closed: a malformed regex in `[raw_exec]` returns `Err(InvalidRegex)`
 /// rather than silently skipping the pattern.
 pub fn from_toml_str(s: &str) -> Result<Policy, PolicyError> {
-    let file: PolicyFile = toml::from_str(s)?;
-    compile(file, s)
+    compose(s, &[])
+}
+
+/// Parse and compile one Policy file and its fragments into ONE [`Policy`]
+/// with one fingerprint.
+///
+/// Pure function — no filesystem access. The rules of each of the four lists
+/// (`[[operation]]`, `[[deny]]`, `[raw_exec].allow`, `[raw_exec].deny`) are
+/// concatenated in composition order: the Policy file, then the fragments by
+/// file name. Deny-beats-allow across files needs no logic of its own:
+/// [`Policy::decide`] runs its deny pass over the whole composed deny list
+/// before any allow (invariant 3). `fragments` are sorted here, so no caller
+/// can get the order wrong and the daemon and `policy check` agree.
+///
+/// A fragment error is [`PolicyError::FragmentInvalid`] and names the
+/// fragment; an error in the Policy file keeps its own variants.
+pub fn compose(policy_file: &str, fragments: &[Fragment]) -> Result<Policy, PolicyError> {
+    compose_sources(Some(policy_file), fragments)
+}
+
+/// [`compose`] for a Node with no Policy file: the fragments alone, composed
+/// and fingerprinted by the same rules (DI-20, DI-36). Deny-by-default holds
+/// as for any Policy: with no fragment the result has no rule and denies
+/// everything. The loader never composes an empty set this way; a missing
+/// Policy file with no fragment is a load error, so the daemon runs deny-all.
+pub fn compose_fragments(fragments: &[Fragment]) -> Result<Policy, PolicyError> {
+    compose_sources(None, fragments)
+}
+
+/// [`compose`] and [`compose_fragments`]: the Policy file when there is one,
+/// then the fragments by name.
+fn compose_sources(
+    policy_file: Option<&str>,
+    fragments: &[Fragment],
+) -> Result<Policy, PolicyError> {
+    let ordered = in_composition_order(fragments);
+
+    let mut parts = Vec::with_capacity(ordered.len() + 1);
+    if let Some(policy_file) = policy_file {
+        parts.push(compile_source(toml::from_str(policy_file)?, policy_file)?);
+    }
+    for fragment in &ordered {
+        let invalid = |source: PolicyError| PolicyError::FragmentInvalid {
+            name: fragment.name.clone(),
+            source: Box::new(source),
+        };
+        let parsed: PolicyFile = toml::from_str(&fragment.text).map_err(|e| invalid(e.into()))?;
+        parts.push(compile_source(parsed, &fragment.text).map_err(invalid)?);
+    }
+    Ok(assemble(
+        parts,
+        policy_file.is_some(),
+        policy_fingerprint(policy_file, &ordered),
+    ))
+}
+
+/// References to `fragments` in composition order: file name, byte order.
+fn in_composition_order(fragments: &[Fragment]) -> Vec<&Fragment> {
+    let mut ordered: Vec<&Fragment> = fragments.iter().collect();
+    ordered.sort_by(|a, b| a.name.cmp(&b.name));
+    ordered
 }
 
 /// The 1-based source line a TOML span starts on, or `None` when the parser
@@ -360,9 +584,18 @@ fn line_of(src: &str, span: Range<usize>) -> Option<usize> {
     Some(newlines + 1)
 }
 
-/// Compiles the parsed file into the evaluated model, recording where each
-/// rule sits in `source` (the text `file` was parsed from).
-fn compile(file: PolicyFile, source: &str) -> Result<Policy, PolicyError> {
+/// The compiled rules of one source (the Policy file or one fragment).
+struct Parts {
+    operations: Vec<CompiledAllow>,
+    denies: Vec<CompiledDeny>,
+    raw_allow: Vec<CompiledRe>,
+    raw_deny: Vec<CompiledRe>,
+}
+
+/// Compiles the parsed file into rules, recording where each sits in `source`
+/// (the text `file` was parsed from). Indices are within `source`;
+/// [`assemble`] renumbers them.
+fn compile_source(file: PolicyFile, source: &str) -> Result<Parts, PolicyError> {
     let raw_allow = compile_regexes(
         file.raw_exec.allow,
         RuleSection::RawExecAllow,
@@ -416,13 +649,55 @@ fn compile(file: PolicyFile, source: &str) -> Result<Policy, PolicyError> {
         })
         .collect();
 
-    Ok(Policy {
+    Ok(Parts {
         operations,
         denies,
         raw_allow,
         raw_deny,
-        fingerprint: policy_fingerprint(source.as_bytes()),
     })
+}
+
+/// Concatenates `parts` (the Policy file's first, when `has_policy_file`) into
+/// one [`Policy`].
+///
+/// Each rule's [`RuleRef::index`] becomes its position in the composed section,
+/// which is what the `PolicySnapshot` lists use; a rule from a fragment loses
+/// its line, because a line number without a file name would mislead.
+fn assemble(parts: Vec<Parts>, has_policy_file: bool, fingerprint: String) -> Policy {
+    let mut policy = Policy {
+        operations: Vec::new(),
+        denies: Vec::new(),
+        raw_allow: Vec::new(),
+        raw_deny: Vec::new(),
+        fingerprint,
+        without_policy_file: !has_policy_file,
+    };
+    for (source, part) in parts.into_iter().enumerate() {
+        let from_fragment = source > 0 || !has_policy_file;
+        let place = |at: &mut RuleRef, index: usize| {
+            at.index = index;
+            if from_fragment {
+                at.line = None;
+            }
+        };
+        for mut rule in part.operations {
+            place(&mut rule.at, policy.operations.len());
+            policy.operations.push(rule);
+        }
+        for mut rule in part.denies {
+            place(&mut rule.at, policy.denies.len());
+            policy.denies.push(rule);
+        }
+        for mut rule in part.raw_allow {
+            place(&mut rule.at, policy.raw_allow.len());
+            policy.raw_allow.push(rule);
+        }
+        for mut rule in part.raw_deny {
+            place(&mut rule.at, policy.raw_deny.len());
+            policy.raw_deny.push(rule);
+        }
+    }
+    policy
 }
 
 /// Compiles a `[raw_exec] deny` pattern verbatim — deny semantics are
@@ -546,19 +821,23 @@ fn with_allow_regex_hint(err: PolicyError) -> PolicyError {
 // Loader (filesystem + fail-closed permission gate)
 // ---------------------------------------------------------------------------
 
-/// Load and compile a Policy from the file at `path`.
+/// The Policy directory's name beside the Policy file: the daemon reads
+/// fragments from `<parent of the Policy file>/policy.d`.
+pub const POLICY_DIR_NAME: &str = "policy.d";
+
+/// Load and compile a Policy from the file at `path` and the fragments in the
+/// directory `dir`, composed into one [`Policy`] by [`compose`].
 ///
-/// **Local only** — takes a `&Path`; there is no network branch.
+/// **Local only** — takes two `&Path`s; there is no network branch. The Policy
+/// is read once, here; nothing re-reads it, so a change to the file or to a
+/// fragment is applied by restarting the daemon.
 ///
-/// **Single-descriptor validate-then-read**: the file is opened exactly once;
-/// every check below (symlink, regular-file, mode, owner) is performed via
-/// `fstat` on that *open descriptor*, and the bytes are read from the same
-/// descriptor. This closes the metadata/read TOCTOU race that a path-based
-/// check-then-read has — the bytes validated are always the bytes loaded.
-///
-/// Fail-closed checks (ADR-0002), in order, performed by the shared
-/// [`open_hardened`] (the same open Template Operation files use); each
-/// refusal is logged here and mapped to this loader's own [`PolicyError`]:
+/// **The Policy file** is opened exactly once and validated by `fstat` on that
+/// *open descriptor*, and the bytes are read from the same descriptor. This
+/// closes the metadata/read TOCTOU race that a path-based check-then-read has —
+/// the bytes validated are always the bytes loaded. Fail-closed checks
+/// (ADR-0002), in order, performed by the shared [`open_hardened`] (the same
+/// open Template Operation files use):
 /// 1. Refuses to load if the final path component is a symlink. Enforced via
 ///    `O_NOFOLLOW` at `open()` (an `ELOOP` open error, not an `lstat`
 ///    afterward — re-checking the path after open would reopen the race).
@@ -574,15 +853,72 @@ fn with_allow_regex_hint(err: PolicyError) -> PolicyError {
 ///    allows the check to pass on a non-root CI runner while remaining
 ///    more-restrictive than the floor requirement (group/world-write only).
 ///
+/// **The Policy directory** `dir` holds the fragments; every entry in it is a
+/// fragment (no suffix filter, no recursion), so nothing in it is silently
+/// ignored. An absent directory means no fragments. Each fragment is opened
+/// through the same [`open_hardened`], so the same four checks apply to it.
+/// The directory itself is checked by path: it must be a real directory (not a
+/// symlink), not group- or world-writable and owned by root or the daemon's
+/// euid, because whoever can write it can delete a root-owned deny fragment.
+///
+/// **A missing Policy file** (nothing at `path`, not even a dangling symlink)
+/// beside one or more fragments composes the fragments alone, through
+/// [`compose_fragments`] (DI-20). A missing Policy file with no fragment is
+/// the `NotFound` [`PolicyError::Io`], so the caller runs deny-all; beside a
+/// directory that could not be read it is that directory's error.
+///
+/// **Two kinds of failure.** A fragment that is a symlink, not a regular file,
+/// group- or world-writable or owned by a third party, and an insecure
+/// directory, return an error whose [`PolicyError::refuses_start`] is `true`:
+/// the daemon exits non-zero, whether or not the Policy file exists. A
+/// fragment that cannot be read or parsed, a directory that cannot be listed,
+/// and every other Policy-file failure (unreadable, unparsable, insecure),
+/// return an error for which it is `false`: the caller runs deny-all. A
+/// refusal anywhere wins over any deny-all error — the whole directory is
+/// scanned first — so a loud failure is never masked by a quiet one. There is
+/// no partial load and no last-known-good.
+///
 /// **Residual (documented, not closed here):** parent-directory writability.
 /// `O_NOFOLLOW` only guards the final path component — a rename-swap of the
 /// Policy file within an attacker-writable *parent* directory remains
-/// possible even though the file itself is root-owned and mode-correct.
-/// This is mitigated operationally by requiring the Policy file to live in a
+/// possible even though the file itself is root-owned and mode-correct. The
+/// directory checks are by path, so the same rename-swap class applies to
+/// `dir`. This is mitigated operationally by requiring both to live in a
 /// root-owned directory (e.g. `/etc/relay-daemon/`); fully closing it would
-/// require validating the parent directory itself (e.g. `openat` from a
-/// validated directory descriptor), which is out of scope here.
-pub fn load_policy(path: &Path) -> Result<Policy, PolicyError> {
+/// require an `openat`-style walk from a validated directory descriptor, which
+/// is out of scope here.
+pub fn load_policy(path: &Path, dir: &Path) -> Result<Policy, PolicyError> {
+    let (fragments, directory_error) = match read_policy_directory(dir) {
+        Ok(fragments) => (fragments, None),
+        Err(e) if e.refuses_start() => return Err(e),
+        Err(e) => (Vec::new(), Some(e)),
+    };
+    let text = match read_policy_file(path) {
+        Ok(text) => Some(text),
+        // With no Policy file the directory decides: its own deny-all error
+        // names what failed, and with no fragment the missing file does.
+        Err(PolicyError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+            if let Some(directory_error) = directory_error {
+                return Err(directory_error);
+            }
+            if fragments.is_empty() {
+                return Err(PolicyError::Io(e));
+            }
+            None
+        }
+        Err(e) => return Err(e),
+    };
+    if let Some(e) = directory_error {
+        return Err(e);
+    }
+    match text {
+        Some(text) => compose(&text, &fragments),
+        None => compose_fragments(&fragments),
+    }
+}
+
+/// Opens, validates and reads the Policy file at `path`.
+fn read_policy_file(path: &Path) -> Result<String, PolicyError> {
     // Open once and validate the descriptor — checks 1-4 above, in that order —
     // in the shared hardened open (`hardened_open`, the same one templates
     // use): O_NOFOLLOW | O_NONBLOCK, no write flag, and every check an fstat
@@ -629,7 +965,120 @@ pub fn load_policy(path: &Path) -> Result<Policy, PolicyError> {
     // line that closes the metadata/read TOCTOU race.
     let mut contents = String::new();
     file.read_to_string(&mut contents)?;
-    from_toml_str(&contents)
+    Ok(contents)
+}
+
+/// Opens, validates and reads the Policy fragment at `path`, named `name` in
+/// errors. The refusals are fragment-worded [`PolicyError`]s for which
+/// [`PolicyError::refuses_start`] holds; the caller logs them once.
+fn read_fragment(path: &Path, name: &str) -> Result<String, PolicyError> {
+    let unreadable = |source: std::io::Error| PolicyError::FragmentUnreadable {
+        name: name.to_string(),
+        source,
+    };
+    let (mut file, _meta) = open_hardened(path).map_err(|rejection| match rejection {
+        HardenedRejection::Symlink => PolicyError::FragmentSymlink {
+            name: name.to_string(),
+        },
+        HardenedRejection::NotRegularFile => PolicyError::FragmentNotRegularFile {
+            name: name.to_string(),
+        },
+        HardenedRejection::InsecurePermissions { mode } => {
+            PolicyError::FragmentInsecurePermissions {
+                name: name.to_string(),
+                mode,
+            }
+        }
+        HardenedRejection::InsecureOwner { uid } => PolicyError::FragmentInsecureOwner {
+            name: name.to_string(),
+            uid,
+        },
+        HardenedRejection::Io(e) => unreadable(e),
+    })?;
+
+    // Read from the SAME descriptor that was validated above.
+    let mut contents = String::new();
+    file.read_to_string(&mut contents).map_err(unreadable)?;
+    Ok(contents)
+}
+
+/// Reads every fragment in the Policy directory `dir`, sorted by file name
+/// ([`compose`] sorts again, so no caller depends on this order). An absent
+/// directory has none.
+///
+/// The directory is checked by path with `symlink_metadata` (which does not
+/// follow a symlink), then listed. A refusal ([`PolicyError::refuses_start`])
+/// is returned at once; any other error is remembered and the scan continues,
+/// so a refusal later in the directory still wins over it.
+fn read_policy_directory(dir: &Path) -> Result<Vec<Fragment>, PolicyError> {
+    let meta = match fs::symlink_metadata(dir) {
+        Ok(meta) => meta,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(PolicyError::PolicyDirectoryIo(e)),
+    };
+    if meta.file_type().is_symlink() {
+        return Err(PolicyError::PolicyDirectorySymlink);
+    }
+    if !meta.is_dir() {
+        return Err(PolicyError::PolicyDirectoryNotADirectory);
+    }
+    let mode = meta.mode() & 0o777;
+    if mode & 0o022 != 0 {
+        return Err(PolicyError::PolicyDirectoryInsecurePermissions { mode });
+    }
+    let uid = meta.uid();
+    if !hardened_open::owner_is_trusted(uid, rustix::process::geteuid().as_raw()) {
+        return Err(PolicyError::PolicyDirectoryInsecureOwner { uid });
+    }
+
+    let mut deny_all: Option<PolicyError> = None;
+    let mut entries = Vec::new();
+    for entry in fs::read_dir(dir).map_err(PolicyError::PolicyDirectoryIo)? {
+        match entry {
+            Ok(entry) => entries.push(entry),
+            Err(e) => {
+                deny_all.get_or_insert(PolicyError::PolicyDirectoryIo(e));
+            }
+        }
+    }
+    entries.sort_by_key(|entry| entry.file_name());
+
+    let mut fragments = Vec::new();
+    for entry in entries {
+        // The lossy rendering names the entry in refusals; a name that is not
+        // UTF-8 is classified only after every refusal check has passed.
+        let file_name = entry.file_name();
+        let name = file_name.to_string_lossy().into_owned();
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(source) => {
+                deny_all.get_or_insert(PolicyError::FragmentUnreadable { name, source });
+                continue;
+            }
+        };
+        if file_type.is_symlink() {
+            return Err(PolicyError::FragmentSymlink { name });
+        }
+        if !file_type.is_file() {
+            return Err(PolicyError::FragmentNotRegularFile { name });
+        }
+        match read_fragment(&entry.path(), &name) {
+            Ok(text) => match file_name.into_string() {
+                Ok(name) => fragments.push(Fragment { name, text }),
+                Err(name) => {
+                    deny_all.get_or_insert(PolicyError::FragmentName { name });
+                }
+            },
+            Err(e) if e.refuses_start() => return Err(e),
+            Err(e) => {
+                deny_all.get_or_insert(e);
+            }
+        }
+    }
+    match deny_all {
+        Some(e) => Err(e),
+        None => Ok(fragments),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -660,14 +1109,21 @@ pub struct LintFinding {
     pub message: String,
 }
 
-/// The result of linting a Policy file.
+/// The result of linting a Policy file, or a Policy file and its fragments.
 ///
 /// A TOML parse error means nothing else is checkable, so `parse_error` is
 /// mutually exclusive with `findings` being non-empty: when `parse_error` is
 /// `Some`, `findings` is always empty.
+///
+/// `parse_errors` holds one entry per source that failed to parse, the Policy
+/// file first and then the fragments by name; a fragment's entry opens with
+/// `<name>: `, the name Debug-escaped as the daemon logs it. `parse_error` is
+/// the same entries joined with a newline, and is `Some` exactly when
+/// `parse_errors` is not empty.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LintReport {
     pub parse_error: Option<String>,
+    pub parse_errors: Vec<String>,
     pub findings: Vec<LintFinding>,
 }
 
@@ -758,33 +1214,111 @@ pub fn lint_with_vocabulary(
     template_names: &[String],
     vocabulary_complete: bool,
 ) -> LintReport {
-    let file: PolicyFile = match toml::from_str(toml) {
-        Ok(f) => f,
-        Err(e) => {
-            return LintReport {
-                parse_error: Some(e.to_string()),
-                findings: Vec::new(),
-            }
+    lint_composed(toml, &[], template_names, vocabulary_complete)
+}
+
+/// One parsed source of a composed lint: the Policy file (`fragment` is
+/// `None`) or one Policy fragment.
+struct LintSource<'a> {
+    fragment: Option<&'a str>,
+    file: PolicyFile,
+}
+
+impl LintSource<'_> {
+    /// Prefix for a finding's location: a fragment's findings name the
+    /// fragment, the Policy file's are unchanged.
+    fn locate(&self, location: String) -> String {
+        match self.fragment {
+            Some(name) => format!("{name:?}: {location}"),
+            None => location,
         }
-    };
+    }
 
-    let mut findings = Vec::new();
+    /// The clause that names this source where a message points at one of its
+    /// rules; empty for the Policy file.
+    fn in_clause(&self) -> String {
+        match self.fragment {
+            Some(name) => format!(" in {name:?}"),
+            None => String::new(),
+        }
+    }
+}
 
-    lint_raw_exec_regexes(
-        &file.raw_exec.allow,
-        "allow",
-        compile_allow_regex,
-        true,
-        &mut findings,
-    );
-    lint_raw_exec_regexes(
-        &file.raw_exec.deny,
-        "deny",
-        compile_deny_regex,
-        false,
-        &mut findings,
-    );
-    lint_raw_exec_allow_anchoring(&file.raw_exec.allow, &mut findings);
+/// [`lint_with_vocabulary`] over a Policy file and its fragments, linted as
+/// the daemon would load them: one pass reports every problem in every source.
+///
+/// - A source that fails to parse is reported in `parse_error` and nothing else
+///   is checked, as for a lone Policy file; every failing source is listed.
+/// - The per-rule checks (regexes, anchoring, unknown names, deny no-ops) run
+///   over each source, and a finding in a fragment has its location prefixed
+///   with `<fragment name>: ` (Debug-escaped). Locations count rules per file,
+///   which is what an operator editing the file needs; the composed Policy
+///   numbers them across files.
+/// - The shadowed-allow check runs across sources: an allow in any source is
+///   shadowed by a deny in any source, because the daemon composes them into
+///   one deny list.
+///
+/// Fragments are linted in name order. With no fragment the report is exactly
+/// [`lint_with_vocabulary`]'s.
+pub fn lint_composed(
+    policy_file: &str,
+    fragments: &[Fragment],
+    template_names: &[String],
+    vocabulary_complete: bool,
+) -> LintReport {
+    lint_sources(
+        Some(policy_file),
+        fragments,
+        template_names,
+        vocabulary_complete,
+    )
+}
+
+/// [`lint_composed`] for a Node with no Policy file: the fragments alone, as
+/// [`compose_fragments`] composes them.
+pub fn lint_fragments(
+    fragments: &[Fragment],
+    template_names: &[String],
+    vocabulary_complete: bool,
+) -> LintReport {
+    lint_sources(None, fragments, template_names, vocabulary_complete)
+}
+
+/// [`lint_composed`] and [`lint_fragments`]: the Policy file when there is
+/// one, then the fragments by name.
+fn lint_sources(
+    policy_file: Option<&str>,
+    fragments: &[Fragment],
+    template_names: &[String],
+    vocabulary_complete: bool,
+) -> LintReport {
+    let mut sources = Vec::new();
+    let mut parse_errors = Vec::new();
+    if let Some(policy_file) = policy_file {
+        match toml::from_str::<PolicyFile>(policy_file) {
+            Ok(file) => sources.push(LintSource {
+                fragment: None,
+                file,
+            }),
+            Err(e) => parse_errors.push(e.to_string()),
+        }
+    }
+    for fragment in in_composition_order(fragments) {
+        match toml::from_str::<PolicyFile>(&fragment.text) {
+            Ok(file) => sources.push(LintSource {
+                fragment: Some(&fragment.name),
+                file,
+            }),
+            Err(e) => parse_errors.push(format!("{:?}: {e}", fragment.name)),
+        }
+    }
+    if !parse_errors.is_empty() {
+        return LintReport {
+            parse_error: Some(parse_errors.join("\n")),
+            parse_errors,
+            findings: Vec::new(),
+        };
+    }
 
     let known =
         |name: &str| operations::is_native(name) || template_names.iter().any(|t| t == name);
@@ -802,31 +1336,68 @@ pub fn lint_with_vocabulary(
         )
     };
 
-    for (i, op) in file.operation.iter().map(|s| s.get_ref()).enumerate() {
-        if !known(&op.name) {
-            findings.push(LintFinding {
-                severity,
-                location: format!("[[operation]] #{i} (name={:?})", op.name),
-                message: format!("unknown Operation name {:?}: {hint}", op.name),
-            });
+    let mut findings = Vec::new();
+
+    for source in &sources {
+        let file = &source.file;
+        let mut local = Vec::new();
+
+        lint_raw_exec_regexes(
+            &file.raw_exec.allow,
+            "allow",
+            compile_allow_regex,
+            true,
+            &mut local,
+        );
+        lint_raw_exec_regexes(
+            &file.raw_exec.deny,
+            "deny",
+            compile_deny_regex,
+            false,
+            &mut local,
+        );
+        lint_raw_exec_allow_anchoring(&file.raw_exec.allow, &mut local);
+
+        for (i, op) in file.operation.iter().map(|s| s.get_ref()).enumerate() {
+            if !known(&op.name) {
+                local.push(LintFinding {
+                    severity,
+                    location: format!("[[operation]] #{i} (name={:?})", op.name),
+                    message: format!("unknown Operation name {:?}: {hint}", op.name),
+                });
+            }
+        }
+
+        for (i, deny) in file.deny.iter().map(|s| s.get_ref()).enumerate() {
+            if !known(&deny.name) {
+                local.push(LintFinding {
+                    severity,
+                    location: format!("[[deny]] #{i} (name={:?})", deny.name),
+                    message: format!("unknown Operation name {:?}: {hint}", deny.name),
+                });
+            }
+        }
+
+        for mut finding in local {
+            finding.location = source.locate(finding.location);
+            findings.push(finding);
         }
     }
 
-    for (i, deny) in file.deny.iter().map(|s| s.get_ref()).enumerate() {
-        if !known(&deny.name) {
-            findings.push(LintFinding {
-                severity,
-                location: format!("[[deny]] #{i} (name={:?})", deny.name),
-                message: format!("unknown Operation name {:?}: {hint}", deny.name),
-            });
+    lint_shadowed_allows(&sources, &mut findings);
+
+    for source in &sources {
+        let mut local = Vec::new();
+        lint_deny_arg_noops(&source.file.deny, &mut local);
+        for mut finding in local {
+            finding.location = source.locate(finding.location);
+            findings.push(finding);
         }
     }
-
-    lint_shadowed_allows(&file.operation, &file.deny, &mut findings);
-    lint_deny_arg_noops(&file.deny, &mut findings);
 
     LintReport {
         parse_error: None,
+        parse_errors: Vec::new(),
         findings,
     }
 }
@@ -1055,33 +1626,44 @@ fn lint_deny_arg_noops(denies: &[toml::Spanned<DenyRuleRaw>], findings: &mut Vec
 }
 
 /// Flags every `[[operation]]` allow rule that is fully shadowed by some
-/// `[[deny]]` rule of the same name (see `DenyScope::covers`).
+/// `[[deny]]` rule of the same name (see `DenyScope::covers`), in the same
+/// source or in any other: the daemon composes all of them into one deny list.
 ///
 /// A deny covers an allow iff the allow can never fire: an empty `args` blocks
 /// the whole operation; otherwise for every position the allow lists, the deny
 /// either lists no such position (vacuous) or its value set subsumes the
 /// allow's. A `"*"` allow position is never subsumed, because a deny has no
-/// wildcard.
-fn lint_shadowed_allows(
-    allows: &[toml::Spanned<OperationRuleRaw>],
-    denies: &[toml::Spanned<DenyRuleRaw>],
-    findings: &mut Vec<LintFinding>,
-) {
-    for (ai, allow) in allows.iter().map(|s| s.get_ref()).enumerate() {
-        let allow_matchers = compile_allow_args(&allow.allowed_args);
-        for (di, deny) in denies.iter().map(|s| s.get_ref()).enumerate() {
-            if deny.name != allow.name {
-                continue;
-            }
-            if compile_deny_args(&deny.args).covers(&allow_matchers) {
-                findings.push(LintFinding {
-                    severity: LintSeverity::Warning,
-                    location: format!("[[operation]] #{ai} (name={:?})", allow.name),
-                    message: format!(
-                        "allow rule is fully shadowed by [[deny]] #{di} (name={:?}); it can never fire",
-                        deny.name
-                    ),
-                });
+/// wildcard. The finding sits at the allow; its message names the deny by its
+/// per-file index, and its fragment when it is in one.
+fn lint_shadowed_allows(sources: &[LintSource<'_>], findings: &mut Vec<LintFinding>) {
+    for source in sources {
+        for (ai, allow) in source
+            .file
+            .operation
+            .iter()
+            .map(|s| s.get_ref())
+            .enumerate()
+        {
+            let allow_matchers = compile_allow_args(&allow.allowed_args);
+            for other in sources {
+                for (di, deny) in other.file.deny.iter().map(|s| s.get_ref()).enumerate() {
+                    if deny.name != allow.name {
+                        continue;
+                    }
+                    if compile_deny_args(&deny.args).covers(&allow_matchers) {
+                        findings.push(LintFinding {
+                            severity: LintSeverity::Warning,
+                            location: source
+                                .locate(format!("[[operation]] #{ai} (name={:?})", allow.name)),
+                            message: format!(
+                                "allow rule is fully shadowed by [[deny]] #{di} (name={:?}){}; \
+                                 it can never fire",
+                                deny.name,
+                                other.in_clause()
+                            ),
+                        });
+                    }
+                }
             }
         }
     }
@@ -1162,10 +1744,19 @@ fn reason_fragment(text: &str) -> String {
 // ---------------------------------------------------------------------------
 
 impl Policy {
-    /// The SHA-256 fingerprint of the raw Policy file bytes, as a 64-character
-    /// lowercase-hex string. Safe to log; the Policy body is not (ADR-0002).
+    /// The Policy fingerprint, as a 64-character lowercase-hex string: the
+    /// SHA-256 of the raw Policy file bytes when there is no fragment, else
+    /// over the Policy file and its fragments (see `policy_fingerprint`). Safe
+    /// to log; the Policy body is not (ADR-0002).
     pub fn fingerprint(&self) -> &str {
         &self.fingerprint
+    }
+
+    /// Whether this Policy was composed from fragments alone because there was
+    /// no Policy file (DI-20). Every deny that file would hold is absent, so
+    /// the daemon says so when it starts.
+    pub fn composed_without_policy_file(&self) -> bool {
+        self.without_policy_file
     }
 
     /// Whether Raw Exec is enabled at all on this Node: `true` iff the
@@ -1179,7 +1770,8 @@ impl Policy {
         !self.raw_allow.is_empty()
     }
 
-    /// The `[raw_exec] allow` regex patterns, in file order.
+    /// The `[raw_exec] allow` regex patterns, in composition order: the Policy
+    /// file, then fragments by name.
     ///
     /// Report-only / display-only (ADR-0002) — for the `PolicySnapshot` the
     /// Relay displays; not used for evaluation (the compiled `Regex` on
@@ -1188,15 +1780,15 @@ impl Policy {
         self.raw_allow.iter().map(|c| c.pattern.clone()).collect()
     }
 
-    /// The `[raw_exec] deny` regex patterns, in file order.
+    /// The `[raw_exec] deny` regex patterns, in composition order.
     ///
     /// Report-only / display-only (ADR-0002) — see [`Policy::raw_allow_patterns`].
     pub fn raw_deny_patterns(&self) -> Vec<String> {
         self.raw_deny.iter().map(|c| c.pattern.clone()).collect()
     }
 
-    /// The distinct `[[operation]]` allow-rule names, in first-appearance file
-    /// order.
+    /// The distinct `[[operation]]` allow-rule names, in first-appearance
+    /// composition order.
     ///
     /// Report-only / display-only (ADR-0002): a raw report of allow-rule
     /// names for the `PolicySnapshot` the Relay displays. `[[deny]]` rule
@@ -1213,9 +1805,9 @@ impl Policy {
         names
     }
 
-    /// Every `[[operation]]` allow block, in file order.
+    /// Every `[[operation]]` allow block, in composition order.
     ///
-    /// Report-only / display-only (ADR-0002): a raw mirror of the Policy file
+    /// Report-only / display-only (ADR-0002): a raw mirror of the Policy
     /// for the `PolicySnapshot` the Relay displays. Unlike
     /// [`Policy::allowed_operations`], this does NOT dedup by name — a name
     /// may appear in multiple blocks with different `allowed_args`, and every
@@ -1232,10 +1824,10 @@ impl Policy {
             .collect()
     }
 
-    /// Every `[[deny]]` block, in file order.
+    /// Every `[[deny]]` block, in composition order.
     ///
-    /// Report-only / display-only (ADR-0002): a raw mirror of the Policy
-    /// file's deny rules for the `PolicySnapshot` the Relay displays. It
+    /// Report-only / display-only (ADR-0002): a raw mirror of the Policy's
+    /// deny rules for the `PolicySnapshot` the Relay displays. It
     /// never folds allow and deny together into an effective verdict — that
     /// would reimplement `Policy::decide`, forbidden by ADR-0011.
     pub fn deny_rules(&self) -> Vec<OperationDenyRule> {

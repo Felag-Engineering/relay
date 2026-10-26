@@ -1111,10 +1111,10 @@ fn demo_roster_matches_the_documented_fleet() {
     // that ROSTER never mentions is invisible to every test in this file: a
     // rogue block can reuse another Node's hostname, mount another Node's
     // state volume, or point RELAY_POLICY_PATH at a file that doesn't exist
-    // — which does not fail loudly. A missing Policy file makes the daemon
-    // `warn!` and fall back to a deny-all Policy (daemon/src/main.rs:783-791
-    // at time of writing), so that Node enrolls, reports healthy, and
-    // refuses everything.
+    // — which does not fail loudly. A missing Policy file with no fragment
+    // makes the daemon `warn!` and fall back to a deny-all Policy
+    // (`startup_policy` in daemon/src/main.rs), so that Node enrolls, reports
+    // healthy, and refuses everything.
     let compose_daemons: BTreeSet<String> = services
         .iter()
         .filter(|s| {

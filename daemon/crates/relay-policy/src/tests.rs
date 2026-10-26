@@ -3,7 +3,7 @@
 //! Tests
 //! ---------------------------------------------------------------------------
 use super::*;
-use crate::test_support::{args, TempFile};
+use crate::test_support::{args, unique_temp_path, TempFile};
 
 // The fixture is the example policy file checked into the repo. Tests
 // use it directly so the documented examples stay honest.
@@ -660,7 +660,7 @@ fn loader_rejects_group_or_world_writable() {
         (0o666_u32, "both write bits"),
     ] {
         let tmp = TempFile::with_forced_mode("writable", FIXTURE.as_bytes(), mode);
-        let result = load_policy(tmp.path());
+        let result = load_policy(tmp.path(), &unique_temp_path("no-policy-dir"));
         assert!(
                 matches!(
                     result,
@@ -679,7 +679,7 @@ fn loader_accepts_secure_modes() {
     // runner's euid (exercises the uid == geteuid() branch in the loader).
     for mode in [0o600_u32, 0o644] {
         let tmp = TempFile::with_forced_mode("secure", FIXTURE.as_bytes(), mode);
-        let result = load_policy(tmp.path());
+        let result = load_policy(tmp.path(), &unique_temp_path("no-policy-dir"));
         assert!(
                 result.is_ok(),
                 "policy file with mode {mode:#o} owned by test-runner euid must be accepted; got {result:?}"
@@ -766,7 +766,8 @@ fn load_policy_fingerprint_matches_from_toml_str() {
     // as parsing the string directly. This is the seam the `policy check`
     // subcommand (#93) will rely on.
     let tmp = TempFile::with_forced_mode("fingerprint-eq", FIXTURE.as_bytes(), 0o600);
-    let file_policy = load_policy(tmp.path()).expect("secure-mode fixture must load");
+    let file_policy = load_policy(tmp.path(), &unique_temp_path("no-policy-dir"))
+        .expect("secure-mode fixture must load");
     let str_policy = from_toml_str(FIXTURE).expect("fixture must parse");
     assert_eq!(
         file_policy.fingerprint(),
@@ -1277,6 +1278,7 @@ fn lint_reports_toml_parse_error() {
 fn lint_report_has_errors_and_has_warnings() {
     let error_only = LintReport {
         parse_error: None,
+        parse_errors: vec![],
         findings: vec![LintFinding {
             severity: LintSeverity::Error,
             location: "x".to_string(),
@@ -1288,6 +1290,7 @@ fn lint_report_has_errors_and_has_warnings() {
 
     let warning_only = LintReport {
         parse_error: None,
+        parse_errors: vec![],
         findings: vec![LintFinding {
             severity: LintSeverity::Warning,
             location: "x".to_string(),
@@ -1299,8 +1302,581 @@ fn lint_report_has_errors_and_has_warnings() {
 
     let parse_err = LintReport {
         parse_error: Some("bad".to_string()),
+        parse_errors: vec!["bad".to_string()],
         findings: vec![],
     };
     assert!(parse_err.has_errors());
     assert!(!parse_err.has_warnings());
+}
+
+// -----------------------------------------------------------------------
+// Policy fragments: one Policy, one fingerprint, deny beating allow across
+// every file.
+// -----------------------------------------------------------------------
+
+const EMPTY_SHA256: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
+const ALLOW_RESTART_NGINX: &str =
+    "[[operation]]\nname = \"service.restart\"\nallowed_args = [[\"nginx\"]]\n";
+const DENY_RESTART_NGINX: &str = "[[deny]]\nname = \"service.restart\"\nargs = [[\"nginx\"]]\n";
+const ALLOW_FILE_READ: &str = "[[operation]]\nname = \"file.read\"\nallowed_args = [[\"*\"]]\n";
+const ALLOW_RAW_TRUE: &str = "[raw_exec]\nallow = [\"^/bin/true$\"]\n";
+const DENY_RAW_TRUE: &str = "[raw_exec]\ndeny = [\"^/bin/true$\"]\n";
+
+fn fragment(name: &str, text: &str) -> Fragment {
+    Fragment {
+        name: name.to_string(),
+        text: text.to_string(),
+    }
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    ring::digest::digest(&ring::digest::SHA256, bytes)
+        .as_ref()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// The documented set-fingerprint stream, built independently of the loader.
+fn set_stream(records: &[(&str, &str)]) -> Vec<u8> {
+    let mut stream = b"relay-policy-set-v1\n".to_vec();
+    for (label, text) in records {
+        stream.extend_from_slice(label.as_bytes());
+        stream.push(0);
+        stream.extend_from_slice(text.len().to_string().as_bytes());
+        stream.push(b'\n');
+        stream.extend_from_slice(text.as_bytes());
+    }
+    stream
+}
+
+fn restart(policy: &Policy, service: &str) -> Explained {
+    policy.decide(&Request::Operation {
+        name: "service.restart",
+        positional: &args(&[service]),
+        path_positions: &[],
+    })
+}
+
+// Proves DI-36.
+#[test]
+fn an_empty_fragment_set_keeps_the_raw_bytes_fingerprint() {
+    let composed = compose(FIXTURE, &[]).expect("fixture composes");
+    let direct = from_toml_str(FIXTURE).expect("fixture parses");
+    assert_eq!(composed.fingerprint(), direct.fingerprint());
+    assert_eq!(
+        composed.fingerprint(),
+        sha256_hex(FIXTURE.as_bytes()),
+        "with no fragment the fingerprint is the SHA-256 of the Policy file's raw bytes"
+    );
+    assert_eq!(
+        compose("", &[]).expect("empty composes").fingerprint(),
+        EMPTY_SHA256
+    );
+}
+
+/// With no Policy file the fragments compose by the same rules, and the set
+/// fingerprint omits the Policy file's record rather than recording it empty.
+#[test]
+fn fragments_compose_alone_with_no_policy_file() {
+    let fragments = [
+        fragment("b", ALLOW_RAW_TRUE),
+        fragment("a", ALLOW_RESTART_NGINX),
+    ];
+    let policy = compose_fragments(&fragments).expect("composes");
+    assert!(matches!(
+        restart(&policy, "nginx").decision,
+        Decision::Allow(_)
+    ));
+    assert!(matches!(
+        policy.evaluate_raw_exec(&args(&["/bin/true"])),
+        Decision::Allow(_)
+    ));
+    assert!(matches!(
+        restart(&policy, "sshd").decision,
+        Decision::Deny { .. }
+    ));
+    assert_eq!(
+        policy.fingerprint(),
+        sha256_hex(&set_stream(&[
+            ("policy.d/a", ALLOW_RESTART_NGINX),
+            ("policy.d/b", ALLOW_RAW_TRUE),
+        ]))
+    );
+    assert_ne!(
+        policy.fingerprint(),
+        compose("", &fragments).expect("composes").fingerprint(),
+        "a missing Policy file is not fingerprinted as an empty one"
+    );
+
+    // A fragment rule has no line, the first fragment's included.
+    let first = restart(&policy, "nginx");
+    assert_eq!(first.rule.expect("an allow rule decided").line, None);
+
+    // Deny-by-default: an empty composition denies everything.
+    let empty = compose_fragments(&[]).expect("composes");
+    assert!(matches!(
+        restart(&empty, "nginx").decision,
+        Decision::Deny { .. }
+    ));
+    assert!(matches!(
+        empty.evaluate_raw_exec(&args(&["/bin/true"])),
+        Decision::Deny { .. }
+    ));
+}
+
+// Proves DI-36.
+#[test]
+fn fragments_compose_into_one_policy_with_one_fingerprint() {
+    let fragments = [
+        fragment("a", ALLOW_FILE_READ),
+        fragment("b", ALLOW_RAW_TRUE),
+    ];
+    let policy = compose(ALLOW_RESTART_NGINX, &fragments).expect("composes");
+
+    assert!(matches!(
+        restart(&policy, "nginx").decision,
+        Decision::Allow(_)
+    ));
+    assert!(matches!(
+        policy.evaluate("file.read", &args(&["/etc/hostname"])),
+        Decision::Allow(_)
+    ));
+    assert!(matches!(
+        policy.evaluate_raw_exec(&args(&["/bin/true"])),
+        Decision::Allow(_)
+    ));
+
+    let expected = sha256_hex(&set_stream(&[
+        ("policy.toml", ALLOW_RESTART_NGINX),
+        ("policy.d/a", ALLOW_FILE_READ),
+        ("policy.d/b", ALLOW_RAW_TRUE),
+    ]));
+    assert_eq!(policy.fingerprint(), expected);
+    assert_ne!(
+        policy.fingerprint(),
+        sha256_hex(ALLOW_RESTART_NGINX.as_bytes()),
+        "a Policy with fragments is not fingerprinted as its Policy file alone"
+    );
+
+    let reversed = [fragments[1].clone(), fragments[0].clone()];
+    let same = compose(ALLOW_RESTART_NGINX, &reversed).expect("composes");
+    assert_eq!(
+        same.fingerprint(),
+        expected,
+        "the order of the slice must not matter: composition sorts by name"
+    );
+
+    let renamed = [fragment("c", ALLOW_FILE_READ), fragments[1].clone()];
+    assert_ne!(
+        compose(ALLOW_RESTART_NGINX, &renamed)
+            .unwrap()
+            .fingerprint(),
+        expected,
+        "a fragment's file name is part of the fingerprint"
+    );
+    let edited = [
+        fragment("a", &format!("{ALLOW_FILE_READ}\n")),
+        fragments[1].clone(),
+    ];
+    assert_ne!(
+        compose(ALLOW_RESTART_NGINX, &edited).unwrap().fingerprint(),
+        expected,
+        "a fragment's bytes are part of the fingerprint"
+    );
+}
+
+// Proves DI-36.
+#[test]
+fn deny_in_any_file_beats_allow_in_any_other() {
+    let denied_operation = |policy_file: &str, fragments: &[Fragment]| {
+        let policy = compose(policy_file, fragments).expect("composes");
+        let explained = restart(&policy, "nginx");
+        assert!(
+            matches!(explained.decision, Decision::Deny { .. }),
+            "got {:?}",
+            explained.decision
+        );
+        assert_eq!(explained.pass, Pass::Deny);
+    };
+    // A Policy-file allow, a fragment deny.
+    denied_operation(
+        ALLOW_RESTART_NGINX,
+        &[fragment("deny.toml", DENY_RESTART_NGINX)],
+    );
+    // A fragment allow, a Policy-file deny.
+    denied_operation(
+        DENY_RESTART_NGINX,
+        &[fragment("allow.toml", ALLOW_RESTART_NGINX)],
+    );
+    // An allow in one fragment, a deny in another, in either name order.
+    denied_operation(
+        "",
+        &[
+            fragment("1-allow.toml", ALLOW_RESTART_NGINX),
+            fragment("2-deny.toml", DENY_RESTART_NGINX),
+        ],
+    );
+    denied_operation(
+        "",
+        &[
+            fragment("1-deny.toml", DENY_RESTART_NGINX),
+            fragment("2-allow.toml", ALLOW_RESTART_NGINX),
+        ],
+    );
+
+    // Raw Exec: an allow in the Policy file, a deny in a fragment.
+    let policy = compose(ALLOW_RAW_TRUE, &[fragment("deny.toml", DENY_RAW_TRUE)]).unwrap();
+    let argv = args(&["/bin/true"]);
+    let explained = policy.decide(&Request::RawExec { argv: &argv });
+    assert!(matches!(explained.decision, Decision::Deny { .. }));
+    assert_eq!(explained.pass, Pass::Deny);
+    assert!(explained.raw_exec_permit.is_none());
+}
+
+// Proves DI-36.
+#[test]
+fn a_broken_fragment_is_named_in_the_error() {
+    let broken_toml = compose("", &[fragment("x.toml", "this is = = not toml")]);
+    let Err(PolicyError::FragmentInvalid { name, source }) = broken_toml else {
+        panic!("a fragment parse error must be FragmentInvalid");
+    };
+    assert_eq!(name, "x.toml");
+    assert!(matches!(*source, PolicyError::Parse(_)));
+
+    let broken_regex = compose(
+        "",
+        &[fragment("x.toml", "[raw_exec]\nallow = [\"[unclosed\"]\n")],
+    )
+    .unwrap_err();
+    assert!(
+        matches!(&broken_regex, PolicyError::FragmentInvalid { source, .. }
+            if matches!(**source, PolicyError::InvalidRegex { .. })),
+        "got {broken_regex:?}"
+    );
+    assert!(
+        broken_regex.to_string().contains("\"x.toml\""),
+        "the message must quote the fragment's name: {broken_regex}"
+    );
+
+    // A newline in a file name is escaped, so it cannot split a journal line.
+    let hostile = compose(
+        "",
+        &[fragment("a\nb.toml", "[raw_exec]\nallow = [\"[\"]\n")],
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        hostile.starts_with("Policy fragment \"a\\nb.toml\" is invalid: "),
+        "got {hostile:?}"
+    );
+    let refusal = PolicyError::FragmentSymlink {
+        name: "a\nb.toml".to_string(),
+    }
+    .to_string();
+    assert!(!refusal.contains('\n'), "got {refusal:?}");
+
+    // A failure in the Policy file keeps its own variant, with no fragment named.
+    let file_error = compose("not toml = =", &[fragment("ok.toml", "")]).unwrap_err();
+    assert!(
+        matches!(file_error, PolicyError::Parse(_)),
+        "got {file_error:?}"
+    );
+}
+
+#[test]
+fn fragment_rules_carry_composed_index_and_no_line() {
+    let policy = compose(
+        ALLOW_RESTART_NGINX,
+        &[
+            fragment("a", ALLOW_FILE_READ),
+            fragment("b", DENY_RESTART_NGINX),
+        ],
+    )
+    .unwrap();
+
+    let at = restart(&policy, "nginx")
+        .rule
+        .expect("the deny from fragment b decided");
+    assert_eq!(
+        (at.section, at.index, at.line),
+        (RuleSection::Deny, 0, None),
+        "a fragment rule has the composed index and no line"
+    );
+
+    let only_file = compose(ALLOW_RESTART_NGINX, &[fragment("a", ALLOW_FILE_READ)]).unwrap();
+    let at = restart(&only_file, "nginx").rule.expect("file allow");
+    assert_eq!(
+        (at.section, at.index, at.line),
+        (RuleSection::Operation, 0, Some(1)),
+        "a Policy-file rule keeps its own index and line"
+    );
+    let read = only_file.decide(&Request::Operation {
+        name: "file.read",
+        positional: &args(&["/etc/hostname"]),
+        path_positions: &[0],
+    });
+    let at = read.rule.expect("fragment allow");
+    assert_eq!(
+        (at.section, at.index, at.line),
+        (RuleSection::Operation, 1, None),
+        "the fragment's allow follows the Policy file's in the composed section"
+    );
+}
+
+#[test]
+fn snapshot_lists_follow_composition_order() {
+    let policy = compose(
+        ALLOW_RESTART_NGINX,
+        &[
+            fragment("b", ALLOW_RAW_TRUE),
+            fragment("a", ALLOW_FILE_READ),
+        ],
+    )
+    .unwrap();
+    let names: Vec<String> = policy
+        .operation_allow_rules()
+        .into_iter()
+        .map(|r| r.name)
+        .collect();
+    assert_eq!(names, ["service.restart", "file.read"]);
+    assert_eq!(policy.raw_allow_patterns(), ["^/bin/true$"]);
+}
+
+#[test]
+fn refuses_start_classifies_every_variant() {
+    let io = || std::io::Error::other("x");
+    let toml_error = toml::from_str::<PolicyFile>("= =").unwrap_err();
+    let regex_error = compile_deny_regex("[").unwrap_err();
+    let name = || "f.toml".to_string();
+
+    let refusals = [
+        PolicyError::FragmentSymlink { name: name() },
+        PolicyError::FragmentNotRegularFile { name: name() },
+        PolicyError::FragmentInsecurePermissions {
+            name: name(),
+            mode: 0o666,
+        },
+        PolicyError::FragmentInsecureOwner {
+            name: name(),
+            uid: 1,
+        },
+        PolicyError::PolicyDirectorySymlink,
+        PolicyError::PolicyDirectoryNotADirectory,
+        PolicyError::PolicyDirectoryInsecurePermissions { mode: 0o777 },
+        PolicyError::PolicyDirectoryInsecureOwner { uid: 1 },
+    ];
+    for e in &refusals {
+        assert!(e.refuses_start(), "{e:?} must refuse start");
+    }
+
+    let deny_all = [
+        PolicyError::InsecurePermissions { mode: 0o666 },
+        PolicyError::InsecureOwner { uid: 1 },
+        PolicyError::SymlinkPath,
+        PolicyError::NotRegularFile,
+        PolicyError::Io(io()),
+        PolicyError::Parse(toml_error),
+        PolicyError::InvalidRegex {
+            pattern: "[".to_string(),
+            source: regex_error,
+            hint: String::new(),
+        },
+        PolicyError::FragmentUnreadable {
+            name: name(),
+            source: io(),
+        },
+        PolicyError::FragmentInvalid {
+            name: name(),
+            source: Box::new(PolicyError::SymlinkPath),
+        },
+        PolicyError::FragmentName {
+            name: std::ffi::OsString::from("f"),
+        },
+        PolicyError::PolicyDirectoryIo(io()),
+    ];
+    for e in &deny_all {
+        assert!(!e.refuses_start(), "{e:?} must leave the daemon deny-all");
+    }
+}
+
+// -----------------------------------------------------------------------
+// Lint over a Policy file and its fragments
+// -----------------------------------------------------------------------
+
+#[test]
+fn lint_composed_with_no_fragment_equals_the_single_source_lint() {
+    for text in [
+        FIXTURE,
+        "[[operation]]\nname = \"nope\"\n",
+        "[[operation]]\nname = \"service.restart\"\nallowed_args = [[\"nginx\"]]\n[[deny]]\nname = \"service.restart\"\n",
+        "this is = = not toml",
+    ] {
+        assert_eq!(
+            lint_composed(text, &[], &[], false),
+            lint_with_vocabulary(text, &[], false)
+        );
+    }
+}
+
+#[test]
+fn lint_composed_shadows_an_allow_across_files() {
+    let report = lint_composed(
+        ALLOW_RESTART_NGINX,
+        &[fragment("deny.toml", DENY_RESTART_NGINX)],
+        &[],
+        false,
+    );
+    assert!(report.parse_error.is_none());
+    assert_eq!(report.findings.len(), 1, "{:?}", report.findings);
+    let finding = &report.findings[0];
+    assert_eq!(finding.severity, LintSeverity::Warning);
+    assert_eq!(
+        finding.location, "[[operation]] #0 (name=\"service.restart\")",
+        "a Policy-file allow keeps its plain location"
+    );
+    assert!(
+        finding
+            .message
+            .contains("[[deny]] #0 (name=\"service.restart\") in \"deny.toml\""),
+        "the message names the deny's fragment: {}",
+        finding.message
+    );
+
+    let report = lint_composed(
+        DENY_RESTART_NGINX,
+        &[fragment("allow.toml", ALLOW_RESTART_NGINX)],
+        &[],
+        false,
+    );
+    assert_eq!(
+        report.findings[0].location,
+        "\"allow.toml\": [[operation]] #0 (name=\"service.restart\")"
+    );
+    assert!(!report.findings[0].message.contains(" in "));
+}
+
+#[test]
+fn lint_composed_prefixes_a_fragment_finding_with_its_name() {
+    let report = lint_composed(
+        "",
+        &[fragment("bad.toml", "[raw_exec]\nallow = [\"[x\"]\n")],
+        &[],
+        true,
+    );
+    assert!(report.has_errors());
+    assert!(report
+        .findings
+        .iter()
+        .all(|f| f.location.starts_with("\"bad.toml\": [raw_exec].allow[0]")));
+
+    let unknown = lint_composed(
+        "",
+        &[fragment(
+            "ops.toml",
+            "[[operation]]\nname = \"nope.nope\"\n",
+        )],
+        &[],
+        true,
+    );
+    assert_eq!(unknown.findings.len(), 1);
+    assert_eq!(unknown.findings[0].severity, LintSeverity::Error);
+    assert!(unknown.findings[0].location.starts_with("\"ops.toml\": "));
+}
+
+#[test]
+fn lint_composed_reports_every_failing_source() {
+    let report = lint_composed(
+        "= =",
+        &[
+            fragment("b.toml", "also = ="),
+            fragment("a.toml", "[raw_exec]\n"),
+            fragment("c.toml", "x = ="),
+        ],
+        &[],
+        false,
+    );
+    assert!(report.findings.is_empty());
+    assert_eq!(report.parse_errors.len(), 3);
+    assert!(!report.parse_errors[0].starts_with("\"b.toml\": "));
+    assert!(report.parse_errors[1].starts_with("\"b.toml\": "));
+    assert!(report.parse_errors[2].starts_with("\"c.toml\": "));
+    assert_eq!(
+        report.parse_error.as_deref(),
+        Some(report.parse_errors.join("\n").as_str())
+    );
+}
+
+// -----------------------------------------------------------------------
+// Unknown keys are a parse error, so lint and the loader agree
+// -----------------------------------------------------------------------
+
+#[test]
+fn an_unknown_key_at_every_level_is_a_parse_error_naming_the_key() {
+    for (text, key) in [
+        ("[[denny]]\nname = \"service.restart\"\n", "denny"),
+        ("[raw_exec]\nalow = [\"^ls$\"]\n", "alow"),
+        (
+            "[[deny]]\nnmae = \"service.restart\"\nname = \"service.restart\"\n",
+            "nmae",
+        ),
+        (
+            "[[operation]]\nname = \"service.restart\"\nallowed_arg = [[\"nginx\"]]\n",
+            "allowed_arg",
+        ),
+    ] {
+        let err = from_toml_str(text).expect_err(text);
+        assert!(matches!(err, PolicyError::Parse(_)), "{text}: {err:?}");
+        assert!(err.to_string().contains(key), "{text}: {err}");
+
+        let report = lint(text);
+        let parse_error = report.parse_error.as_deref().expect(text);
+        assert!(parse_error.contains(key), "{text}: {parse_error}");
+        assert!(report.has_errors(), "{text}");
+    }
+}
+
+#[test]
+fn every_key_the_loader_reads_is_accepted() {
+    let text = "[[operation]]\nname = \"service.restart\"\nallowed_args = [[\"nginx\"]]\n\
+         [[deny]]\nname = \"file.read\"\nargs = [[\"/etc/shadow\"]]\n\
+         [raw_exec]\nallow = [\"^ls$\"]\ndeny = [\"rm\"]\n";
+    assert!(from_toml_str(text).is_ok());
+    assert!(lint(text).findings.is_empty());
+}
+
+#[test]
+fn lint_composed_reports_an_unknown_key_in_a_fragment_under_its_name() {
+    let report = lint_composed(
+        ALLOW_RESTART_NGINX,
+        &[fragment(
+            "90-deny.toml",
+            "[[denny]]\nname = \"service.restart\"\nargs = []\n",
+        )],
+        &[],
+        false,
+    );
+    assert_eq!(report.parse_errors.len(), 1, "{:?}", report.parse_errors);
+    assert!(
+        report.parse_errors[0].starts_with("\"90-deny.toml\": "),
+        "{}",
+        report.parse_errors[0]
+    );
+    assert!(
+        report.parse_errors[0].contains("denny"),
+        "{}",
+        report.parse_errors[0]
+    );
+    assert!(report.has_errors());
+}
+
+#[test]
+fn lint_escapes_a_fragment_name_with_control_characters() {
+    let report = lint_composed("", &[fragment("a\nb.toml", "[[denny]]\n")], &[], false);
+    assert!(
+        report.parse_errors[0].starts_with("\"a\\nb.toml\": "),
+        "{}",
+        report.parse_errors[0]
+    );
 }

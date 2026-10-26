@@ -106,7 +106,7 @@ pub fn open_hardened(path: &Path) -> Result<(File, Metadata), HardenedRejection>
 /// `daemon_euid`: only root or the daemon's own effective uid. A pure function
 /// so the decision is unit-tested on any runner — the fixture tests that chown
 /// a real file to a third-party uid need root, and CI is not root.
-fn owner_is_trusted(file_uid: u32, daemon_euid: u32) -> bool {
+pub(crate) fn owner_is_trusted(file_uid: u32, daemon_euid: u32) -> bool {
     file_uid == 0 || file_uid == daemon_euid
 }
 

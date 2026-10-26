@@ -94,6 +94,26 @@ invalidate it. Let it expire, or revoke it if it is believed leaked, knowing tha
 cascades to every Node enrolled under it ([enrollment.md](enrollment.md)). Backups and images of
 the Node taken before the upgrade still carry the line.
 
+## Before upgrading onto the release that adds the Policy directory
+
+**A Policy key this release does not recognise loads as deny-all.** Earlier releases ignored
+such a key, so a Policy with a mistyped `[[denny]]` or `alow = [...]` ran with that line silently
+dropped. This release reads it as a parse error, and the Node then denies every Task. The rule
+covers the Policy file and every fragment in the Policy directory.
+
+Before restarting any Node onto this release, run **this release's** `relay-daemon policy
+check`, in CI or from the new artifact on a staging host, over the Policy file and the Policy
+directory exactly as config management pushes them. An older binary ignores the key and passes:
+
+```console
+$ relay-daemon policy check policies/web-prod.toml --policy-dir policies/web-prod.d
+```
+
+The check reports an unrecognised key as an error and exits `1`. Fix the Policy, push it, and
+then roll the binary. If a Node restarted first, it reports the deny-all fingerprint
+`e3b0c442…b855`, and its journal line `policy load failed; using deny-all policy` names the key
+([policy-as-code.md](policy-as-code.md)).
+
 ## The minimum-version gate (the Relay's side)
 
 `reach.min_daemon_version` in `relay.toml` ([relay-install.md](relay-install.md)) sets the
