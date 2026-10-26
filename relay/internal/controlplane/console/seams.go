@@ -32,10 +32,10 @@ package console
 // configuration, OAuthConfigured, mirrors a startup value the composition root
 // sets. This package cannot read it from anywhere.
 //
-// There are TWO write seams on Deps — JobCanceller (cancel.go) and
-// AccountAdministrator (accounts_write.go) — and neither lives in this file,
-// on purpose: each gets its own file so this file's "every seam here is
-// read-only" claim stays true of seams.go without qualification.
+// There are THREE write seams on Deps — JobCanceller (cancel.go),
+// AccountAdministrator (accounts_write.go) and TagWriter (tags.go) — and none
+// lives in this file, on purpose: each gets its own file so this file's "every
+// seam here is read-only" claim stays true of seams.go without qualification.
 //
 // The filtered, paginated, per-principal audit/Job query lane is the
 // capability layer's — see QueryReader below. Job detail reads nothing else:

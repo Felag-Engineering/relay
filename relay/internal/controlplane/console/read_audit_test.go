@@ -211,6 +211,26 @@ var consoleReadAudit = map[string]readAuditRule{
 			"job_cancel with its Principal, and a refusal as a refusal",
 	},
 
+	// ── Tag writes ────────────────────────────────────────────────────────
+	//
+	// The confirmation page resolves a filter to Node IDs, which discloses the
+	// matched Nodes, so it reads the fleet through the audited lane exactly as
+	// the Fleet view does. The two POST routes are writes.
+	"GET " + confirmTagsPath: {
+		path: confirmTagsPath + "?filter=node%3Arole%3Dweb&op=add&label=tag%3Aowner%3Dteam-a",
+		tool: "list_nodes",
+	},
+	"POST /console/nodes/{node_id}/tags": {
+		path: "",
+		why: "a write, not a read: the capability layer records each change as tag_write " +
+			"with its Principal and old and new values, and a refusal as a refusal; no step-up",
+	},
+	"POST /console/tags": {
+		path: "",
+		why: "a write, not a read: the capability layer records each change as tag_write " +
+			"with its Principal and old and new values, and a refusal as a refusal; no step-up",
+	},
+
 	// ── The Accounts confirmation pages (#1046) ──────────────────────────
 	//
 	// These DO read Account data, so they sit outside "Not data reads". Each
@@ -686,6 +706,9 @@ func realLaneDeps(trail *recordingTrail) Deps {
 
 	d := renderableDeps()
 	d.Queries = svc.ReadLane
+	// Tags is wired so the confirmation page is offered and renders 200
+	// through the real lane; the fake writes nothing.
+	d.Tags = &fakeTagWriter{}
 	// Without this, GET /console/events 503s before RecordEventSubscription
 	// is ever reached — d.Events == nil is checked first — which would make
 	// this file's sweeps prove nothing about the one route this is the

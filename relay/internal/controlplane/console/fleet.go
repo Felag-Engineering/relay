@@ -36,6 +36,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Felag-Engineering/relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/relay/relay/internal/capability"
 	"github.com/Felag-Engineering/relay/relay/internal/nodestate"
 	"github.com/Felag-Engineering/relay/relay/internal/registry"
@@ -99,8 +100,8 @@ type fleetNode struct {
 	// never as an edit affordance — nobody sets these, including admins.
 	States []Label
 
-	// Labels are the declared namespaces drawn on this screen: node: and relay:.
-	// Tags are not drawn here yet. Separate from States because the difference
+	// Labels are the declared namespaces drawn on this screen: node:, tag: and
+	// relay:. Separate from States because the difference
 	// between an observation and a declaration is the whole point of the
 	// namespace model.
 	Labels []Label
@@ -420,6 +421,11 @@ type fleetView struct {
 	// after the view is built. It only ever travels through this screen —
 	// every row and facet link appends it so a click does not lose the pins.
 	Pin pinState
+
+	// TagSelection is the bulk-tag form, set by the handler only when the
+	// Account is offered the write, the filter is valid and non-empty, and it
+	// matched at least one Node. Nil draws nothing: absent, not disabled.
+	TagSelection *fleetTagSelection
 }
 
 // GroupParam is the grouping a form on this screen carries onward: "-" for
@@ -586,6 +592,16 @@ func handleFleet(d Deps) http.HandlerFunc {
 		// one disclosure, one record.
 		v.Pin = buildPinState(resolveIn(nodes), pins, fleetPath, "pin")
 		pinRows(v.Groups, pins)
+		if v.FilterOK && strings.TrimSpace(v.Filter) != "" && v.Matched > 0 &&
+			tagsOffered(d, accounts.Role(caller.Role), confirmTagsPattern) {
+			v.TagSelection = &fleetTagSelection{
+				Action:  confirmTagsPath,
+				Filter:  v.Filter,
+				Group:   v.GroupParam(),
+				Pin:     v.Pin.Raw,
+				Matched: v.Matched,
+			}
+		}
 		renderScreen(w, p, fleetTmpl, v)
 	}
 }
@@ -646,7 +662,8 @@ func buildFleetView(d Deps, nodes []registry.Node, certExpiringWithin time.Durat
 
 	matched := nodes
 	if strings.TrimSpace(filter) != "" {
-		sel, err := parseFleetFilter(filter)
+		ev := capability.StateEval{Now: d.now(), CertExpiringWithin: certExpiringWithin}
+		m, err := matchFleetFilter(nodes, filter, ev)
 		if err != nil {
 			v.FilterOK = false
 			v.FilterError = err.Error()
@@ -655,13 +672,7 @@ func buildFleetView(d Deps, nodes []registry.Node, certExpiringWithin time.Durat
 			// never blanked: a typo must not feel like an outage.
 			matched = nodes
 		} else {
-			ev := capability.StateEval{Now: d.now(), CertExpiringWithin: certExpiringWithin}
-			matched = matched[:0:0]
-			for _, n := range nodes {
-				if sel.Matches(n, ev) {
-					matched = append(matched, n)
-				}
-			}
+			matched = m
 		}
 	}
 	v.Matched = len(matched)
@@ -712,6 +723,24 @@ func buildFleetView(d Deps, nodes []registry.Node, certExpiringWithin time.Durat
 	v.CertExpiryKnown = v.CertExpiryUnknown == 0
 
 	return v
+}
+
+// matchFleetFilter is the Nodes in nodes that filter selects: the real Selector
+// parser followed by the capability layer's own Matches. The fleet view and the
+// tag confirmation page both resolve through it, so the set a tag write confirms
+// is resolved by the same code as the set the fleet showed.
+func matchFleetFilter(nodes []registry.Node, filter string, ev capability.StateEval) ([]registry.Node, error) {
+	sel, err := parseFleetFilter(filter)
+	if err != nil {
+		return nil, err
+	}
+	matched := make([]registry.Node, 0, len(nodes))
+	for _, n := range nodes {
+		if sel.Matches(n, ev) {
+			matched = append(matched, n)
+		}
+	}
+	return matched, nil
 }
 
 // buildWall assembles the fleet-wide block: every matched Node as one cell, in
@@ -967,20 +996,22 @@ func stateChips(ls []nodestate.Label) []Label {
 	return out
 }
 
-// declaredChips returns the labels somebody SET that this screen draws: node:
-// and relay:.
+// declaredChips returns the labels somebody SET that this screen draws: node:,
+// tag: and relay:.
 //
-// `tag:` is DELIBERATELY ABSENT. Tags live in their own map (Node.TagLabels), so
-// the relay loop below can never render one as a `relay:` chip — lock glyph,
-// security hue, data-lane="security" — which is the single confusion the
-// four-namespace grammar exists to prevent (invariant 7: `tag:` is never a valid
-// security-lane target). This screen draws no tag chip; the chip, when it is
-// built, is added HERE, in one place, and must never render with the security
-// lane.
+// Tags live in their own map (Node.TagLabels), so the relay loop below can never
+// render one as a `relay:` chip — lock glyph, security hue, data-lane="security"
+// — which is the single confusion the four-namespace grammar exists to prevent
+// (invariant 7: `tag:` is never a valid security-lane target). A tag chip is
+// built here, in one place, and never takes the security lane
+// (Label.SecurityLane is relay: only).
 func declaredChips(n registry.Node) []Label {
 	var out []Label
 	for _, k := range slices.Sorted(maps.Keys(n.NodeLabels)) {
 		out = append(out, Label{Namespace: NamespaceNode, Key: k, Value: n.NodeLabels[k]})
+	}
+	for _, k := range slices.Sorted(maps.Keys(n.TagLabels)) {
+		out = append(out, Label{Namespace: NamespaceTag, Key: k, Value: n.TagLabels[k]})
 	}
 	for _, k := range slices.Sorted(maps.Keys(n.RelayLabels)) {
 		out = append(out, Label{Namespace: NamespaceRelay, Key: k, Value: n.RelayLabels[k]})
@@ -1692,6 +1723,25 @@ var fleetTmpl = newScreen("fleet", `
   submits nothing, and the wrapper keeps the age and Refresh from joining the count's text. */}}
   <div class="freshline">{{template "rendered-age" .Rendered}}{{template "refresh" .RefreshControl}}</div>
 </form>
+{{with .TagSelection}}
+<form class="ctlform ctlrow tagsel" method="get" action="{{.Action}}">
+  <input type="hidden" name="filter" value="{{.Filter}}">
+  <input type="hidden" name="group" value="{{.Group}}">
+  {{with .Pin}}<input type="hidden" name="pin" value="{{.}}">{{end}}
+  <div class="fld">
+    <label class="fldlabel" for="tag-op">Tag change</label>
+    <select id="tag-op" name="op">
+      <option value="add">Add</option>
+      <option value="remove">Remove</option>
+    </select>
+  </div>
+  <div class="fld">
+    <label class="fldlabel" for="tag-label">Tag</label>
+    <input id="tag-label" name="label" placeholder="tag:key=value" spellcheck="false" autocomplete="off" required>
+  </div>
+  <button class="btn" type="submit">Tag these {{.Matched}}</button>
+</form>
+{{end}}
 {{with .Note}}<p class="gap"><b>Part of this URL could not be read:</b> {{.}}.</p>{{end}}
 {{if .Pin.Any}}{{template "pin-bar" .Pin}}{{end}}
 

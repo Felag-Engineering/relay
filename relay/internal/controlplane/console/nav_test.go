@@ -39,6 +39,9 @@ func TestNav_ChildScreenMarksItsParentCurrent(t *testing.T) {
 		"/console/accounts/acct-mike/tokens/tok-live/revoke": "Accounts",
 		"/console/api-tokens/tok-live/revoke":                "Accounts",
 		"/console/access":                                    "Access",
+		"/console/tags/confirm":                              "Fleet",
+		"/console/tags":                                      "Fleet",
+		"/console/nodes/node-web-1/tags":                     "Fleet",
 
 		// Nothing current: the empty path (the 404 shell), unknown paths, a
 		// near-miss of a root, and a Link, which is exact and never a prefix.
@@ -48,6 +51,7 @@ func TestNav_ChildScreenMarksItsParentCurrent(t *testing.T) {
 		"/console/new-accountx": "",
 		"/console/compare-x":    "",
 		"/console/jobsx/1":      "",
+		"/console/tagsx":        "",
 		"/console/run":          "",
 		"/console/run/x":        "",
 	}
@@ -107,6 +111,7 @@ func TestNav_EveryMountedScreenMarksExactlyOneItemCurrent(t *testing.T) {
 		"/console/accounts/{account_id}/lower":                    "Accounts",
 		"/console/accounts/{account_id}/tokens/{token_id}/revoke": "Accounts",
 		"/console/access":                                         "Access",
+		"/console/tags/confirm":                                   "Fleet",
 	}
 	d := sweepFixture()
 	walked := map[string]bool{}

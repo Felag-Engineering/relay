@@ -504,6 +504,54 @@ func (f *fakeCanceller) CancelJob(_ context.Context, p capability.Principal, job
 	return f.err
 }
 
+// tagWriteCall records one WriteTag invocation's arguments.
+type tagWriteCall struct {
+	Principal capability.Principal
+	Write     capability.TagWrite
+}
+
+// fakeTagWriter is the Tags write seam. Like fakeCanceller it records every
+// call and decides nothing: the floor, the label rules and the audit rows are
+// the capability layer's, and a fake that refused a role or a label would
+// assert against its own implementation. With no configuration it answers every
+// requested Node as changed, so a result page renders. The recorder is guarded
+// because sweepFixture shares one instance across parallel sweeps.
+type fakeTagWriter struct {
+	mu   sync.Mutex
+	recd []tagWriteCall
+
+	result capability.TagWriteResult
+	err    error
+}
+
+func (f *fakeTagWriter) WriteTag(_ context.Context, p capability.Principal, w capability.TagWrite) (capability.TagWriteResult, error) {
+	f.mu.Lock()
+	f.recd = append(f.recd, tagWriteCall{Principal: p, Write: w})
+	f.mu.Unlock()
+	if f.err != nil {
+		return capability.TagWriteResult{}, f.err
+	}
+	if f.result.Changed != nil || f.result.Unchanged != nil {
+		return f.result, nil
+	}
+	var res capability.TagWriteResult
+	key, value, _ := strings.Cut(strings.TrimPrefix(w.Label, "tag:"), "=")
+	for _, id := range w.NodeIDs {
+		res.Changed = append(res.Changed, registry.TagChange{
+			NodeID: id, Key: key,
+			After: registry.TagValue{Set: w.Op == capability.TagAdd, Value: value},
+		})
+	}
+	return res, nil
+}
+
+// calls returns a copy of the recorded calls.
+func (f *fakeTagWriter) calls() []tagWriteCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]tagWriteCall(nil), f.recd...)
+}
+
 // The five calls fakeAccountAdmin records, each carrying exactly what the
 // handler passed, so a test asserts what reached the seam rather than that
 // something did.
@@ -992,6 +1040,12 @@ func sweepFixture() Deps {
 	// branch instead of the five forms, so the CSRF-token sweep and the
 	// snapshot producer would be asserting about a page that does not ship.
 	d.AccountAdmin = &fakeAccountAdmin{}
+	// Tags is wired for the same reason: an unwired write seam would make every
+	// sweep render Node detail and the filtered Fleet view without the tag
+	// controls, so the CSRF and CSP sweeps would assert about a page that does
+	// not ship. The default fake is permissive; a test that asserts on calls
+	// builds a fresh one.
+	d.Tags = &fakeTagWriter{}
 	d.Audit = fakeAudit{records: []audit.Record{
 		{Kind: audit.KindDispatch, JobID: "job-1", NodeID: "node-web-1", OperationName: "service.restart", Timestamp: testNow},
 	}}

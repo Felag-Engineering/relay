@@ -81,7 +81,7 @@ type surfaceDeps struct {
 	// accountAdmin backs api.AccountAdmin, console.Accounts and
 	// console.AccountAdmin.
 	accountAdmin *capability.AccountAdmin
-	// tagWriter backs api.TagWriter; no other surface holds it.
+	// tagWriter backs api.TagWriter and console.Deps.Tags; MCP never holds it.
 	tagWriter        *capability.TagWriter
 	jobs             jobs.JobRepository
 	tasks            jobs.TaskRepository
@@ -358,6 +358,13 @@ func (consoleSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		// step-up and the role route's current-role read need no new wiring
 		// either. None of these five composes or dispatches anything.
 		AccountAdmin: d.accountAdmin,
+		// Tags: the Console's third write seam. The same
+		// *capability.TagWriter the Control API holds, so the floor (a human
+		// Account at operator or above, no step-up), the label rules, the caps
+		// and the audit rows are the capability layer's. MCP is never handed
+		// it. Through the helper, never `Tags: d.tagWriter` — see
+		// consoleTagsOrNil for the typed-nil trap.
+		Tags: consoleTagsOrNil(d.tagWriter),
 	})
 	mux.Handle("/console/", console.Secure(consoleMux, d.logger))
 }
@@ -510,6 +517,17 @@ func consoleEventsOrNil(b *events.Bus) console.EventReader {
 		return nil
 	}
 	return b
+}
+
+// consoleTagsOrNil returns w as a console.TagWriter, or an untyped nil when w is
+// nil: the typed-nil guard consoleEventsOrNil documents. A nil *TagWriter inside
+// a non-nil interface would pass the Console's `d.Tags == nil` checks, draw the
+// tag controls and panic in WriteTag.
+func consoleTagsOrNil(w *capability.TagWriter) console.TagWriter {
+	if w == nil {
+		return nil
+	}
+	return w
 }
 
 // readAuditorOrNil returns s as an api.ReadAuditor, or an untyped nil when s

@@ -147,7 +147,7 @@ type Deps struct {
 	// one subject where being wrong is worst.
 	Accounts AccountReader
 
-	// Cancel is one of the Console's two write seams (cancel.go): the
+	// Cancel is one of the Console's three write seams (cancel.go): the
 	// same capability.Execution.CancelJob the Control API and MCP call. The role
 	// floor is operator; the scope beyond that floor differs by Account kind
 	// (human: any Job, machine: only a Job it requested). Both the
@@ -172,6 +172,14 @@ type Deps struct {
 	// either partner nil, means the controls do not render and the routes
 	// answer unavailable.
 	AccountAdmin AccountAdministrator
+
+	// Tags is the Console's third write seam (tags.go): the same
+	// capability.TagWriter.WriteTag the Control API calls. The floor (a human
+	// Account at operator or above, no step-up), the label rules, the
+	// per-Node cap and the audit rows are the capability layer's; this package
+	// only renders what it decided (invariant 10, ADR-0050). Nil means no tag
+	// control renders and the routes answer unavailable.
+	Tags TagWriter
 }
 
 // logger resolves Deps.Logger, falling back to slog.Default() when unset.
@@ -256,7 +264,7 @@ func Routes(d Deps) []Route {
 		// "/console/" catch-all (method-less) for every path this table does
 		// not claim; {$} is still required so an unclaimed path reaches THAT
 		// catch-all's styled 404 rather than this handler.
-		{"GET", "/console/{$}", NavEntry{Group: NavObserve, Label: "Fleet", Order: 10, Under: []string{"/console/nodes", "/console/compare"}}, accounts.RoleViewer, handleFleet},
+		{"GET", "/console/{$}", NavEntry{Group: NavObserve, Label: "Fleet", Order: 10, Under: []string{"/console/nodes", "/console/compare", "/console/tags"}}, accounts.RoleViewer, handleFleet},
 		{"GET", "/console/nodes/{node_id}", NavEntry{}, accounts.RoleViewer, handleNode},
 		{"GET", "/console/activity", NavEntry{Group: NavObserve, Label: "Activity", Order: 30, Under: []string{"/console/jobs"}}, accounts.RoleViewer, handleActivity},
 		{"GET", "/console/jobs/{job_id}", NavEntry{}, accounts.RoleViewer, handleJob},
@@ -421,6 +429,19 @@ func Routes(d Deps) []Route {
 		// forbidden" every other MinRole gives); the capability layer's
 		// RoleGate, reached inside handleCancelJob, is the authority.
 		{"POST", "/console/jobs/{job_id}/cancel", NavEntry{}, accounts.RoleOperator, handleCancelJob},
+
+		// Tags (tags.go): edit one Node's tag: labels from Node detail, and a
+		// filtered selection's from the Fleet view through a confirmation
+		// page that lists the matched Nodes. MinRole operator narrows to
+		// authz.ControlTagWrite's own floor and widens nothing; the
+		// human-Account-only rule is the capability layer's, reached inside the
+		// POST handlers. The confirmation page is a read that writes nothing.
+		// Each path owns itself: a constrained route also mounts its bare path,
+		// so none shares a path with another route and none is a literal beneath
+		// a constrained wildcard.
+		{"POST", "/console/nodes/{node_id}/tags", NavEntry{}, accounts.RoleOperator, handleWriteNodeTag},
+		{"GET", "/console/tags/confirm", NavEntry{}, accounts.RoleOperator, handleConfirmTags},
+		{"POST", "/console/tags", NavEntry{}, accounts.RoleOperator, handleWriteTags},
 	}
 }
 

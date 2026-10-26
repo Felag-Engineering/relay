@@ -970,6 +970,12 @@ var fixtureIDs = map[string]string{
 var fixtureLinks = map[string]string{
 	"/console/accounts/{account_id}/lower":                    "/console/accounts/" + targetAdminID + "/lower?role=operator",
 	"/console/accounts/{account_id}/tokens/{token_id}/revoke": "/console/accounts/" + sweepMachineAccountID + "/tokens/tok-live/revoke",
+
+	// The tag confirmation page wants a filter that matches Nodes, an
+	// operation and a well-formed tag. It matches node-web-1..3 in sweepFixture.
+	// The label avoids a word starting "on" so assertCSPClean's handler-shape
+	// scan has nothing to false-positive on.
+	confirmTagsPath: confirmTagsPath + "?filter=node%3Arole%3Dweb&op=add&label=tag%3Aowner%3Dteam-a",
 }
 
 // selectedAccountsScreen is the Account page, a walkable route and the

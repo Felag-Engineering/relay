@@ -25,6 +25,12 @@ package console
 // from this screen to a Node's Policy file, and an operator who does not know
 // that will go looking for the edit button and conclude the product is broken
 // when they cannot find it.
+//
+// # The one write
+//
+// Policy and Facts stay read-only. The page's one write is a tag: label, added
+// or removed through the capability layer's TagWriter (tags.go) for an Account
+// offered it; every other namespace renders with no control (invariant 7).
 
 import (
 	"context"
@@ -32,6 +38,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/Felag-Engineering/relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/relay/relay/internal/audit"
 	"github.com/Felag-Engineering/relay/relay/internal/capability"
 	"github.com/Felag-Engineering/relay/relay/internal/jobs"
@@ -83,6 +90,11 @@ type nodeView struct {
 
 	States []Label
 	Labels []Label
+
+	// TagEdit is the tag add and remove controls. Nil for an Account not
+	// offered the write route, or when the seam is unwired: absent, not
+	// disabled.
+	TagEdit *nodeTagEdit
 
 	CertFingerprint string
 	EnrollingToken  string
@@ -250,6 +262,7 @@ func handleNode(d Deps) http.HandlerFunc {
 			return
 		}
 		v := buildNodeView(d, r, detail, pins, resolve)
+		v.TagEdit = newNodeTagEdit(d, accounts.Role(caller.Role), n.NodeID, p.CSRFToken)
 		if refusedUnaudited(w, lane, "this Node's registry record") {
 			return
 		}
@@ -610,9 +623,25 @@ var nodeTmpl = newScreen("node", `
 {{if .Pin.Any}}{{template "pin-bar" .Pin}}{{end}}
 
 <div class="labelrow">
-  {{range .Labels}}{{template "label-chip" .}}{{end}}
+  {{range .Labels}}{{template "label-chip" .}}{{if and .IsTag $.TagEdit}}<form class="tagrm" method="post" action="{{$.TagEdit.Action}}">
+    <input type="hidden" name="csrf_token" value="{{$.TagEdit.CSRFToken}}">
+    <input type="hidden" name="op" value="remove">
+    <input type="hidden" name="label" value="{{.KeyTerm}}">
+    <button class="btn" type="submit" aria-label="Remove {{.KeyTerm}}">Remove</button>
+  </form>{{end}}{{end}}
   {{range .States}}{{template "label-chip" .}}{{end}}
 </div>
+{{with .TagEdit}}
+<form class="ctlform ctlrow tagadd" method="post" action="{{.Action}}">
+  <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+  <input type="hidden" name="op" value="add">
+  <div class="fld">
+    <label class="fldlabel" for="tag-add-label">Tag</label>
+    <input id="tag-add-label" name="label" placeholder="tag:key=value" spellcheck="false" autocomplete="off" required>
+  </div>
+  <button class="btn grant" type="submit">Add tag</button>
+</form>
+{{end}}
 
 <div class="panels">
   <div class="pcol">

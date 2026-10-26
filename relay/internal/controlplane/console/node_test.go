@@ -139,16 +139,18 @@ func withNodePolicy(d Deps, nodeID string) Deps {
 }
 
 // TestNode_IsStructurallyReadOnly is the rendered half of "read-only
-// structurally, not by permission".
+// structurally, not by permission", for Policy and Facts.
 //
 // It runs as ADMIN — the strongest role — so a pass means NO role is offered a
 // control, rather than that the role this test happened to pick was not. The
 // seam type (PolicyReader has Get only), the AST guard in no_dispatch_test.go
 // and the route walk below are the other three halves.
 //
-// Node detail offers no form, button or input at all. Compare carries exactly
-// one kind of form, a GET that re-requests itself (spec 02, D28): no POST, no
-// htmx, no other action, at any role.
+// With no tag seam wired, Node detail offers no form, button or input at all;
+// with one wired, its only forms are POSTs to this Node's own tags route (the
+// page's one write, through the capability layer) and none uses htmx. Compare
+// carries exactly one kind of form, a GET that re-requests itself (spec 02,
+// D28): no POST, no htmx, no other action, at any role.
 func TestNode_IsStructurallyReadOnly(t *testing.T) {
 	d := fleetFixture()
 	d = withPolicy(d, map[string]policyview.Snapshot{"node-web-1": reportedSnapshot(policyview.Snapshot{
@@ -172,6 +174,26 @@ func TestNode_IsStructurallyReadOnly(t *testing.T) {
 		}
 	}
 
+	// Wired: every POST form targets this Node's tags route, and nothing is
+	// htmx.
+	wired := d
+	wired.Tags = &fakeTagWriter{}
+	wiredContent := strings.ToLower(contentOf(get(t, newTestHandler(wired, accounts.RoleAdmin), "/console/nodes/node-web-1").Body.String()))
+	posts := postForms(wiredContent)
+	if len(posts) == 0 {
+		t.Fatal("a wired Node detail renders no tag form — the check below would be vacuous")
+	}
+	for _, f := range posts {
+		if !strings.Contains(f, `action="`+nodeTagsAction("node-web-1")+`"`) {
+			t.Errorf("a POST form on Node detail does not target this Node's tags route: %s", f)
+		}
+	}
+	for _, banned := range []string{"hx-post", "hx-put", "hx-patch", "hx-delete"} {
+		if strings.Contains(wiredContent, banned) {
+			t.Errorf("a wired Node detail renders %q", banned)
+		}
+	}
+
 	const compare = "/console/compare?nodes=node-web-1,node-web-2"
 	content := strings.ToLower(contentOf(get(t, h, compare).Body.String()))
 	for _, banned := range []string{`method="post"`, "hx-", "formaction", "formmethod", ` form="`} {
@@ -190,17 +212,25 @@ func TestNode_IsStructurallyReadOnly(t *testing.T) {
 	}
 }
 
-// TestNode_NoRouteUnderThisScreenMutates is the route half. It fails the day
-// someone adds a POST here, not the day someone notices one.
-func TestNode_NoRouteUnderThisScreenMutates(t *testing.T) {
+// TestNode_TheOnlyWriteUnderThisScreenIsTheTagWrite is the route half. It fails
+// the day someone adds a second write here, not the day someone notices one:
+// the one non-GET route under /console/nodes/ is the tag write, which reaches
+// the capability layer's TagWriter and nothing else, and Compare stays a GET.
+func TestNode_TheOnlyWriteUnderThisScreenIsTheTagWrite(t *testing.T) {
+	var writes []string
 	for _, r := range Routes(renderableDeps()) {
 		if !strings.HasPrefix(r.Path, "/console/nodes/") && r.Path != "/console/compare" {
 			continue
 		}
-		if r.Method != http.MethodGet {
-			t.Errorf("route %s %s is not a GET — node detail and compare are read screens "+
-				"(v0.6.0: zero routes reaching the capability layer's write or dispatch path)", r.Method, r.Path)
+		if r.Path == "/console/compare" && r.Method != http.MethodGet {
+			t.Errorf("route %s %s is not a GET — Compare is a read screen", r.Method, r.Path)
 		}
+		if r.Method != http.MethodGet {
+			writes = append(writes, r.Pattern())
+		}
+	}
+	if len(writes) != 1 || writes[0] != nodeTagsPattern {
+		t.Errorf("non-GET routes under node detail = %v, want exactly [%s]", writes, nodeTagsPattern)
 	}
 }
 
@@ -253,13 +283,16 @@ func TestNode_FingerprintLinksTargetTheSameValueAsASelector(t *testing.T) {
 // TestNode_LabelChipTooltipsNameEachNamespacesWriter: invariant 7's grammar is
 // four namespaces with four different writers. Each chip's title names its
 // namespace's writer, and relay: says it is never the Node's to write; there is
-// no legend. tag: is not described, because this screen renders no tag chip (02,
-// "Labels").
+// no legend. tag: names an operator (02, "Labels"). node-web-1 carries a tag
+// and node-db-1 the other three.
 func TestNode_LabelChipTooltipsNameEachNamespacesWriter(t *testing.T) {
-	body := get(t, newTestHandler(fleetFixture(), accounts.RoleAdmin), "/console/nodes/node-db-1").Body.String()
+	h := newTestHandler(fleetFixture(), accounts.RoleAdmin)
+	body := get(t, h, "/console/nodes/node-db-1").Body.String() +
+		get(t, h, "/console/nodes/node-web-1").Body.String()
 
 	for ns, writer := range map[string]string{
 		"node":  "config management",
+		"tag":   "set by an operator",
 		"relay": "set by the Relay, never the Node",
 		"state": "derived by the Relay",
 	} {
