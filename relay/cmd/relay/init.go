@@ -91,9 +91,17 @@ func (r recordedTokens) CreateToken(ctx context.Context, t accounts.APIToken) er
 	return r.st.CreateAPITokenRecorded(ctx, t, rec)
 }
 
-// runInitCommand implements `relay init` and returns the process exit code.
-// envErr is relayconfig.RefuseRetiredEnv's verdict on the process environment.
-func runInitCommand(args []string, envErr error, stdin, stdout, stderr *os.File) int {
+// initOptions are the validated flags of `relay init`.
+type initOptions struct {
+	configPath  string
+	admin       string
+	recoverName string
+	ttl         time.Duration
+}
+
+// parseInitFlags parses and validates the arguments. done is true when the
+// command must stop with exitCode: a parse or validation refusal, or --help.
+func parseInitFlags(args []string, stderr *os.File) (opts initOptions, exitCode int, done bool) {
 	set := flag.NewFlagSet("init", flag.ContinueOnError)
 	set.SetOutput(stderr)
 	set.Usage = func() { fmt.Fprint(stderr, initUsage) }
@@ -103,35 +111,40 @@ func runInitCommand(args []string, envErr error, stdin, stdout, stderr *os.File)
 	ttl := set.Duration("ttl", 0, "lifetime of the API Token minted; 0 means no expiry")
 	if err := set.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
-			return 0
+			return initOptions{}, 0, true
 		}
-		return 2
+		return initOptions{}, 2, true
 	}
 	switch {
 	case set.NArg() > 0:
 		fmt.Fprintln(stderr, "relay init: takes no positional arguments")
-		return 2
+		return initOptions{}, 2, true
 	case *path == "":
 		fmt.Fprintln(stderr, "relay init: --config must name a file")
-		return 2
+		return initOptions{}, 2, true
 	case (*admin == "") == (*recoverName == ""):
 		fmt.Fprintln(stderr, "relay init: give exactly one of --admin NAME or --recover NAME")
 		fmt.Fprint(stderr, initUsage)
-		return 2
+		return initOptions{}, 2, true
 	case *ttl < 0:
 		fmt.Fprintln(stderr, "relay init: --ttl must not be negative")
-		return 2
+		return initOptions{}, 2, true
 	}
+	return initOptions{configPath: *path, admin: *admin, recoverName: *recoverName, ttl: *ttl}, 0, false
+}
 
-	// The server's own front door, in the server's order (ADR-0043): no bypass.
+// openRelayStoreForInit runs the server's own front door, in the server's order
+// (ADR-0043): no bypass. It returns the Relay's existing store, or the exit
+// code to stop with.
+func openRelayStoreForInit(configPath string, envErr error, stderr *os.File) (*store.Store, int) {
 	if envErr != nil {
 		fmt.Fprintf(stderr, "relay init: %v\n", envErr)
-		return 1
+		return nil, 1
 	}
-	sc, err := loadConfig(*path)
+	sc, err := loadConfig(configPath)
 	if err != nil {
 		fmt.Fprintf(stderr, "relay init: %v\n", err)
-		return 1
+		return nil, 1
 	}
 	for _, w := range sc.Warnings {
 		fmt.Fprintf(stderr, "relay init: warning: %s\n", w.String())
@@ -140,23 +153,37 @@ func runInitCommand(args []string, envErr error, stdin, stdout, stderr *os.File)
 	if err := startup.CheckExistingStore(storePath); err != nil {
 		if errors.Is(err, startup.ErrStoreAbsent) {
 			fmt.Fprintf(stderr, "relay init: the Relay's store %s does not exist yet. Start the Relay first: it creates its CA and store at its first start, and init acts only on that store.\n", storePath)
-			return 1
+			return nil, 1
 		}
 		fmt.Fprintf(stderr, "relay init: start-time file check refused: %v\n", err)
-		return 1
+		return nil, 1
 	}
 	st, err := store.Open(storePath)
 	if err != nil {
 		fmt.Fprintf(stderr, "relay init: open store: %v\n", err)
-		return 1
+		return nil, 1
+	}
+	return st, 0
+}
+
+// runInitCommand implements `relay init` and returns the process exit code.
+// envErr is relayconfig.RefuseRetiredEnv's verdict on the process environment.
+func runInitCommand(args []string, envErr error, stdin, stdout, stderr *os.File) int {
+	opts, code, done := parseInitFlags(args, stderr)
+	if done {
+		return code
+	}
+	st, code := openRelayStoreForInit(opts.configPath, envErr, stderr)
+	if st == nil {
+		return code
 	}
 	defer st.Close() //nolint:errcheck
 
 	ctx := context.Background()
-	if *recoverName != "" {
-		return initRecover(ctx, st, *recoverName, *ttl, stdout, stderr)
+	if opts.recoverName != "" {
+		return initRecover(ctx, st, opts.recoverName, opts.ttl, stdout, stderr)
 	}
-	return initFirstAdmin(ctx, st, *admin, *ttl, stdin, stdout, stderr)
+	return initFirstAdmin(ctx, st, opts.admin, opts.ttl, stdin, stdout, stderr)
 }
 
 // initFirstAdmin creates the first admin on a store with no human Account, or
@@ -359,17 +386,13 @@ func emitCredential(stdout, stderr io.Writer, credential, tokenID string) int {
 // twice with echo off; otherwise the first line of stdin.
 func readNewPassword(stdin *os.File, prompt io.Writer, name string) (accounts.Password, error) {
 	if isTerminal(stdin) {
-		fmt.Fprintf(prompt, "Console password for %s (not echoed): ", name)
-		first, err := readNoEcho(stdin)
-		fmt.Fprintln(prompt)
+		first, err := promptNoEcho(stdin, prompt, fmt.Sprintf("Console password for %s (not echoed): ", name))
 		if err != nil {
-			return accounts.Password{}, fmt.Errorf("read password: %w", err)
+			return accounts.Password{}, err
 		}
-		fmt.Fprint(prompt, "Again: ")
-		second, err := readNoEcho(stdin)
-		fmt.Fprintln(prompt)
+		second, err := promptNoEcho(stdin, prompt, "Again: ")
 		if err != nil {
-			return accounts.Password{}, fmt.Errorf("read password: %w", err)
+			return accounts.Password{}, err
 		}
 		if first != second {
 			return accounts.Password{}, errors.New("the two passwords differ")
@@ -381,6 +404,18 @@ func readNewPassword(stdin *os.File, prompt io.Writer, name string) (accounts.Pa
 		return accounts.Password{}, fmt.Errorf("read password from stdin: %w", err)
 	}
 	return accounts.NewPassword(line), nil
+}
+
+// promptNoEcho writes label to prompt, reads one line from the terminal with
+// echo off, and ends the prompt's line.
+func promptNoEcho(term *os.File, prompt io.Writer, label string) (string, error) {
+	fmt.Fprint(prompt, label)
+	line, err := readNoEcho(term)
+	fmt.Fprintln(prompt)
+	if err != nil {
+		return "", fmt.Errorf("read password: %w", err)
+	}
+	return line, nil
 }
 
 // maxPromptBytes bounds a password read from stdin: one byte past the longest
