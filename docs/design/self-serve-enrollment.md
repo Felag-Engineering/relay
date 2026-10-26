@@ -49,7 +49,7 @@ fail-closed off. The leaf is now re-issued through a `GetCertificate` callback b
 under its own `ServerLeafValidity` constant.
 
 ### E2 · One server certificate, multi-SAN
-**ADR-0031 §1–2 · escalate: mTLS + CA · open (#404)**
+**ADR-0031 §1–2 · escalate: mTLS + CA · built (#404) except operator-added names**
 
 - One `NewServerCertificate` call shared between both listeners, which today each issue
   their own.

@@ -535,7 +535,8 @@ past fourteen days would have served an expired certificate to the fleet and the
 `ca.ServerLeafValidity` (24h), and is re-issued in-process before it expires, with each rotation
 logged and counted (`serverCertObserver`, `relay/cmd/relay/main.go`). Its sibling
 [#404](https://github.com/Felag-Engineering/relay/issues/404) — one multi-SAN certificate for both
-listeners (ADR-0031 decision 1) — is open, so each listener still has its own leaf.
+listeners (ADR-0031 decision 1) — is built except operator-added names: one leaf serves both
+listeners.
 
 ### D14. CA rotation has no story — **raised as [#412](https://github.com/Felag-Engineering/relay/issues/412)**
 

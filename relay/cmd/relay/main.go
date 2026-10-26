@@ -187,14 +187,17 @@ type Config struct {
 type appDeps struct {
 	// logger is the process logger every internal package is handed; it adds
 	// the request, principal and Job ids from the context (logctx).
-	logger   *slog.Logger
-	ca       *ca.CA
-	store    *store.Store
-	registry registry.Repository
-	jobs     jobs.JobRepository
-	tasks    jobs.TaskRepository
-	audit    audit.Repository
-	tokens   *enroll.Service
+	logger *slog.Logger
+	ca     *ca.CA
+	// serverCert is the one server certificate both listeners present
+	// (ADR-0031 §1); held for tests.
+	serverCert *ca.ServerCertificate
+	store      *store.Store
+	registry   registry.Repository
+	jobs       jobs.JobRepository
+	tasks      jobs.TaskRepository
+	audit      audit.Repository
+	tokens     *enroll.Service
 	// minter is the one enrollment Minter the Control API mints through; the
 	// devharness and tests mint join strings through it too, never by hand.
 	minter     *enroll.Minter
@@ -273,11 +276,12 @@ func (r jobResultReader) TasksByJob(ctx context.Context, jobID string) ([]jobs.T
 	return r.tasksRepo.ByJob(ctx, jobID)
 }
 
-// serverCertObserver returns the callback that makes one listener's server
-// certificate rotation observable: the log line an operator reads after
-// the fact, and the counter they can alert on. internal/ca deliberately logs
+// serverCertObserver returns the callback that makes rotation of the Relay's
+// one server certificate observable: the log line an operator reads after the
+// fact, and the counter they can alert on. internal/ca deliberately logs
 // nothing itself, so this — the composition root — is where a rotation becomes
-// visible.
+// visible. Both listeners present the certificate (ADR-0031 §1), so a re-issue
+// moves the counter series of every listener given.
 //
 // The fingerprint is the new leaf's, and it is not a secret: it identifies a
 // certificate, never authenticates one. Nothing here touches key material.
@@ -286,16 +290,17 @@ func (r jobResultReader) TasksByJob(ctx context.Context, jobID string) ([]jobs.T
 // warning: rotation stopping is the first act of the outage this whole
 // mechanism exists to prevent, and the leaf's remaining lifetime is all the
 // warning there is.
-func serverCertObserver(listener string, l metrics.ServerCertListener, m *metrics.Metrics) func(ca.Rotation) {
+func serverCertObserver(m *metrics.Metrics, listeners ...metrics.ServerCertListener) func(ca.Rotation) {
 	return func(r ca.Rotation) {
 		if r.Err != nil {
 			slog.Error("server certificate re-issue failed; still serving the current certificate",
-				"listener", listener, "err", r.Err)
+				"err", r.Err)
 			return
 		}
-		m.IncServerCertRotation(l)
+		for _, l := range listeners {
+			m.IncServerCertRotation(l)
+		}
 		slog.Info("server certificate rotated",
-			"listener", listener,
 			"not_after", r.NotAfter.Format(time.RFC3339),
 			"renew_at", r.RenewAt.Format(time.RFC3339),
 			"fingerprint", r.Fingerprint,
@@ -340,9 +345,8 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 	// (ADR-0031): it identifies the certificate authority every Node's
 	// certificate chains to, so it survives the server leaf's daily
 	// re-issue, and the Console's day-one screen renders the same value.
-	// ADR-0031 decision 3 will have a daemon PIN it through a join string;
-	// neither exists yet, so this is a value to compare, not yet a value
-	// anything enforces. A digest over a public certificate — no key
+	// It is the fingerprint a join string carries and a daemon pins
+	// (ADR-0031 decision 3, EN-7). A digest over a public certificate — no key
 	// material, nothing secret, and safe to log.
 	slog.Info("relay certificate authority", "ca_fingerprint", relayCA.Fingerprint())
 
@@ -456,19 +460,38 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 		LabelsDeclined: st.LabelsDeclined,
 	})
 
-	// The node-plane listener's own TLS server certificate (ADR-0031 §5).
-	// Issued here, and RE-issued in-process before it expires: a certificate
-	// minted once and held static expires while the process is still running,
-	// and from that instant every daemon's chain verification fails and the
-	// whole fleet fail-closes off the Relay. The Relay is its own CA, so
-	// re-issuance is a function call against a key already open in this address
-	// space — no restart, no operator, no network. It is wired here rather than
-	// beside the CA above only so the rotation observer can reach appMetrics.
-	nodePlaneCert, err := relayCA.NewServerCertificate([]string{cfg.Hostname}, nil,
-		ca.WithRotationObserver(serverCertObserver("node-plane", metrics.ListenerNodePlane, appMetrics)))
+	// The Relay's one TLS server certificate, presented on both listeners
+	// (ADR-0031 §1) and re-issued in-process before it expires so the fleet
+	// never fail-closes on an expired leaf (ADR-0031 §5). The listeners share
+	// the certificate and nothing else: each builds its own tls.Config, and
+	// only the node plane asks for a client certificate (EN-9). Sharing a
+	// tls.Config would share ClientAuth, so never share one.
+	//
+	// Failing to list the host's addresses is a warning, not a refusal: they
+	// are a convenience on top of tls.hostname, the name a join string carries,
+	// and a detector must not become an outage.
+	names, err := serverCertificateNames(cfg.Hostname, net.InterfaceAddrs)
 	if err != nil {
-		return nil, nil, fmt.Errorf("issue node-plane server certificate: %w", err)
+		slog.Warn("server certificate names only tls.hostname and loopback: this host's addresses could not be listed; a systemd unit whose RestrictAddressFamilies omits AF_NETLINK prevents it",
+			"err", err)
 	}
+	if names.Omitted > 0 {
+		slog.Warn("server certificate omits some of this host's addresses",
+			"omitted", names.Omitted, "kept", maxDetectedAddresses)
+	}
+	presentedOn := []metrics.ServerCertListener{metrics.ListenerNodePlane}
+	if cfg.ControlEnabled {
+		presentedOn = append(presentedOn, metrics.ListenerControlPlane)
+	}
+	serverCert, err := relayCA.NewServerCertificate(names.DNSNames, names.IPAddresses,
+		ca.WithRotationObserver(serverCertObserver(appMetrics, presentedOn...)))
+	if err != nil {
+		return nil, nil, fmt.Errorf("issue server certificate: %w", err)
+	}
+	slog.Info("relay server certificate",
+		"server_cert_fingerprint", serverCert.Fingerprint(),
+		"dns_names", names.DNSNames,
+		"ip_addresses", ipStrings(names.IPAddresses))
 
 	// The real adapter to the SQLite-backed audit trail is the Recorder
 	// below, and the real persisted Relay-wide emergency stop (ADR-0013 —
@@ -486,10 +509,10 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 	// back to it (DI-21).
 	revokedDials := auditsink.NewRevokedDialRecorder(auditSink, hooks.testRevokedDialClock)
 
-	// Every handshake asks nodePlaneCert for the certificate to present, which
+	// Every handshake asks serverCert for the certificate to present, which
 	// is what makes the guarantee unconditional: rotation is driven by
 	// connections, not by a timer that a sleeping process could miss.
-	creds := transport.ServerCredentials(nodePlaneCert.GetCertificate, clientCAs, denylist, revokedDials)
+	creds := transport.ServerCredentials(serverCert.GetCertificate, clientCAs, denylist, revokedDials)
 
 	// Rehydrate the denylist from the persisted authority before the listener
 	// accepts any connection: the Denylist is a derived cache of
@@ -631,18 +654,6 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 	var controlSrv *controlplane.Server
 	var dispatchRouter *dispatch.Router
 	if cfg.ControlEnabled {
-		// A dedicated server cert for the control-plane listener, independent
-		// of the node-plane nodePlaneCert above: separate listeners get
-		// separate certificates, even though both chain to the same Relay CA.
-		// They also rotate independently — each holder owns its own leaf, its
-		// own key, and its own jittered renewal instant, so neither listener
-		// can be affected by the other's re-issuance (ADR-0031 §5).
-		controlCert, err := relayCA.NewServerCertificate([]string{cfg.Hostname}, nil,
-			ca.WithRotationObserver(serverCertObserver("control-plane", metrics.ListenerControlPlane, appMetrics)))
-		if err != nil {
-			return nil, nil, fmt.Errorf("issue control-plane server certificate: %w", err)
-		}
-
 		// This is THE production execution flip: the Relay becomes
 		// remote-code-execution-as-a-service over the control surfaces
 		// mounted below. newDispatchStack (dispatch_wiring.go) is the SAME
@@ -771,7 +782,7 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 		}
 
 		authn := controlplane.NewAuthenticator(apiTokenSvc, authOpts...)
-		controlCfg := controlplane.Config{Addr: cfg.ControlAddr, GetCertificate: controlCert.GetCertificate}
+		controlCfg := controlplane.Config{Addr: cfg.ControlAddr, GetCertificate: serverCert.GetCertificate}
 		if cfg.ConsoleEnabled {
 			// A browser opened on the bare host lands on the Console. Off with
 			// the Console, so / stays the authenticated mux's 401.
@@ -857,14 +868,12 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 			// fixed for the life of the process; the server leaf's is read
 			// live because it is re-issued about daily.
 			//
-			// controlCert, not nodePlaneCert: this is the certificate the
-			// browser reading that screen is actually talking to. ADR-0031
-			// decision 1 (one certificate for both listeners) is not
-			// implemented yet, so "the server certificate" is still
-			// listener-scoped and the screen says which one it means.
+			// The one server certificate both listeners present, so the leaf
+			// this screen shows is the one the browser reading it is talking
+			// to (ADR-0031 §1).
 			trust: consoleTrustReader{
 				caFingerprint: relayCA.Fingerprint(),
-				serverCert:    controlCert,
+				serverCert:    serverCert,
 			},
 			// Test-only (serverHooks): empty on the production path,
 			// since newServer always calls newServerWithHooks with an empty
@@ -898,6 +907,7 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 
 	deps := &appDeps{
 		ca:         relayCA,
+		serverCert: serverCert,
 		store:      st,
 		registry:   reg,
 		jobs:       st.Jobs(),
