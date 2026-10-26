@@ -8,14 +8,19 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"encoding/pem"
+	"log/slog"
 	"net"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Felag-Engineering/relay/relay/internal/ca"
 	"github.com/Felag-Engineering/relay/relay/internal/ca/catest"
+	"github.com/Felag-Engineering/relay/relay/internal/protoconv"
 	"github.com/Felag-Engineering/relay/relay/internal/ratelimit"
 	"github.com/Felag-Engineering/relay/relay/internal/registry"
 	relayv1 "github.com/Felag-Engineering/relay/relay/internal/relay/v1"
@@ -339,6 +344,104 @@ func TestEnroll_BadCSR(t *testing.T) {
 	}
 }
 
+// TestEnroll_SelfReportedFactsAreBounded proves the Hello ingress bound on
+// self-reported Facts also holds at Enroll (#1068): a hostname carrying U+202E
+// does not fail the request and is not recorded.
+func TestEnroll_SelfReportedFactsAreBounded(t *testing.T) {
+	svc := NewService(NewMemoryRepository())
+	srv, reg, _ := newEnrollServer(t, svc)
+	_, plaintext := mintToken(t, svc, []string{"relay:env=prod"})
+
+	resp, err := srv.Enroll(context.Background(), &relayv1.EnrollRequest{
+		EnrollmentToken: plaintext,
+		Csr:             genCSR(t, "cn"),
+		Facts:           &relayv1.Facts{Hostname: "web\u202e01", Os: "linux"},
+	})
+	if err != nil {
+		t.Fatalf("Enroll: %v", err)
+	}
+	node, ok := reg.Get(resp.NodeId)
+	if !ok {
+		t.Fatal("Node not found in registry")
+	}
+	if node.Facts.Hostname != "" {
+		t.Errorf("Facts.Hostname = %q, want not recorded", node.Facts.Hostname)
+	}
+	if node.Facts.OS != "linux" {
+		t.Errorf("Facts.OS = %q, want linux kept", node.Facts.OS)
+	}
+}
+
+// TestEnroll_RefusedFactsAreLoggedByNameNeverByValue pins that Enroll, like the
+// Hello ingress, emits one warning naming the Facts fields it refused and never
+// the value (#1068).
+func TestEnroll_RefusedFactsAreLoggedByNameNeverByValue(t *testing.T) {
+	svc := NewService(NewMemoryRepository())
+	realCA, err := catest.Generate()
+	if err != nil {
+		t.Fatalf("catest.Generate: %v", err)
+	}
+	logs := &strings.Builder{}
+	srv := NewServer(svc, realCA, registry.NewInMemory(),
+		WithServerLogger(slog.New(slog.NewJSONHandler(logs, nil))))
+	_, plaintext := mintToken(t, svc, []string{"relay:env=prod"})
+
+	if _, err := srv.Enroll(context.Background(), &relayv1.EnrollRequest{
+		EnrollmentToken: plaintext,
+		Csr:             genCSR(t, "cn"),
+		Facts:           &relayv1.Facts{Hostname: "web\u202e01", Os: "linux"},
+	}); err != nil {
+		t.Fatalf("Enroll: %v", err)
+	}
+
+	var refusals int
+	for _, line := range strings.Split(strings.TrimRight(logs.String(), "\n"), "\n") {
+		if strings.Contains(line, "web") || strings.Contains(line, "\u202e") || strings.Contains(line, `\u202e`) {
+			t.Errorf("a log line carries a refused wire value: %.200s", line)
+		}
+		var entry struct {
+			Msg           string   `json:"msg"`
+			RefusedFields []string `json:"refused_fields"`
+		}
+		if json.Unmarshal([]byte(line), &entry) != nil || !strings.HasPrefix(entry.Msg, "refused malformed Facts") {
+			continue
+		}
+		refusals++
+		if !slices.Equal(entry.RefusedFields, []string{protoconv.FieldHostname}) {
+			t.Errorf("refused_fields = %v, want [%s]", entry.RefusedFields, protoconv.FieldHostname)
+		}
+	}
+	if refusals != 1 {
+		t.Errorf("got %d refusal records, want exactly 1; logs:\n%.1000s", refusals, logs.String())
+	}
+}
+
+// TestEnroll_RefusedSelfLabelKeyIsBoundedInTheError pins that the key echoed in
+// the InvalidArgument message is bounded, so a hostile megabyte key cannot
+// inflate the response (#1068).
+func TestEnroll_RefusedSelfLabelKeyIsBoundedInTheError(t *testing.T) {
+	svc := NewService(NewMemoryRepository())
+	srv, _, _ := newEnrollServer(t, svc)
+	_, plaintext := mintToken(t, svc, []string{"relay:env=prod"})
+
+	huge := "node:" + strings.Repeat("k", 1<<20) + "="
+	_, err := srv.Enroll(context.Background(), &relayv1.EnrollRequest{
+		EnrollmentToken: plaintext,
+		Csr:             genCSR(t, "cn"),
+		SelfLabels:      []*relayv1.Label{{Key: huge, Value: "web"}},
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("want InvalidArgument, got %v", err)
+	}
+	msg := status.Convert(err).Message()
+	if len(msg) > 1024 {
+		t.Errorf("refusal message is %d bytes, want it bounded", len(msg))
+	}
+	if !strings.Contains(msg, "node:kkkk") {
+		t.Errorf("refusal message %.200q does not name the (truncated) offending key", msg)
+	}
+}
+
 // TestEnroll_NonNodeSelfLabel verifies that self_labels without the "node:" prefix
 // (or with an empty bare key), or with a key/value that fails the well-formedness
 // gate (registry.WellFormedLabel, #504), are rejected with InvalidArgument,
@@ -365,6 +468,16 @@ func TestEnroll_NonNodeSelfLabel(t *testing.T) {
 			name:  "malformed-key",
 			label: &relayv1.Label{Key: "node:role=x", Value: "web"},
 		},
+		{
+			// The selectors-and-labels Limits: a bare key is at most
+			// registry.MaxLabelKeyLen bytes (#1068).
+			name:  "over-long-key",
+			label: &relayv1.Label{Key: "node:" + strings.Repeat("k", registry.MaxLabelKeyLen+1), Value: "web"},
+		},
+		{
+			name:  "over-long-value",
+			label: &relayv1.Label{Key: "node:role", Value: strings.Repeat("v", registry.MaxLabelValueLen+1)},
+		},
 	}
 
 	for _, tc := range cases {
@@ -383,6 +496,15 @@ func TestEnroll_NonNodeSelfLabel(t *testing.T) {
 			_, err := srv.Enroll(context.Background(), req)
 			if status.Code(err) != codes.InvalidArgument {
 				t.Errorf("non-node: label %q: want InvalidArgument, got %v", tc.label.Key, err)
+			}
+			// The refusal states the length limits beside the alphabet, so an
+			// operator with an over-long label can see what to change.
+			for _, want := range []string{
+				strconv.Itoa(registry.MaxLabelKeyLen), strconv.Itoa(registry.MaxLabelValueLen),
+			} {
+				if msg := status.Convert(err).Message(); !strings.Contains(msg, want) {
+					t.Errorf("refusal message %.200q does not state the limit %s", msg, want)
+				}
 			}
 			if len(reg.List()) != 0 {
 				t.Errorf("registry must be empty after rejection, got %d entries", len(reg.List()))

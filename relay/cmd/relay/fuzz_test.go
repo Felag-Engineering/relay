@@ -2,10 +2,13 @@ package main
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/Felag-Engineering/relay/relay/internal/capability"
+	"github.com/Felag-Engineering/relay/relay/internal/nodestate"
 	"github.com/Felag-Engineering/relay/relay/internal/protoconv"
+	"github.com/Felag-Engineering/relay/relay/internal/registry"
 	relayv1 "github.com/Felag-Engineering/relay/relay/internal/relay/v1"
 	"google.golang.org/protobuf/proto"
 )
@@ -125,6 +128,19 @@ func FuzzDaemonMessageUnmarshal(f *testing.F) {
 		f.Fatalf("marshal seed DaemonMessage: %v", err)
 	}
 	f.Add(seed)
+	// A bidi control and a 64 KiB Policy fingerprint, which the ingress must
+	// record as not reported.
+	hostile, err := proto.Marshal(&relayv1.DaemonMessage{
+		Body: &relayv1.DaemonMessage_Hello{
+			Hello: &relayv1.Hello{
+				PolicyFingerprint: "abcdefghij\u202e" + strings.Repeat("a", 1<<16),
+			},
+		},
+	})
+	if err != nil {
+		f.Fatalf("marshal hostile DaemonMessage: %v", err)
+	}
+	f.Add(hostile)
 	f.Add([]byte(nil))
 	f.Add([]byte{0x08, 0xff, 0xff, 0xff})
 
@@ -136,9 +152,31 @@ func FuzzDaemonMessageUnmarshal(f *testing.F) {
 		if h := m.GetHello(); h != nil {
 			_, _ = nodeLabelsFromHello(h.GetLabels())
 			_ = protoconv.FactsFromProto(h.GetFacts())
+			assertHelloReportBounded(t, h)
 		}
 		if ps := m.GetPolicy(); ps != nil {
 			_ = snapshotFromProto(ps)
 		}
 	})
+}
+
+// assertHelloReportBounded checks that whatever a Hello carries, the report the
+// Relay records from it passes every ingress bound.
+func assertHelloReportBounded(t *testing.T, h *relayv1.Hello) {
+	t.Helper()
+	r, _ := protoconv.HelloReportFromProto(h)
+	if r.PolicyFingerprint != "" && !registry.WellFormedFingerprint(r.PolicyFingerprint) {
+		t.Fatalf("recorded a malformed Policy fingerprint: %.100q", r.PolicyFingerprint)
+	}
+	if fp := r.TemplateSetFingerprint; fp != "" && fp != nodestate.TemplateUnloadable && !registry.WellFormedFingerprint(fp) {
+		t.Fatalf("recorded a malformed template-set fingerprint: %.100q", fp)
+	}
+	if v := r.DaemonVersion; v != "" && (!registry.ValidVersion(v) || len(v) > registry.MaxSelfReportedTextBytes) {
+		t.Fatalf("recorded a malformed daemon version: %.100q", v)
+	}
+	for _, text := range []string{r.Facts.Hostname, r.Facts.OS, r.Facts.Kernel, r.Facts.Arch} {
+		if !registry.WellFormedSelfReportedText(text) {
+			t.Fatalf("recorded an unbounded Facts string: %.100q", text)
+		}
+	}
 }

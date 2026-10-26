@@ -125,11 +125,13 @@ import "unicode/utf8"
 // of them appears in a shipped example of either namespace, and admitting
 // them later is backwards-compatible while excluding them later is not (an
 // already-enrolled Node's label, or an already-minted token's scope, would
-// start being refused). There is no length cap: the hazard here is GRAMMAR —
-// what a value can be misread as — not size, and gRPC's own message-size
-// limit already bounds how large a Hello, Enroll or mint request (and
-// therefore this map) can be. Leaving it unbounded here is a decision, not
-// an oversight.
+// start being refused). This predicate has no length cap: the hazard here is
+// GRAMMAR, what a value can be misread as, not size. A Label a Node or a human
+// Account writes is bounded in length at its own ingress by MaxLabelKeyLen and
+// MaxLabelValueLen, and not here, because this predicate also runs on
+// read-back of every stored namespace and a length check here would newly
+// decline rows already stored. A relay: scope Label minted by a human is not
+// held to those bounds.
 //
 // # Two write seams, one namespace (relay-space)
 //
@@ -176,6 +178,17 @@ func wellFormedLabelBytes(s string) bool {
 	return true
 }
 
+// MaxLabelKeyLen and MaxLabelValueLen bound a Label's bare key and value in
+// bytes (selectors-and-labels "Limits"). Within the safe alphabet a byte is a
+// character, so bytes and the spec's characters agree. They are applied where a
+// writer other than the Relay supplies a Label: the node: ingress
+// (protoconv.ParseNodeLabel) and the tag: write. WellFormedLabel does not apply
+// them; see the length-cap note on its doc.
+const (
+	MaxLabelKeyLen   = 63
+	MaxLabelValueLen = 255
+)
+
 // MaxLoggedLabelKeyBytes bounds a refused label key before it reaches a log or
 // a report.
 //
@@ -203,6 +216,8 @@ const MaxLoggedLabelKeyBytes = 128
 // there is one hazard and there must be one helper: both the Hello ingress
 // (cmd/relay/tunnel.go) and the read-back scan (internal/store) bound the same
 // attacker-influenced key for the same reason, and a second copy would drift.
+// The tunnel also bounds the wire hello.node_id with it, the same hazard: an
+// attacker-controlled string headed for a log.
 func BoundLogKey(k string) (bounded string, truncated bool) {
 	if len(k) <= MaxLoggedLabelKeyBytes {
 		return k, false

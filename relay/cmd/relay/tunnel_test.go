@@ -2,10 +2,13 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net"
 	"reflect"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -1417,5 +1420,210 @@ func TestTunnelOpen_ANewerRegistrationEndsTheStreamItDisplaced(t *testing.T) {
 	}
 	if n, _ := reg.Get(nodeID); n.Connected {
 		t.Error("the node reads connected after its last stream ended")
+	}
+}
+
+// openWithHello runs the real Open handler over bufconn against a fresh
+// in-memory registry, sends hello as the first message, waits for the Ping
+// (registration is complete once it arrives) and returns the registry. A Ping
+// that does not arrive means the stream was dropped, which a malformed
+// self-reported field must never do.
+func openWithHello(t *testing.T, nodeID string, hello *relayv1.Hello) *registry.InMemory {
+	t.Helper()
+	reg := registry.NewInMemory()
+	srv := grpc.NewServer(grpc.StreamInterceptor(injectNodeIDInterceptor(nodeID)))
+	relayv1.RegisterTunnelServer(srv, &tunnelServer{reg: reg})
+	conn := newBufconnConn(t, srv)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	stream, err := relayv1.NewTunnelClient(conn).Open(ctx)
+	if err != nil {
+		t.Fatalf("open stream: %v", err)
+	}
+	if err := stream.Send(&relayv1.DaemonMessage{
+		Body: &relayv1.DaemonMessage_Hello{Hello: hello},
+	}); err != nil {
+		t.Fatalf("send hello: %v", err)
+	}
+	msg, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("recv ping (stream dropped?): %v", err)
+	}
+	if msg.GetPing() == nil {
+		t.Fatalf("expected Ping, got %T", msg.Body)
+	}
+	return reg
+}
+
+// TestTunnelOpen_HelloMalformedPolicyFingerprintIsStoredAsNotReported pins
+// #1068: a Policy fingerprint that is not exactly 64 lowercase hex characters
+// is recorded as not reported, and the connection stays up.
+func TestTunnelOpen_HelloMalformedPolicyFingerprintIsStoredAsNotReported(t *testing.T) {
+	const nodeID = "cert-node-fp"
+	hex64 := strings.Repeat("0123456789abcdef", 4)
+	tests := []struct {
+		name string
+		fp   string
+	}{
+		{"oversized", strings.Repeat("a", 1<<20)},
+		{"bidi control U+202E", "abcdefghij\u202e" + strings.Repeat("a", 51)},
+		{"sha256 prefix", "sha256:" + hex64},
+		{"uppercase", strings.ToUpper(hex64)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := openWithHello(t, nodeID, &relayv1.Hello{NodeId: nodeID, PolicyFingerprint: tt.fp})
+			n, ok := reg.Get(nodeID)
+			if !ok {
+				t.Fatal("node not registered")
+			}
+			if n.PolicyFingerprint != "" {
+				t.Errorf("PolicyFingerprint = %.80q (%d bytes), want not reported", n.PolicyFingerprint, len(n.PolicyFingerprint))
+			}
+		})
+	}
+}
+
+// TestTunnelOpen_HelloWellFormedPolicyFingerprintIsUnchanged pins the other
+// half of #1068: what a well-behaved relay-daemon sends is stored verbatim.
+func TestTunnelOpen_HelloWellFormedPolicyFingerprintIsUnchanged(t *testing.T) {
+	const nodeID = "cert-node-fp-ok"
+	policyFP := strings.Repeat("0123456789abcdef", 4)
+	templateFP := strings.Repeat("fedcba9876543210", 4)
+	reg := openWithHello(t, nodeID, &relayv1.Hello{
+		NodeId:                 nodeID,
+		PolicyFingerprint:      policyFP,
+		TemplateSetFingerprint: templateFP,
+		DaemonVersion:          "0.0.1-test",
+	})
+	n, ok := reg.Get(nodeID)
+	if !ok {
+		t.Fatal("node not registered")
+	}
+	if n.PolicyFingerprint != policyFP || n.TemplateSetFingerprint != templateFP || n.DaemonVersion != "0.0.1-test" {
+		t.Errorf("stored (%q, %q, %q), want the reported values verbatim",
+			n.PolicyFingerprint, n.TemplateSetFingerprint, n.DaemonVersion)
+	}
+}
+
+// TestTunnelOpen_HelloBoundsEverySelfReportedField covers the free-text
+// fields beside the Policy fingerprint (#1068): each malformed one is stored
+// empty or omitted and every well-formed neighbour is kept.
+func TestTunnelOpen_HelloBoundsEverySelfReportedField(t *testing.T) {
+	const nodeID = "cert-node-bounds"
+	reg := openWithHello(t, nodeID, &relayv1.Hello{
+		NodeId:                 nodeID,
+		TemplateSetFingerprint: "sha256:not-a-fingerprint",
+		DaemonVersion:          "1.4.2, tag:x=y",
+		Facts: &relayv1.Facts{
+			Hostname:    strings.Repeat("h", 254),
+			Os:          "linux",
+			IpAddresses: []string{"10.0.0.1", "fe80::1%eth0"},
+		},
+		Labels: []*relayv1.Label{
+			{Key: "node:role", Value: "web"},
+			{Key: "node:big", Value: strings.Repeat("v", registry.MaxLabelValueLen+1)},
+		},
+	})
+	n, ok := reg.Get(nodeID)
+	if !ok {
+		t.Fatal("node not registered")
+	}
+	if n.TemplateSetFingerprint != "" {
+		t.Errorf("TemplateSetFingerprint = %q, want empty", n.TemplateSetFingerprint)
+	}
+	if n.DaemonVersion != "" {
+		t.Errorf("DaemonVersion = %q, want empty", n.DaemonVersion)
+	}
+	if n.Facts.Hostname != "" {
+		t.Errorf("a 254-byte Hostname was recorded (%d bytes)", len(n.Facts.Hostname))
+	}
+	if n.Facts.OS != "linux" {
+		t.Errorf("Facts.OS = %q, want linux kept", n.Facts.OS)
+	}
+	if !reflect.DeepEqual(n.Facts.IPAddresses, []string{"10.0.0.1"}) {
+		t.Errorf("IPAddresses = %v, want the zoned address dropped", n.Facts.IPAddresses)
+	}
+	if !reflect.DeepEqual(n.NodeLabels, map[string]string{"role": "web"}) {
+		t.Errorf("NodeLabels = %v, want only role=web", n.NodeLabels)
+	}
+}
+
+// TestTunnelOpen_MalformedHelloFieldsAreLoggedByNameNeverByValue pins #1068's
+// audit note: one bounded warning per connect names the refused fields from a
+// closed set, no log line carries a refused value, and a hostile
+// hello.node_id is bounded before it is logged. Not parallel: it swaps the
+// default slog logger.
+func TestTunnelOpen_MalformedHelloFieldsAreLoggedByNameNeverByValue(t *testing.T) {
+	const nodeID = "cert-node-log"
+	logs := &syncBuffer{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	huge := strings.Repeat("a", 1<<20)
+	openWithHello(t, nodeID, &relayv1.Hello{
+		// A printable-ASCII id: the exact length bound below holds only
+		// because %q does not expand printable bytes. A hostile non-printable
+		// id is longer once quoted, though still bounded.
+		NodeId:            strings.Repeat("n", 1<<20),
+		PolicyFingerprint: huge,
+		Facts:             &relayv1.Facts{Hostname: "web\u202e01"},
+	})
+
+	var refusals int
+	var connected, differs bool
+	for _, line := range strings.Split(strings.TrimRight(logs.String(), "\n"), "\n") {
+		if strings.Contains(line, huge) || strings.Contains(line, "\u202e") || strings.Contains(line, `\u202e`) {
+			t.Errorf("a log line carries a refused wire value: %.200s", line)
+		}
+		var entry struct {
+			Msg           string   `json:"msg"`
+			NodeID        string   `json:"node_id"`
+			CertNodeID    string   `json:"cert_node_id"`
+			RefusedFields []string `json:"refused_fields"`
+			Hostname      *string  `json:"hostname"`
+			HelloNodeID   string   `json:"hello_node_id"`
+		}
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			continue
+		}
+		switch entry.Msg {
+		case "refused malformed Hello fields; recorded as not reported":
+			if entry.NodeID != nodeID {
+				continue
+			}
+			refusals++
+			if !slices.Contains(entry.RefusedFields, "policy_fingerprint") || !slices.Contains(entry.RefusedFields, "facts.hostname") {
+				t.Errorf("refused_fields = %v, want policy_fingerprint and facts.hostname", entry.RefusedFields)
+			}
+		case "node connected":
+			if entry.NodeID != nodeID {
+				continue
+			}
+			connected = true
+			if entry.Hostname == nil || *entry.Hostname != "" {
+				t.Errorf("node connected hostname = %v, want the bounded empty value", entry.Hostname)
+			}
+		case "hello.node_id differs from cert identity; using cert":
+			if entry.CertNodeID != nodeID {
+				continue
+			}
+			differs = true
+			if len(entry.HelloNodeID) > registry.MaxLoggedLabelKeyBytes+2 {
+				t.Errorf("hello_node_id logged at %d bytes, want at most %d", len(entry.HelloNodeID), registry.MaxLoggedLabelKeyBytes+2)
+			}
+		}
+	}
+	if refusals != 1 {
+		t.Errorf("got %d refusal records for %q, want exactly 1; logs:\n%.2000s", refusals, nodeID, logs.String())
+	}
+	if !connected {
+		t.Errorf("no \"node connected\" record for %q; logs:\n%.2000s", nodeID, logs.String())
+	}
+	if !differs {
+		t.Errorf("no \"hello.node_id differs\" record for cert node %q; logs:\n%.2000s", nodeID, logs.String())
 	}
 }
