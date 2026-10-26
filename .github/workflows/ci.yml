@@ -74,6 +74,7 @@ jobs:
       code: ${{ steps.paths.outputs.code }}
       proto: ${{ steps.paths.outputs.proto }}
       deps: ${{ steps.paths.outputs.deps }}
+      packaging: ${{ steps.paths.outputs.packaging }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -179,6 +180,19 @@ jobs:
       - name: Changed-paths classifier self-test
         if: ${{ !cancelled() }}
         run: make test-ci-changed-paths
+
+      # scripts/install-matrix-platforms.sh, the DI-33 platform-list check below, proved against
+      # fixture specs and workflows in both claim shapes. Bash and awk only.
+      - name: Install-matrix platform list self-test
+        if: ${{ !cancelled() }}
+        run: make test-install-matrix-platforms
+
+      # DI-33 on the real spec and workflow: the install matrix runs exactly the platforms and
+      # architectures the specification names. Here, in the job that always runs, because the
+      # matrix itself is skipped on a change outside the packaging class.
+      - name: Install-matrix platform list (DI-33)
+        if: ${{ !cancelled() }}
+        run: make install-matrix-platforms-check
 
       # scripts/vuln-gate.sh, the relay job's PR govulncheck gate, proved against fixture
       # govulncheck streams (bash + jq). Here because the gate itself runs only on deps=.
@@ -538,6 +552,21 @@ jobs:
         with:
           key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
 
+  # ---- install-matrix: the packages installed, upgraded and removed on every supported
+  # platform (DI-33), and the enroll-connect-execute syscall trace of the packaged unit.
+  # Runs for a change in the `packaging=` path class (scripts/ci-changed-paths.sh) and on every
+  # push to main; a red row blocks the merge through ci-ok. Cancellation of a superseded run
+  # comes from this file's workflow-level concurrency group.
+  # Cost shape: a job of its own, because it needs per-platform systemd containers on both
+  # x86_64 and aarch64 runners, which no existing job has. ----
+  install-matrix:
+    name: Install matrix
+    needs: docs
+    if: ${{ !cancelled() && needs.docs.outputs.packaging != 'false' && github.event.pull_request.draft != true }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/install-matrix.yml
+
   # ---- ci-ok: the one check branch protection should require. ----
   # A job skipped by its `if:` reports as passing to a required status check. Draft gating
   # makes that matter: a draft run leaves the toolchain jobs *skipped* on the head commit,
@@ -545,11 +574,12 @@ jobs:
   # finishes — so for those minutes, requiring them individually would see stale skips
   # as passes. This job fails closed instead: it is red on a draft run, and green only
   # when Docs passed and every other job either passed or was skipped for the one
-  # legitimate reason (the classifier said the change cannot reach it). Require this
+  # legitimate reason (the classifier said the change cannot reach it: `packaging=false` is
+  # the only excuse for a skipped install matrix). Require this
   # check alone; the jobs it names stay visible for diagnosis.
   ci-ok:
     name: CI OK
-    needs: [docs, relay, daemon, proto, integration]
+    needs: [docs, relay, daemon, proto, integration, install-matrix]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -559,11 +589,13 @@ jobs:
           DRAFT: ${{ github.event.pull_request.draft }}
           CODE: ${{ needs.docs.outputs.code }}
           PROTO: ${{ needs.docs.outputs.proto }}
+          PACKAGING: ${{ needs.docs.outputs.packaging }}
           DOCS: ${{ needs.docs.result }}
           RELAY: ${{ needs.relay.result }}
           DAEMON: ${{ needs.daemon.result }}
           PROTO_JOB: ${{ needs.proto.result }}
           INTEGRATION: ${{ needs.integration.result }}
+          INSTALL_MATRIX: ${{ needs.install-matrix.result }}
         run: |
           if [ "$DRAFT" = "true" ]; then
             echo "::error::draft pull request: the toolchain gates did not run. Mark it ready for review."
@@ -586,6 +618,7 @@ jobs:
           check daemon "$DAEMON" "$CODE"
           check integration "$INTEGRATION" "$CODE"
           check proto "$PROTO_JOB" "$PROTO"
+          check install-matrix "$INSTALL_MATRIX" "$PACKAGING"
           exit "$fail"
 
   # ---- release-build: compile-check the musl static binary (main only) ----

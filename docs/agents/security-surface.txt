@@ -135,3 +135,8 @@ relay/cmd/relay/init*.go
 relay/cmd/relay/reload*.go
 daemon/src/join*.rs
 daemon/src/join/**
+
+# Added 2026-10-26 (install matrix; the owner confirms at review): the per-platform images
+# the install matrix boots. Each decides what the matrix proves about a package, for the
+# same reason .golangci.yml and tools/** are listed.
+docker/install-matrix/**
