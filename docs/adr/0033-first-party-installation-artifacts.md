@@ -2,7 +2,8 @@
 
 **Status:** Accepted; amended 2026-10-15 (the Relay ships as OS packages; the image is a
 production path; place-if-absent Policy; remove and purge; no Alpine package yet); amended by
-ADR-0043; amended 2026-10-21 (`relay-daemon join` enrolls).
+ADR-0043; amended 2026-10-21 (`relay-daemon join` enrolls); amended 2026-10-26 (fragments compose
+without a Policy file).
 
 ADR-0053 (2026-10-23) supersedes the 2026-10-15 amendment's optional read-catalog package: the
 catalog ships inside the `relay-daemon` package.
@@ -59,7 +60,8 @@ changing the shipped default in a later release never reaches an existing Node. 
 — Policy is the customer's (ADR-0002) — and is recorded so nobody later "fixes" it.
 
 The daemon's own semantics do not change: a missing or unreadable Policy is still deny-all, and
-a group- or world-writable one is still refused. This decides what the *package places*, never
+a group- or world-writable one is still refused. (Since the 2026-10-26 amendment, a missing Policy
+file beside fragments composes the fragments alone.) This decides what the *package places*, never
 what the *daemon does*.
 
 **5. The container image is the evaluation artifact, not the recommended production
@@ -204,7 +206,8 @@ as a reference copy it owns, and **places it as the live Policy on first install
 no Policy file exists, and only when no Policy directory exists.** Never on an upgrade or a
 reinstall (rpm cannot tell a reinstall after removal from a first install, so there the two
 absence checks are the whole guard): an operator who deleted the Policy to lock a Node down to
-deny-all, or who composes Policy only from fragments, must not find the default back after the
+deny-all (with `policy.d` emptied too, since the 2026-10-26 amendment), or who composes Policy only
+from fragments, must not find the default back after the
 next upgrade. The live Policy is never a package-owned file: no install, upgrade or remove
 rewrites it. A changed default in a later release reaches only Nodes installed after it, which
 is correct, because the Policy is the customer's (ADR-0002). The daemon's `EnvironmentFile`
@@ -342,3 +345,16 @@ names known-gap row 11 in `AGENTS.md` as closing when the Relay enforces the own
 It has: the Relay checks its configuration file and every secret file it reads at start and on
 reload (ADR-0043; `docs/specs/relay-configuration.md`), and the row is deleted. The consumer
 list's "known-gap row 11" is historical. Signposted in place, dated.
+
+## Amendment (2026-10-26): fragments compose without a Policy file
+
+Owner decision while building the Policy directory (#648). A missing Policy file is deny-all only
+when `policy.d` holds no fragment; beside one or more fragments, the daemon composes the fragments
+alone, deny beating allow as always (`docs/specs/daemon-installation.md` DI-20, DI-36). This is
+what decision 4's place-if-absent rule already protects: an operator who composes Policy only from
+fragments gets a working Node, not a deny-all one. An unreadable Policy file is still deny-all,
+and a refused fragment still refuses start.
+
+Two consequences. Locking a Node down to deny-all now means removing the fragments as well as the
+Policy file. Removing `policy.toml` drops whatever it denied, so the daemon warns at start when it
+runs without one, and load-bearing denies belong in a fragment (threat model R6).
