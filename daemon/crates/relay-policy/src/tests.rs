@@ -1376,6 +1376,56 @@ fn an_empty_fragment_set_keeps_the_raw_bytes_fingerprint() {
     );
 }
 
+/// With no Policy file the fragments compose by the same rules, and the set
+/// fingerprint omits the Policy file's record rather than recording it empty.
+#[test]
+fn fragments_compose_alone_with_no_policy_file() {
+    let fragments = [
+        fragment("b", ALLOW_RAW_TRUE),
+        fragment("a", ALLOW_RESTART_NGINX),
+    ];
+    let policy = compose_fragments(&fragments).expect("composes");
+    assert!(matches!(
+        restart(&policy, "nginx").decision,
+        Decision::Allow(_)
+    ));
+    assert!(matches!(
+        policy.evaluate_raw_exec(&args(&["/bin/true"])),
+        Decision::Allow(_)
+    ));
+    assert!(matches!(
+        restart(&policy, "sshd").decision,
+        Decision::Deny { .. }
+    ));
+    assert_eq!(
+        policy.fingerprint(),
+        sha256_hex(&set_stream(&[
+            ("policy.d/a", ALLOW_RESTART_NGINX),
+            ("policy.d/b", ALLOW_RAW_TRUE),
+        ]))
+    );
+    assert_ne!(
+        policy.fingerprint(),
+        compose("", &fragments).expect("composes").fingerprint(),
+        "a missing Policy file is not fingerprinted as an empty one"
+    );
+
+    // A fragment rule has no line, the first fragment's included.
+    let first = restart(&policy, "nginx");
+    assert_eq!(first.rule.expect("an allow rule decided").line, None);
+
+    // Deny-by-default: an empty composition denies everything.
+    let empty = compose_fragments(&[]).expect("composes");
+    assert!(matches!(
+        restart(&empty, "nginx").decision,
+        Decision::Deny { .. }
+    ));
+    assert!(matches!(
+        empty.evaluate_raw_exec(&args(&["/bin/true"])),
+        Decision::Deny { .. }
+    ));
+}
+
 // Proves DI-36.
 #[test]
 fn fragments_compose_into_one_policy_with_one_fingerprint() {

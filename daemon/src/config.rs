@@ -229,10 +229,11 @@ pub struct Config {
     ///
     /// Defaults to `/etc/relay-daemon/policy.toml` when the env var is absent.
     /// The daemon loads the Policy at startup via `policy::load_policy`, which
-    /// also reads the Policy directory ([`Config::policy_dir`]). Absent or
-    /// unreadable file → warn and fall back to deny-all (fail-closed for
-    /// dispatch). A refused fragment or Policy directory stops the daemon from
-    /// starting.
+    /// also reads the Policy directory ([`Config::policy_dir`]). An unreadable
+    /// file, or an absent one with no fragment → warn and fall back to deny-all
+    /// (fail-closed for dispatch); an absent file beside fragments → warn and
+    /// compose the fragments alone (DI-20). A refused fragment or Policy
+    /// directory stops the daemon from starting.
     pub policy_path: PathBuf,
     /// The Policy directory: `policy.d` beside the Policy file (DI-36). It has
     /// no setting of its own, so it follows `RELAY_POLICY_PATH`.

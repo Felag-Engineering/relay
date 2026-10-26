@@ -1,11 +1,13 @@
-//! The Policy directory, driven through the compiled binary (DI-36, DI-46).
+//! The Policy directory, driven through the compiled binary (DI-20, DI-36,
+//! DI-46).
 //!
 //! A fragment the daemon refuses to start on really stops the process, with a
-//! non-zero exit and a journal line that names the fragment; and `policy check`
-//! prints the Policy fingerprint the daemon's own loader computes over the same
-//! files. The loader's composition rules are proved at the crate level, in
-//! `relay-policy`; this file proves what only a real process can: the exit and
-//! the CLI.
+//! non-zero exit and a journal line that names the fragment; a missing Policy
+//! file beside fragments loads the fragments alone; and `policy check` agrees
+//! with the daemon's own loader over the same files, printing the Policy
+//! fingerprint it computes. The loader's composition rules are proved at the
+//! crate level, in `relay-policy`; this file proves what only a real process
+//! can: the exit, the journal and the CLI.
 
 // Spawning the compiled binary is the point; clippy.toml's spawn ban is for the
 // daemon's own code.
@@ -16,7 +18,7 @@ mod common;
 use common::TempDir;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
 const ALLOW_NGINX: &str = "\
@@ -70,11 +72,17 @@ struct Node {
 
 impl Node {
     fn new(label: &str, policy: &str) -> Node {
+        let node = Node::without_policy_file(label);
+        node.write(&node.policy(), policy);
+        node
+    }
+
+    /// A Node whose Policy directory exists, empty, beside no Policy file.
+    fn without_policy_file(label: &str) -> Node {
         let root = TempDir::new(label);
         std::fs::create_dir_all(root.path()).expect("create the config dir");
         set_mode(root.path(), 0o755);
         let node = Node { root };
-        node.write(&node.policy(), policy);
         std::fs::create_dir(node.dir()).expect("create the Policy directory");
         set_mode(&node.dir(), 0o755);
         node
@@ -195,6 +203,13 @@ fn check_prints_the_fingerprint_the_daemon_loads() {
 /// `policy check` over a file plus its directory, returning the exit code and
 /// stderr.
 fn check_with(node: &Node, extra: &[&str]) -> (Option<i32>, String) {
+    let (code, _stdout, stderr) = check_output(node, extra);
+    (code, stderr)
+}
+
+/// `policy check` over `node`'s Policy file, returning the exit code, stdout
+/// and stderr.
+fn check_output(node: &Node, extra: &[&str]) -> (Option<i32>, String, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_relay-daemon"))
         .env_clear()
         .args(["policy", "check"])
@@ -204,8 +219,264 @@ fn check_with(node: &Node, extra: &[&str]) -> (Option<i32>, String) {
         .expect("spawn relay-daemon policy check");
     (
         out.status.code(),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
         String::from_utf8_lossy(&out.stderr).into_owned(),
     )
+}
+
+/// `policy check` over `node`'s Policy file and Policy directory.
+fn check_dir(node: &Node, extra: &[&str]) -> (Option<i32>, String, String) {
+    let dir = node.dir();
+    let mut args = vec!["--policy-dir", dir.to_str().expect("a UTF-8 temp path")];
+    args.extend_from_slice(extra);
+    check_output(node, &args)
+}
+
+/// The value of the `fingerprint:` line `policy check` printed, if any.
+fn printed_fingerprint(stdout: &str) -> Option<&str> {
+    stdout.lines().find_map(|l| l.strip_prefix("fingerprint: "))
+}
+
+fn stop(mut child: Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// Starts the daemon on `node`'s Policy, against a closed port so it never
+/// connects, and watches its journal until a line holds `until`, the process
+/// exits, or ten seconds pass. Returns the exit status if it exited (a daemon
+/// still running is stopped) and everything it logged.
+fn run_daemon(node: &Node, until: &str) -> (Option<ExitStatus>, String) {
+    let state = TempDir::new("policy-dir-state");
+    seed_identity(state.path());
+    let journal_dir = TempDir::new("policy-dir-journal");
+    std::fs::create_dir_all(journal_dir.path()).expect("create the journal dir");
+    let journal = journal_dir.path().join("daemon.log");
+    let log = std::fs::File::create(&journal).expect("create the journal file");
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_relay-daemon"))
+        .env_clear()
+        .env("RELAY_STATE_DIR", state.path())
+        .env("RELAY_ADDRESS", "https://127.0.0.1:1")
+        .env("RELAY_POLICY_PATH", node.policy())
+        .env("RUST_LOG", "info")
+        .stdin(Stdio::null())
+        .stdout(log.try_clone().expect("clone the journal handle"))
+        .stderr(log)
+        .spawn()
+        .expect("spawn relay-daemon");
+
+    let read = || std::fs::read_to_string(&journal).unwrap_or_default();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(status) = child.try_wait().expect("poll the daemon") {
+            return (Some(status), read());
+        }
+        let all = read();
+        if all.contains(until) || Instant::now() >= deadline {
+            stop(child);
+            return (None, all);
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// The deny-all fallback's journal line (`startup_policy` in the daemon).
+const DENY_ALL_LINE: &str = "using deny-all policy";
+
+fn fragment(name: &str, text: &str) -> relay_policy::Fragment {
+    relay_policy::Fragment {
+        name: name.to_string(),
+        text: text.to_string(),
+    }
+}
+
+// Proves DI-20.
+#[test]
+fn a_missing_policy_file_beside_fragments_loads_the_fragments_alone() {
+    let node = Node::without_policy_file("policy-dir-no-file");
+    node.fragment("10-sshd.toml", ALLOW_SSHD);
+    node.fragment("20-deny.toml", DENY_PHP);
+
+    let loaded =
+        relay_policy::load_policy(&node.policy(), &node.dir()).expect("the fragments load alone");
+    let composed = relay_policy::compose_fragments(&[
+        fragment("10-sshd.toml", ALLOW_SSHD),
+        fragment("20-deny.toml", DENY_PHP),
+    ])
+    .expect("composes");
+    assert_eq!(loaded.fingerprint(), composed.fingerprint());
+
+    let (exited, all) = run_daemon(&node, "policy loaded");
+    assert!(exited.is_none(), "the daemon must keep running: {all}");
+    assert!(
+        all.contains("policy loaded") && all.contains(loaded.fingerprint()),
+        "the journal reports the fragments' fingerprint: {all}"
+    );
+    assert!(!all.contains(DENY_ALL_LINE), "journal: {all}");
+
+    assert!(
+        all.contains("no policy file; composing the Policy directory's fragments alone"),
+        "the daemon says it runs without the Policy file's denies: {all}"
+    );
+
+    let (code, stdout, stderr) = check_dir(&node, &[]);
+    assert_eq!(code, Some(0), "stderr: {stderr}");
+    assert_eq!(
+        printed_fingerprint(&stdout),
+        Some(loaded.fingerprint()),
+        "policy check prints the fingerprint the daemon loads; stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("warning: ") && stderr.contains("does not exist; checking the fragments"),
+        "a missing Policy file is called out, not passed silently: {stderr}"
+    );
+
+    // A mistyped <file> cannot pass a strict gate.
+    let (code, stdout, stderr) = check_dir(&node, &["--strict"]);
+    assert_eq!(code, Some(1), "stderr: {stderr}");
+    assert_eq!(printed_fingerprint(&stdout), None);
+
+    // Without --policy-dir there is nothing to check: a missing file is an error.
+    let (code, stdout, _) = check_output(&node, &[]);
+    assert_eq!(code, Some(1));
+    assert_eq!(printed_fingerprint(&stdout), None);
+}
+
+// Proves DI-20.
+#[test]
+fn a_missing_policy_file_with_no_fragment_is_deny_all() {
+    let node = Node::without_policy_file("policy-dir-nothing");
+
+    let (exited, all) = run_daemon(&node, DENY_ALL_LINE);
+    assert!(exited.is_none(), "deny-all, not a refusal: {all}");
+    assert!(all.contains(DENY_ALL_LINE), "journal: {all}");
+
+    let (code, stdout, stderr) = check_dir(&node, &[]);
+    assert_eq!(code, Some(1), "stderr: {stderr}");
+    assert_eq!(printed_fingerprint(&stdout), None);
+    assert!(
+        stderr.contains("holds no Policy fragment") && stderr.contains("deny-all"),
+        "stderr: {stderr}"
+    );
+}
+
+// Proves DI-20.
+#[test]
+fn a_missing_policy_file_with_a_refused_fragment_refuses_start() {
+    let node = Node::without_policy_file("policy-dir-no-file-refused");
+    node.fragment("10-sshd.toml", ALLOW_SSHD);
+    std::os::unix::fs::symlink(
+        node.dir().join("10-sshd.toml"),
+        node.dir().join("evil.toml"),
+    )
+    .unwrap();
+
+    let (exited, all) = run_daemon(&node, "policy loaded");
+    let status = exited.unwrap_or_else(|| panic!("the daemon kept running: {all}"));
+    assert!(!status.success(), "must exit non-zero: {all}");
+    assert!(
+        all.contains("refusing to start") && all.contains("evil.toml"),
+        "journal: {all}"
+    );
+
+    let (code, stdout, stderr) = check_dir(&node, &[]);
+    assert_eq!(code, Some(1), "stderr: {stderr}");
+    assert_eq!(printed_fingerprint(&stdout), None);
+    assert!(stderr.contains("evil.toml"), "stderr: {stderr}");
+}
+
+// Proves DI-20.
+#[test]
+fn an_unreadable_policy_file_beside_fragments_is_deny_all() {
+    // Unparsable.
+    let unparsable = Node::new("policy-dir-bad-file", "this is = = not toml");
+    unparsable.fragment("10-sshd.toml", ALLOW_SSHD);
+    // Not a file at all: a directory where the Policy file should be.
+    let not_a_file = Node::without_policy_file("policy-dir-file-is-dir");
+    std::fs::create_dir(not_a_file.policy()).expect("create a directory at the Policy path");
+    set_mode(&not_a_file.policy(), 0o755);
+    not_a_file.fragment("10-sshd.toml", ALLOW_SSHD);
+    // A dangling symlink is not a missing Policy file: the loader refuses to
+    // follow it, and `policy check` must not take it for missing.
+    let dangling = Node::without_policy_file("policy-dir-file-dangling");
+    std::os::unix::fs::symlink("/nonexistent", dangling.policy()).unwrap();
+    dangling.fragment("10-sshd.toml", ALLOW_SSHD);
+
+    for node in [&unparsable, &not_a_file, &dangling] {
+        let (exited, all) = run_daemon(node, DENY_ALL_LINE);
+        assert!(exited.is_none(), "deny-all, not a refusal: {all}");
+        assert!(all.contains(DENY_ALL_LINE), "journal: {all}");
+        assert!(!all.contains("policy loaded"), "journal: {all}");
+
+        let (code, stdout, stderr) = check_dir(node, &[]);
+        assert_eq!(code, Some(1), "stderr: {stderr}");
+        assert_eq!(printed_fingerprint(&stdout), None);
+    }
+}
+
+/// An unknown Policy key is a load error, so the Policy is deny-all; the
+/// journal line that says so names the key, in the Policy file or a fragment.
+#[test]
+fn an_unknown_policy_key_is_deny_all_and_the_journal_names_it() {
+    let in_file = Node::new(
+        "policy-dir-unknown-key-file",
+        &format!("{ALLOW_NGINX}\n[[denny]]\nname = \"service.restart\"\n"),
+    );
+    let in_fragment = Node::new("policy-dir-unknown-key-fragment", ALLOW_NGINX);
+    in_fragment.fragment("90-deny.toml", "[raw_exec]\nenabeld = true\n");
+
+    for (node, key) in [(&in_file, "denny"), (&in_fragment, "enabeld")] {
+        let (exited, all) = run_daemon(node, DENY_ALL_LINE);
+        assert!(exited.is_none(), "deny-all, not a refusal: {all}");
+        let line = all
+            .lines()
+            .find(|l| l.contains(DENY_ALL_LINE))
+            .unwrap_or_else(|| panic!("no deny-all line: {all}"));
+        assert!(
+            line.contains(key),
+            "the deny-all line names {key:?}: {line}"
+        );
+    }
+}
+
+/// `policy check` refuses a symlinked `--policy-dir` as the daemon does, so a
+/// layout that would take the Node offline cannot pass the gate.
+// Proves DI-46.
+#[test]
+fn check_refuses_a_symlinked_or_non_directory_policy_dir() {
+    let node = Node::new("policy-dir-symlinked-dir", ALLOW_NGINX);
+    node.fragment("10-sshd.toml", ALLOW_SSHD);
+    let linked = node.root.path().join("linked.d");
+    std::os::unix::fs::symlink(node.dir(), &linked).unwrap();
+    let a_file = node.root.path().join("file.d");
+    node.write(&a_file, ALLOW_SSHD);
+
+    for (dir, expected) in [
+        (&linked, "the Policy directory is a symlink"),
+        (&a_file, "the Policy directory is not a directory"),
+    ] {
+        let refused = relay_policy::load_policy(&node.policy(), dir)
+            .expect_err("the daemon refuses this Policy directory");
+        assert!(refused.refuses_start(), "got {refused:?}");
+        assert!(refused.to_string().contains(expected), "got {refused}");
+
+        for extra in [&[][..], &["--strict"][..]] {
+            let mut args = vec!["--policy-dir", dir.to_str().unwrap()];
+            args.extend_from_slice(extra);
+            let (code, stdout, stderr) = check_output(&node, &args);
+            assert_eq!(code, Some(1), "{dir:?} {extra:?}: stderr: {stderr}");
+            assert_eq!(
+                printed_fingerprint(&stdout),
+                None,
+                "{dir:?} {extra:?}: no fingerprint for a refused layout; stdout: {stdout}"
+            );
+            assert!(
+                stderr.contains(&refused.to_string()),
+                "{dir:?} {extra:?}: the loader's own error; stderr: {stderr}"
+            );
+        }
+    }
 }
 
 /// A mistyped table in a deny-only fragment is a parse error, not a silent

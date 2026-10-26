@@ -584,18 +584,157 @@ fn an_insecure_policy_directory_refuses_start() {
     }
 }
 
+// Proves DI-20.
 #[test]
-fn a_missing_policy_file_with_fragments_is_deny_all() {
+fn a_missing_policy_file_beside_fragments_composes_the_fragments_alone() {
     let layout = Layout::new(None);
     layout.create_dir();
-    layout.fragment("f.toml", ALLOW_SSHD);
-    let err = layout.load().unwrap_err();
+    layout.fragment("10-sshd.toml", ALLOW_SSHD);
+    layout.fragment("20-deny.toml", DENY_SSHD);
+    layout.fragment("30-nginx.toml", ALLOW_NGINX);
+
+    let policy = layout.load().expect("the fragments load alone");
+    assert!(policy.composed_without_policy_file());
+    assert!(matches!(
+        restart_decision(&policy, "nginx"),
+        Decision::Allow(_)
+    ));
     assert!(
-        !err.refuses_start(),
-        "a missing Policy file stays deny-all, fragments or not; got {err:?}"
+        matches!(restart_decision(&policy, "sshd"), Decision::Deny { .. }),
+        "deny beats allow across the fragments"
+    );
+    assert!(
+        matches!(restart_decision(&policy, "php-fpm"), Decision::Deny { .. }),
+        "deny-by-default holds with no Policy file"
     );
 
-    // A refusal in the directory still wins over the missing file.
+    // The set fingerprint with the Policy file's record absent, built here
+    // independently of the loader.
+    let mut stream = b"relay-policy-set-v1\n".to_vec();
+    for (name, text) in [
+        ("10-sshd.toml", ALLOW_SSHD),
+        ("20-deny.toml", DENY_SSHD),
+        ("30-nginx.toml", ALLOW_NGINX),
+    ] {
+        stream.extend_from_slice(format!("policy.d/{name}\0{}\n", text.len()).as_bytes());
+        stream.extend_from_slice(text.as_bytes());
+    }
+    let expected: String = ring::digest::digest(&ring::digest::SHA256, &stream)
+        .as_ref()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    assert_eq!(policy.fingerprint(), expected);
+
+    // An empty Policy file decides the same, and fingerprints differently: what
+    // the Node holds stays distinguishable.
+    write_secure_policy(&layout.file(), b"", 0o644);
+    let with_empty_file = layout.load().expect("loads");
+    assert!(!with_empty_file.composed_without_policy_file());
+    assert!(matches!(
+        restart_decision(&with_empty_file, "nginx"),
+        Decision::Allow(_)
+    ));
+    assert_ne!(with_empty_file.fingerprint(), policy.fingerprint());
+}
+
+// Proves DI-20.
+#[test]
+fn a_missing_policy_file_with_no_fragment_is_deny_all() {
+    let layout = Layout::new(None);
+    for state in ["absent", "empty"] {
+        if state == "empty" {
+            layout.create_dir();
+        }
+        let err = layout.load().expect_err(state);
+        assert!(
+            matches!(&err, PolicyError::Io(e) if e.kind() == std::io::ErrorKind::NotFound),
+            "{state} Policy directory: got {err:?}"
+        );
+        assert!(!err.refuses_start(), "{state}: deny-all, not a refusal");
+    }
+}
+
+// Proves DI-20.
+#[test]
+fn a_missing_policy_file_with_a_refused_fragment_refuses_start() {
+    let layout = Layout::new(None);
+    layout.create_dir();
+    layout.fragment("10-sshd.toml", ALLOW_SSHD);
     std::os::unix::fs::symlink("/nonexistent", layout.dir().join("link.toml")).unwrap();
-    assert!(layout.load().unwrap_err().refuses_start());
+    let err = layout.load().unwrap_err();
+    assert!(
+        matches!(err, PolicyError::FragmentSymlink { .. }),
+        "got {err:?}"
+    );
+
+    let layout = Layout::new(None);
+    layout.create_dir();
+    layout.fragment("10-sshd.toml", ALLOW_SSHD);
+    write_secure_policy(
+        &layout.dir().join("loose.toml"),
+        ALLOW_NGINX.as_bytes(),
+        0o664,
+    );
+    let err = layout.load().unwrap_err();
+    assert!(
+        matches!(err, PolicyError::FragmentInsecurePermissions { .. }),
+        "got {err:?}"
+    );
+    assert!(err.refuses_start());
+}
+
+// Proves DI-20.
+#[test]
+fn an_unreadable_policy_file_beside_fragments_is_deny_all() {
+    let layout = Layout::new(Some("this is = = not toml"));
+    layout.create_dir();
+    layout.fragment("10-sshd.toml", ALLOW_SSHD);
+    let err = layout.load().expect_err("an unparsable Policy file");
+    assert!(matches!(err, PolicyError::Parse(_)), "got {err:?}");
+    assert!(!err.refuses_start());
+
+    // A dangling symlink is not a missing Policy file: the loader refuses to
+    // follow it, and the Policy is deny-all.
+    let layout = Layout::new(None);
+    layout.create_dir();
+    layout.fragment("10-sshd.toml", ALLOW_SSHD);
+    std::os::unix::fs::symlink("/nonexistent", layout.file()).unwrap();
+    let err = layout.load().expect_err("a dangling symlinked Policy file");
+    assert!(matches!(err, PolicyError::SymlinkPath), "got {err:?}");
+    assert!(!err.refuses_start());
+
+    // A directory where the Policy file should be.
+    let layout = Layout::new(None);
+    layout.create_dir();
+    layout.fragment("10-sshd.toml", ALLOW_SSHD);
+    std::fs::create_dir(layout.file()).unwrap();
+    let err = layout.load().expect_err("a directory at the Policy path");
+    assert!(matches!(err, PolicyError::NotRegularFile), "got {err:?}");
+    assert!(!err.refuses_start());
+
+    // A fragment that cannot be parsed, with no Policy file, is deny-all too.
+    let layout = Layout::new(None);
+    layout.create_dir();
+    layout.fragment("10-sshd.toml", ALLOW_SSHD);
+    layout.fragment("20-bad.toml", "= =");
+    let err = layout.load().expect_err("an unparsable fragment");
+    assert!(
+        matches!(&err, PolicyError::FragmentInvalid { name, .. } if name == "20-bad.toml"),
+        "got {err:?}"
+    );
+    assert!(!err.refuses_start());
+
+    // An unreadable fragment with no Policy file: the error names the
+    // fragment, not the missing file.
+    let layout = Layout::new(None);
+    layout.create_dir();
+    layout.fragment("10-sshd.toml", ALLOW_SSHD);
+    write_secure_policy(&layout.dir().join("20-binary.toml"), &[0xff, 0xfe], 0o644);
+    let err = layout.load().expect_err("an unreadable fragment");
+    assert!(
+        matches!(&err, PolicyError::FragmentUnreadable { name, .. } if name == "20-binary.toml"),
+        "got {err:?}"
+    );
+    assert!(!err.refuses_start());
 }

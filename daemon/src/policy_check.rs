@@ -13,10 +13,13 @@
 //! fragment, the same way, and lints and compiles them with `<file>` through
 //! `policy::lint_composed` and `policy::compose` — the functions the daemon's
 //! own composition uses (DI-36, DI-46) — so the verdict and the printed
-//! fingerprint are the ones the Node will have. A symlink or a non-regular
-//! entry is an error here because the daemon refuses to start on one; a
-//! fragment's mode and owner are not checked, for the reason the Policy
-//! file's are not.
+//! fingerprint are the ones the Node will have. A symlinked directory, and a
+//! symlink or a non-regular entry, are errors here because the daemon refuses
+//! to start on one; the directory's and a fragment's mode and owner are not
+//! checked, for the reason the Policy file's are not. A missing `<file>`
+//! beside a fragment composes the fragments alone, through
+//! `policy::lint_fragments` and `policy::compose_fragments`, as the daemon
+//! does (DI-20).
 //!
 //! `--would-allow` is answered by building a [`crate::gen::PolicyQuery`] and
 //! calling the exact same [`crate::dispatch::evaluate_policy_query`] entry
@@ -93,8 +96,14 @@ Options:
                          composes its Policy directory with its Policy file:
                          one Policy, deny beating allow across all of them. File
                          names are part of the fingerprint. Mode and owner are
-                         not checked here; a symlink or a non-regular entry is
-                         an error, because the daemon refuses to start on one.
+                         not checked here; a symlinked <dir>, or a symlink or a
+                         non-regular entry in it, is an error, because the
+                         daemon refuses to start on one. <file> may be absent
+                         when <dir> holds a fragment: the daemon then composes
+                         the fragments alone, and this prints a warning, which
+                         --strict makes a failure, so a mistyped <file> cannot
+                         pass a strict gate. With neither, the daemon runs
+                         deny-all, and that is an error here.
                          A <dir> that does not exist is an error here, although
                          the daemon treats a missing Policy directory as having
                          no fragments: a mistyped path should not pass a gate.
@@ -187,8 +196,12 @@ pub fn run(argv: &[String]) -> i32 {
         }
     };
 
+    // With --policy-dir a missing Policy file is not yet an error: the daemon
+    // composes the fragments alone (DI-20). Whether the check then fails
+    // depends on what the directory read below finds, as it does for the daemon.
     let contents = match std::fs::read_to_string(&parsed.file) {
-        Ok(c) => c,
+        Ok(c) => Some(c),
+        Err(_) if parsed.fragment_dir.is_some() && policy_file_is_missing(&parsed.file) => None,
         Err(e) => {
             eprintln!("error: failed to read {:?}: {e}", parsed.file);
             return EXIT_INVALID;
@@ -207,6 +220,23 @@ pub fn run(argv: &[String]) -> i32 {
         },
         None => Vec::new(),
     };
+    if let (None, Some(dir)) = (&contents, &parsed.fragment_dir) {
+        if fragments.is_empty() {
+            eprintln!(
+                "error: {:?} does not exist and {dir:?} holds no Policy fragment: the daemon \
+                 runs deny-all with neither",
+                parsed.file
+            );
+            return EXIT_INVALID;
+        }
+        // A mistyped <file> must not pass silently as a fragments-only Policy:
+        // a warning, which --strict makes a failure.
+        eprintln!(
+            "warning: {:?} does not exist; checking the fragments in {dir:?} alone, as the \
+             daemon composes them, without any deny that file would hold",
+            parsed.file
+        );
+    }
     let uncovered_policy_dir = match parsed.fragment_dir {
         Some(_) => None,
         None => populated_sibling_policy_dir(&parsed.file),
@@ -234,12 +264,15 @@ pub fn run(argv: &[String]) -> i32 {
         .map(|r| r.names.clone())
         .unwrap_or_default();
 
-    let report = policy::lint_composed(
-        &contents,
-        &fragments,
-        &template_names,
-        template_report.is_some(),
-    );
+    let report = match &contents {
+        Some(contents) => policy::lint_composed(
+            contents,
+            &fragments,
+            &template_names,
+            template_report.is_some(),
+        ),
+        None => policy::lint_fragments(&fragments, &template_names, template_report.is_some()),
+    };
     print_report(&report);
     if let Some(tr) = &template_report {
         print_findings(&tr.findings);
@@ -248,10 +281,10 @@ pub fn run(argv: &[String]) -> i32 {
     // Self-reference lint: does this Policy's reach include the
     // daemon's own trust root? Answered by probing the LIVE engine, never by a
     // second matcher (ADR-0011) — so it can only run once the file compiles.
-    let compiled = if report.parse_error.is_none() {
-        policy::compose(&contents, &fragments).ok()
-    } else {
-        None
+    let compiled = match (&report.parse_error, &contents) {
+        (Some(_), _) => None,
+        (None, Some(contents)) => policy::compose(contents, &fragments).ok(),
+        (None, None) => policy::compose_fragments(&fragments).ok(),
     };
     let self_reference = compiled
         .as_ref()
@@ -282,7 +315,8 @@ pub fn run(argv: &[String]) -> i32 {
         && (report.has_warnings()
             || template_warnings
             || !self_reference.is_empty()
-            || uncovered_policy_dir.is_some())
+            || uncovered_policy_dir.is_some()
+            || contents.is_none())
     {
         eprintln!("error: lint warnings present and --strict was given");
         return EXIT_INVALID;
@@ -475,14 +509,41 @@ fn load_vocabulary_templates(dir: Option<&str>) -> templates::TemplateSet {
         .unwrap_or_else(|_| templates::TemplateSet::unloadable())
 }
 
+/// Whether nothing at all is at `file`, which is what the loader means by a
+/// missing Policy file: a dangling symlink is there, and the loader refuses it.
+fn policy_file_is_missing(file: &str) -> bool {
+    matches!(
+        std::fs::symlink_metadata(file),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound
+    )
+}
+
 /// Reads every entry of the Policy directory at `dir` as a Policy fragment.
 ///
-/// The offline counterpart of the daemon's loader: every entry is a fragment
-/// (no suffix filter), and an entry the daemon refuses to start on, a symlink
-/// or a non-regular file, is an error. Mode and owner are not checked (the
-/// module doc says why). Every problem is collected, so a pipeline sees them
-/// all at once. The order of the result is unspecified: composition sorts.
+/// The offline counterpart of the daemon's loader: the directory itself must
+/// be a real directory, checked without following a symlink, and every entry
+/// is a fragment (no suffix filter); an entry the daemon refuses to start on,
+/// a symlink or a non-regular file, is an error. Mode and owner are not checked,
+/// of the directory or of a fragment (the module doc says why). Every problem
+/// with an entry is collected, so a pipeline sees them all at once. The order
+/// of the result is unspecified: composition sorts.
 fn read_fragment_dir(dir: &str) -> Result<Vec<policy::Fragment>, Vec<String>> {
+    // `read_dir` follows a symlink, and the daemon refuses to start on a
+    // symlinked Policy directory: check the directory's own type first, with
+    // the loader's own error.
+    let meta = std::fs::symlink_metadata(dir).map_err(|e| vec![format!("{dir}: {e}")])?;
+    if meta.file_type().is_symlink() {
+        return Err(vec![format!(
+            "{dir}: {}",
+            policy::PolicyError::PolicyDirectorySymlink
+        )]);
+    }
+    if !meta.is_dir() {
+        return Err(vec![format!(
+            "{dir}: {}",
+            policy::PolicyError::PolicyDirectoryNotADirectory
+        )]);
+    }
     let entries = std::fs::read_dir(dir).map_err(|e| vec![format!("{dir}: {e}")])?;
 
     let mut fragments = Vec::new();

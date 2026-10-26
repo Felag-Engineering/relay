@@ -70,8 +70,9 @@ and never writes into it again; config management populates it. Fragments are ro
 not group- or world-writable too. A fragment that is a symlink, is not a regular file or is
 insecure, or an insecure directory, makes the daemon refuse to start; a fragment that cannot
 be read or parsed leaves the whole Policy deny-all; so does a key the daemon does not read
-(a mistyped `[[denny]]`), in a fragment or in the Policy file. Ship a `policy.toml` beside fragments (it
-may be empty): with none, the daemon runs deny-all and ignores them. Policy is delivered by
+(a mistyped `[[denny]]`), in a fragment or in the Policy file. A `policy.toml` beside fragments
+is optional: with none, the daemon composes the fragments alone, and with neither it runs
+deny-all. Policy is delivered by
 the customer's config management, **never over the wire**: the Relay may query a Node's Policy
 fingerprint but can never modify it (ADR-0002). Changing Policy is a config-management push
 followed by a daemon restart, not an API call.

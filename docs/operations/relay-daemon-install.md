@@ -65,12 +65,16 @@ Fail-closed behaviors to know about (all deliberate):
 - **No Relay address → refuse to run.** An enrolled daemon with neither `RELAY_ADDRESS` nor a
   persisted address exits non-zero, naming `RELAY_ADDRESS`; there is no localhost default. A
   Node with no persisted address works only while `RELAY_ADDRESS` is set; nothing backfills it.
-- **Policy missing or unreadable → deny-all.** The daemon starts, connects, and denies every
-  Task rather than refusing to start or running open (ADR-0002). A group- or world-writable
-  Policy file is likewise refused. Ship a `policy.toml` (it may be empty) beside any
-  fragments: with no Policy file the daemon runs deny-all and ignores every fragment. A Node
-  whose `/etc/relay-daemon/policy.d` already existed when the package was installed gets no
-  default Policy file, so its fragments do nothing until config management writes one.
+- **Policy unreadable, or missing with no fragment → deny-all.** The daemon starts, connects,
+  and denies every Task rather than refusing to start or running open (ADR-0002). A group- or
+  world-writable Policy file is likewise refused. A `policy.toml` beside fragments is
+  optional: with no Policy file and at least one fragment in `policy.d`, the daemon composes
+  the fragments alone, and warns `no policy file; composing the Policy directory's fragments
+  alone`. That drops every deny the file held, the shipped confidentiality deny-list included,
+  so keep load-bearing denies in a fragment as well. A Node whose `/etc/relay-daemon/policy.d`
+  already existed when the package was installed gets no default Policy file, so its fragments
+  are its whole Policy. Deleting the Policy file locks a Node down to deny-all only when
+  `policy.d` holds no fragment.
 - **A Policy fragment or Policy directory refused → refuse to run.** A fragment in `policy.d`
   that is a symlink, is not a regular file, or is group/world-writable or owned by neither
   root nor the daemon's user, and a `policy.d` that is insecure the same way, exit the daemon

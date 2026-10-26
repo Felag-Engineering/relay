@@ -105,9 +105,11 @@ fn load_enrolled() -> Result<(Config, crate::identity::Identity), Box<dyn std::e
 /// Policy directory) is returned as an error, so `main` exits non-zero and
 /// systemd shows the unit failed (DI-36). Any other failure falls back to a
 /// deny-all Policy with a warning: a daemon with no usable Policy denies every
-/// Task, the most restrictive safe default, and a Policy-file failure always
-/// ends this way (DI-20). A refused or deny-all fragment or directory outcome
-/// is logged once, here; the loader logs a Policy-file failure itself.
+/// Task, the most restrictive safe default. An unreadable Policy file, or a
+/// missing one with no fragment beside it, always ends this way (DI-20); the
+/// logged error names what failed, an unknown Policy key included. A refused or
+/// deny-all fragment or directory outcome is logged once, here; the loader logs
+/// a Policy-file refusal itself.
 fn startup_policy(
     loaded: Result<policy::Policy, policy::PolicyError>,
     path: &Path,
@@ -115,6 +117,15 @@ fn startup_policy(
 ) -> Result<policy::Policy, policy::PolicyError> {
     match loaded {
         Ok(p) => {
+            if p.composed_without_policy_file() {
+                // Not an error (DI-20), but every deny the file would hold is
+                // gone, so a mistyped path or a removed file must be visible.
+                tracing::warn!(
+                    path = %path.display(),
+                    dir = %dir.display(),
+                    "no policy file; composing the Policy directory's fragments alone"
+                );
+            }
             info!(path = %path.display(), dir = %dir.display(), fingerprint = %p.fingerprint(), "policy loaded");
             Ok(p)
         }
@@ -128,10 +139,13 @@ fn startup_policy(
             Err(e)
         }
         Err(e) => {
+            // A TOML error spans several lines, its reason (an unknown key
+            // included) last; Debug-escaping keeps the whole reason on the one
+            // journal line that says the Policy is deny-all.
             tracing::warn!(
                 path = %path.display(),
                 dir = %dir.display(),
-                error = %e,
+                error = ?e.to_string(),
                 "policy load failed; using deny-all policy (fail closed)"
             );
             // from_toml_str("") produces a valid deny-all Policy: no allow

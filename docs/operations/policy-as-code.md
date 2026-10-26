@@ -87,10 +87,19 @@ fingerprints, exactly as a Node without one.
   task (Ansible `state: absent`). A stray file still shows, because fragment file names are
   part of the fingerprint and appear as drift in section 4.
 - **Fragments are root-owned and not group/world-writable**, and so is `policy.d` itself.
-- **Always ship a `policy.toml` beside fragments; it may be empty.** With no Policy file the
-  daemon runs deny-all and ignores every fragment. A Node whose `/etc/relay-daemon/policy.d`
-  already existed when the package was installed gets no default Policy file, so its fragments
-  do nothing until config management writes a `policy.toml`.
+- **A `policy.toml` beside fragments is optional.** With no Policy file and at least one
+  fragment, the daemon composes the fragments alone, deny-by-default as always. With no Policy
+  file and no fragment it runs deny-all. A Node whose `/etc/relay-daemon/policy.d` already
+  existed when the package was installed gets no default Policy file, so its fragments are its
+  whole Policy. A missing Policy file and an empty one decide the same, but fingerprint
+  differently (section 4).
+- **Removing `policy.toml` removes its denies.** The fragments' allows keep running, and the
+  daemon only logs `no policy file; composing the Policy directory's fragments alone`. The
+  shipped default `policy.toml` holds the confidentiality deny-list (`/etc/shadow`, SSH host
+  keys, the daemon's own key and environment file), so a Node that keeps it and adds allows
+  in `policy.d` must not lose it: keep load-bearing denies in a fragment too (for example
+  `policy.d/00-deny.toml`). A mistyped `RELAY_POLICY_PATH` filename has the same effect. To
+  lock a Node down to deny-all, remove or empty its fragments as well as the Policy file.
 - **A bad fragment stops the daemon; an unreadable one makes the Policy deny-all.** A fragment
   that is a symlink, is not a regular file, or is group/world-writable or owned by neither
   root nor the daemon's user, and a `policy.d` that is insecure the same way, **refuse
@@ -144,10 +153,14 @@ $ relay-daemon policy check policies/web-prod.toml --strict
   prefixed with its file name in quotes, escaped as the daemon logs it. A key the daemon
   does not read (a mistyped `[[denny]]`, `alow = [...]`, `nmae = ...`), in the Policy file or a
   fragment, is a parse error, reported with the others: the daemon runs the whole Policy
-  deny-all rather than load it. A symlink or a non-regular entry in `<dir>` is an error, because
-  the daemon refuses to start on one. Mode and owner are not checked: the subcommand runs on a
-  non-root checkout. A `<dir>` that does not exist is an error here, although the daemon treats a
-  missing Policy directory as having no fragments: a mistyped path should not pass a gate.
+  deny-all rather than load it. A `<dir>` that is a symlink or not a directory, and a symlink or
+  a non-regular entry in it, is an error, because the daemon refuses to start on one. Mode and
+  owner are not checked: the subcommand runs on a non-root checkout. A `<dir>` that does not
+  exist is an error here, although the daemon treats a missing Policy directory as having no
+  fragments: a mistyped path should not pass a gate. A Policy file that does not exist is
+  checked as the daemon loads it: beside a fragment in `<dir>` the fragments are checked alone,
+  with a `warning:` that `--strict` makes a failure, so a mistyped path fails a strict gate;
+  with no fragment it is an error, because the daemon runs deny-all.
 - **Prints the fingerprint.** On success, `policy check` prints `fingerprint: <hex>` to stdout,
   the Policy fingerprint a Node holding exactly these files will report (section 4). Without
   `--policy-dir` it covers the Policy file alone, and does not match a Node that has fragments.
@@ -302,7 +315,9 @@ $ sha256sum policies/web-prod.toml
 ```
 
 On a Node **with fragments** it covers the Policy file and every fragment, with each fragment's
-file name; the Policy file's own name and the directory paths do not count. Compare it against
+file name; the Policy file's own name and the directory paths do not count. On a Node with
+fragments and **no Policy file** it covers the fragments alone, so it differs from the same
+fragments beside an empty `policy.toml`. Compare it against
 the `fingerprint:` line that `policy check` prints over the same files that config management
 pushes:
 
@@ -325,7 +340,8 @@ reported.
   Investigate.
 - **`e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`** (the empty-input
   SHA-256) → the daemon is running the deny-all fallback: its Policy file was missing or
-  unreadable at startup, or a fragment could not be read or parsed, or there is no Policy file.
+  unreadable at startup, or a fragment could not be read or parsed, or there is neither a
+  Policy file nor a fragment.
 - **A Node stopped reporting after a fragment push** → a fragment or its Policy directory was
   refused. `systemctl status relay-daemon` shows the unit failed, and the journal line
   `policy fragment or Policy directory refused` names the reason and the fragment. Step 2 of

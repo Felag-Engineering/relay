@@ -156,6 +156,8 @@ pub struct Policy {
     raw_allow: Vec<CompiledRe>,
     raw_deny: Vec<CompiledRe>,
     fingerprint: String,
+    /// Composed from fragments alone, with no Policy file (DI-20).
+    without_policy_file: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -443,46 +445,53 @@ pub struct Fragment {
 /// - An empty / deny-all Policy produces the SHA-256 of the empty string:
 ///   `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`.
 ///
-/// **No fragment** (the Policy directory is absent or empty): the SHA-256 of
-/// the Policy file's raw bytes alone, so a Node without fragments reports what
-/// `sha256sum` of its Policy file prints.
+/// **A Policy file and no fragment** (the Policy directory is absent or
+/// empty): the SHA-256 of the Policy file's raw bytes alone, so a Node without
+/// fragments reports what `sha256sum` of its Policy file prints.
 ///
-/// **One or more fragments:** the SHA-256 of a stream that opens with
-/// [`FINGERPRINT_DOMAIN`] and then holds one record per source, the Policy file
-/// first, then each fragment in order:
-/// `<label> NUL <byte length in decimal ASCII> LF <raw bytes>`. The label is
-/// `policy.toml` for the Policy file and `policy.d/<file name>` for a
-/// fragment. Records are length-prefixed and a file name cannot hold NUL, so
-/// the encoding is injective; it cannot collide with the no-fragment form
-/// because a parsed Policy is valid TOML, which cannot hold NUL, and the stream
-/// always does. Fragment file names are part of the fingerprint, so a stray or
-/// renamed file shows as drift; the Policy file's name and the directory paths
-/// are not.
+/// **Otherwise** (one or more fragments, or no Policy file): the SHA-256 of a
+/// stream that opens with [`FINGERPRINT_DOMAIN`] and then holds one record per
+/// source present, the Policy file first when there is one, then each fragment
+/// in order: `<label> NUL <byte length in decimal ASCII> LF <raw bytes>`. The
+/// label is `policy.toml` for the Policy file and `policy.d/<file name>` for a
+/// fragment. With no Policy file its record is absent, not empty, so a missing
+/// Policy file and an empty one fingerprint differently. Records are
+/// length-prefixed and a file name cannot hold NUL, so the encoding is
+/// injective. It cannot collide with the raw-bytes form, because a parsed
+/// Policy is valid TOML: a stream with a record holds a NUL, which TOML cannot,
+/// and one with none is the domain tag alone, which is not TOML either. Fragment
+/// file names are part of the fingerprint, so a stray or renamed file shows as
+/// drift; the Policy file's name and the directory paths are not.
 ///
 /// The TOML serializer is excluded from the daemon binary for musl size
 /// (ADR-0007); re-adding it plus a stable field-ordering round-trip for
 /// canonicalization adds weight on a security-adjacent path for no gain.
-fn policy_fingerprint(policy_file: &str, fragments: &[&Fragment]) -> String {
-    let digest = if fragments.is_empty() {
-        ring::digest::digest(&ring::digest::SHA256, policy_file.as_bytes())
-    } else {
-        let mut ctx = ring::digest::Context::new(&ring::digest::SHA256);
-        ctx.update(FINGERPRINT_DOMAIN);
-        let mut record = |label: &str, bytes: &[u8]| {
-            ctx.update(label.as_bytes());
-            ctx.update(b"\0");
-            ctx.update(bytes.len().to_string().as_bytes());
-            ctx.update(b"\n");
-            ctx.update(bytes);
-        };
-        record(POLICY_FILE_LABEL, policy_file.as_bytes());
-        for fragment in fragments {
-            record(
-                &format!("{POLICY_DIR_NAME}/{}", fragment.name),
-                fragment.text.as_bytes(),
-            );
+fn policy_fingerprint(policy_file: Option<&str>, fragments: &[&Fragment]) -> String {
+    let digest = match policy_file {
+        Some(policy_file) if fragments.is_empty() => {
+            ring::digest::digest(&ring::digest::SHA256, policy_file.as_bytes())
         }
-        ctx.finish()
+        _ => {
+            let mut ctx = ring::digest::Context::new(&ring::digest::SHA256);
+            ctx.update(FINGERPRINT_DOMAIN);
+            let mut record = |label: &str, bytes: &[u8]| {
+                ctx.update(label.as_bytes());
+                ctx.update(b"\0");
+                ctx.update(bytes.len().to_string().as_bytes());
+                ctx.update(b"\n");
+                ctx.update(bytes);
+            };
+            if let Some(policy_file) = policy_file {
+                record(POLICY_FILE_LABEL, policy_file.as_bytes());
+            }
+            for fragment in fragments {
+                record(
+                    &format!("{POLICY_DIR_NAME}/{}", fragment.name),
+                    fragment.text.as_bytes(),
+                );
+            }
+            ctx.finish()
+        }
     };
     let mut s = String::with_capacity(64);
     for b in digest.as_ref() {
@@ -516,9 +525,30 @@ pub fn from_toml_str(s: &str) -> Result<Policy, PolicyError> {
 /// A fragment error is [`PolicyError::FragmentInvalid`] and names the
 /// fragment; an error in the Policy file keeps its own variants.
 pub fn compose(policy_file: &str, fragments: &[Fragment]) -> Result<Policy, PolicyError> {
+    compose_sources(Some(policy_file), fragments)
+}
+
+/// [`compose`] for a Node with no Policy file: the fragments alone, composed
+/// and fingerprinted by the same rules (DI-20, DI-36). Deny-by-default holds
+/// as for any Policy: with no fragment the result has no rule and denies
+/// everything. The loader never composes an empty set this way; a missing
+/// Policy file with no fragment is a load error, so the daemon runs deny-all.
+pub fn compose_fragments(fragments: &[Fragment]) -> Result<Policy, PolicyError> {
+    compose_sources(None, fragments)
+}
+
+/// [`compose`] and [`compose_fragments`]: the Policy file when there is one,
+/// then the fragments by name.
+fn compose_sources(
+    policy_file: Option<&str>,
+    fragments: &[Fragment],
+) -> Result<Policy, PolicyError> {
     let ordered = in_composition_order(fragments);
 
-    let mut parts = vec![compile_source(toml::from_str(policy_file)?, policy_file)?];
+    let mut parts = Vec::with_capacity(ordered.len() + 1);
+    if let Some(policy_file) = policy_file {
+        parts.push(compile_source(toml::from_str(policy_file)?, policy_file)?);
+    }
     for fragment in &ordered {
         let invalid = |source: PolicyError| PolicyError::FragmentInvalid {
             name: fragment.name.clone(),
@@ -527,7 +557,11 @@ pub fn compose(policy_file: &str, fragments: &[Fragment]) -> Result<Policy, Poli
         let parsed: PolicyFile = toml::from_str(&fragment.text).map_err(|e| invalid(e.into()))?;
         parts.push(compile_source(parsed, &fragment.text).map_err(invalid)?);
     }
-    Ok(assemble(parts, policy_fingerprint(policy_file, &ordered)))
+    Ok(assemble(
+        parts,
+        policy_file.is_some(),
+        policy_fingerprint(policy_file, &ordered),
+    ))
 }
 
 /// References to `fragments` in composition order: file name, byte order.
@@ -623,22 +657,23 @@ fn compile_source(file: PolicyFile, source: &str) -> Result<Parts, PolicyError> 
     })
 }
 
-/// Concatenates `parts` (the Policy file's first) into one [`Policy`].
+/// Concatenates `parts` (the Policy file's first, when `has_policy_file`) into
+/// one [`Policy`].
 ///
 /// Each rule's [`RuleRef::index`] becomes its position in the composed section,
-/// which is what the `PolicySnapshot` lists use; a rule from any part but the
-/// first (a fragment) loses its line, because a line number without a file
-/// name would mislead.
-fn assemble(parts: Vec<Parts>, fingerprint: String) -> Policy {
+/// which is what the `PolicySnapshot` lists use; a rule from a fragment loses
+/// its line, because a line number without a file name would mislead.
+fn assemble(parts: Vec<Parts>, has_policy_file: bool, fingerprint: String) -> Policy {
     let mut policy = Policy {
         operations: Vec::new(),
         denies: Vec::new(),
         raw_allow: Vec::new(),
         raw_deny: Vec::new(),
         fingerprint,
+        without_policy_file: !has_policy_file,
     };
     for (source, part) in parts.into_iter().enumerate() {
-        let from_fragment = source > 0;
+        let from_fragment = source > 0 || !has_policy_file;
         let place = |at: &mut RuleRef, index: usize| {
             at.index = index;
             if from_fragment {
@@ -826,15 +861,22 @@ pub const POLICY_DIR_NAME: &str = "policy.d";
 /// symlink), not group- or world-writable and owned by root or the daemon's
 /// euid, because whoever can write it can delete a root-owned deny fragment.
 ///
+/// **A missing Policy file** (nothing at `path`, not even a dangling symlink)
+/// beside one or more fragments composes the fragments alone, through
+/// [`compose_fragments`] (DI-20). A missing Policy file with no fragment is
+/// the `NotFound` [`PolicyError::Io`], so the caller runs deny-all; beside a
+/// directory that could not be read it is that directory's error.
+///
 /// **Two kinds of failure.** A fragment that is a symlink, not a regular file,
 /// group- or world-writable or owned by a third party, and an insecure
 /// directory, return an error whose [`PolicyError::refuses_start`] is `true`:
-/// the daemon exits non-zero. A fragment that cannot be read or parsed, a
-/// directory that cannot be listed, and every Policy-file failure, return an
-/// error for which it is `false`: the caller runs deny-all. A refusal anywhere
-/// wins over any deny-all error — the whole directory is scanned first — so a
-/// loud failure is never masked by a quiet one. There is no partial load and no
-/// last-known-good.
+/// the daemon exits non-zero, whether or not the Policy file exists. A
+/// fragment that cannot be read or parsed, a directory that cannot be listed,
+/// and every other Policy-file failure (unreadable, unparsable, insecure),
+/// return an error for which it is `false`: the caller runs deny-all. A
+/// refusal anywhere wins over any deny-all error — the whole directory is
+/// scanned first — so a loud failure is never masked by a quiet one. There is
+/// no partial load and no last-known-good.
 ///
 /// **Residual (documented, not closed here):** parent-directory writability.
 /// `O_NOFOLLOW` only guards the final path component — a rename-swap of the
@@ -851,11 +893,28 @@ pub fn load_policy(path: &Path, dir: &Path) -> Result<Policy, PolicyError> {
         Err(e) if e.refuses_start() => return Err(e),
         Err(e) => (Vec::new(), Some(e)),
     };
-    let text = read_policy_file(path)?;
+    let text = match read_policy_file(path) {
+        Ok(text) => Some(text),
+        // With no Policy file the directory decides: its own deny-all error
+        // names what failed, and with no fragment the missing file does.
+        Err(PolicyError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+            if let Some(directory_error) = directory_error {
+                return Err(directory_error);
+            }
+            if fragments.is_empty() {
+                return Err(PolicyError::Io(e));
+            }
+            None
+        }
+        Err(e) => return Err(e),
+    };
     if let Some(e) = directory_error {
         return Err(e);
     }
-    compose(&text, &fragments)
+    match text {
+        Some(text) => compose(&text, &fragments),
+        None => compose_fragments(&fragments),
+    }
 }
 
 /// Opens, validates and reads the Policy file at `path`.
@@ -1207,14 +1266,42 @@ pub fn lint_composed(
     template_names: &[String],
     vocabulary_complete: bool,
 ) -> LintReport {
+    lint_sources(
+        Some(policy_file),
+        fragments,
+        template_names,
+        vocabulary_complete,
+    )
+}
+
+/// [`lint_composed`] for a Node with no Policy file: the fragments alone, as
+/// [`compose_fragments`] composes them.
+pub fn lint_fragments(
+    fragments: &[Fragment],
+    template_names: &[String],
+    vocabulary_complete: bool,
+) -> LintReport {
+    lint_sources(None, fragments, template_names, vocabulary_complete)
+}
+
+/// [`lint_composed`] and [`lint_fragments`]: the Policy file when there is
+/// one, then the fragments by name.
+fn lint_sources(
+    policy_file: Option<&str>,
+    fragments: &[Fragment],
+    template_names: &[String],
+    vocabulary_complete: bool,
+) -> LintReport {
     let mut sources = Vec::new();
     let mut parse_errors = Vec::new();
-    match toml::from_str::<PolicyFile>(policy_file) {
-        Ok(file) => sources.push(LintSource {
-            fragment: None,
-            file,
-        }),
-        Err(e) => parse_errors.push(e.to_string()),
+    if let Some(policy_file) = policy_file {
+        match toml::from_str::<PolicyFile>(policy_file) {
+            Ok(file) => sources.push(LintSource {
+                fragment: None,
+                file,
+            }),
+            Err(e) => parse_errors.push(e.to_string()),
+        }
     }
     for fragment in in_composition_order(fragments) {
         match toml::from_str::<PolicyFile>(&fragment.text) {
@@ -1663,6 +1750,13 @@ impl Policy {
     /// to log; the Policy body is not (ADR-0002).
     pub fn fingerprint(&self) -> &str {
         &self.fingerprint
+    }
+
+    /// Whether this Policy was composed from fragments alone because there was
+    /// no Policy file (DI-20). Every deny that file would hold is absent, so
+    /// the daemon says so when it starts.
+    pub fn composed_without_policy_file(&self) -> bool {
+        self.without_policy_file
     }
 
     /// Whether Raw Exec is enabled at all on this Node: `true` iff the
