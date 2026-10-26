@@ -196,6 +196,14 @@ pub fn run(argv: &[String]) -> i32 {
         }
     };
 
+    if let Some(refusal) = refused_policy_file(&parsed.file) {
+        eprintln!(
+            "error: {:?}: {refusal}; the daemon runs deny-all on it",
+            parsed.file
+        );
+        return EXIT_INVALID;
+    }
+
     // With --policy-dir a missing Policy file is not yet an error: the daemon
     // composes the fragments alone (DI-20). Whether the check then fails
     // depends on what the directory read below finds, as it does for the daemon.
@@ -401,6 +409,11 @@ fn explain(argv: &[String]) -> Explanation {
         Ok(p) => p,
         Err(e) => return invalid(e),
     };
+    if let Some(refusal) = refused_policy_file(&file) {
+        return invalid(format!(
+            "{file:?}: {refusal}; the daemon runs deny-all on it"
+        ));
+    }
     let contents = match std::fs::read_to_string(&file) {
         Ok(c) => c,
         Err(e) => return invalid(format!("failed to read {file:?}: {e}")),
@@ -507,6 +520,22 @@ fn load_vocabulary_templates(dir: Option<&str>) -> templates::TemplateSet {
         .unwrap_or_else(config::template_dir_from_env);
     templates::TemplateSet::load(&template_dir)
         .unwrap_or_else(|_| templates::TemplateSet::unloadable())
+}
+
+/// The loader's refusal of the Policy file at `file`, if it refuses one: the
+/// daemon opens it without following a final symlink and loads only a regular
+/// file, running deny-all otherwise, so a check that read through either would
+/// pass a Policy the Node never runs. A regular or missing file is `None`; the
+/// read reports everything else.
+fn refused_policy_file(file: &str) -> Option<policy::PolicyError> {
+    let meta = std::fs::symlink_metadata(file).ok()?;
+    if meta.file_type().is_symlink() {
+        Some(policy::PolicyError::SymlinkPath)
+    } else if !meta.is_file() {
+        Some(policy::PolicyError::NotRegularFile)
+    } else {
+        None
+    }
 }
 
 /// Whether nothing at all is at `file`, which is what the loader means by a
