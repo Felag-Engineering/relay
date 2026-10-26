@@ -23,16 +23,16 @@
 #               scanners, nor the CI machinery. Gates the PR-time advisory scans (govulncheck, cargo-deny advisories): an advisory
 #               published against an untouched dependency is the nightly scan's to report,
 #               not a reason to turn every open PR red at once.
-#   packaging=false nothing a package carries or the install matrix runs changed: not the
-#               package payload (the shipped unit, maintainer scripts and manifests under
-#               daemon/packaging/ and relay/packaging/, the default Policy, the posture doc
-#               and LICENSE), the pinned nfpm, the build and version scripts, the daemon's
-#               manifests and lockfile (a crate bump moves the syscall footprint the
-#               packaged unit's SystemCallFilter must allow), the daemon's join code and
-#               the relay init command (the install matrix's enrollment steps), nor the
-#               matrix's own scripts, images and workflow, nor release.yml, the Makefile or
-#               the CI machinery. Other daemon source is not an input: a push to main
-#               always runs the matrix, so such a change is caught there.
+#   packaging=false the change cannot reach the packages or the install matrix, which runs
+#               on a pull request only when it can. Its inputs: all of daemon/ and relay/
+#               (both binaries are package payload, and the packaged unit files, maintainer
+#               scripts and nfpm manifests live under their packaging/ directories), proto/
+#               (it compiles into both), the rest of the payload (the posture doc and
+#               LICENSE), the pinned nfpm, the package build and version scripts, the
+#               matrix's own scripts, images and workflow, release.yml, the Makefile (its
+#               package-building targets) and the CI machinery. A docs-only or tooling-only
+#               change (the lint and scan tools, the other scripts, the dev-fleet images,
+#               deploy/) skips it, and a push to main always runs it.
 #
 # Fails OPEN: a push (main is the backstop), a missing diff, or any error runs every job.
 # A skipped gate is only safe when the change provably cannot reach it.
@@ -62,8 +62,9 @@ else
   # A pull_request checkout is the merge commit: its first parent is the base it
   # merges into, so this is exactly what the PR changes. Needs fetch-depth >= 2.
   # --no-renames: a rename must classify BOTH paths — moving a file the build reads
-  # into docs/ would otherwise look like a docs-only change.
-  files=$(git diff --no-renames --name-only HEAD^1 HEAD) \
+  # into docs/ would otherwise look like a docs-only change. core.quotePath=false prints a
+  # non-ASCII name as itself; a name git still quotes fails open below.
+  files=$(git -c core.quotePath=false diff --no-renames --name-only HEAD^1 HEAD) \
     || emit true true true true "cannot diff the merge commit against its base; running every job"
 fi
 
@@ -73,6 +74,11 @@ deps=false
 packaging=false
 while IFS= read -r f; do
   [ -n "$f" ] || continue
+  # git quotes a name holding a control character, a quote or a backslash, and a quoted
+  # name matches none of the patterns below: it would read as a skippable change.
+  case "$f" in
+    \"*) emit true true true true "a changed path git prints quoted ($f); running every job" ;;
+  esac
   case "$f" in
     docs/api/* | docs/design/console/* | docs/brand/* | docs/operations/demo-fleet.md \
       | docs/specs/accounts-and-access.md)    code=true ;;
@@ -94,11 +100,9 @@ while IFS= read -r f; do
       deps=true ;;
   esac
   case "$f" in
-    daemon/packaging/* | relay/packaging/* | daemon/policy.default.toml \
+    daemon/* | relay/* | proto/* \
       | docs/operations/daemon-privilege-posture.md | LICENSE | tools/nfpm/* \
       | scripts/build-packages.sh | scripts/build-version.sh \
-      | daemon/Cargo.toml | daemon/crates/*/Cargo.toml | daemon/Cargo.lock \
-      | daemon/src/join* | relay/cmd/relay/init* \
       | scripts/install-matrix-*.sh | docker/install-matrix/* \
       | .github/workflows/install-matrix.yml | .github/workflows/release.yml \
       | Makefile | .github/workflows/ci.yml | .github/actions/* | scripts/ci-changed-paths.sh)

@@ -554,9 +554,11 @@ jobs:
 
   # ---- install-matrix: the packages installed, upgraded and removed on every supported
   # platform (DI-33), and the enroll-connect-execute syscall trace of the packaged unit.
-  # Runs for a change in the `packaging=` path class (scripts/ci-changed-paths.sh) and on every
-  # push to main; a red row blocks the merge through ci-ok. Cancellation of a superseded run
-  # comes from this file's workflow-level concurrency group.
+  # Runs for a change in the `packaging=` path class (scripts/ci-changed-paths.sh: daemon,
+  # Relay and proto source, the packaging and the matrix itself, never a docs-only or
+  # tooling-only change) and on every push to main; a red row blocks the merge through
+  # ci-ok. Cancellation of a superseded run comes from this file's workflow-level
+  # concurrency group.
   # Cost shape: a job of its own, because it needs per-platform systemd containers on both
   # x86_64 and aarch64 runners, which no existing job has. ----
   install-matrix:

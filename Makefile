@@ -370,9 +370,9 @@ test-codex-review:
 
 # Proves scripts/ci-changed-paths.sh runs the code jobs for every docs/ path a Go or Rust test
 # reads, skips them only for documentation nothing reads, trips the proto gates on every input
-# they depend on, trips packaging on every input of the packages and the install matrix, and
-# fails open off a pull request or without a parent commit. Hermetic: bash and git against
-# throwaway fixture repos under a mktemp WORKDIR.
+# they depend on, trips packaging on every input of the packages and the install matrix and
+# never on a docs-only or tooling-only change, and fails open off a pull request or without a
+# parent commit. Hermetic: bash and git against throwaway fixture repos under a mktemp WORKDIR.
 test-ci-changed-paths:
 	bash scripts/ci-changed-paths-test.sh
 

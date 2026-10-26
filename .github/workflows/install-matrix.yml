@@ -11,7 +11,8 @@
 # VM (DI-3's check of the packaged unit); a human signs off its first green report.
 #
 # How it is called. ci.yml calls this workflow for a change in the `packaging=` path class
-# (scripts/ci-changed-paths.sh) and on every push to main. Concurrency comes from the caller,
+# (scripts/ci-changed-paths.sh: daemon, Relay and proto source, the packaging and the matrix
+# itself) and on every push to main. Concurrency comes from the caller,
 # whose workflow-level group cancels in-progress runs, so this file declares none. It uses no
 # build cache, like release.yml, so the release can call it unchanged.
 #
