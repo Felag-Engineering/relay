@@ -123,7 +123,7 @@ pub(crate) struct CompiledDeny {
     pub(crate) at: RuleRef,
 }
 
-/// Which section of the Policy file a rule lives in.
+/// Which section of the Policy a rule lives in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RuleSection {
     /// An `[[operation]]` allow block.
@@ -136,8 +136,11 @@ pub enum RuleSection {
     RawExecDeny,
 }
 
-/// Where a rule sits in the Policy file: its section, its index within that
-/// section, and its 1-based source line where the loader knows it.
+/// Where a rule sits in the Policy: its section, its index within that section
+/// of the composed Policy (the Policy file's rules first, then each fragment's
+/// in name order), and its 1-based source line where the loader knows it. A
+/// rule from a Policy fragment carries no line, because a line number without
+/// a file name would mislead.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RuleRef {
     pub section: RuleSection,

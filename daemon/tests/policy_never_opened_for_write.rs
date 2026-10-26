@@ -20,12 +20,14 @@
 //!   the dev-only
 //!   `relay-test-support` fixtures, and none of those is a module that names
 //!   the Policy path — subject to the limits below;
-//! * the Policy path is named only by three non-writing modules
-//!   (`src/config.rs`, `src/main.rs`, `src/selfref.rs`);
+//! * the Policy path, and the Policy directory beside it, are named only by
+//!   three non-writing modules (`src/config.rs`, `src/main.rs`,
+//!   `src/selfref.rs`);
 //! * the loader's open call names no write flag: the Policy loader
 //!   (relay-policy's `lib.rs`) and the Template Operation loader
 //!   (`crates/relay-ops/src/templates.rs`) open their files only through the shared hardened
-//!   open (relay-policy's `hardened_open.rs`),
+//!   open (relay-policy's `hardened_open.rs`); the Policy loader also reads the
+//!   Policy directory, opening each fragment through that same open,
 //!   whose single `OpenOptions` chain is `.read(true)` plus
 //!   `O_NOFOLLOW | O_NONBLOCK` and nothing else, and none of the three modules
 //!   has a write site at all.
@@ -1026,8 +1028,9 @@ fn production_write_sites_are_exactly_the_allowlist() {
 /// (ii) That set must not intersect the write-site allowlist: a writer must
 /// never also be the module that names the Policy path.
 ///
-/// (iii) `main.rs`'s production text must still hand the path to the
-/// read-only loader — `load_policy(&config.policy_path)` — at least once.
+/// (iii) `main.rs`'s production text must still hand the path, and the Policy
+/// directory beside it, to the read-only loader —
+/// `load_policy(&config.policy_path, &config.policy_dir)` — at least once.
 /// (Reduced from checking every occurrence's shape, per plan review: that
 /// broke on harmless refactors like logging the path differently, and did
 /// not reliably catch the real risk anyway — `main.rs` passing
@@ -1076,8 +1079,9 @@ fn policy_path_reaches_only_the_read_only_loader() {
     }
 
     static LOAD_POLICY_CALL: OnceLock<Regex> = OnceLock::new();
-    let call_re = LOAD_POLICY_CALL
-        .get_or_init(|| Regex::new(r"load_policy\(\s*&config\.policy_path\s*\)").unwrap());
+    let call_re = LOAD_POLICY_CALL.get_or_init(|| {
+        Regex::new(r"load_policy\(\s*&config\.policy_path\s*,\s*&config\.policy_dir\s*\)").unwrap()
+    });
     let main_view = views
         .iter()
         .find(|v| v.rel == "src/main.rs")
@@ -1085,8 +1089,52 @@ fn policy_path_reaches_only_the_read_only_loader() {
     assert!(
         call_re.is_match(&main_view.prod_scrubbed),
         "main.rs must still hand the Policy path to the read-only loader via \
-         load_policy(&config.policy_path)"
+         load_policy(&config.policy_path, &config.policy_dir)"
     );
+}
+
+/// The Policy directory is named only where the Policy path is: the files whose
+/// production text carries the identifier `policy_dir` must be exactly
+/// `{src/config.rs, src/main.rs, src/selfref.rs}` (`policy_check.rs` names its
+/// own `--policy-dir` value `fragment_dir` for this reason: it never reads
+/// `config.policy_dir`, only the directory an operator names on the command
+/// line), and that set must
+/// not intersect the write-site allowlist — a writer must never also be a module
+/// that holds the directory fragments are loaded from.
+#[test]
+fn policy_dir_is_named_only_by_the_non_writing_modules() {
+    static POLICY_DIR_IDENT: OnceLock<Regex> = OnceLock::new();
+    let ident_re = POLICY_DIR_IDENT.get_or_init(|| Regex::new(r"\bpolicy_dir\b").unwrap());
+
+    let write_allowlist = [
+        "crates/relay-transport/src/identity.rs",
+        "src/dedup.rs",
+        "crates/relay-test-support/src/lib.rs",
+    ];
+    let expected = ["src/config.rs", "src/main.rs", "src/selfref.rs"];
+
+    let mut naming: Vec<String> = daemon_src_files()
+        .iter()
+        .filter(|view| ident_re.is_match(&view.prod_scrubbed))
+        .map(|view| view.rel.clone())
+        .collect();
+    naming.sort();
+
+    let expected_sorted: Vec<String> = expected.iter().map(|s| s.to_string()).collect();
+    assert_eq!(
+        naming, expected_sorted,
+        "the files whose production text names the Policy directory must be exactly \
+         {{src/config.rs, src/main.rs, src/selfref.rs}} — either a new module now reaches the \
+         Policy directory (review against invariant 2), or one of the three stopped naming it \
+         (stale check)"
+    );
+    for f in &naming {
+        assert!(
+            !write_allowlist.contains(&f.as_str()),
+            "{f} both names the Policy directory and appears in the write-site allowlist — a \
+             writer must never also be the module that holds the directory fragments load from"
+        );
+    }
 }
 
 /// The Policy file and every Template Operation file are opened only through

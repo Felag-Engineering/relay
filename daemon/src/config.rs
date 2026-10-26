@@ -228,9 +228,15 @@ pub struct Config {
     /// `RELAY_POLICY_PATH` — path to the Node's Policy TOML file.
     ///
     /// Defaults to `/etc/relay-daemon/policy.toml` when the env var is absent.
-    /// The daemon loads the Policy at startup via `policy::load_policy`. Absent or
-    /// unreadable file → warn and fall back to deny-all (fail-closed for dispatch).
+    /// The daemon loads the Policy at startup via `policy::load_policy`, which
+    /// also reads the Policy directory ([`Config::policy_dir`]). Absent or
+    /// unreadable file → warn and fall back to deny-all (fail-closed for
+    /// dispatch). A refused fragment or Policy directory stops the daemon from
+    /// starting.
     pub policy_path: PathBuf,
+    /// The Policy directory: `policy.d` beside the Policy file (DI-36). It has
+    /// no setting of its own, so it follows `RELAY_POLICY_PATH`.
+    pub policy_dir: PathBuf,
     /// `RELAY_TEMPLATE_DIR` — the root of this Node's Template Operation files
     /// (ADR-0021).
     ///
@@ -278,6 +284,7 @@ impl Config {
         let policy_path = std::env::var("RELAY_POLICY_PATH")
             .map(PathBuf::from)
             .unwrap_or_else(|_| PathBuf::from("/etc/relay-daemon/policy.toml"));
+        let policy_dir = policy_dir_beside(&policy_path);
 
         Ok(Config {
             relay_addr,
@@ -285,11 +292,23 @@ impl Config {
             tls_server_name,
             state_dir,
             policy_path,
+            policy_dir,
             template_dir: template_dir_from_env(),
             node_labels,
             facts,
         })
     }
+}
+
+/// The Policy directory for the Policy file at `policy_path`: `policy.d` in the
+/// same directory (DI-36). Standalone for the same reason as
+/// [`template_dir_from_env`]: the self-reference lint resolves it without
+/// building a full [`Config`].
+pub fn policy_dir_beside(policy_path: &Path) -> PathBuf {
+    policy_path
+        .parent()
+        .unwrap_or_else(|| Path::new(""))
+        .join(crate::policy::POLICY_DIR_NAME)
 }
 
 /// Reads `RELAY_TEMPLATE_DIR`, defaulting to `/etc/relay-daemon/templates.d`.
@@ -478,6 +497,23 @@ mod tests {
     }
 
     #[test]
+    fn policy_dir_is_beside_the_policy_file() {
+        assert_eq!(
+            policy_dir_beside(Path::new("/etc/relay-daemon/policy.toml")),
+            PathBuf::from("/etc/relay-daemon/policy.d")
+        );
+        assert_eq!(
+            policy_dir_beside(Path::new("/custom/policy.toml")),
+            PathBuf::from("/custom/policy.d")
+        );
+        assert_eq!(
+            policy_dir_beside(Path::new("policy.toml")),
+            PathBuf::from("policy.d"),
+            "a bare relative name sits in the working directory"
+        );
+    }
+
+    #[test]
     fn config_policy_path_override() {
         let _lock = ENV_LOCK.lock().unwrap();
         let _dir = isolated_state_dir("cfg-policy");
@@ -486,6 +522,7 @@ mod tests {
 
         let cfg = Config::from_env().expect("from_env");
         assert_eq!(cfg.policy_path, PathBuf::from("/custom/policy.toml"));
+        assert_eq!(cfg.policy_dir, PathBuf::from("/custom/policy.d"));
 
         std::env::remove_var("RELAY_POLICY_PATH");
         std::env::remove_var("RELAY_ADDRESS");

@@ -256,3 +256,133 @@ fn unit_execstart_is_usr_bin() {
         "the shipped unit must carry exactly one ExecStart, at /usr/bin (DI-40)"
     );
 }
+
+/// The install creates the Policy directory empty and never writes into it
+/// again (DI-36): `postinst.sh` creates `$POLICY_DIR` in exactly one place, a
+/// bare `mkdir -m 0755` guarded by `! exists`, and no maintainer script or
+/// installed-file list names a path under it. A structural check, because the
+/// executable counterpart (`scripts/package-guard-test.sh`'s `-d $e/policy.d`
+/// assertion after `postinst`) is a shell test that the spec-proof scan, which
+/// reads only `relay/` and `daemon/` Rust and Go, does not see.
+// Proves DI-36.
+#[test]
+fn install_creates_the_policy_directory_empty_and_never_writes_into_it() {
+    let packaging = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("packaging");
+    let read = |path: &Path| {
+        std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
+    };
+    let postinst = read(&packaging.join("scripts/postinst.sh"));
+
+    // (d) Floor against a vacuous pass: the script does name the directory.
+    assert!(
+        postinst.contains("POLICY_DIR=\"$ETC/policy.d\""),
+        "postinst.sh must still assign POLICY_DIR; this test would otherwise prove nothing"
+    );
+
+    // (a) One creation, and it is a bare mkdir.
+    let creates = regex::Regex::new(
+        r"\b(mkdir|install|touch|cp|mv|ln|tee|place|rsync|dd)\b.*\$\{?POLICY_DIR\b",
+    )
+    .unwrap();
+    let lines: Vec<&str> = postinst.lines().collect();
+    let creating: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| !l.trim_start().starts_with('#') && creates.is_match(l))
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(
+        creating.len(),
+        1,
+        "postinst.sh must create the Policy directory in exactly one line: {creating:?}"
+    );
+    let at = creating[0];
+    assert_eq!(
+        lines[at].trim(),
+        "mkdir -m 0755 \"$POLICY_DIR\"",
+        "the Policy directory is created empty, 0755, with nothing written into it"
+    );
+
+    // (b) ... and only when it is absent.
+    let guard = lines[..at]
+        .iter()
+        .rev()
+        .map(|l| l.trim())
+        .find(|l| !l.is_empty())
+        .expect("a line precedes the mkdir");
+    assert_eq!(
+        guard, "if ! exists \"$POLICY_DIR\"; then",
+        "the mkdir must be guarded by the directory not existing"
+    );
+
+    // (c) Nothing names a path under the directory: no script, no file list.
+    let under = regex::Regex::new(r"policy\.d/|\$POLICY_DIR/|\$\{POLICY_DIR\}/").unwrap();
+    let mut checked = 0;
+    for (dir, suffix) in [("scripts", ".sh"), ("expected", ".files")] {
+        for entry in std::fs::read_dir(packaging.join(dir)).unwrap() {
+            let path = entry.unwrap().path();
+            if !path.to_string_lossy().ends_with(suffix) {
+                continue;
+            }
+            checked += 1;
+            for (n, line) in read(&path).lines().enumerate() {
+                assert!(
+                    !under.is_match(line),
+                    "{}:{} names a path under the Policy directory, which the install must \
+                     never write into: {line}",
+                    path.display(),
+                    n + 1
+                );
+            }
+        }
+    }
+    assert!(
+        checked >= 6,
+        "expected the maintainer scripts and file lists, saw {checked}"
+    );
+}
+
+/// The shipped unit keeps `/etc`, and so the Policy directory in it, read-only
+/// (the unit's sandbox claim covers the rest): exactly one `ProtectSystem=strict`, and no directive
+/// that re-opens a path in or above `/etc/relay-daemon` for writing.
+#[test]
+fn unit_keeps_the_policy_directory_read_only() {
+    let unit_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("packaging/relay-daemon.service");
+    let unit = std::fs::read_to_string(&unit_path)
+        .unwrap_or_else(|e| panic!("read {}: {e}", unit_path.display()));
+    let lines: Vec<&str> = unit
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.starts_with('#'))
+        .collect();
+
+    let strict = lines
+        .iter()
+        .filter(|l| **l == "ProtectSystem=strict")
+        .count();
+    assert_eq!(
+        strict, 1,
+        "the unit must carry exactly one ProtectSystem=strict"
+    );
+
+    for line in lines {
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        if !matches!(
+            key,
+            "ReadWritePaths" | "ReadWriteDirectories" | "BindPaths" | "TemporaryFileSystem"
+        ) {
+            continue;
+        }
+        for path in value.split_whitespace() {
+            let path = path.trim_start_matches(['-', '+', '!']);
+            let path = path.split(':').next().unwrap_or(path);
+            assert!(
+                path != "/" && path != "/etc" && !path.starts_with("/etc/"),
+                "{line:?} re-opens {path} for writing, which puts the Policy directory in reach"
+            );
+        }
+    }
+}

@@ -73,8 +73,10 @@ COPY --from=build \
 #   - policy.bastion.toml — the `role=bastion` Node, demo-profile only: the
 #     narrowest of the three — exactly one `file.read` path, no
 #     `service.restart`, and no `[raw_exec]` section at all.
-# The daemon has no Policy include mechanism, so divergence means separate
-# files rather than one.
+# The daemon composes a Policy directory (policy.d) beside the Policy file, but
+# every fixture would share /etc/relay-daemon/policy.d, which this image does
+# not create, so divergence between roles still means separate Policy files
+# rather than one.
 COPY --chmod=0644 docker/fixtures/policy.web.toml     /etc/relay-daemon/policy.web.toml
 COPY --chmod=0644 docker/fixtures/policy.db.toml      /etc/relay-daemon/policy.db.toml
 COPY --chmod=0644 docker/fixtures/policy.bastion.toml /etc/relay-daemon/policy.bastion.toml

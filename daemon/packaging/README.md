@@ -63,10 +63,18 @@ confidentiality deny-list; `mutate` and Raw Exec opt-in.
 digest and risk class. It is append-only, and a changed Template ships under a new name.
 
 Policy (`/etc/relay-daemon/policy.toml`) must be root-owned and not group- or world-writable;
-the daemon's fail-closed loader refuses it otherwise. Policy is delivered by the customer's
-config management, **never over the wire**: the Relay may query a Node's Policy fingerprint
-but can never modify it (ADR-0002). Changing Policy is a config-management push followed by a
-daemon restart, not an API call.
+the daemon's fail-closed loader refuses it otherwise. Beside it sits the Policy directory,
+`/etc/relay-daemon/policy.d`: every file in it is a Policy fragment, composed with the Policy
+file into one Policy with one fingerprint. The install creates the directory empty (`0755`)
+and never writes into it again; config management populates it. Fragments are root-owned and
+not group- or world-writable too. A fragment that is a symlink, is not a regular file or is
+insecure, or an insecure directory, makes the daemon refuse to start; a fragment that cannot
+be read or parsed leaves the whole Policy deny-all; so does a key the daemon does not read
+(a mistyped `[[denny]]`), in a fragment or in the Policy file. Ship a `policy.toml` beside fragments (it
+may be empty): with none, the daemon runs deny-all and ignores them. Policy is delivered by
+the customer's config management, **never over the wire**: the Relay may query a Node's Policy
+fingerprint but can never modify it (ADR-0002). Changing Policy is a config-management push
+followed by a daemon restart, not an API call.
 
 ## Enable
 

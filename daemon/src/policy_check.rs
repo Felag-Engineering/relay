@@ -9,6 +9,15 @@
 //! still applies the full permission gate when it loads the Policy on the
 //! Node.
 //!
+//! With `--policy-dir <dir>` it reads every file in `<dir>` as a Policy
+//! fragment, the same way, and lints and compiles them with `<file>` through
+//! `policy::lint_composed` and `policy::compose` — the functions the daemon's
+//! own composition uses (DI-36, DI-46) — so the verdict and the printed
+//! fingerprint are the ones the Node will have. A symlink or a non-regular
+//! entry is an error here because the daemon refuses to start on one; a
+//! fragment's mode and owner are not checked, for the reason the Policy
+//! file's are not.
+//!
 //! `--would-allow` is answered by building a [`crate::gen::PolicyQuery`] and
 //! calling the exact same [`crate::dispatch::evaluate_policy_query`] entry
 //! point the live wire path uses — ADR-0011: no second evaluator. Reusing
@@ -52,8 +61,8 @@ const EXIT_INVALID: i32 = 1;
 const EXIT_WOULD_DENY: i32 = 2;
 
 const HELP: &str = "\
-Usage: relay-daemon policy check <file> [--strict] [--templates <dir>]
-                                  [--would-allow <spec>]
+Usage: relay-daemon policy check <file> [--policy-dir <dir>] [--strict]
+                                  [--templates <dir>] [--would-allow <spec>]
 
 Parses and lints a Policy file: invalid regex, unknown Operation names, allow
 rules that are fully shadowed by a deny rule and can therefore never fire,
@@ -74,7 +83,21 @@ per-Node, so the linter cannot tell a Template Operation from a typo.
 Optionally answers a --would-allow hypothetical through the exact same
 evaluation code the live wire path uses (ADR-0011) — no second evaluator.
 
+On success it prints \"fingerprint: <hex>\" to stdout: the Policy fingerprint a
+Node holding exactly these files reports. Without --policy-dir the fingerprint
+covers <file> alone, and does not match a Node whose Policy directory holds
+fragments.
+
 Options:
+  --policy-dir <dir>     Compose every file in <dir> with <file>, as the daemon
+                         composes its Policy directory with its Policy file:
+                         one Policy, deny beating allow across all of them. File
+                         names are part of the fingerprint. Mode and owner are
+                         not checked here; a symlink or a non-regular entry is
+                         an error, because the daemon refuses to start on one.
+                         A <dir> that does not exist is an error here, although
+                         the daemon treats a missing Policy directory as having
+                         no fragments: a mistyped path should not pass a gate.
   --strict               Treat lint warnings (a shadowed allow rule, a deny
                          rule that can never fire, an unresolvable Operation
                          name, an unanchored Raw Exec allow pattern, a
@@ -90,9 +113,10 @@ Options:
 Exit codes:
   0   valid       no fatal findings (and, under --strict, no warnings);
                   if --would-allow was given, its verdict was ALLOW.
-  1   invalid     parse error, invalid regex, a bad template file, an
-                  Operation name in neither half of a supplied vocabulary,
-                  file I/O error, or (under --strict) any lint warning.
+  1   invalid     parse error, invalid regex, a bad template file or Policy
+                  fragment, an Operation name in neither half of a supplied
+                  vocabulary, file I/O error, or (under --strict) any lint
+                  warning.
   2   would-deny  the file is valid but the --would-allow verdict is DENY
                   or UNSUPPORTED (the Operation is not in the vocabulary).
 
@@ -107,6 +131,9 @@ Usage: relay-daemon policy explain <file> [--templates <dir>] <spec>
 Asks the same hypothetical as `policy check --would-allow`, through the same
 Policy code the live wire path uses (ADR-0011), and prints which pass and
 rule decided it.
+
+It reads only <file> and does not compose a Policy directory. The combined
+verdict comes from `policy check <file> --policy-dir <dir> --would-allow <spec>`.
 
 <spec> is one of:
   operation <name> [key=value ...]
@@ -168,6 +195,30 @@ pub fn run(argv: &[String]) -> i32 {
         }
     };
 
+    let fragments = match &parsed.fragment_dir {
+        Some(dir) => match read_fragment_dir(dir) {
+            Ok(fragments) => fragments,
+            Err(errors) => {
+                for error in errors {
+                    eprintln!("error: {error}");
+                }
+                return EXIT_INVALID;
+            }
+        },
+        None => Vec::new(),
+    };
+    let uncovered_policy_dir = match parsed.fragment_dir {
+        Some(_) => None,
+        None => populated_sibling_policy_dir(&parsed.file),
+    };
+    if let Some(dir) = &uncovered_policy_dir {
+        eprintln!(
+            "warning: {dir:?} is populated, but --policy-dir was not given: this result \
+             covers the Policy file alone, not the Policy the daemon will compose; pass \
+             --policy-dir {dir:?}"
+        );
+    }
+
     // Template linting: only when the caller named a template
     // root. Its findings are printed with the Policy's and share the same
     // exit-code contract; its accepted names complete the vocabulary the
@@ -183,8 +234,12 @@ pub fn run(argv: &[String]) -> i32 {
         .map(|r| r.names.clone())
         .unwrap_or_default();
 
-    let report =
-        policy::lint_with_vocabulary(&contents, &template_names, template_report.is_some());
+    let report = policy::lint_composed(
+        &contents,
+        &fragments,
+        &template_names,
+        template_report.is_some(),
+    );
     print_report(&report);
     if let Some(tr) = &template_report {
         print_findings(&tr.findings);
@@ -194,7 +249,7 @@ pub fn run(argv: &[String]) -> i32 {
     // daemon's own trust root? Answered by probing the LIVE engine, never by a
     // second matcher (ADR-0011) — so it can only run once the file compiles.
     let compiled = if report.parse_error.is_none() {
-        policy::from_toml_str(&contents).ok()
+        policy::compose(&contents, &fragments).ok()
     } else {
         None
     };
@@ -223,16 +278,22 @@ pub fn run(argv: &[String]) -> i32 {
             .iter()
             .any(|f| f.severity == policy::LintSeverity::Warning)
     });
-    if parsed.strict && (report.has_warnings() || template_warnings || !self_reference.is_empty()) {
+    if parsed.strict
+        && (report.has_warnings()
+            || template_warnings
+            || !self_reference.is_empty()
+            || uncovered_policy_dir.is_some())
+    {
         eprintln!("error: lint warnings present and --strict was given");
         return EXIT_INVALID;
     }
 
+    // The files are regex/parse-valid at this point (checked above), so compose
+    // cannot fail on anything lint didn't already catch.
+    let compiled = compiled.expect("policy::lint reported no errors; policy::compose must succeed");
+    println!("fingerprint: {}", compiled.fingerprint());
+
     if let Some(would_allow) = &parsed.would_allow {
-        // The file is regex/parse-valid at this point (checked above), so
-        // from_toml_str cannot fail on anything lint didn't already catch.
-        let compiled =
-            compiled.expect("policy::lint reported no errors; from_toml_str must succeed");
         let query = build_query(would_allow);
         let templates = load_vocabulary_templates(parsed.templates.as_deref());
         let verdict = evaluate_policy_query(&query, &compiled, &templates);
@@ -314,6 +375,14 @@ fn explain(argv: &[String]) -> Explanation {
         Ok(p) => p,
         Err(e) => return invalid(e.to_string()),
     };
+    let policy_dir_warning = populated_sibling_policy_dir(&file)
+        .map(|dir| {
+            format!(
+                "warning: {dir:?} is populated, but explain reads only the Policy file: this \
+                 verdict does not cover the fragments the daemon will compose\n"
+            )
+        })
+        .unwrap_or_default();
 
     let templates = load_vocabulary_templates(templates_dir.as_deref());
     let query = build_query(&spec);
@@ -321,7 +390,7 @@ fn explain(argv: &[String]) -> Explanation {
         QueryDecision::Unsupported => Explanation {
             code: EXIT_WOULD_DENY,
             stdout: format!("explain: UNSUPPORTED\nreason: {UNSUPPORTED_REASON}\n"),
-            stderr: String::new(),
+            stderr: policy_dir_warning,
         },
         QueryDecision::NoAction => invalid("empty policy query action".to_string()),
         QueryDecision::Decided(e) => {
@@ -343,10 +412,25 @@ fn explain(argv: &[String]) -> Explanation {
             Explanation {
                 code: if allowed { EXIT_VALID } else { EXIT_WOULD_DENY },
                 stdout,
-                stderr: String::new(),
+                stderr: policy_dir_warning,
             }
         }
     }
+}
+
+/// The `policy.d` directory beside the Policy file `file`, when it exists and
+/// holds at least one entry, for the commands that were not told to read it.
+/// `policy check` and `policy explain` then say their result covers the Policy
+/// file alone; the daemon composes every entry.
+fn populated_sibling_policy_dir(file: &str) -> Option<String> {
+    let beside = match std::path::Path::new(file).parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => std::path::Path::new("."),
+    };
+    let dir = beside.join(policy::POLICY_DIR_NAME);
+    let mut entries = std::fs::read_dir(&dir).ok()?;
+    let _first_entry = entries.next()?;
+    Some(dir.display().to_string())
 }
 
 /// Parses `<file> [--templates <dir>] <spec>`.
@@ -391,10 +475,75 @@ fn load_vocabulary_templates(dir: Option<&str>) -> templates::TemplateSet {
         .unwrap_or_else(|_| templates::TemplateSet::unloadable())
 }
 
+/// Reads every entry of the Policy directory at `dir` as a Policy fragment.
+///
+/// The offline counterpart of the daemon's loader: every entry is a fragment
+/// (no suffix filter), and an entry the daemon refuses to start on, a symlink
+/// or a non-regular file, is an error. Mode and owner are not checked (the
+/// module doc says why). Every problem is collected, so a pipeline sees them
+/// all at once. The order of the result is unspecified: composition sorts.
+fn read_fragment_dir(dir: &str) -> Result<Vec<policy::Fragment>, Vec<String>> {
+    let entries = std::fs::read_dir(dir).map_err(|e| vec![format!("{dir}: {e}")])?;
+
+    let mut fragments = Vec::new();
+    let mut errors = Vec::new();
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(e) => {
+                errors.push(format!("{dir}: {e}"));
+                continue;
+            }
+        };
+        let file_name = entry.file_name();
+        let Some(name) = file_name.to_str() else {
+            errors.push(format!(
+                "a Policy fragment's file name is not UTF-8: {file_name:?}"
+            ));
+            continue;
+        };
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(e) => {
+                errors.push(format!("{name:?}: {e}"));
+                continue;
+            }
+        };
+        if file_type.is_symlink() {
+            errors.push(format!(
+                "{name:?}: is a symlink; the daemon refuses to start on a symlinked Policy fragment"
+            ));
+        } else if !file_type.is_file() {
+            errors.push(format!(
+                "{name:?}: is not a regular file; the daemon refuses to start on one"
+            ));
+        } else {
+            match std::fs::read_to_string(entry.path()) {
+                Ok(text) => fragments.push(policy::Fragment {
+                    name: name.to_string(),
+                    text,
+                }),
+                Err(e) => errors.push(format!("{name:?}: {e}")),
+            }
+        }
+    }
+    if errors.is_empty() {
+        Ok(fragments)
+    } else {
+        Err(errors)
+    }
+}
+
 /// Prints all lint findings to stderr, `error:`/`warning:` prefixed.
+///
+/// Each source that failed to parse is its own `error:` block: the Policy
+/// file's error is printed bare, as for a lone file, and a fragment's error
+/// opens with its name.
 fn print_report(report: &policy::LintReport) {
-    if let Some(err) = &report.parse_error {
-        eprintln!("error: {err}");
+    if report.parse_error.is_some() {
+        for err in &report.parse_errors {
+            eprintln!("error: {err}");
+        }
         return;
     }
     print_findings(&report.findings);
@@ -420,6 +569,9 @@ fn print_findings(findings: &[policy::LintFinding]) {
 
 struct ParsedArgs {
     file: String,
+    /// `--policy-dir <dir>`: a directory of Policy fragments to compose with
+    /// `file`.
+    fragment_dir: Option<String>,
     strict: bool,
     /// `--templates <dir>`: the template root to lint alongside the Policy and
     /// to resolve Operation names against.
@@ -445,12 +597,20 @@ fn parse_args(args: &[String]) -> Result<ParsedArgs, String> {
         .ok_or_else(|| "missing <file> argument".to_string())?
         .clone();
 
+    let mut fragment_dir = None;
     let mut strict = false;
     let mut templates = None;
     let mut would_allow = None;
 
     while let Some(arg) = iter.next() {
         match arg.as_str() {
+            "--policy-dir" => {
+                fragment_dir = Some(
+                    iter.next()
+                        .ok_or_else(|| "--policy-dir requires a directory".to_string())?
+                        .clone(),
+                );
+            }
             "--strict" => strict = true,
             "--templates" => {
                 templates = Some(
@@ -466,6 +626,7 @@ fn parse_args(args: &[String]) -> Result<ParsedArgs, String> {
 
     Ok(ParsedArgs {
         file,
+        fragment_dir,
         strict,
         templates,
         would_allow,
@@ -1438,6 +1599,216 @@ deny = ["secret"]
             );
         }
     }
+
+    // -----------------------------------------------------------------------
+    // --policy-dir: the Policy file and its fragments, checked together
+    // -----------------------------------------------------------------------
+
+    const ALLOW_NGINX: &str = "\
+[[operation]]
+name = \"service.restart\"
+allowed_args = [[\"nginx\"]]
+";
+    const DENY_NGINX: &str = "\
+[[deny]]
+name = \"service.restart\"
+args = [[\"nginx\"]]
+";
+
+    /// A fragment directory holding `fragments`, removed on drop.
+    fn fragment_dir(fragments: &[(&str, &str)]) -> TempDir {
+        let dir = TempDir::created("policy-check-fragments");
+        for (name, text) in fragments {
+            dir.write(name, text);
+        }
+        dir
+    }
+
+    fn check_with_dir(file: &TempFile, dir: &TempDir, rest: &[&str]) -> i32 {
+        let mut full = argv(&file.path_str(), &["--policy-dir", &dir.path_str()]);
+        full.extend(rest.iter().map(|s| s.to_string()));
+        run(&full)
+    }
+
+    // Proves DI-46.
+    #[test]
+    fn check_lints_the_policy_file_and_directory_together() {
+        let file = TempFile::new("pc-together", ALLOW_NGINX);
+
+        // A valid pair.
+        let ok = fragment_dir(&[(
+            "10-sshd.toml",
+            "[[operation]]\nname = \"service.restart\"\nallowed_args = [[\"sshd\"]]\n",
+        )]);
+        assert_eq!(check_with_dir(&file, &ok, &["--strict"]), EXIT_VALID);
+
+        // A parse error in a fragment is invalid.
+        let broken = fragment_dir(&[("bad.toml", "this is = = not toml")]);
+        assert_eq!(check_with_dir(&file, &broken, &[]), EXIT_INVALID);
+
+        // An unknown Operation in a fragment is an error once the vocabulary is
+        // complete (an empty --templates root supplies none).
+        let unknown =
+            fragment_dir(&[("ops.toml", "[[operation]]\nname = \"no.such.operation\"\n")]);
+        let empty_root = TempDir::created("pc-together-templates");
+        let templates = empty_root.path_str();
+        assert_eq!(
+            check_with_dir(&file, &unknown, &["--templates", &templates]),
+            EXIT_INVALID
+        );
+
+        // A Policy-file allow shadowed by a fragment deny is a warning:
+        // valid plain, invalid under --strict.
+        let shadow = fragment_dir(&[("deny.toml", DENY_NGINX)]);
+        assert_eq!(check_with_dir(&file, &shadow, &[]), EXIT_VALID);
+        assert_eq!(check_with_dir(&file, &shadow, &["--strict"]), EXIT_INVALID);
+    }
+
+    // Proves DI-46.
+    #[test]
+    fn would_allow_answers_over_the_combined_policy() {
+        let allow_spec = [
+            "--would-allow",
+            "operation",
+            "service.restart",
+            "unit=nginx",
+        ];
+
+        // The only allow is in a fragment.
+        let empty_file = TempFile::new("pc-wa-empty", "");
+        let allowing = fragment_dir(&[("allow.toml", ALLOW_NGINX)]);
+        assert_eq!(
+            check_with_dir(&empty_file, &allowing, &allow_spec),
+            EXIT_VALID
+        );
+
+        // A fragment deny over a Policy-file allow.
+        let file = TempFile::new("pc-wa-file", ALLOW_NGINX);
+        let denying = fragment_dir(&[("deny.toml", DENY_NGINX)]);
+        assert_eq!(
+            check_with_dir(&file, &denying, &allow_spec),
+            EXIT_WOULD_DENY
+        );
+    }
+
+    // Proves DI-46.
+    #[test]
+    fn check_refuses_entries_the_daemon_refuses_to_start_on() {
+        let file = TempFile::new("pc-refuse", ALLOW_NGINX);
+
+        let symlinked = fragment_dir(&[("real.toml", ALLOW_NGINX)]);
+        std::os::unix::fs::symlink(
+            symlinked.path().join("real.toml"),
+            symlinked.path().join("link.toml"),
+        )
+        .unwrap();
+        assert_eq!(check_with_dir(&file, &symlinked, &[]), EXIT_INVALID);
+
+        let nested = fragment_dir(&[]);
+        std::fs::create_dir(nested.path().join("sub.toml")).unwrap();
+        assert_eq!(check_with_dir(&file, &nested, &[]), EXIT_INVALID);
+
+        let absent = TempDir::new("pc-refuse-absent");
+        assert_eq!(check_with_dir(&file, &absent, &[]), EXIT_INVALID);
+    }
+
+    // Proves DI-46.
+    #[test]
+    fn the_runbook_documents_the_three_step_change() {
+        let doc = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../docs/operations/policy-as-code.md"
+        ))
+        .expect("read the Policy-as-code runbook");
+
+        let heading = "### Change a Node's Policy";
+        let start = doc
+            .find(heading)
+            .expect("the runbook must have a \"Change a Node's Policy\" subsection");
+        let section = doc[start + heading.len()..]
+            .split("\n#")
+            .next()
+            .expect("split yields at least one piece");
+
+        let lines: Vec<&str> = section.lines().map(str::trim).collect();
+        let numbered: Vec<&str> = lines
+            .iter()
+            .copied()
+            .filter(|l| {
+                l.split_once(". ")
+                    .is_some_and(|(n, _)| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+            })
+            .collect();
+        assert_eq!(
+            numbered.len(),
+            3,
+            "exactly three numbered steps: {numbered:?}"
+        );
+        assert!(numbered[0].starts_with("1. ") && numbered[0].contains("fragment"));
+        assert!(numbered[1].starts_with("2. "));
+        assert!(
+            numbered[2].starts_with("3. ")
+                && numbered[2].contains("systemctl restart relay-daemon")
+        );
+
+        const COMMAND: &str = "$ relay-daemon policy check ";
+        let command_at = lines
+            .iter()
+            .position(|l| l.starts_with(COMMAND))
+            .expect("step 2 must show the policy check command line");
+        let step_at = |n: &str| lines.iter().position(|l| *l == n).unwrap();
+        assert!(
+            step_at(numbered[0]) < step_at(numbered[1])
+                && step_at(numbered[1]) < command_at
+                && command_at < step_at(numbered[2]),
+            "the steps must come in order: write, check, restart"
+        );
+
+        let args: Vec<String> = lines[command_at][COMMAND.len()..]
+            .split_whitespace()
+            .map(String::from)
+            .collect();
+        let parsed = parse_args(&args).expect("the documented command line must parse");
+        assert_eq!(parsed.file, "policies/web-prod.toml");
+        assert_eq!(parsed.fragment_dir.as_deref(), Some("policies/web-prod.d"));
+        assert!(parsed.strict);
+    }
+
+    #[test]
+    fn parse_args_accepts_policy_dir() {
+        let parsed = parse_args(&[
+            "p.toml".to_string(),
+            "--policy-dir".to_string(),
+            "p.d".to_string(),
+            "--strict".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(parsed.fragment_dir.as_deref(), Some("p.d"));
+        assert!(parsed.strict);
+        assert!(parse_args(&["p.toml".to_string()])
+            .unwrap()
+            .fragment_dir
+            .is_none());
+    }
+
+    #[test]
+    fn parse_args_policy_dir_requires_a_value() {
+        let err = parse_args(&["p.toml".to_string(), "--policy-dir".to_string()])
+            .err()
+            .expect("a flag with no value is refused");
+        assert_eq!(err, "--policy-dir requires a directory");
+    }
+
+    #[test]
+    fn help_mentions_the_fingerprint_needs_policy_dir() {
+        assert!(HELP.contains("--policy-dir <dir>"));
+        let flat = HELP.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            flat.contains("Without --policy-dir the fingerprint covers <file> alone"),
+            "HELP must say a fingerprint printed without --policy-dir covers the file alone"
+        );
+        assert!(EXPLAIN_HELP.contains("does not compose a Policy directory"));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1677,5 +2048,67 @@ allow = [\".*\"]
             assert_eq!(v.rule_section != 0, e.rule.is_some(), "{spec:?}");
             assert_eq!(v.matched_on, e.matched_on.to_string(), "{spec:?}");
         }
+    }
+
+    /// A config directory holding `policy.toml` and, when `fragments` is
+    /// `Some`, a `policy.d` with those file names in it.
+    fn config_dir(label: &str, fragments: Option<&[&str]>) -> TempDir {
+        let root = TempDir::created(label);
+        std::fs::write(root.path().join("policy.toml"), POLICY).unwrap();
+        if let Some(names) = fragments {
+            let dir = root.path().join("policy.d");
+            std::fs::create_dir(&dir).unwrap();
+            for name in names {
+                std::fs::write(dir.join(name), "").unwrap();
+            }
+        }
+        root
+    }
+
+    #[test]
+    fn a_populated_policy_directory_beside_the_file_is_found() {
+        let root = config_dir("sibling-populated", Some(&["10-a.toml"]));
+        let file = root.path().join("policy.toml");
+        let found = populated_sibling_policy_dir(&file.to_string_lossy());
+        assert_eq!(
+            found.as_deref(),
+            Some(root.path().join("policy.d").to_str().unwrap())
+        );
+    }
+
+    #[test]
+    fn an_empty_or_absent_policy_directory_beside_the_file_is_not_reported() {
+        for fragments in [None, Some(&[][..])] {
+            let root = config_dir("sibling-quiet", fragments);
+            let file = root.path().join("policy.toml");
+            assert_eq!(populated_sibling_policy_dir(&file.to_string_lossy()), None);
+        }
+    }
+
+    #[test]
+    fn explain_warns_that_it_reads_only_the_file_when_policy_d_is_populated() {
+        let root = config_dir("explain-sibling", Some(&["10-a.toml"]));
+        let file = root
+            .path()
+            .join("policy.toml")
+            .to_string_lossy()
+            .into_owned();
+        let out = explain(&s(&[&file, "operation", "service.restart", "unit=nginx"]));
+        assert_eq!(out.code, EXIT_VALID);
+        assert!(out.stderr.starts_with("warning: "), "{}", out.stderr);
+        assert!(
+            out.stderr.contains("explain reads only the Policy file"),
+            "{}",
+            out.stderr
+        );
+
+        let root = config_dir("explain-sibling-empty", Some(&[]));
+        let file = root
+            .path()
+            .join("policy.toml")
+            .to_string_lossy()
+            .into_owned();
+        let out = explain(&s(&[&file, "operation", "service.restart", "unit=nginx"]));
+        assert!(out.stderr.is_empty(), "{}", out.stderr);
     }
 }

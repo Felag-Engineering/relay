@@ -41,9 +41,10 @@ StateDirectoryMode=0700
 # --- hardening (issue-required) ---
 NoNewPrivileges=yes
 # /usr,/etc,/boot,/var read-only; StateDirectory stays writable. Read-only
-# /etc reinforces that Policy — and, since ADR-0021, the Template Operation
-# files beside it — are remotely-immutable (ADR-0002): even a compromised
-# daemon process cannot rewrite its own Policy or templates.
+# /etc reinforces that Policy — the Policy file, the Policy directory
+# (/etc/relay-daemon/policy.d) and, since ADR-0021, the Template Operation
+# files beside them — is remotely-immutable (ADR-0002): even a compromised
+# daemon process cannot rewrite its own Policy, fragments or templates.
 ProtectSystem=strict
 # read-only (not "yes") so file.read can still reach /home,/root for its
 # read-only Operation; "yes" would mask those paths and silently break reads.

@@ -43,7 +43,7 @@ The daemon is configured entirely by environment variables, read once at startup
 | `RELAY_ADDRESS` | *(the address persisted at enrollment from the join string `relay-daemon join` read)* | Optional override of the Relay's Node-plane gRPC address. `http://` is normalized to `https://`; the connection is always mTLS (invariant #6). Overrides the persisted address on every start when set. Also settable as the `--relay <addr>` CLI argument. |
 | `RELAY_SERVER_NAME` | *(unset)* | Optional: the name the daemon expects on the Relay's certificate, sent as TLS SNI and verified against its SAN, when it differs from the dialed host (a load-balanced or IP-addressed endpoint). |
 | `RELAY_STATE_DIR` | `/var/lib/relay-daemon` | Where the enrolled identity (`key.pem`, `cert.pem`, `ca_bundle.pem`, `node_id`, `relay_addr`) and the at-most-once dedup marker store (`seen-tasks/`) persist. |
-| `RELAY_POLICY_PATH` | `/etc/relay-daemon/policy.toml` | Path to this Node's Policy file (ADR-0002). See [policy-as-code.md](policy-as-code.md). |
+| `RELAY_POLICY_PATH` | `/etc/relay-daemon/policy.toml` | Path to this Node's Policy file (ADR-0002). Its Policy directory is `policy.d` beside it (default `/etc/relay-daemon/policy.d`), with no setting of its own. See [policy-as-code.md](policy-as-code.md). |
 | `RELAY_TEMPLATE_DIR` | `/etc/relay-daemon/templates.d` | Root of this Node's Template Operation files, beside `policy.toml` and under the same root-owned trust root (ADR-0021). Absent = no templates installed. The shipped read catalog installs to `templates.d/relay-read/`. See [template-packs.md](template-packs.md). |
 | `RELAY_NODE_LABELS` | *(unset)* | Comma-separated bare `key=value` pairs reported as node-space Labels (the daemon adds the `node:` prefix; it can never emit `relay:` labels — ADR-0006). Example: `env=prod,role=web`. Each key and value must match `[A-Za-z0-9._-]+` (the empty value is accepted); anything else is refused at ingress, never sanitised. A malformed pair is REFUSED at enrollment — the Node does not join — and DROPPED at reconnect — the Node stays connected without that one label. |
 | `RELAY_ENROLL_ADDRESS` | *(falls back to `RELAY_ADDRESS`, then the join string's address)* | Optional distinct endpoint for the enrollment RPC `relay-daemon join` makes. Must be `https://` — anything else is refused (fail closed). The CA pin applies to whichever endpoint is dialled. |
@@ -67,7 +67,18 @@ Fail-closed behaviors to know about (all deliberate):
   Node with no persisted address works only while `RELAY_ADDRESS` is set; nothing backfills it.
 - **Policy missing or unreadable → deny-all.** The daemon starts, connects, and denies every
   Task rather than refusing to start or running open (ADR-0002). A group- or world-writable
-  Policy file is likewise refused.
+  Policy file is likewise refused. Ship a `policy.toml` (it may be empty) beside any
+  fragments: with no Policy file the daemon runs deny-all and ignores every fragment. A Node
+  whose `/etc/relay-daemon/policy.d` already existed when the package was installed gets no
+  default Policy file, so its fragments do nothing until config management writes one.
+- **A Policy fragment or Policy directory refused → refuse to run.** A fragment in `policy.d`
+  that is a symlink, is not a regular file, or is group/world-writable or owned by neither
+  root nor the daemon's user, and a `policy.d` that is insecure the same way, exit the daemon
+  non-zero. The journal line `policy fragment or Policy directory refused` names the reason.
+- **A broken fragment → deny-all.** A fragment that cannot be read or parsed invalidates the
+  whole Policy: the daemon runs deny-all, with no partial load. A key the daemon does not read
+  (a mistyped `[[denny]]`) is a parse error, in a fragment or in the Policy file, and
+  `relay-daemon policy check` reports it.
 - **Non-`https` enrollment endpoint → fatal.** TLS, and the CA pinning that rides on it, is
   only active under `https://`.
 
@@ -77,10 +88,11 @@ These are offline: no network, no identity, no Relay.
 
 - `relay-daemon --version` / `-version` / `-V` — print the build stamp and exit (the same
   three spellings as the Relay; [version-stamping.md](version-stamping.md)).
-- `relay-daemon policy check <file> [--strict] [--would-allow <spec>]` — lint a Policy file
-  and optionally answer a hypothetical through the evaluator the live wire path uses
-  (ADR-0011). Exit codes `0` valid / `1` invalid / `2` would-deny. See
-  [policy-as-code.md](policy-as-code.md).
+- `relay-daemon policy check <file> [--policy-dir <dir>] [--strict] [--would-allow <spec>]` —
+  lint a Policy file, and with `--policy-dir` the fragments in `<dir>` together with it, and
+  optionally answer a hypothetical through the evaluator the live wire path uses (ADR-0011).
+  It prints the Policy fingerprint those files give. Exit codes `0` valid / `1` invalid / `2`
+  would-deny. See [policy-as-code.md](policy-as-code.md).
 - `relay-daemon dump-operation-schema` — print the canonical Operation schema JSON (ADR-0015).
 
 One subcommand changes the Node. It is the only thing that enrolls it:
@@ -139,8 +151,9 @@ Where the pieces come from:
   [daemon-privilege-posture.md](daemon-privilege-posture.md) explains every directive, and the
   `pkg-install.conf` drop-in for Nodes that run `pkg.install` or filesystem-mutating Raw Exec.
 - **`policy.toml`** comes from your IaC repo ([policy-as-code.md](policy-as-code.md)),
-  root-owned and not group/world-writable. The annotated example is
-  [`daemon/policy.example.toml`](../../daemon/policy.example.toml); the shipped default
+  root-owned and not group/world-writable. The package also creates the Policy directory,
+  `policy.d`, empty and never writes into it again; fragments in it are yours to place. The
+  annotated example is [`daemon/policy.example.toml`](../../daemon/policy.example.toml); the shipped default
   (`read` pre-allowed with a confidentiality deny-list, `mutate` and Raw Exec opt-in,
   ADR-0022) is [`daemon/policy.default.toml`](../../daemon/policy.default.toml).
 - **`relay-daemon.env`** is the filled-in example env file. It holds no secret and no join

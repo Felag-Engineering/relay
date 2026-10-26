@@ -46,7 +46,10 @@ From `daemon/packaging/relay-daemon.service`:
 - **`NoNewPrivileges=yes`**: blocks `setuid`/file-capability escalation via `execve`.
 - **`ProtectSystem=strict`**: mounts the OS hierarchy read-only, with `StateDirectory` the one
   writable path. This reinforces ADR-0002: Policy lives under `/etc/relay-daemon/`, so even a
-  compromised daemon process cannot rewrite its own Policy file.
+  compromised daemon process cannot rewrite its own Policy file or add, change or remove a
+  fragment in the Policy directory (`/etc/relay-daemon/policy.d`). The `pkg.install` drop-in's
+  `ProtectSystem=full` also mounts `/etc` read-only, so the Policy directory stays read-only
+  under it.
 - **`ProtectHome=read-only`** (not `=yes`): keeps `/home` and `/root` readable for `file.read`
   while blocking writes. `=yes` would silently break `file.read` for any Policy-permitted path
   under a home directory; fleets that never read there can tighten it.

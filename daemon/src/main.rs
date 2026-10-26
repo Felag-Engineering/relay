@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -98,6 +99,48 @@ fn load_enrolled() -> Result<(Config, crate::identity::Identity), Box<dyn std::e
     Ok((config, identity))
 }
 
+/// The Policy the daemon runs with, from the result of loading it.
+///
+/// A refusal (a symlinked, non-regular or insecure fragment, or an insecure
+/// Policy directory) is returned as an error, so `main` exits non-zero and
+/// systemd shows the unit failed (DI-36). Any other failure falls back to a
+/// deny-all Policy with a warning: a daemon with no usable Policy denies every
+/// Task, the most restrictive safe default, and a Policy-file failure always
+/// ends this way (DI-20). A refused or deny-all fragment or directory outcome
+/// is logged once, here; the loader logs a Policy-file failure itself.
+fn startup_policy(
+    loaded: Result<policy::Policy, policy::PolicyError>,
+    path: &Path,
+    dir: &Path,
+) -> Result<policy::Policy, policy::PolicyError> {
+    match loaded {
+        Ok(p) => {
+            info!(path = %path.display(), dir = %dir.display(), fingerprint = %p.fingerprint(), "policy loaded");
+            Ok(p)
+        }
+        Err(e) if e.refuses_start() => {
+            tracing::error!(
+                path = %path.display(),
+                dir = %dir.display(),
+                error = %e,
+                "policy fragment or Policy directory refused; refusing to start (fail closed)"
+            );
+            Err(e)
+        }
+        Err(e) => {
+            tracing::warn!(
+                path = %path.display(),
+                dir = %dir.display(),
+                error = %e,
+                "policy load failed; using deny-all policy (fail closed)"
+            );
+            // from_toml_str("") produces a valid deny-all Policy: no allow
+            // rules → every evaluate call returns Deny{rule: None}.
+            Ok(policy::from_toml_str("").expect("empty TOML must produce deny-all Policy"))
+        }
+    }
+}
+
 /// Assembles a `PolicySnapshot` from the live, loaded Policy for the Relay to
 /// display.
 ///
@@ -106,7 +149,8 @@ fn load_enrolled() -> Result<(Config, crate::identity::Identity), Box<dyn std::e
 /// Relay-derived. `policy_fingerprint` calls the SAME [`policy::Policy::fingerprint`]
 /// Hello uses, so a snapshot and the Hello sent from the same `Policy` always
 /// agree. `operation_rules` and `deny_rules` are verbatim mirrors of every
-/// `[[operation]]`/`[[deny]]` block (file order, no dedup, no evaluation).
+/// `[[operation]]`/`[[deny]]` block (composition order: the Policy file, then
+/// fragments by name; no dedup, no evaluation).
 fn policy_snapshot(policy: &policy::Policy) -> PolicySnapshot {
     PolicySnapshot {
         raw_exec_enabled: policy.raw_exec_enabled(),
@@ -778,26 +822,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Open the dedup store before connecting (fail closed: must be writable).
     let dedup = dedup::DedupStore::open(&config.state_dir)?;
 
-    // Load Policy from the configured path (fail closed on any error).
-    // If the file is absent or unreadable, fall back to a deny-all Policy
-    // with a warning rather than refusing to start. A daemon with no policy
-    // file denies every Task, which is the most restrictive safe default.
-    let policy = match policy::load_policy(&config.policy_path) {
-        Ok(p) => {
-            info!(path = %config.policy_path.display(), fingerprint = %p.fingerprint(), "policy loaded");
-            p
-        }
-        Err(e) => {
-            tracing::warn!(
-                path = %config.policy_path.display(),
-                error = %e,
-                "policy load failed; using deny-all policy (fail closed)"
-            );
-            // from_toml_str("") produces a valid deny-all Policy: no allow
-            // rules → every evaluate call returns Deny{rule: None}.
-            policy::from_toml_str("").expect("empty TOML must produce deny-all Policy")
-        }
-    };
+    // Load the Policy file and the Policy directory beside it, composed into one
+    // Policy. A refused fragment or directory stops the daemon from starting;
+    // any other failure leaves it running deny-all (see `startup_policy`).
+    let policy = startup_policy(
+        policy::load_policy(&config.policy_path, &config.policy_dir),
+        &config.policy_path,
+        &config.policy_dir,
+    )
+    .map_err(|e| e.to_string())?;
 
     // Load this Node's Template Operations from the local root-owned template
     // root (ADR-0021, issue #291) — the same trust root as Policy, never the
@@ -1081,5 +1114,125 @@ mod tests {
         // from the same policy.fingerprint() call on the same Arc<Policy>.
         let p = policy::from_toml_str(FIXTURE).expect("fixture must parse");
         assert_eq!(policy_snapshot(&p).policy_fingerprint, p.fingerprint());
+    }
+
+    // -----------------------------------------------------------------------
+    // startup_policy: refuse start versus deny-all
+    // -----------------------------------------------------------------------
+
+    use super::startup_policy;
+    use std::path::Path;
+
+    fn fragment(name: &str, text: &str) -> policy::Fragment {
+        policy::Fragment {
+            name: name.to_string(),
+            text: text.to_string(),
+        }
+    }
+
+    // Proves DI-36.
+    #[test]
+    fn startup_policy_falls_back_to_deny_all_on_a_broken_fragment() {
+        let allow_nginx =
+            "[[operation]]\nname = \"service.restart\"\nallowed_args = [[\"nginx\"]]\n";
+        let allowed = policy::compose("", &[fragment("ok.toml", allow_nginx)]).expect("composes");
+        assert!(matches!(
+            allowed.evaluate("service.restart", &["nginx".to_string()]),
+            policy::Decision::Allow(_)
+        ));
+
+        let loaded = policy::compose(
+            "",
+            &[
+                fragment("ok.toml", allow_nginx),
+                fragment("broken.toml", "this is = = not toml"),
+            ],
+        );
+        assert!(
+            loaded.is_err(),
+            "the broken fragment invalidates the whole Policy"
+        );
+        let running = startup_policy(
+            loaded,
+            Path::new("/p/policy.toml"),
+            Path::new("/p/policy.d"),
+        )
+        .expect("a fragment that cannot be parsed is deny-all, not a refusal");
+
+        assert_eq!(
+            running.fingerprint(),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "the deny-all fallback reports the empty-Policy fingerprint"
+        );
+        assert!(matches!(
+            running.evaluate("service.restart", &["nginx".to_string()]),
+            policy::Decision::Deny { .. }
+        ));
+    }
+
+    // Proves DI-36.
+    #[test]
+    fn startup_policy_is_deny_all_when_a_fragment_has_an_unknown_key() {
+        let allow_nginx =
+            "[[operation]]\nname = \"service.restart\"\nallowed_args = [[\"nginx\"]]\n";
+        let loaded = policy::compose(
+            allow_nginx,
+            &[fragment(
+                "90-deny.toml",
+                "[[denny]]\nname = \"service.restart\"\n",
+            )],
+        );
+        let err = loaded
+            .as_ref()
+            .expect_err("the mistyped table is a parse error");
+        assert!(!err.refuses_start());
+
+        let running = startup_policy(
+            loaded,
+            Path::new("/p/policy.toml"),
+            Path::new("/p/policy.d"),
+        )
+        .expect("an unparsable fragment is deny-all, not a refusal");
+        assert_eq!(
+            running.fingerprint(),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        assert!(
+            matches!(
+                running.evaluate("service.restart", &["nginx".to_string()]),
+                policy::Decision::Deny { .. }
+            ),
+            "the Policy file's allow is not active"
+        );
+    }
+
+    // Proves DI-36.
+    #[test]
+    fn startup_policy_refuses_start_on_a_refused_fragment() {
+        let refused = policy::PolicyError::FragmentSymlink {
+            name: "evil.toml".to_string(),
+        };
+        let result = startup_policy(
+            Err(refused),
+            Path::new("/p/policy.toml"),
+            Path::new("/p/policy.d"),
+        );
+        assert!(matches!(
+            result,
+            Err(policy::PolicyError::FragmentSymlink { .. })
+        ));
+    }
+
+    #[test]
+    fn startup_policy_keeps_a_policy_file_failure_deny_all() {
+        let result = startup_policy(
+            Err(policy::PolicyError::SymlinkPath),
+            Path::new("/p/policy.toml"),
+            Path::new("/p/policy.d"),
+        );
+        assert!(
+            result.is_ok(),
+            "a Policy-file failure never stops the daemon"
+        );
     }
 }
