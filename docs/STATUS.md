@@ -71,7 +71,7 @@ once its code lands.
 
 | Invariant | Clause | Issue |
 |---|---|---|
-| 7 | `tag:`'s writer, and `relay:`'s | [#430](https://github.com/Felag-Engineering/relay/issues/430) |
+| 7 | `relay:`'s writer, and initial tags | [#1158](https://github.com/Felag-Engineering/relay/issues/1158) |
 
 What each gap means is in
 [AGENTS.md — Known gaps between these invariants and the code](../AGENTS.md#known-gaps-between-these-invariants-and-the-code);
