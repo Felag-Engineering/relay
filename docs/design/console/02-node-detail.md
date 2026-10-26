@@ -187,10 +187,14 @@ link here and a GET form on Fleet; neither writes anything.
       Console does not send (ADR-0052). The panel says "received", never "queried", and an offline Node's panel says it
       cannot be refreshed. The panel draws no note that this screen has no path to the Node's
       Policy (D34); the property is structural, not a sentence.
-- [ ] Editing a `tag:` label demands a human Account at `operator` or above and no step-up, and
+- [x] Editing a `tag:` label demands a human Account at `operator` or above and no step-up, and
       is audited with the old and new values (MVP, ADR-0050).
-      **Not implemented on this screen (#594).** Tags are stored on the Node record and written
-      through the Control API; this screen renders no tag chip and offers no control yet.
+      **Built.** This screen renders each `tag:` chip with a Remove form beside it and an add form
+      below, for `operator` and above; a `viewer` sees no control. Each submit is one call to the
+      capability layer's tag write, the same one the Control API makes, which holds the floor, the
+      human-only rule and the audit record (`TestTags_NodeDetailAddReachesTheCapabilityLayerUnparsed`,
+      `TestTags_AViewerSeesNoTagControlAnywhere`, and the end-to-end
+      `TestConsoleTags_AHumanOperatorTagsANodeAndASelectionThroughTheRealCapabilityLayer`).
 - [x] No surface anywhere writes a `node:` or `state:` label.
 - [x] Facts appear on this page and no other. **Qualified:** the hostname names a fleet row, this
       page's heading and each Compare column, always beside the verified Node ID, never diffed,

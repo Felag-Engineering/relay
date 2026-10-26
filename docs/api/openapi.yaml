@@ -761,6 +761,8 @@ paths:
         has already resolved. A Selector is not accepted here: resolve it with
         `list_nodes` or the Console first, so the Nodes written are the Nodes
         the caller saw.
+        One write names at most 256 Node ids, duplicates counted; a longer
+        list is refused with 400 and nothing is changed.
 
         **Requires the `operator` role or above, and a human Account.** A
         machine Account is refused at every role, `admin` included, and a
@@ -1761,10 +1763,11 @@ components:
         node_ids:
           type: array
           minItems: 1
+          maxItems: 256
           items: { type: string }
           description: |
-            The Node ids to write, already resolved by the caller. Duplicates
-            are written once.
+            The Node ids to write, already resolved by the caller, at most 256.
+            Duplicates are written once.
         op:
           type: string
           enum: [add, remove]

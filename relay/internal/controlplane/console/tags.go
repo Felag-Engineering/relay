@@ -52,26 +52,13 @@ const (
 	bulkTagsAction  = "/console/tags"
 )
 
-// The bounds on one tag change. They narrow what the Console accepts; the
-// capability layer's own rules are unchanged and still apply to what passes.
+// The bounds on one tag change. The Node count is the capability layer's; the
+// body bound only sizes what the Console reads for it.
 const (
-	// formParamCeiling is the most fields net/http parses from one urlencoded
-	// body (net/url's default limit); a body with more is unreadable, and the
-	// bulk form is one field per Node. An operator who sets
-	// GODEBUG urlmaxqueryparams below it makes the confirmation form unreadable
-	// by its own POST, which Secure then refuses with 400: it fails closed.
-	formParamCeiling = 10_000
-
-	// bulkTagFixedFields are the bulk form's fields other than node_id:
-	// csrf_token, op and label.
-	bulkTagFixedFields = 3
-
-	// maxBulkTagNodes is the most Nodes one bulk tag change names: every field
-	// the parser admits, less the fixed ones, so a form the confirmation page
-	// draws is always readable. The confirmation page refuses a larger match
-	// with no form, and the POST refuses a larger list, so the Console never
-	// offers a form its own POST would refuse.
-	maxBulkTagNodes = formParamCeiling - bulkTagFixedFields
+	// maxBulkTagNodes is the capability layer's cap on one tag write. The
+	// confirmation page draws no form for a larger match, so the Console never
+	// offers a form the capability layer would refuse.
+	maxBulkTagNodes = capability.MaxTagWriteNodes
 
 	// maxTagNodeIDBytes mirrors the capability layer's unexported maxNodeIDBytes,
 	// the longest Node ID it accepts in a tag write. It must follow that constant:
@@ -80,14 +67,9 @@ const (
 	maxTagNodeIDBytes = 256
 
 	// maxBulkTagBodyBytes bounds the bulk POST body: maxBulkTagNodes fields of
-	// "node_id=<id>&", each ID at its longest, plus room for the CSRF token, op
-	// and label. About 2.6 MiB, against about 0.4 MiB for as many Relay-minted
-	// IDs. The bound is computed on unescaped lengths: Relay-minted Node IDs are
-	// URL-safe, so a form for them is as long as that, but an ID that needs
-	// percent-encoding costs up to three times its length and the room for the
-	// fixed fields does not promise to cover that. It still stops a body that
-	// exists only to fan out store work.
-	maxBulkTagBodyBytes = int64(maxBulkTagNodes*(maxTagNodeIDBytes+len("node_id=&")) + 64<<10)
+	// "node_id=<id>&", each ID at its longest and fully percent-encoded (three
+	// bytes per byte), plus room for the CSRF token, op and label. About 258 KiB.
+	maxBulkTagBodyBytes = int64(maxBulkTagNodes*(3*maxTagNodeIDBytes+len("node_id=&")) + 64<<10)
 
 	// maxNamedMissingNodes is how many unknown Node IDs a refusal names.
 	maxNamedMissingNodes = 5
@@ -160,12 +142,9 @@ const (
 	tagUnconfirmedHeading = "The Relay could not confirm this tag change. Reload and read the tags before trying again."
 )
 
-// tagTooManyNodesHeading refuses a tag change naming more than maxBulkTagNodes
-// Nodes. n is the count the request or the filter reached.
-func tagTooManyNodesHeading(n int) string {
-	return fmt.Sprintf("That is %d Nodes, and one tag change covers at most %d. Narrow the filter. %s",
-		n, maxBulkTagNodes, tagNotChanged)
-}
+// tagTooManyNodesText refuses a tag change over the capability layer's Node cap,
+// on the confirmation page and when WriteTag refuses one.
+var tagTooManyNodesText = fmt.Sprintf("Tag at most %d Nodes at once; narrow the filter.", maxBulkTagNodes)
 
 // tagMissingNodesHeading names the first maxNamedMissingNodes unknown Node IDs
 // and counts the rest, so one request cannot make the page as large as itself.
@@ -314,7 +293,7 @@ func handleConfirmTags(d Deps) http.HandlerFunc {
 		}
 
 		if len(matched) > maxBulkTagNodes {
-			refuse(http.StatusBadRequest, tagTooManyNodesHeading(len(matched)))
+			refuse(http.StatusBadRequest, tagTooManyNodesText)
 			return
 		}
 
@@ -356,14 +335,10 @@ func handleWriteTags(d Deps) http.HandlerFunc {
 			return
 		}
 		ids := r.PostForm["node_id"]
-		if len(ids) > maxBulkTagNodes {
-			tagRefusal(w, pg, http.StatusRequestEntityTooLarge, tagTooManyNodesHeading(len(ids)), fleetPath, "Back to the fleet")
-			return
-		}
 
 		// The body is the only input. One call for the whole list: the
-		// capability layer applies it all or not at all, so the Console never
-		// loops per Node.
+		// capability layer applies it all or not at all, and caps how many Nodes
+		// it names, so the Console never loops per Node and never counts them.
 		op := capability.TagOp(r.PostForm.Get("op"))
 		res, err := d.Tags.WriteTag(r.Context(), caller, capability.TagWrite{
 			NodeIDs: ids,
@@ -439,6 +414,7 @@ var tagBadRequests = []error{
 	capability.ErrTagOpUnknown,
 	capability.ErrTagNoNodes,
 	capability.ErrTagNodeIDInvalid,
+	capability.ErrTagTooManyNodes,
 }
 
 func isTagBadRequest(err error) bool {
@@ -471,6 +447,8 @@ func tagRefusalText(err error) string {
 		return "A tag change names at least one Node."
 	case errors.Is(err, capability.ErrTagNodeIDInvalid):
 		return "Every Node ID in a tag change must be present and not over-long."
+	case errors.Is(err, capability.ErrTagTooManyNodes):
+		return tagTooManyNodesText
 	case errors.Is(err, capability.ErrTooManyTags):
 		return "A Node carries at most " + strconv.Itoa(registry.MaxTagsPerNode) + " tags."
 	}

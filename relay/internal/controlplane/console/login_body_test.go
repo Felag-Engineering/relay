@@ -157,6 +157,55 @@ func TestTags_ATrickledAuthenticatedBodyIsCutAndWritesNothing(t *testing.T) {
 	}
 }
 
+// ParseForm reads no body that is not form-encoded, so the deadline must not
+// depend on the content type: a signed-in caller with the header token trickles a
+// text/plain body to sign-out, whose handler never reads it, and is still cut off.
+func TestConsole_ATrickledNonFormAuthenticatedBodyIsCut(t *testing.T) {
+	saved := authenticatedBodyTimeout
+	authenticatedBodyTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { authenticatedBodyTimeout = saved })
+
+	f := tagLoginFixture(t, &fakeTagWriter{})
+	session := signedInSession(t, f, "mike", consolePassword)
+	token := renderedCSRFToken(f.do(t, httptest.NewRequest(http.MethodGet, "/console/nodes/node-web-1", nil), session).Body.String())
+	if token == "" {
+		t.Fatal("the Node page rendered no CSRF token")
+	}
+	srv := httptest.NewServer(f.handler)
+	t.Cleanup(srv.Close)
+
+	conn, err := net.Dial("tcp", srv.Listener.Addr().String())
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer conn.Close()
+
+	start := time.Now()
+	if _, err := fmt.Fprintf(conn, "POST %s HTTP/1.1\r\nHost: relay\r\nCookie: %s=%s\r\n%s: %s\r\n"+
+		"Content-Type: text/plain\r\nContent-Length: 1000\r\n\r\nhello",
+		LogoutPath, session.Name, session.Value, csrfHeaderName, token); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatalf("SetReadDeadline: %v", err)
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatal("the Console was still waiting on the trickled body after 5s")
+	}
+	if err != nil {
+		t.Fatalf("ReadResponse: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d (the body could not be read)", resp.StatusCode, http.StatusBadRequest)
+	}
+	if elapsed := time.Since(start); elapsed < authenticatedBodyTimeout {
+		t.Errorf("answered after %v, before the %v deadline: something other than the deadline cut it", elapsed, authenticatedBodyTimeout)
+	}
+}
+
 // The read deadline guards the read of the form and no more: a handler that
 // outlives it still answers.
 func TestTags_TheBodyDeadlineIsClearedOnceTheFormIsRead(t *testing.T) {

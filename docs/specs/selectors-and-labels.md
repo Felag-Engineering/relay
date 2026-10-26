@@ -35,7 +35,7 @@ Label **writes** are deliberately asymmetric:
   it; today that is enrollment.
 - `tag:` — the Console and the Control API, by a human Account of `operator` or above. The
   Console writes on a Node's page, and in bulk over the Nodes a Selector matches. No MCP tool
-  writes a tag. Designed for the MVP, not built.
+  writes a tag. Built on both surfaces; one write names at most 256 Nodes.
 - `state:` — no writer anywhere.
 
 ## Behaviour
@@ -101,9 +101,8 @@ would bring.
 
 ### `tag:` — organising the fleet
 
-Designed for the MVP, not built (ADR-0050). Until it lands, a `tag:` term is refused at parse
-with a recognisable refusal, identically on every surface, rather than silently matching
-nothing.
+Tag writes on the Console and the Control API are built (ADR-0050). Initial tags from an
+Enrollment Token are designed for the MVP, not built.
 
 - **Only a human Account of `operator` or above writes a tag,** through the Console or the
   Control API. Standard authentication, no step-up. No MCP tool writes a tag, a machine Account
@@ -111,6 +110,9 @@ nothing.
 - On the Console, an operator writes tags on a Node's page, or in bulk over the Nodes a
   Selector matches. A bulk write first lists the matched Nodes, and writes only once the
   operator accepts that list.
+- **One tag write names at most 256 Nodes,** on every surface: the capability layer refuses a
+  longer list and changes nothing. The Console's confirm step refuses a larger match and asks
+  for a narrower filter.
 - A tag is `key=value`, the same shape as every other Label.
 - **Every change is audited with its old and new values.** A bulk write is audited as one
   action naming every Node it touched.
@@ -277,10 +279,12 @@ Claims above with **no row**, and so nothing checking them:
 
 - **Everything decided on `2026-09-13` and `2026-10-23`** has no test yet: `relay:` labels
   written only by their defining action, declared versus built-in `node:` labels and reserved
-  keys, `tag:` writes by human `operator` Accounts on the Console and the Control API only,
-  their old-and-new audit and bulk tagging audited as one action, initial tags from an
+  keys, bulk tagging audited as one action, initial tags from an
   Enrollment Token, the per-Node limits, the new `state:` markers, the refusal of a negated
   term, and the empty-Selector refusal on dispatch.
+- `tag:` writes by human `operator` Accounts on the Console and the Control API, their
+  old-and-new audit and the 256-Node cap are tested in the capability layer, the Control API
+  and the Console, but this spec is aspirational and records no proof rows for them.
 - That a zero-width space in a reported fact is accepted. It is;
   `TestFacts_ZeroWidthSpaceIsAcceptedKnownGap` documents it as a **known gap**, which is not
   coverage.

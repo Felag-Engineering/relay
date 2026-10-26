@@ -1313,7 +1313,7 @@ func TestCopyBudget_GoStringNotesAreShort(t *testing.T) {
 		row{"tagNodeGoneHeading", tagNodeGoneHeading, maxHeadingWords},
 		row{"tagUnconfirmedHeading", tagUnconfirmedHeading, maxHeadingWords},
 		row{"bodyTooLargeHeading", bodyTooLargeHeading, maxHeadingWords},
-		row{"tagTooManyNodesHeading", tagTooManyNodesHeading(1_000_000), maxHeadingWords},
+		row{"tagTooManyNodesText", tagTooManyNodesText, maxHeadingWords},
 		row{"tagMissingNodesHeading", tagMissingNodesHeading([]string{"ghost-1", "ghost-2", "ghost-3", "ghost-4", "ghost-5", "ghost-6"}), maxHeadingWords},
 		row{"a refused filter on the tag confirmation page", filterRefusal.Error() + " " + tagNotChanged, maxHeadingWords},
 	)

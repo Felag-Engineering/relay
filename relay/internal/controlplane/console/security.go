@@ -1,9 +1,11 @@
 package console
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"regexp"
@@ -281,14 +283,14 @@ func boundUnauthenticatedBody(w http.ResponseWriter, r *http.Request, log *slog.
 	r.Body = http.MaxBytesReader(w, r.Body, unauthenticatedBodyMaxBytes)
 }
 
-// Bounds on the body of an authenticated unsafe request. The CSRF check reads the
-// form, so without a time bound a signed-in session could trickle any POST body for as
-// long as it liked, on the same listener that has no server-wide ReadTimeout.
+// Bounds on the body of an authenticated unsafe request, of any content type. The CSRF
+// check reads the form, so without a time bound a signed-in session could trickle any
+// POST body for as long as it liked, on the same listener that has no server-wide
+// ReadTimeout.
 const (
 	// defaultAuthenticatedBodyTimeout is how long such a body may take to arrive. The
-	// largest legitimate one is the bulk tag POST at about 2.6 MiB; 30 seconds admits
-	// it at about 90 KiB/s (0.7 Mbit/s), a poor link, and every other form is a few
-	// hundred bytes.
+	// largest legitimate one is the bulk tag POST at about 258 KiB; 30 seconds admits
+	// it at under 9 KiB/s, and every other form is a few hundred bytes.
 	defaultAuthenticatedBodyTimeout = 30 * time.Second
 
 	// maxFormBodyBytes bounds every authenticated Console POST that is not the bulk
@@ -321,16 +323,23 @@ func authenticatedBodyLimit(r *http.Request) int64 {
 const bodyTooLargeHeading = "This request is too large to read. Nothing was changed."
 
 // boundAuthenticatedBody caps the size and the time of an authenticated unsafe
-// request's body and parses its form before the CSRF token is read from it: the token
-// read is the first read of the body, so a bound applied later would bound nothing.
+// request's body, whatever its content type, and parses its form before the CSRF
+// token is read from it: the token read is the first read of the body, so a bound
+// applied later would bound nothing.
 //
-// It refuses every parse error and reports false: 413 for a body over
+// The whole body is read under the deadline, not only a form-encoded one: ParseForm
+// reads nothing of any other type, so a signed-in caller with the header token could
+// otherwise trickle one past a cleared deadline, and net/http's drain after a handler
+// that never reads the body waits with no bound at all. The body is then handed on
+// from memory, at most authenticatedBodyLimit bytes.
+//
+// It refuses every read or parse error and reports false: 413 for a body over
 // authenticatedBodyLimit, 400 for any other (a read that timed out or failed, a
 // malformed escape, more fields than net/url parses). Neither the CSRF check nor a
-// handler sees a form that was only partly read.
+// handler sees a body that was only partly read.
 //
 // The read deadline is per request, for the same reason as boundUnauthenticatedBody's,
-// and is cleared once the form is read so a long-running handler is not cut by it. A
+// and is cleared once the body is read so a long-running handler is not cut by it. A
 // refused request keeps it: the server's own drain of the unread body then fails fast
 // instead of waiting on a client that is stalling.
 func boundAuthenticatedBody(w http.ResponseWriter, r *http.Request, log *slog.Logger) bool {
@@ -339,13 +348,18 @@ func boundAuthenticatedBody(w http.ResponseWriter, r *http.Request, log *slog.Lo
 	if err != nil && !errors.Is(err, http.ErrNotSupported) {
 		logctx.Or(log).WarnContext(r.Context(), "console: could not bound an authenticated request body", "error", err)
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, authenticatedBodyLimit(r))
-	if err := r.ParseForm(); err != nil {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, authenticatedBodyLimit(r)))
+	if err != nil {
 		var tooBig *http.MaxBytesError
 		if errors.As(err, &tooBig) {
 			http.Error(w, bodyTooLargeHeading, http.StatusRequestEntityTooLarge)
 			return false
 		}
+		http.Error(w, "could not read the submitted form", http.StatusBadRequest)
+		return false
+	}
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	if err := r.ParseForm(); err != nil {
 		http.Error(w, "could not read the submitted form", http.StatusBadRequest)
 		return false
 	}

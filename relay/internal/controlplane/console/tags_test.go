@@ -933,7 +933,12 @@ func TestTags_AnOverSizeBodyIsRefusedWholeAndWritesNothing(t *testing.T) {
 	}
 }
 
-func TestTags_ABulkListOverTheCountBoundIsRefusedBeforeWriteTag(t *testing.T) {
+// netURLFieldCeiling is the most fields net/url parses from one body.
+const netURLFieldCeiling = 10_000
+
+// The Node cap is the capability layer's. The Console hands it the list as
+// posted, in one call, and renders its refusal.
+func TestTags_ABulkListOverTheNodeCapIsTheCapabilityLayersRefusal(t *testing.T) {
 	ids := func(n int) []string {
 		out := make([]string, n)
 		for i := range out {
@@ -941,33 +946,40 @@ func TestTags_ABulkListOverTheCountBoundIsRefusedBeforeWriteTag(t *testing.T) {
 		}
 		return out
 	}
+	if maxBulkTagNodes != 256 {
+		t.Fatalf("maxBulkTagNodes = %d, want the capability layer's 256", maxBulkTagNodes)
+	}
+
 	tw := &fakeTagWriter{}
 	h := newTestHandlerSkippingCSRF(tagDeps(tw), accounts.RoleOperator)
-
 	rec := postFormSkippingCSRF(t, h, bulkTagsAction, url.Values{
-		"node_id": ids(maxBulkTagNodes + 1), "op": {"add"}, "label": {"tag:a=b"},
-	})
-	content := contentOf(rec.Body.String())
-	if rec.Code != http.StatusRequestEntityTooLarge || !strings.Contains(content, tagTooManyNodesHeading(maxBulkTagNodes+1)) {
-		t.Fatalf("status %d, want 413 naming the bound; %s", rec.Code, content)
-	}
-	if n := len(tw.calls()); n != 0 {
-		t.Fatalf("WriteTag was called %d times for an over-count list", n)
-	}
-
-	// More fields than net/http will parse is unreadable, and refused too.
-	rec = postFormSkippingCSRF(t, h, bulkTagsAction, url.Values{
-		"node_id": ids(formParamCeiling + 1), "op": {"add"}, "label": {"tag:a=b"},
-	})
-	if rec.Code < 400 || len(tw.calls()) != 0 {
-		t.Fatalf("a list past the parser's ceiling: status %d, %d calls; want a refusal and no call", rec.Code, len(tw.calls()))
-	}
-
-	rec = postFormSkippingCSRF(t, h, bulkTagsAction, url.Values{
 		"node_id": ids(maxBulkTagNodes), "op": {"add"}, "label": {"tag:a=b"},
 	})
 	if calls := tw.calls(); rec.Code != http.StatusOK || len(calls) != 1 || len(calls[0].Write.NodeIDs) != maxBulkTagNodes {
-		t.Errorf("a list exactly at the bound: status %d, %d calls; want one call over %d IDs", rec.Code, len(calls), maxBulkTagNodes)
+		t.Errorf("256 Nodes: status %d, %d calls; want 200 and one call over %d IDs", rec.Code, len(calls), maxBulkTagNodes)
+	}
+
+	refused := &fakeTagWriter{err: capability.ErrTagTooManyNodes}
+	h = newTestHandlerSkippingCSRF(tagDeps(refused), accounts.RoleOperator)
+	rec = postFormSkippingCSRF(t, h, bulkTagsAction, url.Values{
+		"node_id": ids(maxBulkTagNodes + 1), "op": {"add"}, "label": {"tag:a=b"},
+	})
+	content := contentOf(rec.Body.String())
+	if rec.Code != http.StatusBadRequest || !strings.Contains(content, tagTooManyNodesText) {
+		t.Fatalf("257 Nodes: status %d, want 400 with %q; %s", rec.Code, tagTooManyNodesText, content)
+	}
+	if calls := refused.calls(); len(calls) != 1 || len(calls[0].Write.NodeIDs) != maxBulkTagNodes+1 {
+		t.Errorf("257 Nodes: %d calls; want the whole list passed to WriteTag once", len(calls))
+	}
+
+	// More fields than net/url parses is unreadable, and refused before WriteTag.
+	tw = &fakeTagWriter{}
+	h = newTestHandlerSkippingCSRF(tagDeps(tw), accounts.RoleOperator)
+	rec = postFormSkippingCSRF(t, h, bulkTagsAction, url.Values{
+		"node_id": ids(netURLFieldCeiling + 1), "op": {"add"}, "label": {"tag:a=b"},
+	})
+	if rec.Code < 400 || len(tw.calls()) != 0 {
+		t.Fatalf("a list past the parser's ceiling: status %d, %d calls; want a refusal and no call", rec.Code, len(tw.calls()))
 	}
 }
 
@@ -1024,7 +1036,7 @@ func TestTags_TheConfirmPageAndItsPostAgreeAtTheCountBound(t *testing.T) {
 	over.Tags = tw
 	rec = get(t, newTestHandler(over, accounts.RoleOperator), confirmWebLink)
 	refusal := contentOf(rec.Body.String())
-	if rec.Code != http.StatusBadRequest || strings.Contains(refusal, "<form") || !strings.Contains(refusal, tagTooManyNodesHeading(maxBulkTagNodes+1)) {
+	if rec.Code != http.StatusBadRequest || strings.Contains(refusal, "<form") || !strings.Contains(refusal, tagTooManyNodesText) {
 		t.Errorf("confirm over the bound = %d, form present %v; want a 400 sentence and no form", rec.Code, strings.Contains(refusal, "<form"))
 	}
 	if n := len(tw.calls()); n != 1 {
@@ -1107,7 +1119,7 @@ func TestTags_AnUnreadableFormIsRefusedWholeAndWritesNothing(t *testing.T) {
 	// net/url salvages the readable pairs of a malformed body and returns an
 	// error; Secure must refuse the body rather than let the CSRF check and the
 	// handler act on what survived.
-	manyFields := strings.Repeat("node_id=a&", formParamCeiling+1)
+	manyFields := strings.Repeat("node_id=a&", netURLFieldCeiling+1)
 	for name, c := range map[string]struct {
 		path string
 		body string
