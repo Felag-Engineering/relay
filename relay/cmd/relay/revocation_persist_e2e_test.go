@@ -77,7 +77,7 @@ func TestRevokedNode_RefusedAfterRestart(t *testing.T) {
 	lis, deps, srv := bootServer(t, cfg)
 
 	// Enroll: seed a token, then Enroll certless to obtain the Node identity cert.
-	_, plaintext, err := deps.tokens.Create(ctx, []string{"relay:env=prod"}, time.Hour)
+	_, plaintext, err := deps.tokens.Create(ctx, nil, time.Hour)
 	if err != nil {
 		t.Fatalf("seed Enrollment Token: %v", err)
 	}
@@ -152,7 +152,7 @@ func TestRevokedToken_EnrollRefusedAfterRestart(t *testing.T) {
 	cfg := persistTestConfig(t)
 	lis, deps, srv := bootServer(t, cfg)
 
-	tok, plaintext, err := deps.tokens.Create(ctx, []string{"relay:env=prod"}, time.Hour)
+	tok, plaintext, err := deps.tokens.Create(ctx, nil, time.Hour)
 	if err != nil {
 		t.Fatalf("seed Enrollment Token: %v", err)
 	}
@@ -219,7 +219,7 @@ func TestRevokedTokenCascade_NodeRevocationsPersistAcrossRestart(t *testing.T) {
 	cfg := persistTestConfig(t)
 	_, deps, srv := bootServer(t, cfg)
 
-	tok, _, err := deps.tokens.Create(ctx, []string{"relay:env=prod"}, time.Hour)
+	tok, _, err := deps.tokens.Create(ctx, nil, time.Hour)
 	if err != nil {
 		t.Fatalf("seed Enrollment Token: %v", err)
 	}

@@ -35,7 +35,9 @@ keeping fleet-specific work off Raw Exec, the most dangerous path (ADR-0001). Th
   policy.toml                   # the Node's Policy (ADR-0002)
   templates.d/                  # the template root (RELAY_TEMPLATE_DIR)
     local.toml                  # a loose, operator-authored file
-    relay-read/                 # a PACK — installed and versioned as a unit
+    relay-read/                 # the shipped read catalog, owned by the relay-daemon package
+      catalog.toml
+    site-read/                  # a PACK — installed and versioned as a unit
       catalog.toml
       README.md                 # ignored by the loader (only *.toml loads)
 ```
@@ -230,16 +232,19 @@ ADR-0021 amendment explains why there is deliberately no hardcoded daemon-side d
 Config management copies the files and restarts the daemon, exactly as for `policy.toml`:
 
 ```yaml
-- name: Install the read template pack
+- name: Install the site template pack
   ansible.builtin.copy:
-    src: "packs/relay-read/"          # from the IaC repo
-    dest: /etc/relay-daemon/templates.d/relay-read/
+    src: "packs/site-read/"           # from the IaC repo
+    dest: /etc/relay-daemon/templates.d/site-read/
     owner: root
     group: root
     mode: "0644"                      # never group/world-writable
     directory_mode: "0755"
   notify: restart relay-daemon
 ```
+
+Never write into `templates.d/relay-read/`: the relay-daemon package owns it, and an upgrade
+replaces it. Your own packs and loose files go beside it.
 
 The daemon's loader refuses anything it cannot trust, and refuses it **for the whole set**:
 
@@ -313,9 +318,53 @@ The shipped default Policy (ADR-0022) allows exactly these names, `log.tail` inc
 freshly enrolled Node answers the whole catalog with no local authoring. A journal carries
 whatever a service logs, and a read result leaves the fleet for the model provider. Narrowing
 `service.status`/`log.tail` from `"*"` to your real unit list is the highest-value edit you can
-make to it, for example `allowed_args = [["nginx.service", "sshd.service"]]`. To turn
-`log.tail` off, delete its `[[operation]]` block: Policy is deny-by-default, so a name with no
-allow is denied.
+make to it, for example `allowed_args = [["nginx.service", "sshd.service"]]`.
+
+### Turning `log.tail` off, or narrowing it
+
+- **Deny it with a fragment.** Deny beats allow across the Policy file and every fragment, so
+  this works whatever the Policy file allows:
+
+  ```toml
+  # /etc/relay-daemon/policy.d/50-no-log-tail.toml
+  [[deny]]
+  name = "log.tail"
+  args = []
+  ```
+
+  `args = []` blocks the Operation outright. A fragment can take `log.tail` away only whole:
+  deny arguments match exactly, and the `unit` slot accepts a bare `noisy` that journalctl
+  resolves to `noisy.service`, so a per-unit deny is bypassable. Per-unit control is the
+  Policy-file narrowing below, which fails closed. Then follow the three steps in
+  [policy-as-code.md](policy-as-code.md): place the fragment, check, and restart:
+
+  ```console
+  $ relay-daemon policy check /etc/relay-daemon/policy.toml \
+      --policy-dir /etc/relay-daemon/policy.d --templates /etc/relay-daemon/templates.d
+  warning: [[operation]] #7 (name="log.tail") — allow rule is fully shadowed by [[deny]] #0 \
+  (name="log.tail") in "50-no-log-tail.toml"; it can never fire
+  fingerprint: <hex>
+  $ systemctl restart relay-daemon
+  ```
+
+  The check exits 0 and prints that warning: the shipped allow is still in the Policy file and
+  the fragment shadows it. `--strict` turns the warning into a failure, so a pipeline that runs
+  `--strict` should use the Policy-file edit below instead.
+- **Narrow it, or turn it off, in the Policy file.** A fragment cannot narrow an allow, but
+  `/etc/relay-daemon/policy.toml` is yours after the first install and no upgrade rewrites it
+  (ADR-0022). To narrow:
+
+  ```toml
+  [[operation]]
+  name = "log.tail"
+  allowed_args = [["nginx.service", "sshd.service"]]
+  ```
+
+  Only a unit named exactly as listed is allowed: `unit=nginx.service` answers `ALLOW` under
+  `--would-allow`, and `unit=nginx` answers `DENY` because no allow rule matched it.
+
+  Or delete its `[[operation]]` block: Policy is deny-by-default, so a name with no allow is
+  denied. Both edits check clean under `--strict`.
 
 ## Security notes before you author
 

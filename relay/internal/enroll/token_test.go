@@ -13,10 +13,25 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/Felag-Engineering/relay/relay/internal/registry"
 )
 
-// testScope is a minimal valid scope used by most tests.
-var testScope = []string{"relay:env=prod"}
+// testAccount is the minting Account tests hand WithMinter.
+type testAccount struct {
+	attribution string
+	human       bool
+}
+
+func (a testAccount) Attribution() string { return a.attribution }
+func (a testAccount) Human() bool         { return a.human }
+
+// asHuman and asMachine are the two minters most tests need: a human admin
+// Account, which may name initial tags, and a machine admin Account, which may not.
+var (
+	asHuman   = WithMinter("acct-alice", testAccount{"alice:admin", true})
+	asMachine = WithMinter("acct-bot", testAccount{"bot:admin", false})
+)
 
 // fakeNow is a controllable clock for deterministic expiry tests.
 type fakeNow struct {
@@ -57,7 +72,7 @@ func TestCreate_StoresHashedReturnsPlaintextOnce(t *testing.T) {
 	svc, _ := newTestService(t)
 	ctx := context.Background()
 
-	tok, plaintext, err := svc.Create(ctx, testScope, time.Hour)
+	tok, plaintext, err := svc.Create(ctx, nil, time.Hour)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -84,14 +99,17 @@ func TestCreate_StoresHashedReturnsPlaintextOnce(t *testing.T) {
 	}
 }
 
-// TestValidate_Valid_ReturnsScope checks that a valid credential returns the created
-// scope and that mutating the returned scope does not affect a subsequent Validate.
-func TestValidate_Valid_ReturnsScope(t *testing.T) {
+// TestValidate_Valid_ReturnsGrant checks that a valid credential returns the
+// initial tags the token was minted with and the Account that minted it, and
+// that mutating the returned tags does not affect a subsequent Validate.
+//
+// Proves EN-41.
+func TestValidate_Valid_ReturnsGrant(t *testing.T) {
 	svc, _ := newTestService(t)
 	ctx := context.Background()
 
-	scope := []string{"relay:role=web", "relay:env=prod"}
-	_, plaintext, err := svc.Create(ctx, scope, time.Hour)
+	tags := []string{"tag:role=web", "tag:env=prod"}
+	_, plaintext, err := svc.Create(ctx, tags, time.Hour, asHuman)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -100,23 +118,27 @@ func TestValidate_Valid_ReturnsScope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
-	if len(got) != len(scope) {
-		t.Fatalf("scope length mismatch: want %d got %d", len(scope), len(got))
+	if len(got.InitialTags) != len(tags) {
+		t.Fatalf("initial tags length mismatch: want %d got %d", len(tags), len(got.InitialTags))
 	}
-	for i := range scope {
-		if got[i] != scope[i] {
-			t.Errorf("scope[%d]: want %q got %q", i, scope[i], got[i])
+	for i := range tags {
+		if got.InitialTags[i] != tags[i] {
+			t.Errorf("initial tag[%d]: want %q got %q", i, tags[i], got.InitialTags[i])
 		}
 	}
+	want := MintedBy{AccountID: "acct-alice", Account: "alice", Role: "admin", Human: true}
+	if got.MintedBy != want {
+		t.Errorf("MintedBy = %+v, want %+v", got.MintedBy, want)
+	}
 
-	// Mutate the returned slice and validate again — stored scope must be unaffected.
-	got[0] = "relay:tampered=true"
+	// Mutate the returned slice and validate again — stored tags must be unaffected.
+	got.InitialTags[0] = "tag:tampered=true"
 	got2, err := svc.Validate(ctx, plaintext)
 	if err != nil {
 		t.Fatalf("second Validate: %v", err)
 	}
-	if got2[0] != scope[0] {
-		t.Errorf("returned scope mutated stored scope: got %q want %q", got2[0], scope[0])
+	if got2.InitialTags[0] != tags[0] {
+		t.Errorf("returned tags mutated stored tags: got %q want %q", got2.InitialTags[0], tags[0])
 	}
 }
 
@@ -125,7 +147,7 @@ func TestValidate_WrongSecret(t *testing.T) {
 	svc, _ := newTestService(t)
 	ctx := context.Background()
 
-	_, plaintext, err := svc.Create(ctx, testScope, time.Hour)
+	_, plaintext, err := svc.Create(ctx, nil, time.Hour)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -177,7 +199,7 @@ func TestValidate_Expired(t *testing.T) {
 	svc, clk := newTestService(t)
 	ctx := context.Background()
 
-	_, plaintext, err := svc.Create(ctx, testScope, time.Minute)
+	_, plaintext, err := svc.Create(ctx, nil, time.Minute)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -196,7 +218,7 @@ func TestValidate_Revoked(t *testing.T) {
 	svc, _ := newTestService(t)
 	ctx := context.Background()
 
-	tok, plaintext, err := svc.Create(ctx, testScope, time.Hour)
+	tok, plaintext, err := svc.Create(ctx, nil, time.Hour)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -218,7 +240,7 @@ func TestValidate_SecretCheckedBeforeState(t *testing.T) {
 	svc, _ := newTestService(t)
 	ctx := context.Background()
 
-	tok, plaintext, err := svc.Create(ctx, testScope, time.Hour)
+	tok, plaintext, err := svc.Create(ctx, nil, time.Hour)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -244,7 +266,7 @@ func TestReusable_ValidatesRepeatedly(t *testing.T) {
 	svc, _ := newTestService(t)
 	ctx := context.Background()
 
-	_, plaintext, err := svc.Create(ctx, testScope, time.Hour)
+	_, plaintext, err := svc.Create(ctx, nil, time.Hour)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -270,7 +292,7 @@ func TestMaxUses_Enforced(t *testing.T) {
 			svc, _ := newTestService(t)
 			ctx := context.Background()
 
-			_, plaintext, err := svc.Create(ctx, testScope, time.Hour, WithMaxUses(tc.maxUses))
+			_, plaintext, err := svc.Create(ctx, nil, time.Hour, WithMaxUses(tc.maxUses))
 			if err != nil {
 				t.Fatalf("Create: %v", err)
 			}
@@ -299,7 +321,7 @@ func TestMaxUses_Concurrent(t *testing.T) {
 	svc, _ := newTestService(t)
 	ctx := context.Background()
 
-	_, plaintext, err := svc.Create(ctx, testScope, time.Hour, WithMaxUses(k))
+	_, plaintext, err := svc.Create(ctx, nil, time.Hour, WithMaxUses(k))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -335,75 +357,164 @@ func TestMaxUses_Concurrent(t *testing.T) {
 	}
 }
 
-// TestCreate_InvalidScope checks that scopes without relay: prefixes, and
-// scopes that ARE relay:-prefixed but fail the well-formedness gate
-// (registry.WellFormedLabel, #555), are rejected.
+// TestCreate_InitialTagMalformedRefused checks that an entry which is not a
+// well-formed tag: label refuses the mint, whatever the way it is wrong, and
+// that nothing is stored.
 //
-// RED ON: reverting validateScope to the prefix-only check — the
-// malformed-but-correctly-prefixed rows below would then pass Create,
-// while the pre-existing prefix-only rows above them keep passing either
-// way, so the two rules stay separately pinned.
-// Proves EN-3.
-func TestCreate_InvalidScope(t *testing.T) {
-	svc, _ := newTestService(t)
-	ctx := context.Background()
+// RED ON: a gate that sanitises or truncates instead of refusing, that skips the
+// length bounds, or that checks the whole entry with WellFormedLabel (which
+// would reject the ":" in "tag:" itself).
+//
+// Proves EN-40.
+func TestCreate_InitialTagMalformedRefused(t *testing.T) {
+	long := func(n int) string { return strings.Repeat("a", n) }
+	many := make([]string, 0, 65)
+	for i := 0; i < 65; i++ {
+		many = append(many, fmt.Sprintf("tag:k%d=v", i))
+	}
 
 	cases := []struct {
-		name  string
-		scope []string
+		name string
+		tags []string
 	}{
-		{"empty", []string{}},
-		{"nil", nil},
 		{"no-prefix", []string{"env=prod"}},
 		{"node-prefix", []string{"node:role=web"}},
-		{"mixed", []string{"relay:env=prod", "node:role=web"}},
-		{"empty-entry", []string{"relay:env=prod", ""}},
-		// The mirrored measured payload (#504's evidence, opposite
-		// namespace): a comma smuggles a second, cross-namespace term into
-		// what would otherwise store as one relay-space value.
-		{"comma-injected second term", []string{"relay:env=prod,node:role=web"}},
-		// Correctly prefixed but the bare key is empty.
-		{"empty bare key", []string{"relay:"}},
-		// The issue's homoglyph payload: a ZERO WIDTH SPACE in the key.
-		{"zero width space in key", []string{"relay:quarantine\u200b=on"}},
-		// A colon in the bare key re-introduces the namespace-prefix hazard
-		// one level down.
-		{"colon in bare key", []string{"relay:a:b=c"}},
-		// Whitespace after the value, with no comma of its own.
-		{"whitespace in value", []string{"relay:env=prod x"}},
-		// A second `=` is refused whichever half it lands in, because `=` is
-		// outside the allowlist for BOTH key and value. That is what makes
-		// splitScopeEntry's cut direction unobservable downstream — see
-		// TestEnroll_Success's note — so it is pinned here rather than assumed.
-		{"two equals signs", []string{"relay:a=b=c"}},
+		{"state-prefix", []string{"state:connected=true"}},
+		{"upper-case prefix", []string{"TAG:env=prod"}},
+		{"no equals", []string{"tag:env"}},
+		{"empty key", []string{"tag:=prod"}},
+		{"empty bare entry", []string{"tag:"}},
+		{"empty entry", []string{"tag:env=prod", ""}},
+		// The comma smuggles a second, cross-namespace term into what would
+		// otherwise store as one value.
+		{"comma-injected second term", []string{"tag:env=prod,node:role=web"}},
+		{"zero width space in key", []string{"tag:quarantine\u200b=on"}},
+		{"space in value", []string{"tag:env=prod x"}},
+		{"two equals signs", []string{"tag:a=b=c"}},
+		{"64-byte key", []string{"tag:" + long(64) + "=v"}},
+		{"256-byte value", []string{"tag:k=" + long(256)}},
+		{"a key twice", []string{"tag:env=prod", "tag:env=dev"}},
+		{"65 tags", many},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, _, err := svc.Create(ctx, tc.scope, time.Hour)
-			if !errors.Is(err, ErrInvalidScope) {
-				t.Errorf("scope %v: want ErrInvalidScope, got %v", tc.scope, err)
+			repo := NewMemoryRepository()
+			svc := NewService(repo)
+			_, _, err := svc.Create(context.Background(), tc.tags, time.Hour, asHuman)
+			if !errors.Is(err, ErrInvalidInitialTags) {
+				t.Errorf("tags %v: want ErrInvalidInitialTags, got %v", tc.tags, err)
+			}
+			if n := len(repo.tokens); n != 0 {
+				t.Errorf("a refused mint stored %d tokens", n)
 			}
 		})
 	}
 }
 
-// TestCreate_WellFormedScopeAccepted checks that a scope whose entries all
-// pass registry.WellFormedLabel is accepted in a single Create call,
-// including a no-`=` entry (empty value).
+// TestCreate_InitialTagsWellFormedAccepted checks that none, one, several and
+// the longest tags the bounds allow are accepted and stored verbatim.
 //
-// RED ON: an over-tight gate — requiring `=`, rejecting the empty value, or
-// running WellFormedLabel over the whole entry instead of the split halves
-// (the last would reject the ":" in "relay:" itself and is the most likely
-// implementation slip).
-// Proves EN-3.
-func TestCreate_WellFormedScopeAccepted(t *testing.T) {
-	svc, _ := newTestService(t)
-	ctx := context.Background()
-
-	scope := []string{"relay:env=prod", "relay:role=web-1.a_b", "relay:marker"}
-	if _, _, err := svc.Create(ctx, scope, time.Hour); err != nil {
-		t.Errorf("Create(%v): unexpected error: %v", scope, err)
+// RED ON: an over-tight gate that rejects an empty value, the length maxima, or
+// no tags at all.
+//
+// Proves EN-40.
+func TestCreate_InitialTagsWellFormedAccepted(t *testing.T) {
+	maxKey := strings.Repeat("k", 63)
+	maxValue := strings.Repeat("v", 255)
+	cases := []struct {
+		name string
+		tags []string
+	}{
+		{"none", nil},
+		{"one", []string{"tag:env=prod"}},
+		{"several", []string{"tag:env=prod", "tag:role=web-1.a_b", "tag:marker="}},
+		{"longest key and value", []string{"tag:" + maxKey + "=" + maxValue}},
 	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, _ := newTestService(t)
+			tok, _, err := svc.Create(context.Background(), tc.tags, time.Hour, asHuman)
+			if err != nil {
+				t.Fatalf("Create(%v): unexpected error: %v", tc.tags, err)
+			}
+			if len(tok.InitialTags) != len(tc.tags) {
+				t.Fatalf("stored %v, want %v", tok.InitialTags, tc.tags)
+			}
+			for i := range tc.tags {
+				if tok.InitialTags[i] != tc.tags[i] {
+					t.Errorf("stored tag[%d] = %q, want %q verbatim", i, tok.InitialTags[i], tc.tags[i])
+				}
+			}
+		})
+	}
+}
+
+// TestCreate_RelayLabelRefusedNamingIt checks that a relay: label refuses the
+// mint naming the label, whoever mints: a machine Account naming one is told
+// about the label, not about being a machine.
+//
+// RED ON: running the machine-Account rule before the tag syntax, which would
+// answer a machine mint of relay:env=prod with the human-only refusal.
+//
+// Proves EN-35.
+func TestCreate_RelayLabelRefusedNamingIt(t *testing.T) {
+	minters := map[string]Option{"human": asHuman, "machine": asMachine}
+	for who, minter := range minters {
+		for _, label := range []string{"relay:env=prod", "relay:node-id=x"} {
+			t.Run(who+" "+label, func(t *testing.T) {
+				svc, _ := newTestService(t)
+				_, _, err := svc.Create(context.Background(), []string{"tag:ok=1", label}, time.Hour, minter)
+				if !errors.Is(err, ErrInvalidInitialTags) || !errors.Is(err, registry.ErrInitialTagRelayLabel) {
+					t.Fatalf("want ErrInvalidInitialTags wrapping ErrInitialTagRelayLabel, got %v", err)
+				}
+				if errors.Is(err, ErrInitialTagsNeedHuman) {
+					t.Errorf("a relay: label must not be reported as the machine-Account rule: %v", err)
+				}
+				if !strings.Contains(err.Error(), label) {
+					t.Errorf("the refusal does not name %q: %v", label, err)
+				}
+			})
+		}
+	}
+}
+
+// TestCreate_MachineAccountNamingTagsRefused checks that a machine Account's
+// mint naming any initial tag is refused and stores nothing, that a machine
+// mint naming none is unaffected, and that a mint with only WithCreatedBy,
+// which records no human minter, is treated as a machine.
+//
+// RED ON: deciding the rule from anything but the minting Account's recorded
+// kind, or defaulting an unknown minter to human.
+//
+// Proves EN-44.
+func TestCreate_MachineAccountNamingTagsRefused(t *testing.T) {
+	t.Run("machine naming a tag", func(t *testing.T) {
+		repo := NewMemoryRepository()
+		_, _, err := NewService(repo).Create(context.Background(), []string{"tag:env=prod"}, time.Hour, asMachine)
+		if !errors.Is(err, ErrInitialTagsNeedHuman) {
+			t.Fatalf("want ErrInitialTagsNeedHuman, got %v", err)
+		}
+		if n := len(repo.tokens); n != 0 {
+			t.Errorf("a refused mint stored %d tokens", n)
+		}
+	})
+	t.Run("machine naming none", func(t *testing.T) {
+		svc, _ := newTestService(t)
+		tok, _, err := svc.Create(context.Background(), nil, time.Hour, asMachine)
+		if err != nil {
+			t.Fatalf("a machine mint naming no tag: %v", err)
+		}
+		if tok.CreatedByHuman || tok.CreatedByAccountID != "acct-bot" || tok.CreatedBy != "bot:admin" {
+			t.Errorf("minter snapshot = %q %q human=%v", tok.CreatedBy, tok.CreatedByAccountID, tok.CreatedByHuman)
+		}
+	})
+	t.Run("no recorded minter", func(t *testing.T) {
+		svc, _ := newTestService(t)
+		_, _, err := svc.Create(context.Background(), []string{"tag:env=prod"}, time.Hour, WithCreatedBy("someone:admin"))
+		if !errors.Is(err, ErrInitialTagsNeedHuman) {
+			t.Fatalf("want ErrInitialTagsNeedHuman, got %v", err)
+		}
+	})
 }
 
 // TestValidate_RefusesLegacyMalformedScope pins the second write seam: a
@@ -431,10 +542,10 @@ func TestValidate_RefusesLegacyMalformedScope(t *testing.T) {
 	const secret = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 	hash := sha256.Sum256([]byte(secret))
 	legacy := &Token{
-		ID:         "deadbeefdeadbeefdeadbeefdeadbeef", // 32 hex chars, tokenIDLen's shape
-		SecretHash: hash[:],
-		Scope:      []string{"relay:quarantine\u200b=on"},
-		ExpiresAt:  time.Now().Add(time.Hour),
+		ID:          "deadbeefdeadbeefdeadbeefdeadbeef", // 32 hex chars, tokenIDLen's shape
+		SecretHash:  hash[:],
+		LegacyScope: []string{"relay:quarantine\u200b=on"},
+		ExpiresAt:   time.Now().Add(time.Hour),
 	}
 	if err := repo.Create(ctx, legacy); err != nil {
 		t.Fatalf("seeding legacy token: %v", err)
@@ -454,6 +565,80 @@ func TestValidate_RefusesLegacyMalformedScope(t *testing.T) {
 	}
 }
 
+// TestValidate_StoredMachineMintedTagsRefusedBeforeAUse checks that a stored
+// token naming initial tags whose minter was not a human Account is refused
+// without burning a use: only a human Account writes tags.
+//
+// RED ON: trusting the stored row, or checking after the repo.Save that burns a use.
+//
+// Proves EN-44.
+func TestValidate_StoredMachineMintedTagsRefusedBeforeAUse(t *testing.T) {
+	repo := NewMemoryRepository()
+	svc := NewService(repo)
+	ctx := context.Background()
+
+	const secret = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	hash := sha256.Sum256([]byte(secret))
+	stored := &Token{
+		ID:          "deadbeefdeadbeefdeadbeefdeadbeef",
+		SecretHash:  hash[:],
+		InitialTags: []string{"tag:env=prod"},
+		ExpiresAt:   time.Now().Add(time.Hour),
+		CreatedBy:   "bot:admin",
+	}
+	if err := repo.Create(ctx, stored); err != nil {
+		t.Fatalf("seeding token: %v", err)
+	}
+
+	_, err := svc.Validate(ctx, stored.ID+secretSep+secret)
+	if !errors.Is(err, ErrInvalidInitialTags) || !errors.Is(err, ErrInitialTagsNeedHuman) {
+		t.Fatalf("Validate: want ErrInvalidInitialTags wrapping ErrInitialTagsNeedHuman, got %v", err)
+	}
+	got, err := repo.ByID(ctx, stored.ID)
+	if err != nil {
+		t.Fatalf("ByID: %v", err)
+	}
+	if got.Uses != 0 {
+		t.Errorf("Uses = %d, want 0 — a refusal must not burn a use", got.Uses)
+	}
+}
+
+// TestValidate_StoredMalformedInitialTagRefusedBeforeAUse checks that a stored
+// token whose initial tags no longer hold is refused without burning a use.
+//
+// Proves EN-40.
+func TestValidate_StoredMalformedInitialTagRefusedBeforeAUse(t *testing.T) {
+	repo := NewMemoryRepository()
+	svc := NewService(repo)
+	ctx := context.Background()
+
+	const secret = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	hash := sha256.Sum256([]byte(secret))
+	stored := &Token{
+		ID:                 "deadbeefdeadbeefdeadbeefdeadbeef",
+		SecretHash:         hash[:],
+		InitialTags:        []string{"tag:quarantine\u200b=on"},
+		ExpiresAt:          time.Now().Add(time.Hour),
+		CreatedBy:          "alice:admin",
+		CreatedByAccountID: "acct-alice",
+		CreatedByHuman:     true,
+	}
+	if err := repo.Create(ctx, stored); err != nil {
+		t.Fatalf("seeding token: %v", err)
+	}
+
+	if _, err := svc.Validate(ctx, stored.ID+secretSep+secret); !errors.Is(err, ErrInvalidInitialTags) {
+		t.Fatalf("Validate: want ErrInvalidInitialTags, got %v", err)
+	}
+	got, err := repo.ByID(ctx, stored.ID)
+	if err != nil {
+		t.Fatalf("ByID: %v", err)
+	}
+	if got.Uses != 0 {
+		t.Errorf("Uses = %d, want 0 — a refusal must not burn a use", got.Uses)
+	}
+}
+
 // TestCreate_InvalidTTL checks that zero and negative TTLs are rejected.
 func TestCreate_InvalidTTL(t *testing.T) {
 	svc, _ := newTestService(t)
@@ -461,7 +646,7 @@ func TestCreate_InvalidTTL(t *testing.T) {
 
 	cases := []time.Duration{0, -time.Second, -time.Hour}
 	for _, d := range cases {
-		_, _, err := svc.Create(ctx, testScope, d)
+		_, _, err := svc.Create(ctx, nil, d)
 		if !errors.Is(err, ErrInvalidTTL) {
 			t.Errorf("TTL %v: want ErrInvalidTTL, got %v", d, err)
 		}
@@ -484,7 +669,7 @@ func TestRevoke_Idempotent(t *testing.T) {
 	svc, _ := newTestService(t)
 	ctx := context.Background()
 
-	tok, _, err := svc.Create(ctx, testScope, time.Hour)
+	tok, _, err := svc.Create(ctx, nil, time.Hour)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -513,7 +698,7 @@ func TestService_IsRevoked(t *testing.T) {
 	}
 
 	// Existing, not-revoked token.
-	tok, _, err := svc.Create(ctx, testScope, time.Hour)
+	tok, _, err := svc.Create(ctx, nil, time.Hour)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -550,7 +735,7 @@ func TestNoSecretInLogs(t *testing.T) {
 	svc, _ := newTestService(t)
 	ctx := context.Background()
 
-	tok, plaintext, err := svc.Create(ctx, testScope, time.Hour)
+	tok, plaintext, err := svc.Create(ctx, nil, time.Hour)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}

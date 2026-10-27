@@ -51,12 +51,12 @@ func TestMCPExecution_RealDaemon_E2E(t *testing.T) {
 	f := startRelay(t, WithControlPlane(), WithTCPNodePlane())
 	deps := f.Deps
 
-	// Mint an Enrollment Token scoped relay:env=test — the daemon's relay:
+	// Mint an Enrollment Token scoped tag:env=test — the daemon's relay:
 	// label after enrollment, which the run_operation selector below targets
 	// (ADR-0006, invariant 7) — and hand the daemon only its join string.
 	relaytest.StartDaemon(t, relaytest.DaemonConfig{
 		Bin:        daemonBin,
-		JoinString: mintJoinString(t, deps, "relay:env=test"),
+		JoinString: mintJoinString(t, deps, "tag:env=test"),
 		StateDir:   t.TempDir(),
 		PolicyPath: relaytest.WriteTempFile(t, "policy-*.toml", relaytest.FixturePolicy),
 		Hostname:   "mcp-execution-e2e-node",
@@ -73,7 +73,7 @@ func TestMCPExecution_RealDaemon_E2E(t *testing.T) {
 
 	res := relaytest.CallTool(t, session, "run_operation", map[string]any{
 		"operation":    "system.facts",
-		"selector":     "relay:env=test",
+		"selector":     "tag:env=test",
 		"wait_seconds": 300,
 	})
 	if res.IsError {

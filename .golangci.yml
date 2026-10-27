@@ -206,6 +206,7 @@ linters:
             - github.com/Felag-Engineering/relay/relay/internal/capability$
             - github.com/Felag-Engineering/relay/relay/internal/controlplane$
             - github.com/Felag-Engineering/relay/relay/internal/enroll$
+            - github.com/Felag-Engineering/relay/relay/internal/harnesssetup$
             - github.com/Felag-Engineering/relay/relay/internal/jobs$
             - github.com/Felag-Engineering/relay/relay/internal/nodestate$
             - github.com/Felag-Engineering/relay/relay/internal/opvocab$
@@ -390,6 +391,25 @@ linters:
             - context$
             - log/slog$
 
+        # The Harness setup renderer builds text around a live credential and never
+        # reaches the CA, the store or configuration.
+        harnesssetup-imports:
+          list-mode: strict
+          files:
+            - "**/internal/harnesssetup/*.go"
+            - "!$test"
+          allow:
+            - bytes$
+            - encoding/json$
+            - encoding/pem$
+            - errors$
+            - fmt$
+            - log/slog$
+            - net$
+            - net/url$
+            - strings$
+            - github.com/Felag-Engineering/relay/relay/internal/accounts$
+
         # The event bus must never be able to name a result type: capability.NodeResult,
         # jobs.Task and the mcp wire structs carry captured output, and a bus that can
         # spell one is one refactor away from shipping it (ADR-0025).
@@ -409,6 +429,20 @@ linters:
           deny:
             - pkg: github.com/Felag-Engineering/relay/
               desc: "package events never imports a Relay package, where every result-shaped type lives (ADR-0025)"
+
+        # The health route answers without a credential, so it must not be able to name
+        # a capability, the store or a Node: it imports the standard library only.
+        health-imports:
+          list-mode: strict
+          files:
+            - "**/internal/controlplane/health/*.go"
+            - "!$test"
+          allow:
+            - net/http$
+            - sync/atomic$
+          deny:
+            - pkg: github.com/Felag-Engineering/relay/
+              desc: "the health endpoint answers without a credential and reaches no Relay package (invariant 10)"
 
         # revocation never learns what a Principal or an audit record is. RevokeNode is
         # also the Relay's own cleanup after a failed enrollment, with no caller to

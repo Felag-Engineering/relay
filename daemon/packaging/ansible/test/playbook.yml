@@ -1,0 +1,8 @@
+---
+# The test fixture for scripts/install-matrix-ansible-role.sh. It sets no pipelining: the test
+# proves the role forces it.
+- hosts: node
+  become: true
+  gather_facts: false
+  roles:
+    - relay_daemon

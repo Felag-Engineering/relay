@@ -448,8 +448,9 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 }
 
 // tagInternalWriteNames are the tag write's internal seams: the unfloored
-// recorder, the audit repository's atomic write, and the in-memory test seeder.
-// The Console holds the concrete audit repository as d.audit, which offers the
+// recorder, the audit repository's atomic write, the in-memory test seeder, and
+// WriteInitialTags, which writes as another Account and so is the Enrollment
+// service's alone. The Console holds the concrete audit repository as d.audit, which offers the
 // atomic write without its floor, so naming any of them, by selector or as a
 // declared seam method, is refused (invariant 7, invariant 10, ADR-0050). The
 // floored entry, WriteTag, is not on this list: the Console writes a tag only
@@ -460,6 +461,7 @@ var tagInternalWriteNames = map[string]bool{
 	"ApplyTagChanges":    true,
 	"TagWriteRecorder":   true,
 	"TagWriteAppender":   true,
+	"WriteInitialTags":   true,
 }
 
 // tagInternalWriteViolations is the tag rule of dispatchViolations,
@@ -639,6 +641,13 @@ import (
 func f(a PolicyAliasWriter) { _ = a.SetPolicyAlias(context.Background(), capability.Principal{}, "fp", "n") }
 `,
 			wantSubstr: "",
+		},
+		{
+			name: "naming the write of initial tags as another Account is refused",
+			src: `package console
+func f(x interface{ WriteInitialTags() }) { x.WriteInitialTags() }
+`,
+			wantSubstr: "references WriteInitialTags",
 		},
 		{
 			// The false-positive guard: this is exactly what seams.go and

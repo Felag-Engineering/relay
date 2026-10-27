@@ -15,14 +15,17 @@ import (
 // after a read-back.
 func sampleToken(id string) *enroll.Token {
 	return &enroll.Token{
-		ID:         id,
-		SecretHash: []byte{0xde, 0xad, 0xbe, 0xef},
-		Scope:      []string{"relay:env=prod", "relay:role=web"},
-		ExpiresAt:  roundTripTime(time.Date(2026, 8, 1, 12, 0, 0, 42, time.UTC)),
-		MaxUses:    5,
-		Uses:       0,
-		CreatedAt:  roundTripTime(time.Date(2026, 7, 12, 9, 30, 0, 7, time.UTC)),
-		CreatedBy:  "admin@example",
+		ID:                 id,
+		SecretHash:         []byte{0xde, 0xad, 0xbe, 0xef},
+		LegacyScope:        []string{"relay:env=prod", "relay:role=web"},
+		InitialTags:        []string{"tag:env=prod", "tag:role=web"},
+		ExpiresAt:          roundTripTime(time.Date(2026, 8, 1, 12, 0, 0, 42, time.UTC)),
+		MaxUses:            5,
+		Uses:               0,
+		CreatedAt:          roundTripTime(time.Date(2026, 7, 12, 9, 30, 0, 7, time.UTC)),
+		CreatedBy:          "admin:admin",
+		CreatedByAccountID: "acct-admin",
+		CreatedByHuman:     true,
 	}
 }
 
@@ -42,6 +45,30 @@ func TestTokens_CreateByIDRoundTrip(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("round trip mismatch:\n got %+v\nwant %+v", got, want)
+	}
+}
+
+// A token that names no initial tags and no legacy scope is stored as empty
+// arrays, because both columns are NOT NULL, and reads back with none.
+func TestTokens_CreateWithNoTagsRoundTrips(t *testing.T) {
+	st, _ := openTestStore(t)
+	repo := st.Tokens()
+	ctx := context.Background()
+
+	want := sampleToken("bare")
+	want.LegacyScope = nil
+	want.InitialTags = nil
+	want.CreatedByAccountID = ""
+	want.CreatedByHuman = false
+	if err := repo.Create(ctx, want); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	got, err := repo.ByID(ctx, "bare")
+	if err != nil {
+		t.Fatalf("ByID: %v", err)
+	}
+	if len(got.LegacyScope) != 0 || len(got.InitialTags) != 0 || got.CreatedByHuman || got.CreatedByAccountID != "" {
+		t.Errorf("read back %+v, want no scope, tags or minter facts", got)
 	}
 }
 

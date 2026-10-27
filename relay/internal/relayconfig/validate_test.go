@@ -1,6 +1,8 @@
 package relayconfig
 
 import (
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -300,16 +302,58 @@ func TestValidate_MutateCapAboveReadCapWarns(t *testing.T) {
 	}
 }
 
-func TestValidate_AdvertisedHostMustBeCertificateHostname(t *testing.T) {
+func TestValidate_AdvertisedHostIsANamedCertificateName(t *testing.T) {
 	t.Run("another host is refused without naming either", func(t *testing.T) {
 		got := loadErr(t, minimal+"[node_plane]\nadvertised_address = \"other.example.org:7654\"\n")
-		if !strings.Contains(got, "node_plane.advertised_address (line 8)") || !strings.Contains(got, "tls.hostname") {
-			t.Fatalf("error = %q", got)
+		for _, want := range []string{"node_plane.advertised_address (line 8)", "tls.hostname", "tls.extra_names"} {
+			if !strings.Contains(got, want) {
+				t.Fatalf("error does not contain %q: %q", want, got)
+			}
 		}
 		for _, host := range []string{"other.example.org", "relay.example.internal"} {
 			if strings.Contains(got, host) {
 				t.Errorf("error names the host %q: %q", host, got)
 			}
+		}
+	})
+	t.Run("a host named in extra_names is accepted", func(t *testing.T) {
+		for _, tc := range []struct{ extra, advertised string }{
+			{`"NAT.example.org"`, "nat.example.org:7654"},
+			{`"203.0.113.7"`, "203.0.113.7:7654"},
+			{`"2001:DB8::7"`, "[2001:db8::7]:7654"},
+		} {
+			src := minimal + "extra_names = [" + tc.extra + "]\n[node_plane]\nadvertised_address = \"" + tc.advertised + "\"\n"
+			if got := mustLoad(t, src).EffectiveAdvertisedAddress(); got != tc.advertised {
+				t.Errorf("advertised %s with extra_names %s: address = %q", tc.advertised, tc.extra, got)
+			}
+		}
+	})
+	t.Run("a host a certificate cannot carry is refused by shape", func(t *testing.T) {
+		for _, host := range []string{"*.example.org", "0.0.0.0", "[::]", "bad_host", "224.0.0.1", "010.0.0.1", "[::ffff:192.0.2.1]", "[::ffff:c000:201]", "0.1.2.3"} {
+			got := loadErr(t, minimal+"[node_plane]\nadvertised_address = \""+host+":7654\"\n")
+			if !strings.Contains(got, "node_plane.advertised_address (line 8)") {
+				t.Errorf("%s: error does not name the setting: %q", host, got)
+			}
+			if strings.Contains(got, strings.Trim(host, "[]")) {
+				t.Errorf("%s: error names the host: %q", host, got)
+			}
+		}
+	})
+	t.Run("a mapped advertised host is refused by shape even when its IPv4 form is named", func(t *testing.T) {
+		got := loadErr(t, minimal+"extra_names = [\"192.0.2.1\"]\n[node_plane]\nadvertised_address = \"[::ffff:192.0.2.1]:7654\"\n")
+		for _, want := range []string{"node_plane.advertised_address (line 9)", "not an IPv4-mapped IPv6 one"} {
+			if !strings.Contains(got, want) {
+				t.Errorf("error does not contain %q: %q", want, got)
+			}
+		}
+		if strings.Contains(got, "192.0.2.1") {
+			t.Errorf("error names the host: %q", got)
+		}
+	})
+	t.Run("a bad extra_names gives no second error", func(t *testing.T) {
+		got := loadErr(t, minimal+"extra_names = [\"*.example.org\"]\n[node_plane]\nadvertised_address = \"other.example.org:7654\"\n")
+		if !strings.Contains(got, "tls.extra_names") || strings.Contains(got, "node_plane.advertised_address") {
+			t.Fatalf("error = %q", got)
 		}
 	})
 	t.Run("the same host in another case is accepted", func(t *testing.T) {
@@ -333,4 +377,144 @@ func TestValidate_AdvertisedHostMustBeCertificateHostname(t *testing.T) {
 			t.Fatalf("address = %q", got)
 		}
 	})
+}
+
+// The join string carries tls.hostname when no address is advertised, so
+// tls.hostname must pass the whole rule a certificate name does.
+func TestValidate_HostnameIsACertificateName(t *testing.T) {
+	cases := []struct {
+		reason string
+		value  string
+	}{
+		{"must not be a wildcard address", "0.0.0.0"},
+		{"must not be a wildcard", "*.example.internal"},
+		{"must be written as an IPv4 address, not an IPv4-mapped IPv6 one", "::ffff:192.0.2.1"},
+		{"must not end in a numeric label", "10.0.0"},
+		{reasonNotDialable, "fe80::1"},
+		{reasonNotDialable, "224.0.0.1"},
+		{"must be a DNS name or an IP address", "-bad.example"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.value, func(t *testing.T) {
+			src := "[tls]\nhostname = " + strconv.Quote(tc.value) + "\n" + missingOthers("tls")
+			got := loadErr(t, src)
+			for _, want := range []string{"tls.hostname (line 2)", tc.reason} {
+				if !strings.Contains(got, want) {
+					t.Errorf("error does not contain %q: %q", want, got)
+				}
+			}
+			if strings.Contains(got, tc.value) {
+				t.Errorf("error carries the value: %q", got)
+			}
+		})
+	}
+
+	t.Run("an address or a name a daemon can dial is accepted", func(t *testing.T) {
+		for _, host := range []string{"relay.example.internal", "localhost", "203.0.113.7", "2001:db8::7", "127.0.0.1"} {
+			src := "[tls]\nhostname = " + strconv.Quote(host) + "\n" + missingOthers("tls")
+			if got := mustLoad(t, src).TLS.Hostname; got != host {
+				t.Errorf("hostname %q loaded as %q", host, got)
+			}
+		}
+	})
+}
+
+// Proves RC-47.
+func TestValidate_ExtraNamesEachEntryChecked(t *testing.T) {
+	list := func(entries ...string) string {
+		quoted := make([]string, len(entries))
+		for i, e := range entries {
+			quoted[i] = strconv.Quote(e)
+		}
+		return minimal + "extra_names = [" + strings.Join(quoted, ", ") + "]\n"
+	}
+
+	t.Run("accepted entries load unchanged and in order", func(t *testing.T) {
+		in := []string{
+			"lb.example.internal", "203.0.113.10", "2001:db8::9", "LB.Example.Internal",
+			"127.0.0.1", "lb.example.internal", "3com.example.test", "10.example.test",
+			"xn--bcher-kva.example",
+		}
+		if got := mustLoad(t, list(in...)).TLS.ExtraNames; !slices.Equal(got, in) {
+			t.Fatalf("ExtraNames = %v, want %v", got, in)
+		}
+	})
+
+	refused := []struct {
+		reason  string
+		entries []string
+	}{
+		{"must not be empty", []string{""}},
+		{"must not be a wildcard", []string{"*.example.internal", "relay.*.internal", "*"}},
+		{"must not be a wildcard address", []string{"0.0.0.0", "::"}},
+		{reasonNotDialable, []string{"224.0.0.1", "ff02::1", "fe80::1", "255.255.255.255", "0.1.2.3"}},
+		{"must be written as an IPv4 address, not an IPv4-mapped IPv6 one", []string{"::ffff:192.0.2.1", "::ffff:c000:201", "::FFFF:10.0.0.1"}},
+		{"must not end in a numeric label", []string{"010.0.0.1", "10.0.0", "1.2.3.4.5", "0x7f.0.0.1", "0x7f000001", "4294967295"}},
+		{"must be a DNS name or an IP address", []string{
+			"fe80::1%eth0", "10.0.0.0/8", "lb.example.internal:7654", "[2001:db8::1]",
+			"https://lb.example.internal", "bad_name.example", "lb.example.internal.",
+			strings.Repeat("a", 63) + "." + strings.Repeat("b", 63) + "." + strings.Repeat("c", 63) + "." + strings.Repeat("d", 63) + ".example",
+		}},
+	}
+	for _, tc := range refused {
+		for _, entry := range tc.entries {
+			t.Run(tc.reason+"/"+entry, func(t *testing.T) {
+				got := loadErr(t, list("ok.example.internal", entry))
+				for _, want := range []string{"tls.extra_names (line 7)", "entry 2 ", tc.reason} {
+					if !strings.Contains(got, want) {
+						t.Errorf("error does not contain %q: %q", want, got)
+					}
+				}
+				if entry != "" && strings.Contains(got, entry) {
+					t.Errorf("error carries the entry's text: %q", got)
+				}
+			})
+		}
+	}
+
+	t.Run("every bad entry is reported by position", func(t *testing.T) {
+		got := loadErr(t, list("*.a.example", "ok.example.internal", "bad_name"))
+		for _, want := range []string{"entry 1 ", "entry 3 "} {
+			if !strings.Contains(got, want) {
+				t.Errorf("error does not contain %q: %q", want, got)
+			}
+		}
+		if strings.Contains(got, "entry 2 ") {
+			t.Errorf("error refuses the good entry: %q", got)
+		}
+	})
+	t.Run("an empty list is refused", func(t *testing.T) {
+		got := loadErr(t, minimal+"extra_names = []\n")
+		if !strings.Contains(got, "tls.extra_names (line 7)") || !strings.Contains(got, reasonEmpty) {
+			t.Fatalf("error = %q", got)
+		}
+	})
+	t.Run("a wrong type is refused without its value", func(t *testing.T) {
+		for _, body := range []string{"extra_names = [1]\n", "extra_names = \"secret-lb.example\"\n"} {
+			got := loadErr(t, minimal+body)
+			if !strings.Contains(got, "tls.extra_names") || strings.Contains(got, "secret-lb") {
+				t.Errorf("%s: error = %q", strings.TrimSpace(body), got)
+			}
+		}
+	})
+}
+
+// Proves RC-47.
+func TestValidate_ExtraNamesCappedAt32(t *testing.T) {
+	list := func(n int) string {
+		entries := make([]string, n)
+		for i := range entries {
+			entries[i] = `"n` + strconv.Itoa(i) + `.example.internal"`
+		}
+		return minimal + "extra_names = [" + strings.Join(entries, ", ") + "]\n"
+	}
+	if got := mustLoad(t, list(32)).TLS.ExtraNames; len(got) != 32 {
+		t.Fatalf("loaded %d entries, want 32", len(got))
+	}
+	got := loadErr(t, list(33))
+	for _, want := range []string{"tls.extra_names", "at most 32"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("error does not contain %q: %q", want, got)
+		}
+	}
 }

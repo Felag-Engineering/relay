@@ -1,0 +1,266 @@
+---
+# Installs the relay-daemon package and joins the Node with the join string from the operator's
+# vault. Every task that references the join string carries no_log.
+
+- name: A join string is supplied (relay_daemon_join_string, from the vault)
+  ansible.builtin.assert:
+    that:
+      - relay_daemon_join_string is defined
+      - relay_daemon_join_string is string
+      - relay_daemon_join_string | length > 0
+    quiet: true
+  no_log: true
+
+- name: A package directory is supplied (relay_daemon_package_dir)
+  ansible.builtin.assert:
+    that: relay_daemon_package_dir | length > 0
+    fail_msg: relay_daemon_package_dir must name a directory on the controller holding the verified relay-daemon package.
+    quiet: true
+
+# Read-only, and not no_log: it stages no secret.
+- name: Look for the Node's identity files
+  ansible.builtin.stat:
+    path: "{{ relay_daemon_state_dir }}/{{ item }}"
+    get_checksum: false
+  loop: "{{ relay_daemon_identity_files }}"
+  register: relay_daemon_identity
+
+- name: Name the identity files that are present
+  ansible.builtin.set_fact:
+    relay_daemon_identity_present: "{{ relay_daemon_identity.results | selectattr('stat.exists') | map(attribute='item') | list }}"
+
+- name: Refuse a partial identity
+  ansible.builtin.fail:
+    msg: >-
+      partial identity in {{ relay_daemon_state_dir }}:
+      present {{ relay_daemon_identity_present | join(', ') }},
+      missing {{ relay_daemon_identity_files | difference(relay_daemon_identity_present) | join(', ') }};
+      the role installs nothing and does not join
+  when:
+    - relay_daemon_identity_present | length > 0
+    - relay_daemon_identity_present | length < relay_daemon_identity_files | length
+
+# All four files present means enrolled: no install and no join. Join is a no-op there
+# anyway, and the customer's config management owns upgrades (ADR-0014, ADR-0048).
+- name: Join a Node that holds no identity
+  when: relay_daemon_identity_present | length == 0
+  block:
+    # Read-only. The role installs the package only when the daemon is absent, at any version,
+    # and never reads the environment file to decide.
+    - name: Look for an installed daemon
+      ansible.builtin.stat:
+        path: /usr/bin/relay-daemon
+        get_checksum: false
+      register: relay_daemon_binary
+
+    - name: Install the package on a Node that has no daemon
+      when: not relay_daemon_binary.stat.exists
+      block:
+        - name: Gather the architecture and package manager
+          ansible.builtin.setup:
+            gather_subset: [min]
+
+        - name: The package manager is supported
+          ansible.builtin.assert:
+            that: ansible_facts.pkg_mgr in ['apt', 'dnf', 'dnf5']
+            fail_msg: "unsupported package manager {{ ansible_facts.pkg_mgr }}"
+            quiet: true
+
+        - name: The architecture is supported
+          ansible.builtin.assert:
+            that: ansible_facts.architecture in relay_daemon_arch
+            fail_msg: "unsupported architecture {{ ansible_facts.architecture }}; the role supports {{ relay_daemon_arch.keys() | join(', ') }}"
+            quiet: true
+
+        - name: Name this Node's package file
+          ansible.builtin.set_fact:
+            relay_daemon_package_pattern: >-
+              {{ relay_daemon_package_dir ~ '/relay-daemon_*_' ~ relay_daemon_arch[ansible_facts.architecture].deb ~ '.deb'
+              if ansible_facts.pkg_mgr == 'apt'
+              else relay_daemon_package_dir ~ '/relay-daemon-[0-9]*.' ~ relay_daemon_arch[ansible_facts.architecture].rpm ~ '.rpm' }}
+
+        - name: Find the package on the controller
+          ansible.builtin.set_fact:
+            relay_daemon_package_candidates: "{{ query('ansible.builtin.fileglob', relay_daemon_package_pattern) }}"
+
+        - name: Exactly one package matches
+          ansible.builtin.assert:
+            that: relay_daemon_package_candidates | length == 1
+            fail_msg: "expected exactly one package matching {{ relay_daemon_package_pattern }}"
+            quiet: true
+
+        - name: Make a directory for the package on the Node
+          ansible.builtin.tempfile:
+            state: directory
+          register: relay_daemon_tmp
+
+        - name: Copy the package to the Node
+          ansible.builtin.copy:
+            src: "{{ relay_daemon_package_candidates[0] }}"
+            dest: "{{ relay_daemon_tmp.path }}/{{ relay_daemon_package_candidates[0] | basename }}"
+            mode: "0644"
+
+        - name: Install the package (apt)
+          ansible.builtin.apt:
+            deb: "{{ relay_daemon_tmp.path }}/{{ relay_daemon_package_candidates[0] | basename }}"
+          when: ansible_facts.pkg_mgr == 'apt'
+
+        - name: Install the package (dnf)
+          ansible.builtin.dnf:
+            name: "{{ relay_daemon_tmp.path }}/{{ relay_daemon_package_candidates[0] | basename }}"
+            state: present
+          when: ansible_facts.pkg_mgr in ['dnf', 'dnf5']
+
+    # The join string travels on the join task's standard input, through the become method. The
+    # role supports two ways to be root: sudo, or a connection that is already root. Sudo can
+    # record the standard input of what it runs (log_input), which would put the string in a
+    # log on the Node, so the role refuses to join where it does. Any other become method fails
+    # closed here, because the role cannot tell what it records. Every task here is read-only
+    # and stages no secret, so none is no_log.
+    - name: Find the user the role connects as, before any become
+      ansible.builtin.command:
+        argv: [id, -u]
+      become: false
+      vars:
+        ansible_become: false
+      register: relay_daemon_connecting_uid
+      changed_when: false
+
+    - name: Find the user the role runs as, with the play's become
+      ansible.builtin.command:
+        argv: [id, -u]
+      register: relay_daemon_effective_uid
+      changed_when: false
+
+    # Only sudo sets SUDO_USER, and it sets it to the user who ran sudo.
+    - name: Find who ran sudo
+      ansible.builtin.command:
+        argv: [printenv, SUDO_USER]
+      register: relay_daemon_sudo_user
+      changed_when: false
+      failed_when: false
+
+    - name: Name how the role reaches root
+      ansible.builtin.set_fact:
+        relay_daemon_via_sudo: "{{ relay_daemon_sudo_user.rc == 0 and (relay_daemon_sudo_user.stdout | trim | length > 0) }}"
+
+    - name: The role reaches root through sudo, or is already root
+      ansible.builtin.assert:
+        that:
+          - relay_daemon_effective_uid.stdout | trim == '0'
+          - relay_daemon_via_sudo or relay_daemon_connecting_uid.stdout | trim == '0'
+        fail_msg: >-
+          the role joins as root through sudo or over a connection that is already root;
+          any other become method is refused, because the role cannot tell whether it records
+          the join string. The role does not join
+        quiet: true
+
+    # sudo -ll lists the Defaults that apply to the user, command-scoped and Runas-scoped ones
+    # included, and each rule's options and tags.
+    - name: List the sudo configuration that applies to the user who ran sudo
+      ansible.builtin.command:
+        argv: [sudo, -n, -ll, -U, "{{ relay_daemon_sudo_user.stdout | trim }}"]
+      register: relay_daemon_sudo_listing
+      changed_when: false
+      failed_when: false
+      when: relay_daemon_via_sudo
+
+    # The listing may not show every command-scoped Defaults, so the sudoers files are read as
+    # well. A false positive refuses; the patterns are in vars/main.yml.
+    - name: Look for a sudoers directory
+      ansible.builtin.stat:
+        path: /etc/sudoers.d
+        get_checksum: false
+      register: relay_daemon_sudoers_dir
+      when: relay_daemon_via_sudo
+
+    - name: Look in the sudoers files for input logging
+      ansible.builtin.command:
+        argv: "{{ ['grep', '-rliE', '-e', relay_daemon_input_logging_pattern, '/etc/sudoers'] + (['/etc/sudoers.d'] if relay_daemon_sudoers_dir.stat.isdir | default(false) else []) }}"
+      register: relay_daemon_sudoers_scan
+      changed_when: false
+      failed_when: false
+      when: relay_daemon_via_sudo
+
+    - name: Refuse a Node where sudo cannot be read
+      ansible.builtin.fail:
+        msg: >-
+          cannot establish that sudo does not record standard input on this Node:
+          sudo -ll exited {{ relay_daemon_sudo_listing.rc }}
+          and the sudoers scan exited {{ relay_daemon_sudoers_scan.rc }}.
+          The role does not join
+      when:
+        - relay_daemon_via_sudo
+        - relay_daemon_sudo_listing.rc != 0 or relay_daemon_sudoers_scan.rc not in [0, 1]
+
+    - name: Refuse a Node where sudo records standard input
+      ansible.builtin.fail:
+        msg: >-
+          refusing to join: sudo records the standard input of privileged commands on this Node
+          (log_input), and the join string would be recorded in a log. The role does not join
+      when:
+        - relay_daemon_via_sudo
+        - relay_daemon_sudoers_scan.rc == 0 or relay_daemon_sudo_listing.stdout is regex(relay_daemon_input_logging_listing_pattern)
+
+    # The effective values, read the way the join task reads them, compared with the literal
+    # guard path so that no variable can move both sides. An extra-var, a set_fact, an
+    # include_vars or a role parameter outranks the task's vars below; this stops the play
+    # before the join task when any of them has changed what the guard rests on. The pipelining
+    # variables are not checked: where they are off, the guard stops the join task itself.
+    - name: Nothing has weakened the join task's guard
+      ansible.builtin.assert:
+        that:
+          - ansible_remote_tmp == '/dev/null/relay-daemon-role-stages-nothing'
+          - ansible_system_tmpdirs == ['/dev/null/relay-daemon-role-stages-nothing']
+          - ansible_become_user == 'root'
+          - ansible_sudo_user is not defined or ansible_sudo_user == 'root'
+        fail_msg: >-
+          the join task's guard has been overridden: ansible_remote_tmp, ansible_system_tmpdirs,
+          ansible_become_user and ansible_sudo_user must not be set for the role's join task
+        quiet: true
+      vars: &relay_daemon_join_vars
+        ansible_pipelining: true
+        ansible_ssh_pipelining: true
+        ansible_become_user: root
+        ansible_remote_tmp: "{{ relay_daemon_guard_dir }}"
+        ansible_system_tmpdirs: ["{{ relay_daemon_guard_dir }}"]
+
+    # One reason per line:
+    # - argv, not cmd: no shell, and the arguments are fixed.
+    # - stdin is the only channel for the string (DI-42).
+    # - no_log stops the module writing "Invoked with" to the Node's journal and censors the
+    #   controller's output.
+    # - Both pipelining variables are set because the ssh plugin reads both and the last one
+    #   it finds wins. Pipelining sends the module and its arguments over stdin, so nothing is
+    #   staged on the Node.
+    # - become_user root makes the become privileged, which keeps Ansible on remote_tmp rather
+    #   than the system temporary directories; system_tmpdirs names the guard as well, for a
+    #   Node whose Ansible does not count root as privileged.
+    # - remote_tmp under /dev/null is the fail-closed guard: wherever pipelining is off for
+    #   this task, creating the temporary directory fails and the task stops before anything
+    #   is written.
+    - name: relay-daemon join reads the join string on standard input
+      ansible.builtin.command:
+        argv: [/usr/bin/relay-daemon, join]
+        stdin: "{{ relay_daemon_join_string }}"
+      vars: *relay_daemon_join_vars
+      no_log: true
+      register: relay_daemon_join
+      changed_when: true
+      failed_when: false
+
+    # join never prints the join string or any part of it (DI-42). Never print
+    # relay_daemon_join whole: at -vvv it carries the module arguments.
+    - name: Fail when relay-daemon join did not succeed
+      ansible.builtin.fail:
+        msg: >-
+          relay-daemon join exited {{ relay_daemon_join.rc | default('without a status') }}:
+          {{ relay_daemon_join.stderr | default('') }}
+      when: relay_daemon_join.rc is not defined or relay_daemon_join.rc != 0
+
+  always:
+    - name: Remove the package directory from the Node
+      ansible.builtin.file:
+        path: "{{ relay_daemon_tmp.path }}"
+        state: absent
+      when: relay_daemon_tmp is defined and relay_daemon_tmp.path is defined

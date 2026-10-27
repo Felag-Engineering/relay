@@ -395,6 +395,20 @@ func (a *sqliteApprovals) BindJob(ctx context.Context, id, jobID string, now tim
 	return updated, nil
 }
 
+// CountWaiting counts pending Requests whose deadline is after now. The
+// comparison is the complement of ExpirePending's (expires_at <= now), over the
+// same stored format, and the (state, expires_at) index covers it.
+func (a *sqliteApprovals) CountWaiting(ctx context.Context, now time.Time) (int, error) {
+	var n int
+	if err := a.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM approval_requests WHERE state = ? AND expires_at > ?`,
+		int(approval.StatePending), formatTime(roundTripTime(now)),
+	).Scan(&n); err != nil {
+		return 0, fmt.Errorf("count waiting approval requests: %w", err)
+	}
+	return n, nil
+}
+
 // ExpirePending moves lapsed pending Requests to StateExpired.
 //
 // The scan and the update run in one transaction so the returned set is exactly

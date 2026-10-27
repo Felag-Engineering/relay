@@ -48,6 +48,7 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/relay/relay/internal/capability"
 	"github.com/Felag-Engineering/relay/relay/internal/controlplane"
+	"github.com/Felag-Engineering/relay/relay/internal/harnesssetup"
 	"github.com/Felag-Engineering/relay/relay/internal/logctx"
 )
 
@@ -99,6 +100,12 @@ type Deps struct {
 	// Approvals is Job detail's read of a dispatch's approval record.
 	Approvals ApprovalReader
 	Freeze    FreezeReader
+
+	// HarnessSetup renders the MCP URL, the CA certificate and the Harness
+	// blocks an API Token mint shows beside its plaintext. It carries public
+	// data only (never the CA key), and the minted credential is added at mint.
+	// The zero value renders no harness setup.
+	HarnessSetup harnesssetup.Target
 
 	// Trust is the CA and server-certificate fingerprints day one renders
 	// (spec 10). Nil renders that block as "not wired" rather than as two

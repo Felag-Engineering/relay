@@ -208,16 +208,16 @@ func dialNodeTCP(t *testing.T, addr string, tlsCfg *tls.Config) *grpc.ClientConn
 	return conn
 }
 
-// nodeIDForLabel finds the single connected Node whose relay: label key
+// nodeIDForLabel finds the single connected Node whose tag: label key
 // equals value, failing the test if there is none or more than one — used
 // to recover the beta Node's Relay-assigned node_id (needed for the final
-// audit_attribution subtest's node revoke) from its relay:node=beta scope
-// label, since the Relay never lets a caller choose a Node's own id.
+// audit_attribution subtest's node revoke) from its tag:node=beta initial
+// tag, since the Relay never lets a caller choose a Node's own id.
 func nodeIDForLabel(t *testing.T, deps *appDeps, key, value string) string {
 	t.Helper()
 	var found string
 	for _, n := range deps.registry.List() {
-		if n.RelayLabels[key] != value {
+		if n.TagLabels[key] != value {
 			continue
 		}
 		if found != "" {
@@ -234,7 +234,7 @@ func nodeIDForLabel(t *testing.T, deps *appDeps, key, value string) string {
 // TestSurfaceE2E_v006Acceptance proves the full v0.0.6 milestone acceptance
 // matrix end to end, through the public surfaces only, against a shared
 // harness + 3 real relay-daemon subprocesses total (2 baseline: relay:
-// env=test with relay:node=alpha/beta; 1 fresh, minted mid-test over
+// env=test with tag:node=alpha/beta; 1 fresh, minted mid-test over
 // /api/v1). Subtests are ORDERED (t.Run runs them in declaration order) and
 // share state (session, connected Node set, the facts_fanout Job id) — see
 // each subtest's own comment for why its position in the sequence matters.
@@ -244,8 +244,8 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 
 	policyPath := relaytest.WriteTempFile(t, "policy-*.toml", relaytest.FixturePolicy)
 
-	launchDaemon(t, policyPath, mintJoinString(t, deps, "relay:env=test", "relay:node=alpha"), "surface-e2e-alpha")
-	launchDaemon(t, policyPath, mintJoinString(t, deps, "relay:env=test", "relay:node=beta"), "surface-e2e-beta")
+	launchDaemon(t, policyPath, mintJoinString(t, deps, "tag:env=test", "tag:node=alpha"), "surface-e2e-alpha")
+	launchDaemon(t, policyPath, mintJoinString(t, deps, "tag:env=test", "tag:node=beta"), "surface-e2e-beta")
 
 	connected := waitForConnectedNodes(t, deps, 2, 45*time.Second)
 	if len(connected) != 2 {
@@ -261,12 +261,12 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 
 	var factsJobID string
 
-	// (1) facts_fanout: run_operation(system.facts, relay:env=test) fans out
+	// (1) facts_fanout: run_operation(system.facts, tag:env=test) fans out
 	// to both baseline Nodes; per-Node success plus a real hostname fact.
 	t.Run("facts_fanout", func(t *testing.T) {
 		res := relaytest.CallTool(t, session, "run_operation", map[string]any{
 			"operation":    "system.facts",
-			"selector":     "relay:env=test",
+			"selector":     "tag:env=test",
 			"wait_seconds": 300,
 		})
 		if res.IsError {
@@ -363,7 +363,7 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 	// structured Operation (system.facts) still succeeds afterward.
 	t.Run("raw_exec_allowed_denied_and_typed", func(t *testing.T) {
 		sleepRes := relaytest.CallTool(t, session, "raw_exec", map[string]any{
-			"argv": []string{"/bin/sleep", "1"}, "selector": "relay:env=test", "wait_seconds": 300,
+			"argv": []string{"/bin/sleep", "1"}, "selector": "tag:env=test", "wait_seconds": 300,
 		})
 		if sleepRes.IsError {
 			t.Fatalf("raw_exec(/bin/sleep 1): IsError=true; content = %+v", sleepRes.Content)
@@ -378,7 +378,7 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 		}
 
 		echoRes := relaytest.CallTool(t, session, "raw_exec", map[string]any{
-			"argv": []string{"/bin/echo", "hello"}, "selector": "relay:env=test", "wait_seconds": 300,
+			"argv": []string{"/bin/echo", "hello"}, "selector": "tag:env=test", "wait_seconds": 300,
 		})
 		if echoRes.IsError {
 			t.Fatalf("raw_exec(/bin/echo hello): IsError=true; content = %+v", echoRes.Content)
@@ -393,7 +393,7 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 		}
 
 		factsRes := relaytest.CallTool(t, session, "run_operation", map[string]any{
-			"operation": "system.facts", "selector": "relay:env=test", "wait_seconds": 300,
+			"operation": "system.facts", "selector": "tag:env=test", "wait_seconds": 300,
 		})
 		if factsRes.IsError {
 			t.Fatalf("run_operation(system.facts): IsError=true; content = %+v", factsRes.Content)
@@ -414,7 +414,7 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 	t.Run("plan_vs_apply", func(t *testing.T) {
 		t.Run("allow", func(t *testing.T) {
 			planRes := relaytest.CallTool(t, session, "run_operation", map[string]any{
-				"operation": "system.facts", "selector": "relay:env=test", "plan": true,
+				"operation": "system.facts", "selector": "tag:env=test", "plan": true,
 			})
 			if planRes.IsError {
 				t.Fatalf("run_operation(plan=true): IsError=true; content = %+v", planRes.Content)
@@ -429,7 +429,7 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 			}
 
 			applyRes := relaytest.CallTool(t, session, "run_operation", map[string]any{
-				"operation": "system.facts", "selector": "relay:env=test", "wait_seconds": 300,
+				"operation": "system.facts", "selector": "tag:env=test", "wait_seconds": 300,
 			})
 			if applyRes.IsError {
 				t.Fatalf("run_operation(plan=false): IsError=true; content = %+v", applyRes.Content)
@@ -451,7 +451,7 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 
 		t.Run("deny", func(t *testing.T) {
 			planRes := relaytest.CallTool(t, session, "raw_exec", map[string]any{
-				"argv": []string{"/bin/echo", "x"}, "selector": "relay:env=test", "plan": true,
+				"argv": []string{"/bin/echo", "x"}, "selector": "tag:env=test", "plan": true,
 			})
 			if planRes.IsError {
 				t.Fatalf("raw_exec(plan=true): IsError=true; content = %+v", planRes.Content)
@@ -466,7 +466,7 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 			}
 
 			applyRes := relaytest.CallTool(t, session, "raw_exec", map[string]any{
-				"argv": []string{"/bin/echo", "x"}, "selector": "relay:env=test", "wait_seconds": 300,
+				"argv": []string{"/bin/echo", "x"}, "selector": "tag:env=test", "wait_seconds": 300,
 			})
 			if applyRes.IsError {
 				t.Fatalf("raw_exec(plan=false): IsError=true; content = %+v", applyRes.Content)
@@ -500,7 +500,7 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 		}
 
 		frozenRes := relaytest.CallTool(t, session, "run_operation", map[string]any{
-			"operation": "system.facts", "selector": "relay:env=test",
+			"operation": "system.facts", "selector": "tag:env=test",
 		})
 		if !frozenRes.IsError {
 			t.Fatal("run_operation while frozen: IsError = false, want true")
@@ -510,7 +510,7 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 		}
 
 		planRes := relaytest.CallTool(t, session, "run_operation", map[string]any{
-			"operation": "system.facts", "selector": "relay:env=test", "plan": true,
+			"operation": "system.facts", "selector": "tag:env=test", "plan": true,
 		})
 		if planRes.IsError {
 			t.Fatalf("run_operation(plan=true) while frozen: IsError=true, want false (advisory); content = %+v", planRes.Content)
@@ -539,7 +539,7 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 		}
 
 		restoredRes := relaytest.CallTool(t, session, "run_operation", map[string]any{
-			"operation": "system.facts", "selector": "relay:env=test", "wait_seconds": 300,
+			"operation": "system.facts", "selector": "tag:env=test", "wait_seconds": 300,
 		})
 		if restoredRes.IsError {
 			t.Fatalf("run_operation after release: IsError=true; content = %+v", restoredRes.Content)
@@ -558,15 +558,15 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 
 	// (6) api_token_lifecycle (3rd/fresh daemon): mint a scoped Enrollment
 	// Token over /api/v1, enroll a fresh daemon with it, see it appear with
-	// the token's own relay: labels, revoke the token, then prove the
+	// the token's own initial tags, revoke the token, then prove the
 	// revoked plaintext can no longer enroll (direct node-plane Enroll RPC —
 	// the one deterministic negative that needs a real gRPC status code, not
 	// an MCP/HTTP surface).
 	t.Run("api_token_lifecycle", func(t *testing.T) {
 		mintResp := controlAPIRequest(t, authed, http.MethodPost, controlBase+"/api/v1/enrollment-tokens",
 			credential, map[string]any{
-				"scope":       []string{"relay:env=test", "relay:node=fresh"},
-				"ttl_seconds": 3600,
+				"initial_tags": []string{"tag:env=test", "tag:node=fresh"},
+				"ttl_seconds":  3600,
 				// The limit must exceed the enrollments made before the revoke, so the
 				// refusal below proves the revoke and not exhaustion.
 				"max_uses": 2,
@@ -590,18 +590,18 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 			t.Fatalf("waitForConnectedNodes: got %d Nodes, want exactly 3 (bounded fleet): %v", len(freshConnected), freshConnected)
 		}
 
-		listRes := relaytest.CallTool(t, session, "list_nodes", map[string]any{"selector": "relay:node=fresh"})
+		listRes := relaytest.CallTool(t, session, "list_nodes", map[string]any{"selector": "tag:node=fresh"})
 		if listRes.IsError {
-			t.Fatalf("list_nodes(relay:node=fresh): IsError=true; content = %+v", listRes.Content)
+			t.Fatalf("list_nodes(tag:node=fresh): IsError=true; content = %+v", listRes.Content)
 		}
 		var listOut mcp.ListNodesOutput
 		relaytest.DecodeToolJSON(t, listRes, &listOut)
 		if len(listOut.Nodes) != 1 {
-			t.Fatalf("list_nodes(relay:node=fresh): got %d Nodes, want exactly 1: %+v", len(listOut.Nodes), listOut.Nodes)
+			t.Fatalf("list_nodes(tag:node=fresh): got %d Nodes, want exactly 1: %+v", len(listOut.Nodes), listOut.Nodes)
 		}
 		fresh := listOut.Nodes[0]
-		if fresh.RelayLabels["env"] != "test" || fresh.RelayLabels["node"] != "fresh" {
-			t.Errorf("fresh Node RelayLabels = %v, want env=test node=fresh", fresh.RelayLabels)
+		if fresh.TagLabels["env"] != "test" || fresh.TagLabels["node"] != "fresh" {
+			t.Errorf("fresh Node TagLabels = %v, want env=test node=fresh", fresh.TagLabels)
 		}
 
 		revokeResp := controlAPIRequest(t, authed, http.MethodDelete,
@@ -670,7 +670,7 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 				path   string
 				body   any
 			}{
-				{http.MethodPost, "/api/v1/enrollment-tokens", map[string]any{"scope": []string{"relay:env=test"}, "ttl_seconds": 3600}},
+				{http.MethodPost, "/api/v1/enrollment-tokens", map[string]any{"initial_tags": []string{"tag:env=test"}, "ttl_seconds": 3600}},
 				{http.MethodDelete, "/api/v1/enrollment-tokens/does-not-matter", nil},
 				{http.MethodPost, "/api/v1/nodes/does-not-matter/revoke", nil},
 				{http.MethodPost, "/api/v1/freeze/engage", nil},

@@ -33,7 +33,7 @@ func TestEnroll_JoinStringCarriesFingerprintAddressAndToken(t *testing.T) {
 		t.Fatalf("NewMinter: %v", err)
 	}
 
-	m, err := minter.Mint(ctx, testScope, time.Hour, UseLimit{MaxUses: 1})
+	m, err := minter.Mint(ctx, nil, time.Hour, UseLimit{MaxUses: 1})
 	if err != nil {
 		t.Fatalf("Mint: %v", err)
 	}
@@ -162,11 +162,14 @@ func TestMinter_Mint_PassesTokenErrorsThrough(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	if _, err := minter.Mint(ctx, testScope, 0, UseLimit{MaxUses: 1}); !errors.Is(err, ErrInvalidTTL) {
+	if _, err := minter.Mint(ctx, nil, 0, UseLimit{MaxUses: 1}); !errors.Is(err, ErrInvalidTTL) {
 		t.Errorf("zero ttl: err = %v, want ErrInvalidTTL", err)
 	}
-	if _, err := minter.Mint(ctx, nil, time.Hour, UseLimit{MaxUses: 1}); !errors.Is(err, ErrInvalidScope) {
-		t.Errorf("empty scope: err = %v, want ErrInvalidScope", err)
+	if _, err := minter.Mint(ctx, []string{"env=prod"}, time.Hour, UseLimit{MaxUses: 1}, asHuman); !errors.Is(err, ErrInvalidInitialTags) {
+		t.Errorf("malformed initial tag: err = %v, want ErrInvalidInitialTags", err)
+	}
+	if _, err := minter.Mint(ctx, []string{"tag:env=prod"}, time.Hour, UseLimit{MaxUses: 1}, asMachine); !errors.Is(err, ErrInitialTagsNeedHuman) {
+		t.Errorf("machine Account naming a tag: err = %v, want ErrInitialTagsNeedHuman", err)
 	}
 }
 
@@ -208,7 +211,7 @@ func TestMinter_Mint_UseLimitMustBeNamed(t *testing.T) {
 	for _, tc := range refused {
 		t.Run(tc.name, func(t *testing.T) {
 			minter, repo := newMinter(t)
-			m, err := minter.Mint(ctx, testScope, time.Hour, tc.limit)
+			m, err := minter.Mint(ctx, nil, time.Hour, tc.limit)
 			if !errors.Is(err, tc.want) {
 				t.Errorf("err = %v, want %v", err, tc.want)
 			}
@@ -239,7 +242,7 @@ func TestMinter_Mint_UseLimitMustBeNamed(t *testing.T) {
 	for _, tc := range named {
 		t.Run(tc.name, func(t *testing.T) {
 			minter, repo := newMinter(t)
-			m, err := minter.Mint(ctx, testScope, time.Hour, tc.limit, tc.opts...)
+			m, err := minter.Mint(ctx, nil, time.Hour, tc.limit, tc.opts...)
 			if err != nil {
 				t.Fatalf("Mint: %v", err)
 			}
@@ -262,7 +265,7 @@ func TestMinter_Mint_UseLimitMustBeNamed(t *testing.T) {
 		minter, _ := newMinter(t)
 		opts := make([]Option, 1, 4)
 		opts[0] = WithCreatedBy("op")
-		if _, err := minter.Mint(ctx, testScope, time.Hour, UseLimit{Unlimited: true}, opts...); err != nil {
+		if _, err := minter.Mint(ctx, nil, time.Hour, UseLimit{Unlimited: true}, opts...); err != nil {
 			t.Fatalf("Mint: %v", err)
 		}
 		if opts[:2][1] != nil {

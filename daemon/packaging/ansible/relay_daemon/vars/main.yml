@@ -1,0 +1,24 @@
+---
+# Fixed by the package. A role variable outranks play variables but not extra-vars, so none of
+# these is an interface; the join task's guard has its own check (tasks/main.yml).
+relay_daemon_state_dir: /var/lib/relay-daemon
+
+# Must equal IDENTITY_FILES in the daemon's config module; CI compares the two. Keep it on one
+# line in this flow form, which is what that comparison reads.
+relay_daemon_identity_files: [key.pem, cert.pem, ca_bundle.pem, node_id]
+
+# The Node's architecture, as Ansible reports it, to the package file's. Nothing else reaches
+# the controller's file glob.
+relay_daemon_arch:
+  x86_64: {deb: amd64, rpm: x86_64}
+  aarch64: {deb: arm64, rpm: aarch64}
+
+# The join task's remote_tmp: a path no directory can be made under. The guard check in
+# tasks/main.yml compares against the literal path, not this variable.
+relay_daemon_guard_dir: /dev/null/relay-daemon-role-stages-nothing
+
+# What counts as sudo recording standard input, in the sudo -ll listing and in the sudoers
+# files: log_input, unless a "!" or a letter or underscore comes directly before it (!log_input,
+# NOLOG_INPUT). The sudoers pattern is for grep -E with -i, and skips comment lines.
+relay_daemon_input_logging_listing_pattern: '(?i)(?<![!A-Za-z_])log_input'
+relay_daemon_input_logging_pattern: '^[[:space:]]*([^#[:space:]].*[^!A-Za-z_]|)log_input'

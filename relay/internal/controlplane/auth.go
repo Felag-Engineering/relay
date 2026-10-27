@@ -18,6 +18,15 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/relay/relay/internal/capability"
 	"github.com/Felag-Engineering/relay/relay/internal/logctx"
+	"github.com/Felag-Engineering/relay/relay/internal/metrics"
+)
+
+// mcpPath and controlAPIPrefix name where the composition root mounts those
+// surfaces, for counting a refusal by surface. Drift only miscounts as "other"
+// and never admits or refuses anything.
+const (
+	mcpPath          = "/mcp"
+	controlAPIPrefix = "/api/v1/"
 )
 
 // bearerPrefix is the required Authorization header scheme.
@@ -86,10 +95,28 @@ type Authenticator struct {
 	// ignored: no Console, no session to resolve it against, and no
 	// unauthenticated surface punched in this wrapper. See consolesession.go.
 	console *consoleLane
+
+	// failures counts each refusal by surface. Nil counts nothing.
+	failures AuthFailureCounter
+}
+
+// AuthFailureCounter counts one refused request. *metrics.Metrics satisfies it.
+//
+// Narrow on purpose: it is handed the surface and whether a credential was
+// offered, and never the credential, the Account or the source address.
+type AuthFailureCounter interface {
+	IncAuthRefusal(surface metrics.AuthSurface, credentialPresented bool)
 }
 
 // AuthOption configures an Authenticator.
 type AuthOption func(*Authenticator)
+
+// WithAuthFailureCounter makes the Authenticator count every request it
+// refuses. Counting is a side effect after the decision: it never changes
+// which requests are refused.
+func WithAuthFailureCounter(c AuthFailureCounter) AuthOption {
+	return func(a *Authenticator) { a.failures = c }
+}
 
 // WithOAuth makes the control plane accept OAuth sessions from the configured
 // IdP alongside per-Account API Tokens.
@@ -145,10 +172,11 @@ func NewAuthenticator(tokens TokenVerifier, opts ...AuthOption) *Authenticator {
 func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// The Console's sign-in page and its stylesheet are the only routes
-		// on this listener, besides RFC 9728 metadata and the fixed GET /
-		// redirect (Config.RootRedirect), that may be reached
-		// without a credential — a sign-in page behind the authentication it
-		// establishes is a locked door with the key inside.
+		// reaching this wrapper that may be answered without a credential — a
+		// sign-in page behind the authentication it establishes is a locked
+		// door with the key inside. RFC 9728 metadata, the health bit and the
+		// fixed GET / redirect (Config.RootRedirect) answer too, but they are
+		// registered outside Middleware (server.go).
 		//
 		// "Public" means NEVER REFUSED, not "never authenticated": a
 		// credential that resolves is still injected, so the sign-in page can
@@ -172,6 +200,7 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 			// expired token, expired or unknown session, disabled Account,
 			// unreadable store. Distinguishing them would tell an attacker
 			// that a credential is real and only its Account is switched off.
+			a.countRefusal(r)
 			a.refuse(w, r)
 			return
 		}
@@ -283,6 +312,45 @@ func (a *Authenticator) refuse(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.unauthorized(w)
+}
+
+// countRefusal records one refused request. It reads the request's shape only:
+// never the credential's value.
+func (a *Authenticator) countRefusal(r *http.Request) {
+	if a.failures == nil {
+		return
+	}
+	a.failures.IncAuthRefusal(a.surfaceOf(r), a.credentialPresented(r))
+}
+
+// surfaceOf names the surface r was going to. It matches the raw URL path,
+// where the Console's scope predicate cleans it, so an uncleaned path counts as
+// "other" rather than under its surface.
+func (a *Authenticator) surfaceOf(r *http.Request) metrics.AuthSurface {
+	switch p := r.URL.Path; {
+	case p == mcpPath:
+		return metrics.AuthSurfaceMCP
+	case p == strings.TrimSuffix(controlAPIPrefix, "/") || strings.HasPrefix(p, controlAPIPrefix):
+		return metrics.AuthSurfaceControlAPI
+	case a.console != nil && a.console.scope(r):
+		return metrics.AuthSurfaceConsole
+	default:
+		return metrics.AuthSurfaceOther
+	}
+}
+
+// credentialPresented reports whether r offered something to authenticate with:
+// a Bearer header, or, in the Console's scope only, a session cookie. A
+// non-Bearer Authorization header or an empty bearer is no credential.
+func (a *Authenticator) credentialPresented(r *http.Request) bool {
+	if hasBearer(r) {
+		return true
+	}
+	if a.console != nil && a.console.scope(r) {
+		_, ok := consoleSessionFromRequest(r)
+		return ok
+	}
+	return false
 }
 
 // hasBearer reports whether r carries an Authorization: Bearer header at all.

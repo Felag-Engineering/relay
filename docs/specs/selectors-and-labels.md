@@ -47,7 +47,7 @@ Every Label is namespaced, and a namespace is immutable from every side but its 
 
 | Namespace | Written by | Never written by | Purpose |
 |---|---|---|---|
-| `node:` | The Node: config management declares, the daemon reports built-ins | The Relay, any Account | Routine targeting; the Node's self-description |
+| `node:` | The Node: the daemon declares defaults, config management declares the rest | The Relay, any Account | Routine targeting; the Node's self-description |
 | `relay:` | The Relay, only as the side effect of a defined action | The Node, any Account directly | The security lane |
 | `tag:` | A human Account of `operator` or above, on the Console or the Control API | The Node, a machine Account, MCP | Routine targeting; organising the fleet |
 | `state:` | **Nobody** — derived from the registry at resolution time | Anyone | Routine targeting on live condition |
@@ -84,16 +84,16 @@ un-revoke itself.
 - A quarantine, when it is built, defines its own key with the action that engages and lifts
   it.
 
-### `node:` — declared and built-in
+### `node:` — declared, with daemon defaults
 
 - **Declared labels** (`node:env=prod`, `node:role=web`) come from the daemon's
   `RELAY_NODE_LABELS` environment setting, written by the customer's config management. The
   daemon reads it at start; changing it takes a restart of the daemon.
-- **Built-in labels** are filled from the Facts the daemon already reports: `node:hostname`,
-  `node:ip`, `node:os`, `node:arch`. Their keys are reserved; a declared label cannot set one.
-  Designed for the MVP, not built.
-- A multi-valued built-in (`node:ip`) matches when any of its values matches.
-- Every `node:` label, declared or built-in, is forgeable by its own Node.
+- **Default labels:** the daemon also declares `node:hostname`, `node:os` and `node:arch` from
+  what it knows about its host, as ordinary declared labels (ADR-0034: the Node declares them;
+  the Relay derives nothing from Facts). A key set in `RELAY_NODE_LABELS` overrides its default,
+  and a default that is not well formed is left out. No key is reserved. There is no `node:ip`.
+- Every `node:` label, default or not, is forgeable by its own Node.
 
 A root-owned declared-labels file, reloaded with Policy and reported without a reconnect, waits
 in `roadmap: relay/policy-catalog-and-live-reload`, with the `state:labels-invalid` marker it
@@ -135,13 +135,13 @@ Enrollment Token are designed for the MVP, not built.
 
 ### What a compromised Node can and cannot forge
 
-- It **can** forge its own `node:` labels, declared and built-in. Routine `node:` targeting
+- It **can** forge its own `node:` labels, its defaults included. Routine `node:` targeting
   trusts the Node exactly as much as the Node.
 - It **can** influence `state:` terms derived from its own reports, including hiding
   `policy-invalid` and `raw-exec-enabled`.
 - It **cannot** touch `relay:` or `tag:`. That is what makes the security lane safe to target.
 
-Because a Node's reported facts feed `node:` built-ins and `state:`, values are gated at ingress
+Because a Node's declared labels and reported facts feed Selectors and `state:`, values are gated at ingress
 against a well-formedness allowlist so a hostile value cannot inject a second Selector term. A
 value that cannot be rendered as a single Selector term is **refused at ingress, never
 sanitised** — sanitising would let the Relay itself manufacture a value matching a Selector
@@ -188,8 +188,8 @@ Selector's blast radius stays legible at a glance.
   to a match rather than remove one. And "everything except" includes every Node that carries
   no label at all, so a new or unlabelled Node falls into the target unasked.
 - **An empty Selector** matches every Node for reads and listing, and is **refused for
-  dispatch**. Targeting the whole fleet must be written deliberately, with a built-in label every
-  Node carries, such as `node:os=linux`, so an AI-agent that forgets a Selector gets an error, not
+  dispatch**. Targeting the whole fleet must be written deliberately, with a default label every
+  Node carries, `node:os=linux`, so an AI-agent that forgets a Selector gets an error, not
   the fleet. There is no whole-fleet keyword (owner decision 2026-10-23); the blast cap and the
   gate still apply to the result.
 
@@ -225,9 +225,7 @@ which is a disclosed residual (threat-model register R13) with operator-facing r
 | Empty Selector on dispatch | The whole fleet must be targeted explicitly |
 | Unknown `state:` term | Outside the closed vocabulary |
 | Marker with a value, fact without one | The two `state:` shapes are not interchangeable |
-| `tag:` term, until tags land | Refused at parse with a recognisable refusal, identically on every surface |
 | Malformed label at ingress | A key or value that cannot render as one Selector term — refused, never sanitised |
-| Declared label on a reserved built-in key | `node:hostname`, `node:ip`, `node:os`, `node:arch` are the daemon's |
 | Direct write of a `relay:` label | No surface offers one; `relay:` labels are written only by their defining action |
 | Enrollment Token naming a `relay:` label | A token's labels are initial tags; every `relay:` key is defined by a Relay action |
 | Tag write by a `viewer`, a machine Account or a Node, or over MCP | `tag:` is written only by a human Account of `operator` or above, on the Console or the Control API |
@@ -253,8 +251,8 @@ which is a disclosed residual (threat-model register R13) with operator-facing r
 - **ADR-0034 — needs amending** if `raw-exec-enabled` is added to the `state:` vocabulary. The
   Template markers stand (ADR-0021).
 - **ADR-0017** — unchanged: `node:` labels are trusted exactly as much as the Node.
-- **GLOSSARY.md — needs updating** for Label (the `relay:` writing rule, the `tag:` writer,
-  `node:` built-ins) and the `state:` vocabulary.
+- **GLOSSARY.md** — Label names the daemon's default `node:` labels; the `state:` vocabulary
+  still needs updating.
 
 ## Seams and proof
 
@@ -283,8 +281,7 @@ not at a surface.
 Claims above with **no row**, and so nothing checking them:
 
 - **Everything decided on `2026-09-13` and `2026-10-23`** has no test yet: `relay:` labels
-  written only by their defining action, declared versus built-in `node:` labels and reserved
-  keys, bulk tagging audited as one action, initial tags from an
+  written only by their defining action, declared versus default `node:` labels, bulk tagging audited as one action, initial tags from an
   Enrollment Token, the per-Node limits, the new `state:` markers, the refusal of a negated
   term, and the empty-Selector refusal on dispatch.
 - `tag:` writes by human `operator` Accounts on the Console and the Control API, their

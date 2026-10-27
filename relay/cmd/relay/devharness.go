@@ -297,11 +297,12 @@ type harnessResponse struct {
 	// differ from policy_fingerprint's: an empty value legitimately means "no
 	// templates installed on that Node".
 	TemplateSetFingerprint string `json:"template_set_fingerprint,omitempty"`
-	// NodeLabels/RelayLabels intentionally have no `omitempty`: an empty-but-
-	// present map (get_node on a Node with no labels) must still round-trip as
-	// `{}`, not be silently dropped from the response.
+	// NodeLabels/RelayLabels/TagLabels intentionally have no `omitempty`: an
+	// empty-but-present map (get_node on a Node with no labels) must still
+	// round-trip as `{}`, not be silently dropped from the response.
 	NodeLabels  map[string]string `json:"node_labels"`
 	RelayLabels map[string]string `json:"relay_labels"`
+	TagLabels   map[string]string `json:"tag_labels"`
 	// Connected is get_node's live-Tunnel bit (Router.Connected), so tests can
 	// poll for a Node going offline deterministically.
 	Connected bool `json:"connected,omitempty"`
@@ -387,7 +388,9 @@ func dispatchHarnessRequest(ctx context.Context, st *harnessState, req harnessRe
 
 // harnessCreateToken mints an Enrollment Token through the composition root's
 // one enroll.Minter and returns its plaintext credential and the join string
-// carrying it, exactly as the Control API's mint response does.
+// carrying it, exactly as the Control API's mint response does. The request's
+// labels are the token's initial tags (tag:key=value), minted as a human admin
+// Account named devharness: that attribution exists only in this harness build.
 //
 // SECURITY: the plaintext token and the join string are returned to the socket
 // client but MUST NEVER be logged (AGENTS.md: never log secrets).
@@ -397,7 +400,13 @@ func harnessCreateToken(ctx context.Context, deps *appDeps, req harnessRequest) 
 		ttl = time.Hour
 	}
 	// The harness asks for unlimited use so a cross-binary test can re-enroll with one token.
-	minted, err := deps.minter.Mint(ctx, req.Labels, ttl, enroll.UseLimit{Unlimited: true})
+	minter := capability.Principal{
+		AccountID: "devharness",
+		Account:   "devharness",
+		Role:      "admin",
+		Kind:      capability.PrincipalKindHuman,
+	}
+	minted, err := deps.minter.Mint(ctx, req.Labels, ttl, enroll.UseLimit{Unlimited: true}, enroll.WithMinter(minter.AccountID, minter))
 	if err != nil {
 		slog.Warn("devharness: create_token failed", "err", err)
 		return harnessResponse{Error: err.Error()}
@@ -483,6 +492,7 @@ func harnessGetNode(st *harnessState, req harnessRequest) harnessResponse {
 		TemplateSetFingerprint: node.TemplateSetFingerprint,
 		NodeLabels:             node.NodeLabels,
 		RelayLabels:            node.RelayLabels,
+		TagLabels:              node.TagLabels,
 		Connected:              st.router.Connected(req.NodeID),
 	}
 }

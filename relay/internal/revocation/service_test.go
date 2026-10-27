@@ -260,7 +260,7 @@ func TestService_RevokeToken_RecordsEveryCascadedNode(t *testing.T) {
 	ctx := context.Background()
 
 	// Create a token so RevokeToken can mark it revoked in the store.
-	tok, plaintext, err := tokenSvc.Create(ctx, []string{"relay:env=test"}, 24*time.Hour)
+	tok, plaintext, err := tokenSvc.Create(ctx, nil, 24*time.Hour)
 	if err != nil {
 		t.Fatalf("Create token: %v", err)
 	}
@@ -468,7 +468,7 @@ func TestService_RevokeToken_RecordFailureDoesNotStopTheCascade(t *testing.T) {
 	svc, d, _, reg, tokenSvc := newServiceFixture(t)
 	ctx := context.Background()
 
-	tok, _, err := tokenSvc.Create(ctx, []string{"relay:env=test"}, 24*time.Hour)
+	tok, _, err := tokenSvc.Create(ctx, nil, 24*time.Hour)
 	if err != nil {
 		t.Fatalf("Create token: %v", err)
 	}
@@ -535,7 +535,7 @@ func TestService_RevokeToken_RecordsInChunksNotPerNode(t *testing.T) {
 	svc, d, _, reg, tokenSvc := newServiceFixture(t)
 	ctx := context.Background()
 
-	tok, _, err := tokenSvc.Create(ctx, []string{"relay:env=test"}, 24*time.Hour)
+	tok, _, err := tokenSvc.Create(ctx, nil, 24*time.Hour)
 	if err != nil {
 		t.Fatalf("Create token: %v", err)
 	}
@@ -652,7 +652,7 @@ func TestService_RevokeToken_NilRecorderRevokesNothing(t *testing.T) {
 	svc, d, _, reg, tokenSvc := newServiceFixture(t)
 	ctx := context.Background()
 
-	tok, plaintext, err := tokenSvc.Create(ctx, []string{"relay:env=test"}, 24*time.Hour)
+	tok, plaintext, err := tokenSvc.Create(ctx, nil, 24*time.Hour)
 	if err != nil {
 		t.Fatalf("Create token: %v", err)
 	}

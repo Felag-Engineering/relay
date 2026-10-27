@@ -35,7 +35,7 @@ func TestCrossBinary_PreflightDenyCarriesTheRuleReferencePolicyExplainPrints(t *
 		}
 	})
 
-	join := createFleetJoinString(t, fr.harness, "relay:env=test")
+	join := createFleetJoinString(t, fr.harness, "tag:env=test")
 	policyPath := relaytest.WriteTempFile(t, "policy-*.toml", relaytest.FixturePolicy)
 	relaytest.StartDaemon(t, relaytest.DaemonConfig{
 		Bin:        daemonBin,
@@ -83,7 +83,7 @@ func TestCrossBinary_PreflightDenyCarriesTheRuleReferencePolicyExplainPrints(t *
 		t.Run(tc.name, func(t *testing.T) {
 			explain := runPolicyExplain(t, daemonBin, policyPath, templatesDir, tc.explainSpec)
 
-			req := map[string]any{"op": "preflight_job", "selector": "relay:env=test"}
+			req := map[string]any{"op": "preflight_job", "selector": "tag:env=test"}
 			for k, v := range tc.request {
 				req[k] = v
 			}

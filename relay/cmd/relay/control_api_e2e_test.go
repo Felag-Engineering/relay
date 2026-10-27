@@ -22,6 +22,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -33,6 +34,7 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/controlplane/mcp"
 	"github.com/Felag-Engineering/relay/relay/internal/enroll"
 	"github.com/Felag-Engineering/relay/relay/internal/events"
+	"github.com/Felag-Engineering/relay/relay/internal/harnesssetup"
 	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 	"github.com/Felag-Engineering/relay/relay/internal/registry"
 	relayv1 "github.com/Felag-Engineering/relay/relay/internal/relay/v1"
@@ -94,13 +96,13 @@ func controlAPIRequest(t *testing.T, client *http.Client, method, url, token str
 // as an outside HTTP caller would, over the wire, not via package api's
 // internal types).
 type mintTokenAPIResponse struct {
-	ID         string   `json:"id"`
-	Token      string   `json:"token"`
-	JoinString string   `json:"join_string"`
-	Scope      []string `json:"scope"`
-	ExpiresAt  string   `json:"expires_at"`
-	MaxUses    int      `json:"max_uses"`
-	Unlimited  bool     `json:"unlimited"`
+	ID          string   `json:"id"`
+	Token       string   `json:"token"`
+	JoinString  string   `json:"join_string"`
+	InitialTags []string `json:"initial_tags"`
+	ExpiresAt   string   `json:"expires_at"`
+	MaxUses     int      `json:"max_uses"`
+	Unlimited   bool     `json:"unlimited"`
 }
 
 // TestControlAPI_MintEnrollmentToken_ReturnsJoinString: the mint response
@@ -119,7 +121,7 @@ func TestControlAPI_MintEnrollmentToken_ReturnsJoinString(t *testing.T) {
 	f := startRelay(t, WithControlPlane(), WithConfig(func(c *Config) { c.Addr = ":7654" }))
 
 	resp := controlAPIRequest(t, f.ClientFor(""), http.MethodPost, f.ControlBase+"/api/v1/enrollment-tokens",
-		f.Credential, map[string]any{"scope": []string{"relay:env=prod"}, "ttl_seconds": 3600, "max_uses": 1})
+		f.Credential, map[string]any{"initial_tags": []string{"tag:env=prod"}, "ttl_seconds": 3600, "max_uses": 1})
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("mint status = %d, want %d", resp.StatusCode, http.StatusCreated)
@@ -201,8 +203,8 @@ func TestControlAPI_EnrollmentTokenLifecycle(t *testing.T) {
 
 	mintResp := controlAPIRequest(t, client, http.MethodPost, base+"/api/v1/enrollment-tokens",
 		credential, map[string]any{
-			"scope":       []string{"relay:env=prod"},
-			"ttl_seconds": 3600,
+			"initial_tags": []string{"tag:env=prod"},
+			"ttl_seconds":  3600,
 			// The limit must exceed the enrollments made before the revoke, so the
 			// refusal below proves the revoke and not exhaustion.
 			"max_uses": 2,
@@ -268,7 +270,7 @@ func TestControlAPI_NodeRevoke(t *testing.T) {
 
 	// Seed an Enrollment Token via the test-only deps.tokens path (mirrors
 	// lifecycle_e2e_test.go) — this test's focus is node revoke, not mint.
-	_, plaintext, err := deps.tokens.Create(ctx, []string{"relay:env=prod"}, time.Hour)
+	_, plaintext, err := deps.tokens.Create(ctx, nil, time.Hour)
 	if err != nil {
 		t.Fatalf("seed Enrollment Token: %v", err)
 	}
@@ -479,7 +481,7 @@ func TestControlAPI_RequiresCredential(t *testing.T) {
 		path   string
 		body   any
 	}{
-		{http.MethodPost, "/api/v1/enrollment-tokens", map[string]any{"scope": []string{"relay:env=prod"}, "ttl_seconds": 3600}},
+		{http.MethodPost, "/api/v1/enrollment-tokens", map[string]any{"initial_tags": []string{"tag:env=prod"}, "ttl_seconds": 3600}},
 		{http.MethodDelete, "/api/v1/enrollment-tokens/does-not-matter", nil},
 		{http.MethodPost, "/api/v1/nodes/does-not-matter/revoke", nil},
 		{http.MethodPost, "/api/v1/freeze/engage", nil},
@@ -1040,7 +1042,7 @@ func TestMintEnrollmentToken_JoinStringUsesAdvertisedAddress(t *testing.T) {
 				c.ControlAddr = "127.0.0.1:0"
 			}))
 			resp := controlAPIRequest(t, f.ClientFor(""), http.MethodPost, f.ControlBase+"/api/v1/enrollment-tokens",
-				f.Credential, map[string]any{"scope": []string{"relay:env=prod"}, "ttl_seconds": 3600, "max_uses": 1})
+				f.Credential, map[string]any{"initial_tags": []string{"tag:env=prod"}, "ttl_seconds": 3600, "max_uses": 1})
 			defer resp.Body.Close()
 			if resp.StatusCode != http.StatusCreated {
 				t.Fatalf("mint status = %d, want %d", resp.StatusCode, http.StatusCreated)
@@ -1057,6 +1059,101 @@ func TestMintEnrollmentToken_JoinStringUsesAdvertisedAddress(t *testing.T) {
 				t.Errorf("join string address = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// A mint's Harness setup is built from the join string's host, the CA this Relay
+// issued from, and the control-plane port, and a Target nobody wired renders
+// nothing without failing the mint. This is the wiring guard for that silence,
+// and it replays the rendered check against the running Relay, which proves the
+// rendered path is the mounted /mcp and that the minted token works.
+func TestMintAPIToken_HarnessSetupUsesTheJoinStringHostAndTheRelayCA(t *testing.T) {
+	body := "[node_plane]\nlisten_address = \"127.0.0.1:7654\"\n" +
+		"\n[control_plane]\nenabled = true\n\n[ca]\ndir = " + fmt.Sprintf("%q", t.TempDir()) +
+		"\n\n[store]\npath = " + fmt.Sprintf("%q", filepath.Join(t.TempDir(), "relay.db")) +
+		"\n\n[tls]\nhostname = \"localhost\"\n"
+	sc, err := parseConfig([]byte(body), readSecretPlain)
+	if err != nil {
+		t.Fatalf("parseConfig: %v", err)
+	}
+	f := startRelay(t, WithControlPlane(), WithConfig(func(c *Config) {
+		*c = sc.Config
+		c.ControlEnabled = true
+		c.ControlAddr = "127.0.0.1:0"
+	}))
+	client := f.ClientFor("")
+
+	resp := controlAPIRequest(t, client, http.MethodPost, f.ControlBase+"/api/v1/accounts",
+		f.Credential, map[string]any{"name": "harness-ci", "kind": "machine", "role": "operator"})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create account status = %d, want %d", resp.StatusCode, http.StatusCreated)
+	}
+	var account struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&account); err != nil {
+		t.Fatalf("decode account: %v", err)
+	}
+
+	mintResp := controlAPIRequest(t, client, http.MethodPost, f.ControlBase+"/api/v1/accounts/"+account.ID+"/tokens",
+		f.Credential, map[string]any{"name": "harness", "ttl_seconds": 3600})
+	defer mintResp.Body.Close()
+	if mintResp.StatusCode != http.StatusCreated {
+		t.Fatalf("mint status = %d, want %d", mintResp.StatusCode, http.StatusCreated)
+	}
+	var minted struct {
+		Token        string `json:"token"`
+		HarnessSetup struct {
+			MCPURL        string `json:"mcp_url"`
+			CACertificate string `json:"ca_certificate"`
+			Gleipnir      string `json:"gleipnir"`
+		} `json:"harness_setup"`
+	}
+	if err := json.NewDecoder(mintResp.Body).Decode(&minted); err != nil {
+		t.Fatalf("decode mint response: %v", err)
+	}
+
+	parsed, err := url.Parse(minted.HarnessSetup.MCPURL)
+	if err != nil {
+		t.Fatalf("mcp_url %q does not parse: %v", minted.HarnessSetup.MCPURL, err)
+	}
+	if parsed.Hostname() != "localhost" || parsed.Path != "/mcp" {
+		t.Errorf("mcp_url = %q, want the join string's host (localhost) and /mcp", minted.HarnessSetup.MCPURL)
+	}
+	// The CONFIGURED control-plane port renders, not the bound one: the fixture
+	// configures :0 and binds an ephemeral port, so "0" here proves the value
+	// comes from the configured listen address.
+	if parsed.Port() != "0" {
+		t.Errorf("mcp_url port = %q, want the configured control-plane port 0", parsed.Port())
+	}
+	if minted.HarnessSetup.CACertificate != string(f.Deps.ca.Bundle()) {
+		t.Error("ca_certificate is not this Relay's CA bundle")
+	}
+	if minted.HarnessSetup.Gleipnir == "" {
+		t.Error("a machine Account's mint rendered no Gleipnir block")
+	}
+
+	check, err := http.NewRequest(http.MethodPost, f.ControlBase+parsed.Path, strings.NewReader(harnesssetup.CheckBody))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	for _, h := range harnesssetup.CheckHeaders {
+		name, value, _ := strings.Cut(h, ": ")
+		check.Header.Set(name, value)
+	}
+	check.Header.Set("Authorization", "Bearer "+minted.Token)
+	checkResp, err := client.Do(check)
+	if err != nil {
+		t.Fatalf("run the rendered check: %v", err)
+	}
+	defer checkResp.Body.Close()
+	checkBody, err := io.ReadAll(checkResp.Body)
+	if err != nil {
+		t.Fatalf("read check response: %v", err)
+	}
+	if checkResp.StatusCode != http.StatusOK || !strings.Contains(string(checkBody), "serverInfo") {
+		t.Errorf("the rendered check got %d %s, want 200 with serverInfo", checkResp.StatusCode, checkBody)
 	}
 }
 

@@ -2,15 +2,18 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Felag-Engineering/relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/relay/relay/internal/audit"
 	"github.com/Felag-Engineering/relay/relay/internal/controlplane/mcp"
 	"github.com/Felag-Engineering/relay/relay/internal/registry"
+	relayv1 "github.com/Felag-Engineering/relay/relay/internal/relay/v1"
 	"github.com/Felag-Engineering/relay/relay/internal/relaytest"
 )
 
@@ -118,5 +121,116 @@ func TestTags_HumanOperatorWritesOverTheControlAPIAndASelectorResolvesIt(t *test
 	}
 	if got := writes[0].Attribution.Verified.AccountID; got == "" {
 		t.Error("the tag_write record names no verified Account")
+	}
+}
+
+// TestControlAPI_InitialTagsAreOrdinaryTags proves EN-41 end to end through the
+// real composition root: a human admin mints a token naming an initial tag over
+// the Control API, a daemon enrolls with it, the Node carries the tag as an
+// ordinary tag (its own map, resolved by a tag: Selector, one tag_write record
+// attributed to the minting admin) and relay:node-id as the only relay: label,
+// and the same tag is then removed through the ordinary tag route.
+//
+// Proves EN-41.
+func TestControlAPI_InitialTagsAreOrdinaryTags(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	f := startRelay(t, WithControlPlane())
+	client := f.ClientFor(f.Credential)
+
+	mintResp := controlAPIRequest(t, client, http.MethodPost, f.ControlBase+"/api/v1/enrollment-tokens",
+		f.Credential, map[string]any{"initial_tags": []string{"tag:env=prod"}, "ttl_seconds": 3600, "max_uses": 1})
+	defer mintResp.Body.Close()
+	if mintResp.StatusCode != http.StatusCreated {
+		t.Fatalf("mint status = %d, want %d", mintResp.StatusCode, http.StatusCreated)
+	}
+	var minted mintTokenAPIResponse
+	if err := json.NewDecoder(mintResp.Body).Decode(&minted); err != nil {
+		t.Fatalf("decode mint response: %v", err)
+	}
+
+	enrollConn := dialTLS(t, f.Bufconn, &tls.Config{RootCAs: relaytest.CertPool(t, f.Deps.ca.Bundle())})
+	csrPEM, _ := relaytest.NewCSR(t, "ignored-cn")
+	enrolled, err := relayv1.NewEnrollmentClient(enrollConn).Enroll(ctx, &relayv1.EnrollRequest{
+		EnrollmentToken: minted.Token,
+		Csr:             csrPEM,
+		Facts:           &relayv1.Facts{Hostname: "host-initial-tags", Os: "linux"},
+	})
+	if err != nil {
+		t.Fatalf("Enroll: %v", err)
+	}
+	nodeID := enrolled.GetNodeId()
+
+	// The Node read shows the tag in its own map and relay:node-id alone.
+	get := controlAPIRequest(t, client, http.MethodGet, f.ControlBase+"/api/v1/nodes/"+nodeID, f.Credential, nil)
+	defer get.Body.Close()
+	var node struct {
+		TagLabels   map[string]string `json:"tag_labels"`
+		RelayLabels map[string]string `json:"relay_labels"`
+	}
+	if err := json.NewDecoder(get.Body).Decode(&node); err != nil {
+		t.Fatalf("decode node: %v", err)
+	}
+	if len(node.TagLabels) != 1 || node.TagLabels["env"] != "prod" {
+		t.Errorf("tag_labels = %v, want exactly env=prod", node.TagLabels)
+	}
+	if len(node.RelayLabels) != 1 || node.RelayLabels["node-id"] != nodeID {
+		t.Errorf("relay_labels = %v, want exactly node-id=%s", node.RelayLabels, nodeID)
+	}
+
+	// One tag_write record, attributed to the minting admin.
+	admin, err := f.Deps.store.Accounts().GetByName(ctx, testAdminName)
+	if err != nil {
+		t.Fatalf("GetByName: %v", err)
+	}
+	recs, err := f.Deps.store.Audit().ByNode(ctx, nodeID)
+	if err != nil {
+		t.Fatalf("ByNode: %v", err)
+	}
+	var writes []audit.Record
+	for _, r := range recs {
+		if r.Kind == audit.KindTagWrite {
+			writes = append(writes, r)
+		}
+	}
+	if len(writes) != 1 {
+		t.Fatalf("tag_write records = %d, want exactly 1", len(writes))
+	}
+	if writes[0].Attribution.Verified.AccountID != admin.ID {
+		t.Errorf("tag_write attributed to %q, want the minting admin %q", writes[0].Attribution.Verified.AccountID, admin.ID)
+	}
+	// The record names the Enrollment Token by its public ID, so it never reads
+	// as the admin writing live, and carries no part of the secret.
+	tokenID, secret, _ := strings.Cut(minted.Token, ".")
+	if want := `tag:env old=(none) new="prod" (initial tag from Enrollment Token ` + tokenID + `)`; writes[0].Reason != want {
+		t.Errorf("tag_write reason = %q, want %q", writes[0].Reason, want)
+	}
+	if secret == "" || strings.Contains(writes[0].Reason, secret) {
+		t.Errorf("tag_write reason %q carries the token secret (or the token has none)", writes[0].Reason)
+	}
+
+	// A tag: Selector resolves the Node.
+	session := relaytest.Connect(t, f.ControlBase, client)
+	res := relaytest.CallTool(t, session, "list_nodes", map[string]any{"selector": "tag:env=prod"})
+	if res.IsError {
+		t.Fatalf("list_nodes(tag:env=prod): %s", relaytest.ToolErrorText(t, res))
+	}
+	var listing mcp.ListNodesOutput
+	if err := json.Unmarshal([]byte(mcpToolText(t, res)), &listing); err != nil {
+		t.Fatalf("decode list_nodes: %v", err)
+	}
+	if len(listing.Nodes) != 1 || listing.Nodes[0].NodeID != nodeID {
+		t.Errorf("list_nodes(tag:env=prod) = %+v, want the enrolled Node", listing.Nodes)
+	}
+
+	// And it is removed like any other tag.
+	remove := controlAPIRequest(t, client, http.MethodPost, f.ControlBase+"/api/v1/nodes/"+nodeID+"/tags",
+		f.Credential, map[string]string{"op": "remove", "label": "tag:env"})
+	defer remove.Body.Close()
+	if remove.StatusCode != http.StatusOK {
+		t.Fatalf("removing an initial tag = %d, want 200", remove.StatusCode)
+	}
+	if n, _ := f.Deps.registry.Get(nodeID); len(n.TagLabels) != 0 {
+		t.Errorf("tags after removal = %v, want none", n.TagLabels)
 	}
 }

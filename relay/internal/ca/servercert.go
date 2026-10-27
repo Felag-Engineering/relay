@@ -211,6 +211,20 @@ func (s *ServerCertificate) Fingerprint() string {
 	return fingerprint(cur.cert.Leaf.Raw)
 }
 
+// NotAfter returns when the leaf this holder is currently presenting expires,
+// or the zero time before the first one is minted.
+//
+// Like Fingerprint it reads the published pointer and NEVER calls
+// GetCertificate or re-issues: a metrics scrape must not be able to rotate the
+// Relay's TLS identity.
+func (s *ServerCertificate) NotAfter() time.Time {
+	cur := s.current.Load()
+	if cur == nil {
+		return time.Time{}
+	}
+	return cur.cert.Leaf.NotAfter
+}
+
 // issue mints one certificate and computes when it should be replaced. Each
 // call generates a fresh key: rotating the certificate without rotating the
 // key would leave the key's lifetime unbounded, which is half of what

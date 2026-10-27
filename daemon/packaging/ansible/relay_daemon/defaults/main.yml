@@ -1,0 +1,7 @@
+---
+# A directory on the controller holding this release's relay-daemon package for the Node's
+# architecture, as downloaded beside SHA256SUMS and verified.
+relay_daemon_package_dir: ""
+
+# relay_daemon_join_string is deliberately not defined here. It comes from the operator's
+# vault and has no default.

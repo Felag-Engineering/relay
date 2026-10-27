@@ -177,9 +177,10 @@ They then point their harness at `https://relay.example.internal:9443/mcp` and c
 flow. The harness discovers the rest: an unauthenticated request gets a `WWW-Authenticate`
 challenge pointing at `/.well-known/oauth-protected-resource`, which names your IdP.
 
-That metadata document is the **one** unauthenticated route on the control plane, because it
-tells a client how to obtain a credential. It discloses an issuer URL and a resource
-identifier, both public by definition.
+That metadata document and the health endpoint (`GET /healthz`, which answers only serving or
+not serving) are the routes on the control plane that answer without a credential. The
+metadata is unauthenticated because it tells a client how to obtain a credential. It discloses
+an issuer URL and a resource identifier, both public by definition.
 
 ### What an OAuth session does and does not buy
 

@@ -30,10 +30,12 @@ relay/internal/controlplane/auth*.go
 relay/internal/controlplane/oauth*.go
 relay/internal/controlplane/consolesession*.go
 relay/internal/controlplane/server.go
+relay/internal/controlplane/health/**
 relay/internal/controlplane/mcp/**
 relay/internal/controlplane/api/**
 relay/internal/ca/**
 relay/internal/enroll/**
+relay/internal/harnesssetup/**
 relay/internal/revocation/**
 relay/internal/transport/**
 relay/internal/dispatch/**
@@ -69,6 +71,7 @@ relay/internal/audit/**
 relay/internal/auditsink/**
 relay/internal/auditquery/**
 relay/internal/ratelimit/**
+relay/cmd/relay/auth_metrics.go
 relay/cmd/relay/bootstrap_token.go
 relay/cmd/relay/console_password.go
 relay/cmd/relay/control_surfaces.go

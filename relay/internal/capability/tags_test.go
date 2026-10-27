@@ -497,3 +497,198 @@ func TestTagNodesNotFoundError_MatchesTheSentinelAndNamesTheIDs(t *testing.T) {
 		t.Error("an empty TagNodesNotFoundError should read as the bare sentinel")
 	}
 }
+
+// TestTagWriter_WriteInitialTags_OneRecordPerTagAttributedToTheMinter checks
+// that an Enrollment Token's initial tags land as one tag_write record each,
+// attributed to the Account that minted the token, and are then ordinary tags.
+// Tags the Node already carries at the value are skipped, and a key it carries
+// at another value is replaced with the old value on the record.
+//
+// Proves EN-41.
+func TestTagWriter_WriteInitialTags_OneRecordPerTagAttributedToTheMinter(t *testing.T) {
+	f := newTagFixture(t, "n1")
+	ctx := context.Background()
+
+	if err := f.w.WriteInitialTags(ctx, tagOperator, "tok-1", "n1", []string{"tag:role=web", "tag:env=prod", "tag:team=payments"}); err != nil {
+		t.Fatalf("WriteInitialTags: %v", err)
+	}
+	if got, want := f.tags(t, "n1"), map[string]string{"role": "web", "env": "prod", "team": "payments"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("tags = %v, want %v", got, want)
+	}
+	if len(f.sink.events) != 1 {
+		t.Fatalf("events = %d, want one batch", len(f.sink.events))
+	}
+	e := f.sink.events[0]
+	if e.Principal != tagOperator {
+		t.Errorf("recorded as %+v, want the minting Account %+v", e.Principal, tagOperator)
+	}
+	var keys []string
+	for _, c := range e.Changes {
+		keys = append(keys, c.Key)
+		if c.NodeID != "n1" || c.Before.Set || !c.After.Set {
+			t.Errorf("change %+v is not a plain add on n1", c)
+		}
+	}
+	if want := []string{"env", "role", "team"}; !reflect.DeepEqual(keys, want) {
+		t.Errorf("changes in key order = %v, want %v", keys, want)
+	}
+	// The records name the Enrollment Token, so an enrollment-time write never
+	// reads as the minter writing live; the token's secret has no way in.
+	if want := "(initial tag from Enrollment Token tok-1)"; e.Provenance != want {
+		t.Errorf("provenance = %q, want %q", e.Provenance, want)
+	}
+
+	// An ordinary tag write now removes one.
+	if _, err := f.w.WriteTag(ctx, tagOperator, TagWrite{NodeIDs: []string{"n1"}, Op: TagRemove, Label: "tag:env"}); err != nil {
+		t.Fatalf("removing an initial tag: %v", err)
+	}
+
+	// Re-writing at the stored value records nothing; another value replaces.
+	before := len(f.sink.events)
+	if err := f.w.WriteInitialTags(ctx, tagOperator, "tok-1", "n1", []string{"tag:role=web"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.sink.events) != before {
+		t.Error("a tag already at its value was recorded again")
+	}
+	if err := f.w.WriteInitialTags(ctx, tagOperator, "tok-1", "n1", []string{"tag:role=db"}); err != nil {
+		t.Fatal(err)
+	}
+	last := f.sink.events[len(f.sink.events)-1].Changes[0]
+	if !last.Before.Set || last.Before.Value != "web" || last.After.Value != "db" {
+		t.Errorf("replacing change = %+v, want web -> db", last)
+	}
+}
+
+// TestTagWriter_WriteInitialTags_RefusesAMachineMinter checks that who may write
+// a tag stays the Authorizer's decision: a refusal for the minter writes
+// nothing and is audited as a refusal.
+//
+// Proves EN-44.
+func TestTagWriter_WriteInitialTags_RefusesAMachineMinter(t *testing.T) {
+	f := newTagFixture(t, "n1")
+	denied := errors.New("only a human Account writes tags")
+	f.authz.controlErr = denied
+
+	err := f.w.WriteInitialTags(context.Background(), Principal{Account: "bot", Role: "admin"}, "tok-1", "n1", []string{"tag:env=prod"})
+	if !errors.Is(err, denied) {
+		t.Fatalf("err = %v, want the gate's refusal", err)
+	}
+	if len(f.tags(t, "n1")) != 0 || len(f.sink.events) != 0 {
+		t.Error("a refused minter wrote a tag")
+	}
+	if len(f.sink.entries) != 1 || f.sink.entries[0].Kind != AuditKindRefusal {
+		t.Errorf("entries = %+v, want exactly one refusal", f.sink.entries)
+	}
+	if len(f.authz.controlCalls) != 1 || f.authz.controlCalls[0] != ControlTagWrite {
+		t.Errorf("authorized %v, want the tag write", f.authz.controlCalls)
+	}
+}
+
+// TestTagWriter_CheckInitialTags_DecidesBeforeAnyNodeExists checks that the
+// pre-enrollment check reaches the same refusals as the write, with the
+// refusal audited and nothing written, and passes a minter the gate allows
+// without touching a Node.
+//
+// Proves EN-44.
+func TestTagWriter_CheckInitialTags_DecidesBeforeAnyNodeExists(t *testing.T) {
+	ctx := context.Background()
+	t.Run("a refused minter", func(t *testing.T) {
+		f := newTagFixture(t, "n1")
+		denied := errors.New("only a human Account writes tags")
+		f.authz.controlErr = denied
+		err := f.w.CheckInitialTags(ctx, Principal{Account: "bot", Role: "admin"}, []string{"tag:env=prod"})
+		if !errors.Is(err, denied) {
+			t.Fatalf("err = %v, want the gate's refusal", err)
+		}
+		if len(f.sink.events) != 0 || len(f.sink.entries) != 1 || f.sink.entries[0].Kind != AuditKindRefusal {
+			t.Errorf("events = %d entries = %+v, want one refusal and no write", len(f.sink.events), f.sink.entries)
+		}
+	})
+	t.Run("a relay: label", func(t *testing.T) {
+		f := newTagFixture(t, "n1")
+		err := f.w.CheckInitialTags(ctx, tagOperator, []string{"relay:env=prod"})
+		if !errors.Is(err, registry.ErrInitialTagRelayLabel) {
+			t.Fatalf("err = %v, want ErrInitialTagRelayLabel", err)
+		}
+	})
+	t.Run("an allowed minter", func(t *testing.T) {
+		f := newTagFixture(t, "n1")
+		if err := f.w.CheckInitialTags(ctx, tagOperator, []string{"tag:env=prod"}); err != nil {
+			t.Fatalf("err = %v, want nil", err)
+		}
+		if len(f.sink.events) != 0 || len(f.sink.entries) != 0 || len(f.tags(t, "n1")) != 0 {
+			t.Error("the check wrote or recorded something")
+		}
+	})
+}
+
+// TestTagWriter_WriteInitialTags_Refusals checks that tags that do not hold, an
+// unknown Node and a Node that would exceed the cap each write nothing and are
+// audited, and that no tags is a no-op that asks nobody.
+//
+// Proves EN-40.
+func TestTagWriter_WriteInitialTags_Refusals(t *testing.T) {
+	ctx := context.Background()
+	t.Run("a relay: label", func(t *testing.T) {
+		f := newTagFixture(t, "n1")
+		err := f.w.WriteInitialTags(ctx, tagOperator, "tok-1", "n1", []string{"relay:env=prod"})
+		if !errors.Is(err, registry.ErrInitialTagRelayLabel) {
+			t.Fatalf("err = %v, want ErrInitialTagRelayLabel", err)
+		}
+		if len(f.tags(t, "n1")) != 0 || len(f.sink.entries) != 1 {
+			t.Errorf("tags = %v entries = %d, want nothing written and one refusal", f.tags(t, "n1"), len(f.sink.entries))
+		}
+	})
+	t.Run("an unknown Node", func(t *testing.T) {
+		f := newTagFixture(t, "n1")
+		if err := f.w.WriteInitialTags(ctx, tagOperator, "tok-1", "ghost", []string{"tag:a=b"}); !errors.Is(err, ErrTagNodeNotFound) {
+			t.Fatalf("err = %v, want ErrTagNodeNotFound", err)
+		}
+	})
+	t.Run("a Node that would exceed the cap", func(t *testing.T) {
+		f := newTagFixture(t, "n1")
+		for i := 0; i < registry.MaxTagsPerNode; i++ {
+			if _, err := f.w.WriteTag(ctx, tagOperator, TagWrite{NodeIDs: []string{"n1"}, Op: TagAdd, Label: fmt.Sprintf("tag:k%d=v", i)}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := f.w.WriteInitialTags(ctx, tagOperator, "tok-1", "n1", []string{"tag:one-more=v"}); !errors.Is(err, ErrTooManyTags) {
+			t.Fatalf("err = %v, want ErrTooManyTags", err)
+		}
+		if len(f.tags(t, "n1")) != registry.MaxTagsPerNode {
+			t.Error("a refused write changed the Node")
+		}
+	})
+	t.Run("no tags", func(t *testing.T) {
+		f := newTagFixture(t, "n1")
+		f.authz.controlErr = errors.New("would be refused")
+		if err := f.w.WriteInitialTags(ctx, tagOperator, "tok-1", "n1", nil); err != nil {
+			t.Fatalf("no tags: %v", err)
+		}
+		if len(f.sink.entries) != 0 {
+			t.Error("writing no tags recorded a refusal")
+		}
+	})
+}
+
+// TestParseInitialTags_AgreesWithParseTagLabel pins that the one parse of an
+// Enrollment Token's initial tags (registry.ParseInitialTags) accepts exactly
+// what a tag write's ParseTagLabel accepts, so a tag a mint takes is a tag the
+// write path takes.
+//
+// Proves EN-40.
+func TestParseInitialTags_AgreesWithParseTagLabel(t *testing.T) {
+	for _, entry := range []string{
+		"tag:env=prod", "tag:env=", "tag:a.b_c-d=e.f", "tag:env", "tag:=v", "tag:", "tag:a b=c", "tag:a=b=c",
+		"env=prod", "node:env=prod", "state:x=y", "TAG:env=prod", "tag:" + strings.Repeat("k", 63) + "=v",
+		"tag:" + strings.Repeat("k", 64) + "=v", "tag:k=" + strings.Repeat("v", 255), "tag:k=" + strings.Repeat("v", 256),
+		"tag:k\u200b=v", "",
+	} {
+		_, _, writeErr := ParseTagLabel(TagAdd, entry)
+		_, mintErr := registry.ParseInitialTags([]string{entry})
+		if (writeErr == nil) != (mintErr == nil) {
+			t.Errorf("%q: tag write says %v, initial tags say %v", entry, writeErr, mintErr)
+		}
+	}
+}

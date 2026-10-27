@@ -81,8 +81,8 @@ func selectorUses(root string, names ...string) (map[string][]string, error) {
 // TestLabelWriters_EachHasOnlyItsDefiningCallers walks the module and asserts
 // who may call each label writer.
 //
-// MUTATION: call SetRelayLabels, AppendWithTagWrite, RecordTagWrite, WriteTag or
-// ApplyTagChanges from any other non-test file and this test goes red. The
+// MUTATION: call SetRelayLabels, AppendWithTagWrite, RecordTagWrite, WriteTag,
+// WriteInitialTags or ApplyTagChanges from any other non-test file and this test goes red. The
 // registrytest package is the shared conformance suite that seeds relay: labels
 // for the implementations under test.
 func TestLabelWriters_EachHasOnlyItsDefiningCallers(t *testing.T) {
@@ -108,6 +108,14 @@ func TestLabelWriters_EachHasOnlyItsDefiningCallers(t *testing.T) {
 		"WriteTag": {
 			"internal/controlplane/api/tags.go",
 			"internal/controlplane/console/tags.go",
+		},
+		// An Enrollment Token's initial tags are written as the Account that
+		// minted it: the Enrollment service calls the writer, and the composition
+		// root's adapter hands it the capability layer's TagWriter. No surface
+		// calls it.
+		"WriteInitialTags": {
+			"cmd/relay/initialtags.go",
+			"internal/enroll/handler.go",
 		},
 		"ApplyTagChanges": nil,
 	}

@@ -41,10 +41,10 @@ allowed_args = []
 name = "file.read"
 allowed_args = [["*"]]
 
-# --- The shipped read catalog (ADR-0021) --------------------------------------
-# These names are Template Operations, not Native Operations: they exist only
-# on a Node that has the first-party pack installed
-# (/etc/relay-daemon/templates.d/relay-read/). On a Node without it, dispatch
+# --- The shipped read catalog (ADR-0053) --------------------------------------
+# These names are Template Operations, not Native Operations: the relay-daemon
+# package installs them with the daemon, at
+# /etc/relay-daemon/templates.d/relay-read/. On a Node without them, dispatch
 # reports `unsupported` and these rules are simply inert — a Policy rule never
 # creates vocabulary, it only permits it.
 #
@@ -77,6 +77,8 @@ allowed_args = []
 name = "service.status"
 allowed_args = [["*"]]
 
+# To turn log.tail off, deny it in a Policy fragment;
+# docs/operations/template-packs.md shows the fragment.
 [[operation]]
 name = "log.tail"
 allowed_args = [["*"]]

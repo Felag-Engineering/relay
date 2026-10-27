@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -200,5 +201,95 @@ func TestServer_IndependentShutdown(t *testing.T) {
 	defer respB.Body.Close()
 	if respB.StatusCode != http.StatusOK {
 		t.Fatalf("server B after server A shutdown: status = %d, want %d", respB.StatusCode, http.StatusOK)
+	}
+}
+
+func TestServer_HealthAnswersWithoutACredential(t *testing.T) {
+	_, base, client := newTestServer(t)
+
+	for _, token := range []string{"", "wrong-" + testToken} {
+		resp := doRequest(t, client, http.MethodGet, base+"/healthz", token)
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK || string(body) != "serving\n" {
+			t.Fatalf("token %q: %d %q, want 200 %q", token, resp.StatusCode, body, "serving\n")
+		}
+		if got := resp.Header.Get("WWW-Authenticate"); got != "" {
+			t.Errorf("WWW-Authenticate = %q, want none", got)
+		}
+		if got := resp.Header.Get("Set-Cookie"); got != "" {
+			t.Errorf("Set-Cookie = %q, want none", got)
+		}
+		if got := resp.Header.Get("Content-Type"); got != "text/plain; charset=utf-8" {
+			t.Errorf("Content-Type = %q, want %q", got, "text/plain; charset=utf-8")
+		}
+		if got := resp.Header.Get("Cache-Control"); got != "no-store" {
+			t.Errorf("Cache-Control = %q, want %q", got, "no-store")
+		}
+	}
+
+	resp := doRequest(t, client, http.MethodHead, base+"/healthz", "")
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("HEAD /healthz: status = %d, want 200", resp.StatusCode)
+	}
+}
+
+func TestServer_HealthIsNotServingBeforeServeAndAfterShutdown(t *testing.T) {
+	cert := relaytest.SelfSignedServerCert(t, "controlplane-test")
+	srv := New(Config{Addr: "127.0.0.1:0", GetCertificate: staticCert(cert)}, testAuthenticator())
+
+	// Drives the handler directly: it needs no listener, and after Shutdown
+	// none is left to dial.
+	health := func() (int, string) {
+		rec := httptest.NewRecorder()
+		srv.http.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+		return rec.Code, rec.Body.String()
+	}
+
+	if code, body := health(); code != http.StatusServiceUnavailable || body != "not serving\n" {
+		t.Fatalf("before Serve: %d %q, want 503 %q", code, body, "not serving\n")
+	}
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	served := make(chan error, 1)
+	go func() { served <- srv.Serve(lis) }()
+
+	leaf, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		t.Fatalf("ParseCertificate: %v", err)
+	}
+	pool := x509.NewCertPool()
+	pool.AddCert(leaf)
+	client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool}}}
+	resp := doRequest(t, client, http.MethodGet, "https://"+lis.Addr().String()+"/healthz", "")
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("while serving: status = %d, want 200", resp.StatusCode)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(ctx); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+	<-served
+	if code, body := health(); code != http.StatusServiceUnavailable || body != "not serving\n" {
+		t.Fatalf("after Shutdown: %d %q, want 503 %q", code, body, "not serving\n")
+	}
+}
+
+// Only GET (and HEAD) is the health route; any other method falls through to
+// the authenticated mux.
+func TestServer_HealthIsGETOnly(t *testing.T) {
+	_, base, client := newTestServer(t)
+
+	resp := doRequest(t, client, http.MethodPost, base+"/healthz", "")
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("POST /healthz without a credential: status = %d, want 401", resp.StatusCode)
 	}
 }

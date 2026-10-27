@@ -116,7 +116,7 @@ func TestAttemptObserver_BadSelfLabels(t *testing.T) {
 	obs := &capturingAttemptObserver{}
 	svc := NewService(NewMemoryRepository())
 	srv, _ := newObservedEnrollServer(t, svc, obs)
-	_, plaintext := mintToken(t, svc, []string{"relay:env=prod"})
+	_, plaintext := mintToken(t, svc, nil)
 
 	_, err := srv.Enroll(context.Background(), &relayv1.EnrollRequest{
 		EnrollmentToken: plaintext,
@@ -137,7 +137,7 @@ func TestAttemptObserver_Expired(t *testing.T) {
 	obs := &capturingAttemptObserver{}
 	svc, clk := newTestService(t)
 	srv, _ := newObservedEnrollServer(t, svc, obs)
-	_, plaintext := mintToken(t, svc, []string{"relay:env=prod"})
+	_, plaintext := mintToken(t, svc, nil)
 	clk.advance(2 * time.Hour)
 
 	_, err := srv.Enroll(context.Background(), &relayv1.EnrollRequest{
@@ -157,7 +157,7 @@ func TestAttemptObserver_Revoked(t *testing.T) {
 	obs := &capturingAttemptObserver{}
 	svc := NewService(NewMemoryRepository())
 	srv, _ := newObservedEnrollServer(t, svc, obs)
-	tok, plaintext := mintToken(t, svc, []string{"relay:env=prod"})
+	tok, plaintext := mintToken(t, svc, nil)
 	if err := svc.Revoke(context.Background(), tok.ID); err != nil {
 		t.Fatalf("Revoke: %v", err)
 	}
@@ -179,7 +179,7 @@ func TestAttemptObserver_Exhausted(t *testing.T) {
 	obs := &capturingAttemptObserver{}
 	svc := NewService(NewMemoryRepository())
 	srv, _ := newObservedEnrollServer(t, svc, obs)
-	_, plaintext, err := svc.Create(context.Background(), []string{"relay:env=prod"}, time.Hour, WithMaxUses(1))
+	_, plaintext, err := svc.Create(context.Background(), nil, time.Hour, WithMaxUses(1))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -339,8 +339,8 @@ func TestAttemptObserver_AtCapacity(t *testing.T) {
 	})
 	srv := NewServer(svc, realCA, reg, WithAttemptObserver(obs), WithRateLimiter(limiter))
 
-	_, pt1 := mintToken(t, svc, []string{"relay:env=prod"})
-	_, pt2 := mintToken(t, svc, []string{"relay:env=prod"})
+	_, pt1 := mintToken(t, svc, nil)
+	_, pt2 := mintToken(t, svc, nil)
 	ctx := ctxFromIP("10.0.1.1")
 
 	if _, err := srv.Enroll(ctx, &relayv1.EnrollRequest{EnrollmentToken: pt1, Csr: genCSR(t, "cn")}); err != nil {
@@ -371,7 +371,7 @@ func TestAttemptObserver_RevokedMidEnrollment(t *testing.T) {
 	den := &fakeDenylister{}
 	srv := NewServer(svc, realCA, reg, WithAttemptObserver(obs), WithPostEnrollRevocationCheck(svc, den))
 
-	tok, plaintext := mintToken(t, svc, []string{"relay:env=prod"})
+	tok, plaintext := mintToken(t, svc, nil)
 	srv.newID = func() (string, error) {
 		if err := svc.Revoke(context.Background(), tok.ID); err != nil {
 			t.Errorf("race hook Revoke: %v", err)
@@ -399,7 +399,7 @@ func TestAttemptObserver_Success(t *testing.T) {
 	obs := &capturingAttemptObserver{}
 	svc := NewService(NewMemoryRepository())
 	srv, reg := newObservedEnrollServer(t, svc, obs)
-	tok, plaintext := mintToken(t, svc, []string{"relay:env=prod"})
+	tok, plaintext := mintToken(t, svc, nil)
 
 	resp, err := srv.Enroll(context.Background(), &relayv1.EnrollRequest{
 		EnrollmentToken: plaintext, Csr: genCSR(t, "cn"),
@@ -454,7 +454,7 @@ func TestAttemptObserver_RecordEnrollmentFailure_StillExactlyOneAcceptedEvent(t 
 	reg := failingRecordEnrollment{registry.NewInMemory()}
 	srv := NewServer(svc, realCA, reg, WithAttemptObserver(obs))
 
-	_, plaintext := mintToken(t, svc, []string{"relay:env=prod"})
+	_, plaintext := mintToken(t, svc, nil)
 	_, err = srv.Enroll(context.Background(), &relayv1.EnrollRequest{
 		EnrollmentToken: plaintext, Csr: genCSR(t, "cn"),
 	})
@@ -480,7 +480,7 @@ func TestAttemptObserver_PlaintextNeverPublished(t *testing.T) {
 	svc := NewService(NewMemoryRepository())
 	srv, _ := newObservedEnrollServer(t, svc, obs)
 
-	tok, plaintext := mintToken(t, svc, []string{"relay:env=prod"})
+	tok, plaintext := mintToken(t, svc, nil)
 	secret := strings.TrimPrefix(plaintext, tok.ID+secretSep)
 	if secret == "" || secret == plaintext {
 		t.Fatal("test setup broken: could not split the minted credential")
@@ -496,7 +496,7 @@ func TestAttemptObserver_PlaintextNeverPublished(t *testing.T) {
 	// Re-use of the now-exhausted... actually reuse with a bad CSR to force a
 	// second path through the same real credential without exhausting a
 	// fresh mint each time.
-	tok2, plaintext2 := mintToken(t, svc, []string{"relay:env=prod"})
+	tok2, plaintext2 := mintToken(t, svc, nil)
 	secret2 := strings.TrimPrefix(plaintext2, tok2.ID+secretSep)
 	if _, err := srv.Enroll(context.Background(), &relayv1.EnrollRequest{
 		EnrollmentToken: plaintext2, Csr: []byte("not a csr"),
@@ -520,7 +520,7 @@ func TestAttemptObserver_Renew_PublishesNothing(t *testing.T) {
 	obs := &capturingAttemptObserver{}
 	svc := NewService(NewMemoryRepository())
 	srv, _ := newObservedEnrollServer(t, svc, obs)
-	_, plaintext := mintToken(t, svc, []string{"relay:env=prod"})
+	_, plaintext := mintToken(t, svc, nil)
 
 	if _, err := srv.Enroll(context.Background(), &relayv1.EnrollRequest{
 		EnrollmentToken: plaintext, Csr: genCSR(t, "cn"),

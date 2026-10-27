@@ -1,0 +1,17 @@
+---
+galaxy_info:
+  role_name: relay_daemon
+  author: Felag Engineering
+  description: Installs the relay-daemon package and joins the Node to a Relay from a join string in the operator's vault.
+  license: BUSL-1.1
+  min_ansible_version: "2.21"
+  platforms:
+    - name: Debian
+      versions: [all]
+    - name: Ubuntu
+      versions: [all]
+    - name: EL
+      versions: [all]
+    - name: Amazon
+      versions: [all]
+dependencies: []

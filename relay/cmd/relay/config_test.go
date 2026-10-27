@@ -74,6 +74,7 @@ dir = "/srv/ca"
 path = "/srv/relay.db"
 [tls]
 hostname = "relay.example.test"
+extra_names = ["lb.example.test", "192.0.2.7"]
 [oauth]
 issuer = "https://idp.example.test"
 audience = "https://relay.example.test/mcp"
@@ -116,6 +117,7 @@ cert_expiring_fraction = 0.3
 		ControlEnabled: true, ControlAddr: "127.0.0.1:9001",
 		ConsoleEnabled: true, ConsoleSessionMaxAge: 10 * time.Hour, ConsoleSessionIdle: 20 * time.Minute, ConsoleStepUpWindow: 3 * time.Minute,
 		CADir: "/srv/ca", StorePath: "/srv/relay.db", Hostname: "relay.example.test",
+		ExtraNames:  []string{"lb.example.test", "192.0.2.7"},
 		OAuthIssuer: "https://idp.example.test", OAuthAudience: "https://relay.example.test/mcp",
 		OAuthAccountClaim: "sub", OAuthRequiredScope: "relay", OAuthPublicURL: "https://relay.example.test",
 		ApprovalGatePath:       "/srv/gates.json",

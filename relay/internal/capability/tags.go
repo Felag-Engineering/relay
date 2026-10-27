@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/Felag-Engineering/relay/relay/internal/registry"
@@ -229,6 +230,107 @@ func (w *TagWriter) WriteTag(ctx context.Context, p Principal, req TagWrite) (Ta
 			w.control.rec.refuseControl(ctx, p, ErrTagNodeNotFound))
 	default:
 		return TagWriteResult{}, fmt.Errorf("capability: record tag write: %w", err)
+	}
+}
+
+// CheckInitialTags decides, ahead of any enrollment side effect, whether the
+// Account that minted an Enrollment Token may write its initial tags and whether
+// they hold. It is the first half of WriteInitialTags and the same decision, so
+// a refusal that is certain is reached before the use is counted, the
+// certificate signed or the Node recorded. A refusal is audited.
+func (w *TagWriter) CheckInitialTags(ctx context.Context, minter Principal, tags []string) error {
+	if len(tags) == 0 {
+		return nil
+	}
+	_, err := w.checkInitialTags(ctx, minter, tags)
+	return err
+}
+
+func (w *TagWriter) checkInitialTags(ctx context.Context, minter Principal, tags []string) (map[string]string, error) {
+	if w.nodes == nil || w.rec == nil {
+		return nil, ErrTagsUnavailable
+	}
+	if err := w.control.authz.AuthorizeControl(withoutAssertions(ctx), minter, ControlTagWrite); err != nil {
+		return nil, w.control.rec.refuseControl(ctx, minter, err)
+	}
+	parsed, err := registry.ParseInitialTags(tags)
+	if err != nil {
+		return nil, w.control.rec.refuseControl(ctx, minter, err)
+	}
+	return parsed, nil
+}
+
+// initialTagProvenance is the suffix that distinguishes a tag written at
+// enrollment from one the minter wrote live: the bearer of the join string, not
+// the Account itself, caused the write. It names the token by its public ID and
+// never by its secret.
+func initialTagProvenance(tokenID string) string {
+	return "(initial tag from Enrollment Token " + tokenID + ")"
+}
+
+// WriteInitialTags writes an Enrollment Token's initial tags on the Node its
+// enrollment just recorded, as the act of the Account that minted the token, as
+// recorded at mint (ADR-0050 decision 3). All land with one tag_write record
+// each, naming the token, or none do. Who may write a tag stays decided by the
+// Authorizer's ControlTagWrite row, so a machine or sub-operator minter writes
+// nothing and the refusal is audited.
+func (w *TagWriter) WriteInitialTags(ctx context.Context, minter Principal, tokenID, nodeID string, tags []string) error {
+	if len(tags) == 0 {
+		return nil
+	}
+	parsed, err := w.checkInitialTags(ctx, minter, tags)
+	if err != nil {
+		return err
+	}
+	if validateNodeID(nodeID) != nil {
+		return w.control.rec.refuseControl(ctx, minter, ErrTagNodeIDInvalid)
+	}
+	n, ok := w.nodes.Get(nodeID)
+	if !ok {
+		return w.control.rec.refuseControl(ctx, minter, ErrTagNodeNotFound)
+	}
+
+	keys := make([]string, 0, len(parsed))
+	for k := range parsed {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var changes []registry.TagChange
+	added := 0
+	for _, k := range keys {
+		stored, has := n.TagLabels[k]
+		if has && stored == parsed[k] {
+			continue
+		}
+		if !has {
+			added++
+		}
+		changes = append(changes, registry.TagChange{
+			NodeID: nodeID,
+			Key:    k,
+			Before: registry.TagValue{Set: has, Value: stored},
+			After:  registry.TagValue{Set: true, Value: parsed[k]},
+		})
+	}
+	if added+len(n.TagLabels) > registry.MaxTagsPerNode {
+		return w.control.rec.refuseControl(ctx, minter, ErrTooManyTags)
+	}
+	if len(changes) == 0 {
+		return nil
+	}
+
+	err = w.rec.RecordTagWrite(ctx, TagWriteEvent{Principal: minter, Changes: changes, Provenance: initialTagProvenance(tokenID)})
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, ErrTagChanged):
+		return ErrTagChanged
+	case errors.Is(err, ErrTooManyTags):
+		return w.control.rec.refuseControl(ctx, minter, ErrTooManyTags)
+	case errors.Is(err, ErrTagNodeNotFound):
+		return errors.Join(&TagNodesNotFoundError{}, w.control.rec.refuseControl(ctx, minter, ErrTagNodeNotFound))
+	default:
+		return fmt.Errorf("capability: record tag write: %w", err)
 	}
 }
 

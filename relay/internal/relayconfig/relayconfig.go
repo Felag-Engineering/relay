@@ -34,6 +34,10 @@ const (
 	maxPort                = 65535
 	maxHostnameLength      = 253
 	maxHostnameLabelLength = 63
+
+	// maxExtraNames caps tls.extra_names (RC-47). With the composition root's
+	// cap on detected addresses it bounds the certificate's SAN list.
+	maxExtraNames = 32
 )
 
 // LogFormat is how the Relay renders its log.
@@ -88,7 +92,12 @@ type Store struct{ Path string }
 
 // TLS holds the certificate hostname: a name on the one server certificate
 // both listeners present, and the host a join string carries by default.
-type TLS struct{ Hostname string }
+// ExtraNames are the further names that certificate carries (RC-46, RC-47);
+// nil when unset.
+type TLS struct {
+	Hostname   string
+	ExtraNames []string
+}
 
 // OAuth is the human sign-in through an external identity provider; an empty
 // Issuer means OAuth is off.

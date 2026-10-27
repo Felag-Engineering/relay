@@ -102,6 +102,37 @@ func TestRecordTagWrite_OneRecordPerNodeWithOldAndNew(t *testing.T) {
 	}
 }
 
+// TestWriteInitialTags_RecordsNameTheEnrollmentToken checks, on the real store,
+// that an Enrollment Token's initial tags land as tag_write records attributed
+// to the minter whose Reason names the token by its public ID, so they never
+// read as the minter writing live.
+//
+// Proves EN-41.
+func TestWriteInitialTags_RecordsNameTheEnrollmentToken(t *testing.T) {
+	st, repo, path := openSinkStore(t)
+	w := realTagWriter(t, st, New(repo, WithNewID(sequentialIDs("audit-"))))
+	seedTagNodes(t, st, "n1")
+
+	if err := w.WriteInitialTags(context.Background(), tagOperatorPrincipal, "tok-abc", "n1", []string{"tag:env=prod"}); err != nil {
+		t.Fatalf("WriteInitialTags: %v", err)
+	}
+	recs := tagWriteRecords(t, repo)
+	if len(recs) != 1 {
+		t.Fatalf("tag_write records = %d, want 1", len(recs))
+	}
+	want := `tag:env old=(none) new="prod" (initial tag from Enrollment Token tok-abc)`
+	if recs[0].Reason != want {
+		t.Errorf("reason = %q, want %q", recs[0].Reason, want)
+	}
+	if recs[0].Principal != tagOperatorPrincipal.Attribution() {
+		t.Errorf("principal = %q, want the minter", recs[0].Principal)
+	}
+	verdict, err := store.VerifyAuditChain(context.Background(), path, nil)
+	if err != nil || !verdict.Intact() {
+		t.Fatalf("chain verdict = %+v, %v; want intact", verdict, err)
+	}
+}
+
 // TestTagWriter_MachineAndViewerAreRefusedBeforeAnyWrite runs ADR-0050 decision
 // 2's refusals through the real RoleGate and the real store: nothing is
 // written, and each refusal is on the trail as a refusal, not a tag_write.
@@ -219,8 +250,8 @@ func TestRecordTagWrite_MapsStoreConflictsToCapabilitySentinels(t *testing.T) {
 }
 
 func TestTagWriteReason_NeverReadsAnEmptyValueAsAbsent(t *testing.T) {
-	absent := tagWriteReason(registry.TagChange{Key: "k", After: registry.TagValue{Set: true, Value: ""}})
-	empty := tagWriteReason(registry.TagChange{Key: "k", Before: registry.TagValue{Set: true, Value: ""}})
+	absent := audit.TagWriteReason(registry.TagChange{Key: "k", After: registry.TagValue{Set: true, Value: ""}})
+	empty := audit.TagWriteReason(registry.TagChange{Key: "k", Before: registry.TagValue{Set: true, Value: ""}})
 	if absent == empty {
 		t.Errorf("reasons collide: %q", absent)
 	}

@@ -112,9 +112,12 @@ AI-agent or the Control API could target. The Console itself runs nothing (ADR-0
 
 Facts (OS, kernel, hostname, IP, packages) are **not** filterable, and none is on the row except
 the hostname, drawn as the self-reported primary name (`00-foundations.md`, "Self-reported names").
-The row links by Node ID, and the hostname is never filterable or targetable. To target on OS,
-config management stamps `node:os=ubuntu`. The discriminator is the configuration-management scope
-rule (AGENTS.md, *Out of realm*): *what Ansible could check in check-mode is out of realm*.
+The row links by Node ID. The hostname Fact is not filterable, but the daemon declares the
+hostname, OS and architecture as the `node:hostname`, `node:os` and `node:arch` labels, which
+filter and target like any declared label. A distribution is targeted with a label config
+management declares, such as `node:distro=ubuntu`. The discriminator is the
+configuration-management scope rule (AGENTS.md, *Out of realm*): *what Ansible could check in
+check-mode is out of realm*.
 
 ### A refused filter
 

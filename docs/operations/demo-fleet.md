@@ -372,7 +372,7 @@ Why this call, so nobody "improves" it into one that parks:
   stage would show a pending approval instead of a refusal.
 - `node:role=bastion` is fan-out 1, far under the read-class blast cap (default 10000).
 - `/etc/shadow` is explicitly denied in all three fixtures, so the fleet-wide variant (selector
-  `relay:env=dev`) prints nine denial lines: an optional encore, *(predicted)*; only the
+  `tag:env=dev`) prints nine denial lines: an optional encore, *(predicted)*; only the
   bastion's verdict is asserted by a fixture test.
 
 For the full response, drop the python filter. Its shape, *(predicted)* from
@@ -427,7 +427,7 @@ Three ways to clear it:
 
   ```console
   $ scripts/dev-fleet-mcp.sh call raw_exec \
-      '{"selector":"relay:env=dev","argv":["/usr/local/bin/dev-fleet-service","restart"]}'
+      '{"selector":"tag:env=dev","argv":["/usr/local/bin/dev-fleet-service","restart"]}'
   ```
 
   Decide it by any of the ways in [The human approver](#the-human-approver) open to an `admin`
@@ -449,7 +449,7 @@ out). Run these yourself:
 - Nine Nodes, all connected:
 
   ```console
-  $ scripts/dev-fleet-mcp.sh call list_nodes '{"selector":"relay:env=dev"}' \
+  $ scripts/dev-fleet-mcp.sh call list_nodes '{"selector":"tag:env=dev"}' \
       | python3 -c 'import json,sys; n=json.load(sys.stdin)["result"]["structuredContent"]["nodes"]; print(len(n), "Nodes,", sum(1 for x in n if x.get("connected")), "connected")'
   ```
 
@@ -782,15 +782,17 @@ a dev fleet that lies about itself is worse than one that is legibly limited. (T
 [The fixture limit, stated plainly](../dev-fleet.md#the-fixture-limit-stated-plainly).)
 
 `node:env=prod` and `node:env=staging` are **Node-authored** (set by `RELAY_NODE_LABELS` in the
-compose environment, and forgeable by a compromised Node), while `relay:env=dev` is
-**Relay-authored** at enrollment. They are separate namespaces (invariant 7), and `list_nodes()`
-always returns them as separate maps. (`tag:` labels are a third map, `tag_labels`, written only by a human Account through the Control API; the demo fleet seeds none.)
+compose environment, and forgeable by a compromised Node), while `tag:env=dev` is a **tag**,
+written at enrollment from the Enrollment Token's initial tags as the minting Account's act, and
+a compromised Node cannot write it. They are separate namespaces (invariant 7), and
+`list_nodes()` always returns them as separate maps. (`tag:` labels are the third map,
+`tag_labels`, written only by a human Account; the demo fleet's tags are the initial tags.)
 
 ### Selector cardinalities
 
 | Selector | Nodes |
 | --- | --- |
-| `relay:env=dev` | 9 |
+| `tag:env=dev` | 9 |
 | `node:role=web` | 6 |
 | `node:role=db` | 2 |
 | `node:role=bastion` | 1 |
@@ -820,7 +822,7 @@ the `systemctl` shim, exited `0`. The beats below were not re-run under that gat
 **a. Fleet read, all success.**
 
 ```
-run_operation(selector="relay:env=dev", operation="file.read", args={"path":"/etc/os-release"})
+run_operation(selector="tag:env=dev", operation="file.read", args={"path":"/etc/os-release"})
 ```
 
 → 9 × `success`. The allow verdict is tested on all three fixtures
@@ -831,7 +833,7 @@ run_operation(selector="relay:env=dev", operation="file.read", args={"path":"/et
 **b. Mixed read set, no approval at all.**
 
 ```
-run_operation(selector="relay:env=dev", operation="file.read", args={"path":"/var/lib/dev-fleet-service/state"})
+run_operation(selector="tag:env=dev", operation="file.read", args={"path":"/var/lib/dev-fleet-service/state"})
 ```
 
 → 6 × `success` (the web Nodes) *(predicted)*, 2 × `failure` (the db Nodes have no such file)
@@ -841,14 +843,14 @@ run_operation(selector="relay:env=dev", operation="file.read", args={"path":"/va
 **c. The mutate mixed set.**
 
 **On stage, immediately before this beat, run `list_nodes(selector="node:role=bastion")` and
-`list_nodes(selector="relay:env=dev")`.** Only these read the **real registry** rather than the
+`list_nodes(selector="tag:env=dev")`.** Only these read the **real registry** rather than the
 compose file. If the first returns anything but one Node, or the second anything but nine,
 stop and run `make demo-reset`: a stale Node changes the fan-out.
 
 Then:
 
 ```
-raw_exec(selector="relay:env=dev", argv=["/usr/local/bin/dev-fleet-service","restart"])
+raw_exec(selector="tag:env=dev", argv=["/usr/local/bin/dev-fleet-service","restart"])
 ```
 
 → parks under `demo-raw-exec-always-needs-a-human` with a `request_id` and a `plan_hash` (the
@@ -1026,7 +1028,7 @@ table, in the same change that adjusts the roster if that turns out to be needed
    `docker stats --no-stream --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}"`. Record
    total memory, the `relay` container, and one representative web / db / bastion daemon.
 3. **Fan-out:** sample the same command while running
-   `run_operation(selector="relay:env=dev", operation="system.facts")` in a tight loop, and
+   `run_operation(selector="tag:env=dev", operation="system.facts")` in a tight loop, and
    once more during the approved `raw_exec` restart across all nine. Record the peak.
 4. Record the machine (CPU, RAM, OS, Docker version) and the date beside the table.
 5. **If nine does not sit comfortably, drop `daemon-9` first, then `daemon-5`.** `daemon-9` and

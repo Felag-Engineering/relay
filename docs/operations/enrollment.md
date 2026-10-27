@@ -1,6 +1,6 @@
 # Enrollment workflow
 
-How Nodes join the fleet: minting a scoped Enrollment Token, enrolling one Node by hand, and
+How Nodes join the fleet: minting an Enrollment Token that names initial tags, enrolling one Node by hand, and
 bulk-enrolling a fleet through config management (ADR-0006). See also
 [relay-install.md](relay-install.md), [relay-daemon-install.md](relay-daemon-install.md), and
 [ca-disaster-recovery.md](ca-disaster-recovery.md), whose "burn it down" recovery is a re-run
@@ -8,16 +8,17 @@ of the playbook in this document.
 
 ## How enrollment works (ADR-0006, in brief)
 
-A Node enrolls by presenting a **reusable-by-choice, scoped, expiring, revocable Enrollment Token** and a
+A Node enrolls by presenting a **reusable-by-choice, expiring, revocable Enrollment Token** and a
 CSR over server-authenticated TLS (`Enroll` is the single certless RPC). The Relay validates
 the token, generates the `node_id` itself (the CSR subject is discarded, so a daemon can never
-choose its own identity), signs a ~14-day client certificate with `CN = node_id`, and stamps
-the token's scope as relay-space Labels on the new registry entry. Everything after that first
-RPC is mTLS; renewal is automatic and never uses a token again.
+choose its own identity), signs a ~14-day client certificate with `CN = node_id`, stamps
+`relay:node-id` on the new registry entry (the only `relay:` label enrollment writes), and
+writes the token's **initial tags** on the Node as the minting Account's act. Everything after
+that first RPC is mTLS; renewal is automatic and never uses a token again.
 
 The token can only enroll, never run Operations. One reusable token lets config management
 register hundreds of Nodes in a loop while each Node still gets its own certificate. Short
-TTL, scope, `max_uses`, and instant revocation bound the risk of reuse.
+TTL, `max_uses`, and instant revocation bound the risk of reuse.
 
 ## 1. Mint a token
 
@@ -28,33 +29,30 @@ Token; [control-plane-credential.md](control-plane-credential.md)):
 $ curl --cacert ca-cert.pem \
     -H "Authorization: Bearer $RELAY_TOKEN" \
     -H "Content-Type: application/json" \
-    -d '{"scope": ["relay:env=prod", "relay:cohort=web"], "ttl_seconds": 86400, "max_uses": 200}' \
+    -d '{"initial_tags": ["tag:env=prod", "tag:cohort=web"], "ttl_seconds": 86400, "max_uses": 200}' \
     https://relay.example.internal:9443/api/v1/enrollment-tokens
 {
   "id": "3f8a…",
   "token": "3f8a….K7m2…",
   "join_string": "glp_join_…",
-  "scope": ["relay:env=prod", "relay:cohort=web"],
+  "initial_tags": ["tag:env=prod", "tag:cohort=web"],
   "expires_at": "2026-08-10T12:00:00Z",
   "max_uses": 200,
   "unlimited": false
 }
 ```
 
-- **`scope`** — required and non-empty. Every entry is `relay:`-prefixed, with a non-empty
-  bare key and a (possibly empty) value whose every byte is in `[A-Za-z0-9._-]`; a violating
-  entry is refused with `400`, never sanitised. These become the Node's relay-space Labels:
-  Node-immutable, reserved for the security lane (quarantine, remediation,
-  secret-distribution targeting). A token scoped to `relay:env=prod` makes every Node it
-  enrolls *provably* prod for that lane, with no per-Node labeling. Upgrading a Relay whose
-  existing tokens or Nodes carry scopes outside this alphabet: see
-  [Scopes from an earlier Relay](#scopes-from-an-earlier-relay).
-
-  **Changing in the MVP (ADR-0050).** A mint will name optional **initial tags** (`tag:`
-  labels) in place of a `relay:` scope. The enrollment writes them on each Node it enrolls,
-  and an `operator` can change them afterwards like any tag. A mint naming a `relay:` label
-  will be refused, naming it; every Node gets `relay:node-id` from the enrollment itself. This
-  runbook describes the release you run until then.
+- **`initial_tags`** — optional; zero or more tags, each `tag:key=value`, written as the first
+  tags of every Node the token enrolls. The key is at most 63 bytes and the value at most 255,
+  every byte in `[A-Za-z0-9._-]`; a key may be named once, at most 64 tags. A malformed entry is
+  refused with `400`, never sanitised. A `relay:` label is refused with `400`, naming it,
+  whoever mints: `relay:` labels are written only by the Relay action that defines them, and
+  every Node gets `relay:node-id` from the enrollment itself. Only a **human** Account may
+  name an initial tag: a machine Account naming any is refused with `403`, and a machine
+  Account's mint naming none is unaffected. Once written, an initial tag is an ordinary tag:
+  an `operator` changes or removes it like any other, and each one is a `tag_write` record in
+  the audit trail attributed to the Account that minted the token. A request still sending the
+  old `scope` field is refused as an unknown field with `400`; update any script that mints.
 - **`ttl_seconds`** — required, `> 0`, at most one year. Size it to the enrollment window: for
   a planned bulk run, hours or a day.
 - **`max_uses`** — required unless `unlimited` is true; a positive number of Nodes. For a
@@ -78,28 +76,70 @@ $ curl --cacert ca-cert.pem \
     -X DELETE https://relay.example.internal:9443/api/v1/enrollment-tokens/<id>
 ```
 
-### Scopes from an earlier Relay
+### Upgrading from a Relay that stamped a token's scope
 
-The scope rule is narrower than what the Selector parser accepts, so a scope like
-`relay:tier=pci/1` was once accepted and is refused now. On upgrade:
+An earlier Relay stamped a token's `scope` onto each Node as `relay:` labels. This Relay writes
+the token's initial tags instead, and `relay:` keeps only Relay-defined keys. Migration 0033
+runs once, at the first start, and converts what exists:
 
-1. Tokens whose scope violates the rule stop enrolling, with the ordinary "enrollment token
-   rejected". Re-mint them.
-2. Nodes **already enrolled** under such a scope keep their stored label, but the Relay stops
-   serving it: it disappears from the Console, the Control API, MCP, and Selector matching. A
-   security-lane Selector such as `relay:tier=pci/1` then resolves to fewer Nodes, with
-   nothing logged when it happens. The quarantine label, `relay:quarantine=on`, is inside the
-   alphabet and is kept.
+- **Copied to tags.** Every `relay:` label other than `relay:node-id`, on a Node enrolled by a
+  token a **human** Account minted, is copied to a `tag:` label of the same key and value,
+  attributed to that Account. Each copy is a `tag_write` record in the audit trail whose reason
+  ends `(upgrade: copied from Enrollment Token <id> scope)`. The audit chain is extended, not
+  rewritten.
+- **Unused tokens convert.** An unused human-minted token's scope becomes its `initial_tags`, so
+  it writes the same labels as tags on the Nodes it enrolls from now on. A token that has
+  already enrolled a Node keeps its scope unconverted and enrolls with no tags: re-mint it.
+- **Nothing is deleted.** The `relay:` labels stay on upgraded Nodes and a `relay:` Selector
+  still matches them, but the tags are what you regroup from here. Nodes enrolled before this
+  release get no `relay:node-id`.
+- **Not copied, and listed.** At startup the Relay logs a warning for each Node it could not
+  copy a label for, with `node_id`, `reason` and the `keys` (never the values), so a person can
+  tag the Node by hand. The reasons are `minted_by_machine_or_unknown_account` (a machine
+  Account's token, or one whose Account no longer exists), `declined` (the label is outside
+  the tag alphabet or length bounds, for example `relay:tier=pci/1`), `tag_exists` (the Node
+  already has a tag of that key, which is never overwritten), `tag_limit` (the Node already
+  carries 64 tags) and `node_id_mismatch` (a scope that named `relay:node-id` with another
+  Node's ID).
+- **Per-token warnings.** `an Enrollment Token's scope could not be read` (the stored scope was
+  not valid JSON; it was not converted), `Enrollment Token scope entries were not converted to
+  initial tags` (entries dropped converting a human token's scope, with their keys), and
+  `an Enrollment Token a machine or unknown Account minted carries a scope that is no longer
+  stamped` for a token that could still enroll Nodes: re-mint it from a human Account. A
+  human-minted token that has been used and could still enroll Nodes gets `a used Enrollment
+  Token keeps a scope that is no longer stamped`: re-mint it.
+- **A summary line** reports `tags_copied`, `nodes_listed` and `tokens_converted`.
 
-Before upgrading, record `GET /api/v1/nodes` and compare the `relay_labels` you get back
-afterwards; that comparison is the audit.
+A stored token whose legacy scope holds an entry outside the label alphabet (for example
+`relay:tier=pci/1`) still stops enrolling, with the ordinary "enrollment token rejected":
+re-mint it with initial tags.
+
+To list every Node that carries a `relay:` label other than `relay:node-id` and has no tag of
+that key, run this against a copy of the database or with the Relay stopped (the Relay holds a
+single SQLite connection):
+
+```sh
+sqlite3 /var/lib/relay/relay.db \
+  "SELECT r.node_id, r.key FROM relay_labels r
+    WHERE r.key <> 'node-id'
+      AND NOT EXISTS (SELECT 1 FROM tag_labels t WHERE t.node_id = r.node_id AND t.key = r.key)
+    ORDER BY r.node_id, r.key;"
+```
+
+The tag alphabet is narrower than what the Selector parser accepts, so a `relay:` label like
+`relay:tier=pci/1` could be stored by an earlier release. Such a label is not copied, and the
+Relay stops serving it on read-back: it disappears from the Console, the Control API, MCP, and
+Selector matching, and a `relay:tier=pci/1` Selector then resolves to fewer Nodes, with nothing
+logged when it happens. The quarantine label, `relay:quarantine=on`, is inside the alphabet and
+is kept. Before upgrading, record `GET /api/v1/nodes` and compare the `relay_labels` you get
+back afterwards; that comparison is the audit.
 
 After an upgrade, the Relay names affected Nodes at every startup: a read-only scan logs each
 as `stored label declined on read-back` (fields: `namespace`, `node_id`, `key`,
 `key_truncated`, `malformed_part`), then a `startup scan: stored labels declined on read-back`
 summary per non-empty namespace with `labels_declined_at_scan`/`nodes_affected_at_scan`
 totals, `reported` (capped at 50 per namespace), and `truncated`. The declined **value** is
-never logged: read it from the store row or the token scope you are re-minting.
+never logged: read it from the store row.
 `relay_labels_declined_total{namespace="relay"}` on `/metrics` is the ongoing signal between
 startups, but it counts read-back *events*, not distinct Labels, and is traffic-driven: it
 stays flat both when nothing is wrong and when nothing has read an affected Node.
@@ -158,9 +198,10 @@ set, so do not put the join string in the env file.
 Enrollment is idempotent: once an identity exists in the state dir, `relay-daemon join` changes
 nothing and exits 0, so config management may rerun it, and restarts never enroll.
 
-Two Label namespaces are at work: `RELAY_NODE_LABELS` become node-space (`node:…`) Labels,
-node-rooted and for routine targeting, while the token's scope became relay-space (`relay:…`)
-Labels the Node can never alter.
+Three Label namespaces are at work: `RELAY_NODE_LABELS` become node-space (`node:…`) Labels,
+node-rooted and for routine targeting; the token's initial tags become tag-space (`tag:…`)
+Labels the Node can never alter and an `operator` can change; and `relay:node-id` is the one
+relay-space (`relay:…`) Label enrollment writes.
 
 Each `RELAY_NODE_LABELS` key and value must match `[A-Za-z0-9._-]+` (an empty value is fine: a
 bare `role` entry is a legitimate marker). A pair outside that alphabet is REFUSED at
@@ -171,7 +212,7 @@ Selector term is refused.
 
 ## 3. Bulk enrollment via config management
 
-One reusable scoped token and a loop over inventory. An Ansible-flavored role (tasks
+One reusable token and a loop over inventory. An Ansible-flavored role (tasks
 abbreviated; the artifact pin and digest live in group_vars, the token in Vault):
 
 ```yaml
@@ -261,10 +302,12 @@ behind one NAT address join in minutes with no setting to change.
 ## 4. Verify the rollout
 
 From an MCP client or any Control API consumer, `list_nodes` shows every enrolled Node with
-its Labels (node-space and relay-space reported separately), Facts, `last_seen`, and Policy
+its Labels (node-space, relay-space and tag-space reported separately), Facts, `last_seen`, and Policy
 fingerprint. Check:
 
-- every expected Node is present, with `relay:env=prod` stamped from the token's scope;
+- every expected Node is present, with `tag:env=prod` written from the token's initial tags
+  (each one is a `tag_write` record attributed to the Account that minted the token) and
+  `relay:node-id` set to its Node ID;
 - `policy_fingerprint` is uniform across the cohort ([policy-as-code.md](policy-as-code.md));
 - `outdated: false` everywhere, when a minimum daemon version is set
   ([iac-upgrades.md](iac-upgrades.md)).

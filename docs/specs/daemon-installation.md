@@ -1,6 +1,6 @@
 # Daemon installation
 
-**Status:** designed, not built, as of `2026-10-26`.
+**Status:** designed, not built, as of `2026-10-27`.
 **Claim prefix:** `DI`
 **Governed by:** ADR-0014, ADR-0002, ADR-0033, ADR-0021, ADR-0022, ADR-0031, ADR-0036,
 ADR-0048, ADR-0053; invariants 2, 4, 14.
@@ -78,6 +78,16 @@ unit ships until that check is done.
   Template's parsed definition, its command text and its ordered slot declarations as the
   daemon's own parser reads them, and not the text rendered for its shell or the engine that
   renders it. Withdrawing a released name is allowed.
+- **DI-29** The daemon package carries the shipped read Template catalog (`proc.list`,
+  `service.status`, `disk.usage`, `net.listening`, `pkg.inventory`, `log.tail`, `file.checksum`)
+  as package-owned files: replaced on upgrade, removed with the package, and never installed as
+  configuration the package manager would preserve. There is no separate catalog package
+  (ADR-0053, ADR-0021).
+- **DI-31** Removing the daemon package removes the binary, the unit and the shipped catalog's
+  Templates, and leaves the Policy, the Policy directory, the environment file and the state
+  directory. `apt purge` removes everything the package created, the Node's identity included;
+  `.rpm` removal never deletes state and prints the paths to delete by hand. Purge deletes only
+  paths the package itself created, never a path read from an operator-edited file.
 - **DI-32** The release attaches the standalone unit and example environment file under
   `SHA256SUMS`, byte-equal to the copies inside every daemon package, so a hand-built install,
   documented but not supported, verifies its unit like everything else.
@@ -159,10 +169,8 @@ Relay never pushes a binary (invariant 14).
 | DI-25 | The daemon package installs the binary at `/usr/bin/relay-daemon` and the hardened unit as a system unit, and never starts the daemon. It enables the unit on a first install only, only where systemd is running, honouring the distribution's presets; an upgrade never changes whether it is enabled. An enabled unit on a Node that holds no persisted identity stays inactive at boot without failing or retrying; it starts at the next boot after an identity is present, or when `relay-daemon join` (DI-42) or config management starts it. Nothing watches for an identity to appear. | v0.6.5 — Install Path: relay init, join string, packages |
 | DI-26 | The daemon package places the shipped default Policy as the live Policy only on a first install, only if no Policy file exists and no Policy directory existed before the install began; never on an upgrade or a reinstall. On `.rpm` platforms, where a reinstall after removal is indistinguishable from a first install, those absence checks are the whole guard. No install, upgrade or remove rewrites or re-creates the live Policy. | v0.6.5 — Install Path: relay init, join string, packages |
 | DI-27 | The daemon package places the environment file on a first install only, if none exists, owned by root and mode `0600`, and never rewrites it. | v0.6.5 — Install Path: relay init, join string, packages |
-| DI-29 | The daemon package carries the shipped read Template catalog (`proc.list`, `service.status`, `disk.usage`, `net.listening`, `pkg.inventory`, `log.tail`, `file.checksum`) as package-owned files: replaced on upgrade, removed with the package, and never installed as configuration the package manager would preserve. There is no separate catalog package (ADR-0053, ADR-0021). | v0.6.5 — Install Path: relay init, join string, packages |
-| DI-31 | Removing the daemon package removes the binary, the unit and the shipped catalog's Templates, and leaves the Policy, the Policy directory, the environment file and the state directory. `apt purge` removes everything the package created, the Node's identity included; `.rpm` removal never deletes state and prints the paths to delete by hand. Purge deletes only paths the package itself created, never a path read from an operator-edited file. | v0.6.5 — Install Path: relay init, join string, packages |
 | DI-33 | A platform is supported only where CI installs the package, upgrades it over the operator's edited configuration and finds the edit intact, and removes it: Ubuntu 24.04 LTS and 26.04 LTS; Debian 13; RHEL-compatible 10, tested on Rocky Linux 10; Amazon Linux 2023. Each is supported on `x86_64` and `aarch64`. A platform whose package manager refuses an unsigned local package by default is not supported. This list also governs the Relay packages (`relay-configuration.md`). | v0.6.5 — Install Path: relay init, join string, packages |
-| DI-45 | Each release attaches an Ansible role, listed in `SHA256SUMS` and installed by download, verify, install like every release artifact, that installs that release's daemon package and passes a join string from the operator's vault to `relay-daemon join` on standard input. It writes the string to no file, no command line and no log on the Node, the module arguments Ansible would otherwise log or stage there included, places no Policy fragment, and changes nothing on an enrolled Node (DI-42; ADR-0048). | v0.6.5 — Install Path: relay init, join string, packages |
+| DI-45 | Each release attaches an Ansible role, listed in `SHA256SUMS` and installed by download, verify, install like every release artifact, that installs that release's daemon package and passes a join string from the operator's vault to `relay-daemon join` on standard input. It writes the string to no file, no command line and no log on the Node, the module arguments Ansible would otherwise log or stage there included, places no Policy fragment, and changes nothing on an enrolled Node (DI-42; ADR-0048). | MVP |
 | DI-47 | The release's Ansible role restarts the daemon when a Policy fragment changes: a task that writes a fragment notifies the role's restart handler. The role itself still places no fragment (DI-45). | MVP |
 
 ## Out of scope
@@ -177,6 +185,7 @@ Generated by `make spec-proof` from the tests that name the claim they prove.
 <!-- proof:begin -->
 | Claim | Proven by | Seam |
 |---|---|---|
+| DI-6 | `every_deny_listed_path_is_denied_with_attribution`, `mutate_operations_are_denied_by_default`, `raw_exec_is_denied_by_default`, `the_default_policy_allows_every_shipped_template`, `the_default_policy_allows_only_read_operations`, `the_default_policy_denies_the_catalog_over_confidential_paths` | daemon |
 | DI-7 | `env_example_covers_the_config_surface`, `exemptions_are_real` | daemon |
 | DI-9 | `parse_labels_skips_empty_and_garbage` | daemon |
 | DI-12 | `group_or_world_writable_file_is_refused`, `loader_accepts_secure_modes`, `loader_rejects_group_or_world_writable`, `secure_modes_are_accepted` | daemon |
@@ -188,7 +197,9 @@ Generated by `make spec-proof` from the tests that name the claim they prove.
 | DI-21 | `TestRevokedNode_DialAuditedThenThrottled`, `TestRevokedNode_RefusedAfterRestart` | Relay |
 | DI-23 | `TestRevokedNode_DialAuditedThenThrottled`, `TestServerCredentials_ReportsRevokedBeforeRefusing` | Node plane, Relay |
 | DI-28 | `default_policy_denies_only_secret_bearing_own_files`, `default_policy_passes_strict_with_catalog`, `deny_list_mirrors_adr_0022_exactly` | daemon |
+| DI-29 | `the_daemon_package_carries_the_catalog_as_plain_package_files` | daemon |
 | DI-30 | `catalog_names_match_ledger`, `ledger_check_accepts_a_withdrawn_name_absent_from_the_catalog`, `ledger_check_refuses_a_changed_body`, `ledger_check_refuses_a_changed_risk_class`, `ledger_check_refuses_a_withdrawn_name_back_in_the_catalog` | daemon |
+| DI-31 | `removing_the_daemon_package_takes_its_payload_and_keeps_configuration_and_state` | daemon |
 | DI-36 | `a_broken_fragment_is_named_in_the_error`, `a_fragment_change_applies_at_the_next_load`, `a_group_or_world_writable_fragment_refuses_start`, `a_mistyped_table_in_a_fragment_cannot_leave_the_base_allow_active`, `a_non_regular_fragment_refuses_start`, `a_safe_fragment_with_a_non_utf8_name_is_a_deny_all_error`, `a_symlink_or_insecure_fragment_with_a_non_utf8_name_still_refuses_start`, `a_symlinked_fragment_refuses_start`, `a_symlinked_policy_fragment_refuses_start`, `an_absent_or_empty_policy_directory_loads_as_today`, `an_empty_fragment_set_keeps_the_raw_bytes_fingerprint`, `an_unreadable_or_unparsable_fragment_is_a_deny_all_error`, `deny_in_any_file_beats_allow_in_any_other`, `fragments_compose_into_one_policy_with_one_fingerprint`, `install_creates_the_policy_directory_empty_and_never_writes_into_it`, `load_policy_composes_the_policy_directory`, `startup_policy_falls_back_to_deny_all_on_a_broken_fragment`, `startup_policy_is_deny_all_when_a_fragment_has_an_unknown_key`, `startup_policy_refuses_start_on_a_refused_fragment` | daemon |
 | DI-39 | `checksum_is_probed_without_templates`, `current_exe_is_a_write_probe_only`, `exe_equal_to_a_packaged_path_is_not_duplicated`, `lint_read_probes_stop_at_secrets`, `lint_write_probes_cover_packaged_trust_root` | daemon |
 | DI-40 | `unit_execstart_is_usr_bin` | daemon |
@@ -197,7 +208,7 @@ Generated by `make spec-proof` from the tests that name the claim they prove.
 | DI-44 | `TestCrossBinary_RestartWithoutJoinOrAddrUsesPersistedState`, `identity_without_address_exits_nonzero`, `persisted_address_written_at_enrollment`, `relay_addr_overrides_persisted_address` | Relay, daemon |
 | DI-46 | `check_lints_the_policy_file_and_directory_together`, `check_prints_the_fingerprint_the_daemon_loads`, `check_refuses_a_symlinked_or_non_directory_policy_dir`, `check_refuses_entries_the_daemon_refuses_to_start_on`, `the_runbook_documents_the_three_step_change`, `would_allow_answers_over_the_combined_policy` | daemon |
 
-Unproven: DI-1, DI-2, DI-3, DI-5, DI-6, DI-11, DI-15, DI-18, DI-19, DI-32.
+Unproven: DI-1, DI-2, DI-3, DI-5, DI-11, DI-15, DI-18, DI-19, DI-32.
 <!-- proof:end -->
 
 ## Retired

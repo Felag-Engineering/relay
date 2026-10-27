@@ -18,11 +18,14 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-use crate::enroll::{node_labels_from_env, parse_node_labels, state_dir_from_env};
+use crate::enroll::{
+    node_labels_from_env, parse_node_labels, state_dir_from_env, with_default_node_labels,
+};
 use crate::enroll::{EnrollConfig, EnrollError};
 use crate::gen::Facts;
 use crate::identity::{self, load_relay_addr, validate_endpoint_scheme, IdentityError};
 use relay_transport::join_string::{JoinString, JoinStringError};
+use tracing::warn;
 
 /// The longest join string `relay-daemon join` reads. A real join string is well
 /// under 1 KiB; the cap bounds what reaches the decoder.
@@ -279,8 +282,11 @@ pub struct Config {
     /// means "no templates installed"; anything else that goes wrong leaves the
     /// Node with NO Template Operations (fail closed, `templates::TemplateSet`).
     pub template_dir: PathBuf,
-    /// `RELAY_NODE_LABELS` as bare `(key, value)` pairs; `node:` prefix is
-    /// added at send time by `enroll::node_labels_to_proto` (ADR-0006 §7).
+    /// `RELAY_NODE_LABELS` as bare `(key, value)` pairs, followed by the
+    /// daemon's default hostname, OS and architecture labels that
+    /// `RELAY_NODE_LABELS` does not set ([`with_default_node_labels`]); `node:`
+    /// prefix is added at send time by `enroll::node_labels_to_proto`
+    /// (ADR-0006 §7).
     pub node_labels: Vec<(String, String)>,
     /// Facts advertised to the Relay on Hello. Built once here, from the shared
     /// [`crate::operations::system_facts::gather_facts`] collector — the same
@@ -305,7 +311,6 @@ impl Config {
         let tls_server_name = std::env::var("RELAY_SERVER_NAME")
             .ok()
             .filter(|v| !v.is_empty());
-        let node_labels = node_labels_from_env();
 
         // Facts.hostname is the human-readable descriptor, not the
         // Relay-assigned identity UUID (see node_id on Hello, ADR-0006). Gathered
@@ -313,6 +318,14 @@ impl Config {
         // policy (kernel hostname first, $HOSTNAME an explicit fallback) matches
         // the live `system.facts` Operation exactly — see system_facts.rs.
         let facts = crate::operations::system_facts::gather_facts();
+
+        let (node_labels, left_out) = with_default_node_labels(node_labels_from_env(), &facts);
+        for key in left_out {
+            warn!(
+                key,
+                "a default node: label is not well-formed and is left out"
+            );
+        }
 
         let policy_path = std::env::var("RELAY_POLICY_PATH")
             .map(PathBuf::from)
@@ -370,15 +383,17 @@ pub const MAX_OUTPUT_BYTES: usize = 1024 * 1024; // 1 MiB
 ///   join string's, normalized to `https://`;
 /// - `RELAY_ENROLL_ADDRESS` overrides only the enrollment dial target. The CA
 ///   pin applies to whichever endpoint is dialled;
-/// - `RELAY_SERVER_NAME` and `RELAY_NODE_LABELS` are the SNI name and the labels.
+/// - `RELAY_SERVER_NAME` and `RELAY_NODE_LABELS` are the SNI name and the labels,
+///   with the default labels added ([`with_default_node_labels`]).
 ///
 /// It reads no other setting: no CA bundle path and no bare token (EN-30), and
-/// no argv.
+/// no argv. Alongside the configuration it returns the keys of any default
+/// label left out for being ill-formed, for the caller to report.
 pub fn join_enroll_config(
     join: JoinString,
     state_dir: PathBuf,
     setting: &dyn Fn(&str) -> Option<String>,
-) -> Result<EnrollConfig, EnrollError> {
+) -> Result<(EnrollConfig, Vec<&'static str>), EnrollError> {
     let relay_addr = normalize_scheme(
         &setting("RELAY_ADDRESS").unwrap_or_else(|| format!("https://{}", join.relay_address())),
     );
@@ -391,17 +406,22 @@ pub fn join_enroll_config(
     // `EnrollError::Identity` via the existing `#[from]` impl.
     validate_endpoint_scheme(&endpoint)?;
 
-    Ok(EnrollConfig {
+    let facts = crate::operations::system_facts::gather_facts();
+    let declared = setting("RELAY_NODE_LABELS")
+        .map(|v| parse_node_labels(&v))
+        .unwrap_or_default();
+    let (node_labels, left_out) = with_default_node_labels(declared, &facts);
+
+    let config = EnrollConfig {
         join,
         endpoint,
         relay_addr,
         tls_server_name: setting("RELAY_SERVER_NAME"),
         state_dir,
-        node_labels: setting("RELAY_NODE_LABELS")
-            .map(|v| parse_node_labels(&v))
-            .unwrap_or_default(),
-        facts: crate::operations::system_facts::gather_facts(),
-    })
+        node_labels,
+        facts,
+    };
+    Ok((config, left_out))
 }
 
 /// Normalizes `http://` to `https://` in a Relay address.
@@ -522,11 +542,32 @@ mod tests {
             cfg.policy_path,
             PathBuf::from("/etc/relay-daemon/policy.toml")
         );
-        assert!(cfg.node_labels.is_empty());
+        assert_eq!(
+            cfg.node_labels,
+            with_default_node_labels(vec![], &cfg.facts).0
+        );
+        assert!(cfg
+            .node_labels
+            .contains(&("os".to_string(), std::env::consts::OS.to_string())));
 
         std::env::remove_var("RELAY_ADDRESS");
         std::env::remove_var("RELAY_STATE_DIR");
         assert_eq!(state_dir_from_env(), PathBuf::from("/var/lib/relay-daemon"));
+    }
+
+    #[test]
+    fn config_from_env_relay_node_labels_override_a_default() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _dir = isolated_state_dir("cfg-label-override");
+        std::env::set_var("RELAY_ADDRESS", "https://relay:7654");
+        std::env::set_var("RELAY_NODE_LABELS", "os=custom");
+
+        let cfg = Config::from_env().expect("from_env");
+
+        std::env::remove_var("RELAY_NODE_LABELS");
+        std::env::remove_var("RELAY_ADDRESS");
+        let os: Vec<_> = cfg.node_labels.iter().filter(|(k, _)| k == "os").collect();
+        assert_eq!(os, [&("os".to_string(), "custom".to_string())]);
     }
 
     #[test]
@@ -707,7 +748,7 @@ mod tests {
         join: JoinString,
         pairs: &[(&'static str, &'static str)],
     ) -> Result<EnrollConfig, EnrollError> {
-        join_enroll_config(join, PathBuf::from("/state"), &lookup(pairs))
+        join_enroll_config(join, PathBuf::from("/state"), &lookup(pairs)).map(|(config, _)| config)
     }
 
     #[test]
@@ -718,7 +759,10 @@ mod tests {
         assert_eq!(ec.state_dir, PathBuf::from("/state"));
         assert_eq!(ec.join.enrollment_token(), "tok-test");
         assert_eq!(ec.tls_server_name, None);
-        assert!(ec.node_labels.is_empty());
+        assert_eq!(
+            ec.node_labels,
+            with_default_node_labels(vec![], &ec.facts).0
+        );
     }
 
     #[test]
@@ -765,12 +809,15 @@ mod tests {
         )
         .expect("config");
         assert_eq!(
-            ec.node_labels,
-            vec![
+            ec.node_labels[..2],
+            [
                 ("role".to_string(), "web".to_string()),
                 ("env".to_string(), "prod".to_string())
             ]
         );
+        assert!(ec
+            .node_labels
+            .contains(&("arch".to_string(), std::env::consts::ARCH.to_string())));
         assert_eq!(ec.tls_server_name.as_deref(), Some("relay.internal"));
         assert_eq!(ec.facts.hostname, gather_hostname());
     }

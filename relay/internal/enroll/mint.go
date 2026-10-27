@@ -172,14 +172,15 @@ func NewMinter(tokens *Service, ca FingerprintSource, advertisedAddress string) 
 
 // Mint creates an Enrollment Token and returns it with its join string. The use
 // limit must be named (EN-31) and overrides any WithMaxUses in opts. Token errors
-// (ErrInvalidScope, ErrInvalidTTL) and use-limit errors (ErrInvalidUseLimit and its
+// (ErrInvalidInitialTags, ErrInitialTagsNeedHuman, ErrInvalidTTL) and use-limit
+// errors (ErrInvalidUseLimit and its
 // children) pass through unchanged. A refused mint stores nothing. Mint logs nothing.
-func (m *Minter) Mint(ctx context.Context, scope []string, ttl time.Duration, limit UseLimit, opts ...Option) (Minted, error) {
+func (m *Minter) Mint(ctx context.Context, initialTags []string, ttl time.Duration, limit UseLimit, opts ...Option) (Minted, error) {
 	maxUses, err := limit.resolve()
 	if err != nil {
 		return Minted{}, err
 	}
-	tok, plaintext, err := m.tokens.Create(ctx, scope, ttl, slices.Concat(opts, []Option{withUseLimit(maxUses)})...)
+	tok, plaintext, err := m.tokens.Create(ctx, initialTags, ttl, slices.Concat(opts, []Option{withUseLimit(maxUses)})...)
 	if err != nil {
 		return Minted{}, err
 	}

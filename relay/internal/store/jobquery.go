@@ -28,16 +28,7 @@ var _ jobs.QueryRepository = (*sqliteJobQueries)(nil)
 // Task's Outcome is never Unspecified in practice (jobs.Outcome's doc
 // comment: Unspecified means "not yet resolved"), so summing it would only
 // ever contribute zero.
-var jobOutcomeOrder = []jobs.Outcome{
-	jobs.OutcomeSuccess,
-	jobs.OutcomeFailure,
-	jobs.OutcomeTimeout,
-	jobs.OutcomeDeniedByPolicy,
-	jobs.OutcomeCancelled,
-	jobs.OutcomeUnreachable,
-	jobs.OutcomeVersionRefused,
-	jobs.OutcomeUnsupported,
-}
+var jobOutcomeOrder = jobs.ResolvedOutcomes()
 
 // runningJobIDs selects the job_id of every unresolved Task. Given tasks.state
 // is NOT NULL with CHECK (state IN ('pending','dispatched','resolved')) in

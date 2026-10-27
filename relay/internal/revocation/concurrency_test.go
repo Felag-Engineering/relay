@@ -70,7 +70,7 @@ func TestService_RevokeToken_SerialisesConcurrentRevokesOfTheSameToken(t *testin
 	tracker := &trackingTokenRevoker{inner: tokenSvc}
 	svc := revocation.NewService(d, c, reg, tracker)
 
-	tok, _, err := tokenSvc.Create(ctx, []string{"relay:env=test"}, 24*time.Hour)
+	tok, _, err := tokenSvc.Create(ctx, nil, 24*time.Hour)
 	if err != nil {
 		t.Fatalf("Create token: %v", err)
 	}
@@ -175,11 +175,11 @@ func TestService_RevokeToken_DifferentTokensRunConcurrently(t *testing.T) {
 	ctx := context.Background()
 	svc, _, _, reg, tokenSvc := newServiceFixture(t)
 
-	tokA, _, err := tokenSvc.Create(ctx, []string{"relay:env=test"}, 24*time.Hour)
+	tokA, _, err := tokenSvc.Create(ctx, nil, 24*time.Hour)
 	if err != nil {
 		t.Fatalf("Create token A: %v", err)
 	}
-	tokB, _, err := tokenSvc.Create(ctx, []string{"relay:env=test"}, 24*time.Hour)
+	tokB, _, err := tokenSvc.Create(ctx, nil, 24*time.Hour)
 	if err != nil {
 		t.Fatalf("Create token B: %v", err)
 	}
@@ -245,7 +245,7 @@ func TestService_RevokeNodeRecorded_WritesNoSecondRecordAfterACascadeRecordedThe
 	ctx := context.Background()
 	svc, d, _, reg, tokenSvc := newServiceFixture(t)
 
-	tok, _, err := tokenSvc.Create(ctx, []string{"relay:env=test"}, 24*time.Hour)
+	tok, _, err := tokenSvc.Create(ctx, nil, 24*time.Hour)
 	if err != nil {
 		t.Fatalf("Create token: %v", err)
 	}
@@ -350,7 +350,7 @@ func TestService_RevokeNodeRecorded_NoSecondRecordWhileAChunkIsRecordedButNotYet
 	tokenSvc := enroll.NewService(enroll.NewMemoryRepository())
 	svc := revocation.NewService(d, c, blockingReg, tokenSvc)
 
-	tok, _, err := tokenSvc.Create(ctx, []string{"relay:env=test"}, 24*time.Hour)
+	tok, _, err := tokenSvc.Create(ctx, nil, 24*time.Hour)
 	if err != nil {
 		t.Fatalf("Create token: %v", err)
 	}
@@ -439,7 +439,7 @@ func TestService_RevokeNodeRecorded_CascadeSkipsANodeRecordedByAConcurrentSingle
 	ctx := context.Background()
 	svc, d, _, reg, tokenSvc := newServiceFixture(t)
 
-	tok, _, err := tokenSvc.Create(ctx, []string{"relay:env=test"}, 24*time.Hour)
+	tok, _, err := tokenSvc.Create(ctx, nil, 24*time.Hour)
 	if err != nil {
 		t.Fatalf("Create token: %v", err)
 	}
@@ -542,7 +542,7 @@ func TestService_RevokeNodeRecorded_RacingCascadeRecordsEachNodeOnce(t *testing.
 		tokenSvc := enroll.NewService(enroll.NewMemoryRepository())
 		svc := revocation.NewService(d, c, reg, tokenSvc)
 
-		tok, _, err := tokenSvc.Create(ctx, []string{"relay:env=test"}, 24*time.Hour)
+		tok, _, err := tokenSvc.Create(ctx, nil, 24*time.Hour)
 		if err != nil {
 			t.Fatalf("iter %d: Create token: %v", iter, err)
 		}
@@ -655,7 +655,7 @@ func TestService_RevokeNodeRecorded_RecordsWhenTheNodeWasDenylistedWithoutARecor
 		silenceLogs(t)
 		svc, d, _, reg, tokenSvc := newServiceFixture(t)
 
-		tok, _, err := tokenSvc.Create(ctx, []string{"relay:env=test"}, 24*time.Hour)
+		tok, _, err := tokenSvc.Create(ctx, nil, 24*time.Hour)
 		if err != nil {
 			t.Fatalf("Create token: %v", err)
 		}
@@ -784,7 +784,7 @@ func TestService_RevokeToken_CancelledWhileWaitingRevokesNothing(t *testing.T) {
 	tracker := &trackingTokenRevoker{inner: tokenSvc}
 	svc := revocation.NewService(d, c, reg, tracker)
 
-	tok, _, err := tokenSvc.Create(ctx, []string{"relay:env=test"}, 24*time.Hour)
+	tok, _, err := tokenSvc.Create(ctx, nil, 24*time.Hour)
 	if err != nil {
 		t.Fatalf("Create token: %v", err)
 	}
