@@ -11,12 +11,14 @@
 #              .github/workflows/release.yml). Its binary is not compiled
 #              here: it is the released, rebuild-verified one, supplied as the
 #              named build context `release-binary`. Unprivileged, like runtime.
+#              deploy/production/docker-compose.yml pins this published image by
+#              digest: the single-host deployment in
+#              docs/operations/relay-install.md, section 7.
 #   runtime    the LAST stage, so the default for a build that names no
 #              target: the Relay and nothing else, as an unprivileged user,
-#              compiled from this checkout. deploy/production/docker-compose.yml
-#              builds it until it pins the published image by digest — the
-#              single-host deployment in docs/operations/relay-install.md,
-#              section 7. No fixture, gate file or credential is baked into it.
+#              compiled from this checkout: what a local build gets, and no
+#              committed stack runs it. No fixture, gate file or credential is
+#              baked into it.
 
 # ---- build stage: compile the Relay (Go) as a static binary --------------------
 # golang:1.26-bookworm is a CEILING, and only that: the in-image `go build` below
