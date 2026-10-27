@@ -37,7 +37,7 @@ func MapSlice[In, Out any](in []In, f func(In) Out) []Out {
 const PlanAdvisory = "point-in-time; Policy may change between plan and apply (ADR-0011)"
 
 // JobResultReader is the read-only view over a Job's persisted Tasks that
-// RenderJobResults needs. Read-only by construction: no Create/Update. Each
+// RenderJob needs. Read-only by construction: no Create/Update. Each
 // surface's own reader interface has the same method set and satisfies it.
 type JobResultReader interface {
 	GetJob(ctx context.Context, id string) (jobs.Job, error)
@@ -55,6 +55,24 @@ type RenderedTaskResult struct {
 	StderrTruncated    bool
 	DurationMS         int64
 	RefusalExplanation string
+}
+
+// RenderedHalt is a halted Job's halt, before a surface tags it. Resolved is
+// false when the engine reported the halting outcome with no recorded result;
+// the Task's real outcome may still arrive.
+type RenderedHalt struct {
+	NodeID   string
+	Outcome  string
+	Resolved bool
+	Reason   string
+}
+
+// RenderedJob is a rendered Job: its Tasks sorted by NodeID, its status, and
+// its halt (nil unless the capability layer halted it).
+type RenderedJob struct {
+	Results []RenderedTaskResult
+	Status  string
+	Halt    *RenderedHalt
 }
 
 // RenderedVerdict is one Node's Plan verdict, before a surface tags it.
@@ -141,14 +159,6 @@ func RenderTaskResult(task jobs.Task) RenderedTaskResult {
 	}
 }
 
-// RenderJobResults re-reads jobID and renders every one of its Tasks, sorted
-// by NodeID for a stable response. It is the shared path for a dispatch's own
-// result and a later polling re-read of the same Job, on both surfaces.
-func RenderJobResults(ctx context.Context, results JobResultReader, jobID string) ([]RenderedTaskResult, error) {
-	items, _, err := RenderJobState(ctx, results, jobID)
-	return items, err
-}
-
 // Job statuses reported by a surface that returns a Job before it finishes.
 // A Job is running while any of its Tasks is unresolved, and complete
 // once every Task has a terminal outcome.
@@ -157,15 +167,19 @@ const (
 	JobStatusComplete = "complete"
 )
 
-// RenderJobState is RenderJobResults plus the Job's status: JobStatusRunning if
-// any Task is not yet Resolved, else JobStatusComplete.
-func RenderJobState(ctx context.Context, results JobResultReader, jobID string) ([]RenderedTaskResult, string, error) {
-	if _, err := results.GetJob(ctx, jobID); err != nil {
-		return nil, "", fmt.Errorf("get job %q: %w", jobID, err)
+// RenderJob re-reads jobID and renders every one of its Tasks, sorted by NodeID
+// for a stable response, with the Job's status (JobStatusRunning if any Task is
+// not yet Resolved, else JobStatusComplete) and its halt, if the capability
+// layer halted it. It is the shared path for a dispatch's own result and a
+// later polling re-read of the same Job, on both surfaces.
+func RenderJob(ctx context.Context, results JobResultReader, jobID string) (RenderedJob, error) {
+	job, err := results.GetJob(ctx, jobID)
+	if err != nil {
+		return RenderedJob{}, fmt.Errorf("get job %q: %w", jobID, err)
 	}
 	tasks, err := results.TasksByJob(ctx, jobID)
 	if err != nil {
-		return nil, "", fmt.Errorf("list tasks for job %q: %w", jobID, err)
+		return RenderedJob{}, fmt.Errorf("list tasks for job %q: %w", jobID, err)
 	}
 
 	status := JobStatusComplete
@@ -177,7 +191,17 @@ func RenderJobState(ctx context.Context, results JobResultReader, jobID string) 
 		items = append(items, RenderTaskResult(task))
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].NodeID < items[j].NodeID })
-	return items, status, nil
+
+	out := RenderedJob{Results: items, Status: status}
+	if job.Halt.Halted() {
+		out.Halt = &RenderedHalt{
+			NodeID:   job.Halt.NodeID,
+			Outcome:  jobs.OutcomeName(job.Halt.Outcome),
+			Resolved: job.Halt.Resolved,
+			Reason:   job.Halt.Reason(),
+		}
+	}
+	return out, nil
 }
 
 // RenderPlan renders a capability.PlanResult: verdicts sorted by NodeID for a

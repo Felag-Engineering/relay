@@ -156,3 +156,40 @@ func TestParseRiskClass(t *testing.T) {
 		}
 	}
 }
+
+func TestHalt_ZeroValueHasNotHalted(t *testing.T) {
+	if (Halt{}).Halted() {
+		t.Error("the zero Halt reports a halt")
+	}
+	if !(Halt{TaskID: "task-1"}).Halted() {
+		t.Error("a Halt naming a Task reports no halt")
+	}
+}
+
+func TestHalt_ReasonNamesTheNodeAndOutcome(t *testing.T) {
+	for _, o := range []Outcome{OutcomeFailure, OutcomeTimeout} {
+		h := Halt{TaskID: "task-1", NodeID: "node-7", Outcome: o, Resolved: true}
+		reason := h.Reason()
+		for _, want := range []string{`"node-7"`, OutcomeName(o), "never sent", "in flight"} {
+			if !strings.Contains(reason, want) {
+				t.Errorf("Reason() = %q, want it to contain %q", reason, want)
+			}
+		}
+		if reason != h.Reason() {
+			t.Error("Reason() is not deterministic")
+		}
+	}
+}
+
+// TestHalt_ReasonNeverSaysResolvedOfAnUnresolvedTask: the text claims a
+// recorded resolution only when the Halt says the Task holds one.
+func TestHalt_ReasonNeverSaysResolvedOfAnUnresolvedTask(t *testing.T) {
+	unresolved := Halt{TaskID: "task-1", NodeID: "node-1", Outcome: OutcomeFailure}.Reason()
+	if strings.Contains(unresolved, "resolved") || !strings.Contains(unresolved, "no recorded result") {
+		t.Errorf("unresolved Reason() = %q, want no 'resolved' and 'no recorded result'", unresolved)
+	}
+	resolved := Halt{TaskID: "task-1", NodeID: "node-1", Outcome: OutcomeFailure, Resolved: true}.Reason()
+	if !strings.Contains(resolved, "resolved failure") || strings.Contains(resolved, "no recorded result") {
+		t.Errorf("resolved Reason() = %q, want 'resolved failure' only", resolved)
+	}
+}

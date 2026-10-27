@@ -602,6 +602,69 @@ func TestRun_TemplateTasksRecordTheirOwnNodesClass(t *testing.T) {
 	}
 }
 
+// A Template Job halts on the dispatch's class, the most restrictive any Node
+// reports (invariant 13), even when the failing Node itself reports read. #1150.
+func TestRun_TemplateJobHaltsOnTheDispatchClass(t *testing.T) {
+	tests := []struct {
+		name     string
+		vocab    staticVocab
+		wantHalt bool
+	}{
+		{"one Node reports mutate", staticVocab{
+			"node-0": {Templates: []nodevocab.Template{readTemplate("proc.list")}},
+			"node-1": {Templates: []nodevocab.Template{mutateTemplate("proc.list")}},
+			"node-2": {Templates: []nodevocab.Template{mutateTemplate("proc.list")}},
+		}, true},
+		{"every Node reports read", staticVocab{
+			"node-0": {Templates: []nodevocab.Template{readTemplate("proc.list")}},
+			"node-1": {Templates: []nodevocab.Template{readTemplate("proc.list")}},
+			"node-2": {Templates: []nodevocab.Template{readTemplate("proc.list")}},
+		}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var log []string
+			conduit := connectedConduit(&log, "node-0", "node-1", "node-2")
+			conduit.results["node-0"] = jobs.Result{Outcome: jobs.OutcomeFailure}
+			svc, f := newTemplateTestService(t, seedNodes(t, 3), conduit, tt.vocab, &spyCapChecker{})
+
+			results, err := svc.Run(context.Background(), Principal{Account: "alice"}, webSelector(), templateAction("proc.list", nil))
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			var halts []AuditEntry
+			f.audit.mu.Lock()
+			for _, e := range f.audit.entries {
+				if e.Kind == AuditKindJobHalt {
+					halts = append(halts, e)
+				}
+			}
+			f.audit.mu.Unlock()
+			if tt.wantHalt {
+				if len(halts) != 1 || halts[0].Halt.NodeID != "node-0" {
+					t.Fatalf("halt entries = %+v, want one naming node-0", halts)
+				}
+				tasks, err := f.tasks.ByJob(context.Background(), results[0].JobID)
+				if err != nil {
+					t.Fatalf("ByJob: %v", err)
+				}
+				for _, task := range tasks {
+					if task.NodeID == "node-0" && task.Action.RiskClass != jobs.RiskClassRead {
+						t.Errorf("node-0 recorded class %s, want its own read: the halt followed the dispatch's class, not the Node's", jobs.RiskClassName(task.Action.RiskClass))
+					}
+				}
+				return
+			}
+			if len(halts) != 0 {
+				t.Errorf("halt entries = %+v, want none for an all-read Template", halts)
+			}
+			if len(log) != 3 {
+				t.Errorf("dispatched = %v, want every Node reached", log)
+			}
+		})
+	}
+}
+
 // A cached report whose fingerprint differs from the Node's latest Hello is
 // from before a daemon restart; until the new report lands it counts as no
 // report, so a Template whose class changed across the restart cannot be

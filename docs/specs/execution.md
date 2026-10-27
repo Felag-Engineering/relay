@@ -373,6 +373,15 @@ also need `make test-integration`; changes to the daemon-facing contract need th
 | An outdated Node's Task is refused before it is sent | `TestEngineMixedFleetVersionGate` | capability |
 | Cancel stops Pending, asks Dispatched, leaves Resolved alone | `TestCancelJobStopsPendingSendsCancelToDispatchedLeavesResolved` | capability |
 | A Task that wins the cancel race keeps its true outcome | `TestEngineDispatchOneTreatsConcurrentCancelAsTerminal` | capability |
+| A `mutate` Job halts on its first `failure` or `timeout`; unsent Tasks resolve `cancelled` with the halt as their reason | `TestJobEngine_MutateJobHaltsOnFailureOrTimeout` | capability |
+| No further Task is sent once a halting outcome is seen, even before it is persisted | `TestJobEngine_HaltClosesTheGateBeforeTheHaltingOutcomeIsPersisted`, `TestJobEngine_HaltAfterAdmitWithholdsThroughTheGuard`, `TestDispatchWiring_AHaltClosingAfterASiblingPassedAdmitWithholdsItsSend` | capability, composition |
+| Tasks in flight when a Job halts finish and report their real outcomes, within the dispatch bound | `TestJobEngine_HaltLetsInFlightTasksFinishWithinTheBound` | capability |
+| A Policy denial, `unsupported` and `unreachable` do not halt | `TestJobEngine_NonHaltingOutcomesDoNotHalt` | capability |
+| A `read` Job never halts | `TestJobEngine_ReadJobNeverHalts` | capability |
+| A Template Job halts on its most restrictive reported class | `TestRun_TemplateJobHaltsOnTheDispatchClass` | capability |
+| The halt is recorded on the Job and in the audit trail | `TestExecution_HaltIsRecordedOnTheJobAndAudited` | capability |
+| A halted Job's unsent Tasks are never sent after a restart | `TestDispatchWiring_AHaltedJobsUnsentTasksAreNeverSentAfterARestart` | composition |
+| A halted Job names the halting Node, the same on both surfaces | `TestMCP_HaltedMutateJob_ReportsTheHaltOnRunAndGetJob`, `TestControlAPI_HaltRendersIdenticallyOnBothSurfaces` | MCP, Control API |
 | No surface can dispatch outside this layer | `TestNoDispatchConstruction`, `TestDispatchSymbolsUnexported` | compile-time |
 | The layer imports nothing but registry and jobs | `.golangci.yml` depguard rule `capability-imports` | lint |
 | Policy preflight and apply agree on an unchanged fleet | `TestMCP_Plan_PlanVsRealRunParity` | MCP |
@@ -388,9 +397,6 @@ Claims above with **no row**, and so nothing checking them:
 - A zero-match dispatch is refused as `no_nodes_matched` with no Job.
 - An empty Selector is refused for dispatch.
 - Nodes not reporting a Template are excluded before the cap and reported `unsupported`.
-- A `mutate` Job halts on its first `failure` or `timeout`; unsent Tasks resolve `cancelled`
-  with the halt as their reason; Tasks in flight finish and report; a `read` Job never halts;
-  `denied_by_policy`, `unsupported` and `unreachable` do not halt.
 - A dispatch hands back its Job before finishing.
 - A repeated idempotency key returns the existing Job; the same key with different arguments is
   refused.

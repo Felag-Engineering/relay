@@ -700,7 +700,7 @@ func TestJobEngine_DispatchPanicFailsOnlyThatTask(t *testing.T) {
 			e := panicTestEngine(jobsRepo, tasksRepo, &panicConduit{fakeConduit: fc, dispatchPanic: panicNode})
 
 			nodes := []registry.Node{testNode("node-a"), testNode("node-b"), testNode("node-c")}
-			act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"}
+			act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead}
 			dr, err := e.run(context.Background(), newDispatch(Principal{Account: "alice"}, Selector{}, nodes, act))
 			if !errors.Is(err, errDispatchPanicked) {
 				t.Fatalf("run() error = %v, want it to wrap errDispatchPanicked", err)
@@ -764,7 +764,7 @@ func TestJobEngine_DispatchPanicBeforeMarkDispatchedIsNeverSent(t *testing.T) {
 	e := panicTestEngine(jobsRepo, tasksRepo, &panicConduit{fakeConduit: fc, connectedPanic: "node-a"})
 
 	nodes := []registry.Node{testNode("node-a"), testNode("node-b")}
-	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"}
+	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead}
 	dr, err := e.run(context.Background(), newDispatch(Principal{Account: "alice"}, Selector{}, nodes, act))
 	if !errors.Is(err, errDispatchPanicked) {
 		t.Fatalf("run() error = %v, want it to wrap errDispatchPanicked", err)
@@ -1747,7 +1747,9 @@ func newConcurrentEngine(t *testing.T, c Conduit, concurrency int) (*jobEngine, 
 	}, tasksRepo
 }
 
-var fanOutAction = jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"}
+// fanOutAction is a read, as system.facts is in production, so the fan-out
+// tests' failing Nodes do not halt the Job (halt_test.go covers the halt).
+var fanOutAction = jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead}
 
 // TestJobEngine_FanOutRunsConcurrentlyUnderTheBound is #886's acceptance: N
 // pending Tasks across N fake Nodes complete in roughly one Task's time, not N.

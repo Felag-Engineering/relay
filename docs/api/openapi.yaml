@@ -1570,6 +1570,34 @@ components:
           type: array
           items: { $ref: '#/components/schemas/PerNodeResult' }
           description: One entry per matched Node, sorted by `node_id`. Always an array, never null.
+        halt:
+          $ref: '#/components/schemas/JobHalt'
+          description: |
+            Present only when a mutate Job halted on its first failure or
+            timeout (execution.md, Halting a failing mutation); a read Job
+            never halts. Tasks not yet sent resolve `cancelled` with `reason`
+            as their `stderr`; Tasks already in flight report their own
+            outcomes.
+
+    JobHalt:
+      type: object
+      required: [node_id, outcome, resolved, reason]
+      properties:
+        node_id:
+          type: string
+          description: The Node whose Task's outcome halted the Job.
+        outcome:
+          type: string
+          enum: [failure, timeout]
+        resolved:
+          type: boolean
+          description: |
+            True when `outcome` is the Task's recorded result. False when the
+            engine reported this outcome with no recorded result; the Task's
+            real outcome may still arrive.
+        reason:
+          type: string
+          description: Relay-authored. Also the `stderr` of every Task the halt left unsent.
 
     PerNodeVerdict:
       type: object
@@ -1670,6 +1698,14 @@ components:
         results:
           type: array
           items: { $ref: '#/components/schemas/PerNodeResult' }
+        halt:
+          $ref: '#/components/schemas/JobHalt'
+          description: |
+            Present only when a mutate Job halted on its first failure or
+            timeout (execution.md, Halting a failing mutation); a read Job
+            never halts. Tasks not yet sent resolve `cancelled` with `reason`
+            as their `stderr`; Tasks already in flight report their own
+            outcomes.
 
     CancelledJob:
       type: object

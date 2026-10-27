@@ -23,6 +23,7 @@ import (
 	"log/slog"
 	"net/http"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -1056,5 +1057,100 @@ func TestMintEnrollmentToken_JoinStringUsesAdvertisedAddress(t *testing.T) {
 				t.Errorf("join string address = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// seedHaltedJob writes, through the real store, a Job that halted: a Task that
+// ran and failed, a sibling the halt left unsent, and the halt naming the
+// failed Task. It seeds through the store rather than the engine, since the
+// engine-driven halt is proven end to end by the dispatch-wiring and MCP tests.
+func seedHaltedJob(t *testing.T, deps *appDeps) string {
+	t.Helper()
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	jobID := "job-e2e-halt"
+	if err := deps.jobs.CreateJob(ctx, jobs.Job{ID: jobID, CreatedAt: now}); err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	if err := deps.jobs.AddStage(ctx, jobs.Stage{ID: "stage-e2e-halt", JobID: jobID, Index: 0}); err != nil {
+		t.Fatalf("AddStage: %v", err)
+	}
+	act := jobs.Action{Kind: jobs.ActionRawExec, RawExecArgv: []string{"/bin/true"}, RiskClass: jobs.RiskClassMutate}
+	failed := jobs.Task{ID: "task-e2e-failed", JobID: jobID, StageID: "stage-e2e-halt", NodeID: "node-failed", Action: act, CreatedAt: now}
+	unsent := jobs.Task{ID: "task-e2e-unsent", JobID: jobID, StageID: "stage-e2e-halt", NodeID: "node-unsent", Action: act, CreatedAt: now}
+	for _, task := range []jobs.Task{failed, unsent} {
+		if err := deps.tasks.CreateTask(ctx, task); err != nil {
+			t.Fatalf("CreateTask(%s): %v", task.ID, err)
+		}
+	}
+	if err := deps.tasks.MarkDispatched(ctx, failed.ID, now); err != nil {
+		t.Fatalf("MarkDispatched: %v", err)
+	}
+	if err := deps.tasks.Resolve(ctx, failed.ID, jobs.Result{Outcome: jobs.OutcomeFailure, ExitCode: 1}); err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	halt := jobs.Halt{TaskID: failed.ID, NodeID: failed.NodeID, Outcome: jobs.OutcomeFailure, Resolved: true, At: now}
+	if err := deps.tasks.MarkHalted(ctx, unsent.ID, halt.Reason(), now); err != nil {
+		t.Fatalf("MarkHalted: %v", err)
+	}
+	if err := deps.jobs.RecordHalt(ctx, jobID, halt); err != nil {
+		t.Fatalf("RecordHalt: %v", err)
+	}
+	return jobID
+}
+
+// TestControlAPI_HaltRendersIdenticallyOnBothSurfaces is #1150's cross-surface
+// parity proof, modelled on TestControlAPI_JobResultsMatchMCP: a halted Job
+// reads the same halt object, and the same stderr on the Task the halt left
+// unsent, through the Control API and MCP get_job.
+func TestControlAPI_HaltRendersIdenticallyOnBothSurfaces(t *testing.T) {
+	f := startRelay(t, WithControlPlane())
+	jobID := seedHaltedJob(t, f.Deps)
+
+	resp := controlAPIRequest(t, f.ClientFor(""), http.MethodGet,
+		f.ControlBase+"/api/v1/jobs/"+jobID, f.Credential, nil)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("API status = %d, want 200", resp.StatusCode)
+	}
+	var apiBody struct {
+		Results []mcp.PerNodeResult `json:"results"`
+		Halt    map[string]any      `json:"halt"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&apiBody); err != nil {
+		t.Fatalf("decode API body: %v", err)
+	}
+
+	session := relaytest.Connect(t, f.ControlBase, f.Client())
+	res := relaytest.CallTool(t, session, "get_job", map[string]any{"job_id": jobID})
+	if res.IsError {
+		t.Fatalf("get_job returned IsError; content = %+v", res.Content)
+	}
+	var mcpBody struct {
+		Results []mcp.PerNodeResult `json:"results"`
+		Halt    map[string]any      `json:"halt"`
+	}
+	if err := json.Unmarshal([]byte(mcpToolText(t, res)), &mcpBody); err != nil {
+		t.Fatalf("decode MCP output: %v", err)
+	}
+
+	if apiBody.Halt == nil || !reflect.DeepEqual(apiBody.Halt, mcpBody.Halt) {
+		t.Errorf("halt differs between surfaces: API %#v, MCP %#v", apiBody.Halt, mcpBody.Halt)
+	}
+	if apiBody.Halt["node_id"] != "node-failed" || apiBody.Halt["outcome"] != "failure" || apiBody.Halt["resolved"] != true {
+		t.Errorf("halt = %#v, want node-failed, failure, resolved", apiBody.Halt)
+	}
+	if len(apiBody.Results) != 2 || len(mcpBody.Results) != 2 {
+		t.Fatalf("results: API %d, MCP %d, want 2 each", len(apiBody.Results), len(mcpBody.Results))
+	}
+	for i := range apiBody.Results {
+		a, m := apiBody.Results[i], mcpBody.Results[i]
+		if a.NodeID != m.NodeID || a.Outcome != m.Outcome || a.Stderr != m.Stderr {
+			t.Errorf("result[%d]: API {%s %s %q} != MCP {%s %s %q}", i, a.NodeID, a.Outcome, a.Stderr, m.NodeID, m.Outcome, m.Stderr)
+		}
+		if a.NodeID == "node-unsent" && (a.Outcome != "cancelled" || a.Stderr != apiBody.Halt["reason"]) {
+			t.Errorf("the unsent Node = {%s %q}, want cancelled with the halt's reason", a.Outcome, a.Stderr)
+		}
 	}
 }

@@ -252,6 +252,31 @@ func (s *Sink) Record(ctx context.Context, e capability.AuditEntry) error {
 		return err
 	}
 
+	// A mutate Job's halt. Handled before the dispatch fall-through, which
+	// would record its no-Results entry as a dispatch. It is the Relay's act,
+	// with no Account, so the record carries no Principal, Attribution or
+	// Selector (the requester is one join away on job_id); repeating the
+	// arguments would copy the arguments residual risk onto one more row. The
+	// approval link set above stays, as on every Kind.
+	if e.Kind == capability.AuditKindJobHalt {
+		if !e.Halt.Halted() || e.JobID == "" {
+			return errors.New("auditsink: a job halt entry names a halt and a Job")
+		}
+		rec := base
+		rec.Principal = ""
+		rec.Attribution = audit.Attribution{}
+		rec.Selector = ""
+		rec.Args = nil
+		rec.RawExecArgv = nil
+		rec.Kind = audit.KindJobHalt
+		rec.JobID = e.JobID
+		rec.NodeID = e.Halt.NodeID
+		rec.Reason = jobHaltReason(e.Halt)
+		err := s.append(ctx, rec)
+		s.logDecision(audit.KindJobHalt, e, 0, "")
+		return err
+	}
+
 	base.JobID = e.JobID
 	if len(e.Results) == 0 {
 		base.Kind = audit.KindDispatch
@@ -330,6 +355,16 @@ func (s *Sink) RecordIntent(ctx context.Context, e capability.AuditEntry, tasks 
 		return fmt.Errorf("auditsink: record dispatch intent: %w", err)
 	}
 	return nil
+}
+
+// jobHaltReason renders a job_halt record's Reason as space-separated key=value
+// text: halting_task_id, halting_outcome (failure or timeout) and
+// halting_task_resolved (whether the halting outcome is the Task's recorded
+// resolution). Relay-minted IDs and closed vocabularies only, no output
+// (ADR-0025).
+func jobHaltReason(h jobs.Halt) string {
+	return fmt.Sprintf("halting_task_id=%s halting_outcome=%s halting_task_resolved=%t",
+		h.TaskID, jobs.OutcomeName(h.Outcome), h.Resolved)
 }
 
 // intentReason renders a dispatch_intent record's Reason as space-separated
@@ -726,6 +761,8 @@ func (s *Sink) logDecision(kind string, e capability.AuditEntry, matched int, co
 		attrs = append(attrs, "job_id", e.JobID, "node_count", matched)
 	case audit.KindRefusal:
 		attrs = append(attrs, "reason", e.Reason)
+	case audit.KindJobHalt:
+		attrs = append(attrs, "job_id", e.JobID, "node_id", e.Halt.NodeID)
 	}
 	s.log.Info("audit decision", attrs...)
 }

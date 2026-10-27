@@ -656,7 +656,21 @@ func (s *Execution) account(ctx context.Context, p Principal, sel Selector, pr p
 		}
 	}
 
-	if err := errors.Join(dispatchErr, auditErr); err != nil {
+	// A mutate Job's halt is the Relay's act, audited beside the per-Node
+	// outcomes it explains (execution.md, Halting a failing mutation).
+	var haltAuditErr error
+	if res.halt.Halted() {
+		haltEntry := AuditEntry{Kind: AuditKindJobHalt, Action: act, JobID: res.jobID, Halt: res.halt, ApprovalID: ap.requestID, GrantID: ap.grantID}
+		if err := s.recorder().audit.Record(acctCtx, haltEntry); err != nil {
+			haltAuditErr = fmt.Errorf("capability: record job halt audit entry: %w", err)
+			if reserved || alwaysLog {
+				s.logger().ErrorContext(acctCtx, "capability: job halt audit write failed; a halted Job has no halt audit record",
+					"job_id", res.jobID, "node_id", res.halt.NodeID, "approval_id", ap.requestID, "error", haltAuditErr)
+			}
+		}
+	}
+
+	if err := errors.Join(dispatchErr, auditErr, haltAuditErr); err != nil {
 		return res.results, err
 	}
 	return res.results, nil

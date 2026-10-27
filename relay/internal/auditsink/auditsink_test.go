@@ -1550,3 +1550,103 @@ func TestRecordDispatchRetentionFollowsEachResultsOwnClass(t *testing.T) {
 		}
 	}
 }
+
+func haltEntry(h jobs.Halt) capability.AuditEntry {
+	return capability.AuditEntry{
+		Kind:      capability.AuditKindJobHalt,
+		Selector:  capability.Selector{Predicates: []capability.Predicate{{Namespace: capability.NamespaceNode, Key: "role", Value: "web"}}},
+		Action:    jobs.Action{Kind: jobs.ActionRawExec, RawExecArgv: []string{"/bin/echo", "secret-argument"}, RiskClass: jobs.RiskClassMutate},
+		JobID:     "job-1",
+		Halt:      h,
+		Principal: capability.Principal{Account: "alice", Role: "operator"},
+	}
+}
+
+// TestRecordJobHalt_OneRelayAttributedRecord: a halt is one record of the
+// Relay's own act (#1150): no Principal, Attribution, Selector or arguments, no
+// output, and an unspecified Outcome so an outcome query never mixes it in.
+func TestRecordJobHalt_OneRelayAttributedRecord(t *testing.T) {
+	_, repo, _ := openSinkStore(t)
+	sink := New(repo, WithNewID(sequentialIDs("audit-")), WithClock(fixedClock(time.Date(2026, 10, 26, 0, 0, 0, 0, time.UTC))))
+
+	h := jobs.Halt{TaskID: "task-1", NodeID: "node-1", Outcome: jobs.OutcomeFailure}
+	if err := sink.Record(context.Background(), haltEntry(h)); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+
+	records, err := repo.ByJob(context.Background(), "job-1")
+	if err != nil {
+		t.Fatalf("ByJob: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("ByJob returned %d records, want 1", len(records))
+	}
+	rec := records[0]
+	if rec.Kind != audit.KindJobHalt || rec.JobID != "job-1" || rec.NodeID != "node-1" {
+		t.Errorf("record = kind %q job %q node %q, want job_halt job-1 node-1", rec.Kind, rec.JobID, rec.NodeID)
+	}
+	if rec.Principal != "" || !reflect.DeepEqual(rec.Attribution, audit.Attribution{}) || rec.Selector != "" ||
+		len(rec.Args) != 0 || len(rec.RawExecArgv) != 0 {
+		t.Errorf("record carries an Account, Selector or arguments: %+v", rec)
+	}
+	if rec.Outcome != jobs.OutcomeUnspecified {
+		t.Errorf("Outcome = %v, want unspecified", rec.Outcome)
+	}
+	if len(rec.Stdout) != 0 || len(rec.Stderr) != 0 || rec.Truncated {
+		t.Errorf("record carries output: %+v", rec)
+	}
+	const wantReason = "halting_task_id=task-1 halting_outcome=failure halting_task_resolved=false"
+	if rec.Reason != wantReason {
+		t.Errorf("Reason = %q, want %q", rec.Reason, wantReason)
+	}
+	byOutcome, err := repo.ByNode(context.Background(), "node-1")
+	if err != nil || len(byOutcome) != 1 {
+		t.Errorf("ByNode(node-1) = %v, %v, want the halt row", byOutcome, err)
+	}
+}
+
+func TestRecordJobHalt_ReasonSaysWhenTheTaskIsResolved(t *testing.T) {
+	got := jobHaltReason(jobs.Halt{TaskID: "task-2", NodeID: "node-2", Outcome: jobs.OutcomeTimeout, Resolved: true})
+	const want = "halting_task_id=task-2 halting_outcome=timeout halting_task_resolved=true"
+	if got != want {
+		t.Errorf("jobHaltReason = %q, want %q", got, want)
+	}
+}
+
+// TestRecordJobHalt_CarriesTheApprovalLink: an approval-released Job's halt row
+// joins the same approval query as its dispatch rows (ADR-0027).
+func TestRecordJobHalt_CarriesTheApprovalLink(t *testing.T) {
+	_, repo, _ := openSinkStore(t)
+	sink := New(repo, WithNewID(sequentialIDs("audit-")), WithClock(fixedClock(time.Date(2026, 10, 26, 0, 0, 0, 0, time.UTC))))
+
+	entry := haltEntry(jobs.Halt{TaskID: "task-1", NodeID: "node-1", Outcome: jobs.OutcomeFailure})
+	entry.ApprovalID, entry.GrantID = "appr-1", "grant-1"
+	if err := sink.Record(context.Background(), entry); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	got, err := repo.ByApproval(context.Background(), "appr-1")
+	if err != nil {
+		t.Fatalf("ByApproval: %v", err)
+	}
+	if len(got) != 1 || got[0].Kind != audit.KindJobHalt || got[0].GrantID != "grant-1" {
+		t.Errorf("ByApproval = %+v, want the one job_halt row under grant-1", got)
+	}
+}
+
+func TestRecordJobHalt_RefusesAnEntryWithNoHalt(t *testing.T) {
+	_, repo, _ := openSinkStore(t)
+	sink := New(repo, WithNewID(sequentialIDs("audit-")))
+
+	if err := sink.Record(context.Background(), haltEntry(jobs.Halt{})); err == nil {
+		t.Error("Record of a halt entry naming no halt = nil, want a refusal")
+	}
+	noJob := haltEntry(jobs.Halt{TaskID: "task-1", NodeID: "node-1", Outcome: jobs.OutcomeFailure})
+	noJob.JobID = ""
+	if err := sink.Record(context.Background(), noJob); err == nil {
+		t.Error("Record of a halt entry naming no Job = nil, want a refusal")
+	}
+	records, _ := repo.ByJob(context.Background(), "job-1")
+	if len(records) != 0 {
+		t.Errorf("a refused halt entry wrote %d records, want none", len(records))
+	}
+}

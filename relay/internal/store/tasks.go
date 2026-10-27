@@ -128,6 +128,21 @@ func (t *sqliteTasks) MarkUnsupported(ctx context.Context, taskID, reason string
 	})
 }
 
+// MarkHalted transitions a Task from Pending directly to Resolved with
+// jobs.OutcomeCancelled and Stderr = reason, leaving dispatched_at NULL — its
+// mutate Job halted before the Task was sent (execution.md, Halting a failing
+// mutation), so InFlight never returns it. Returns jobs.ErrTaskNotFound if the
+// Task does not exist, or jobs.ErrInvalidTaskState if it is not currently
+// Pending.
+func (t *sqliteTasks) MarkHalted(ctx context.Context, taskID, reason string, at time.Time) error {
+	return t.transition(ctx, taskID, jobs.TaskEventHalt, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `
+			UPDATE tasks SET state = 'resolved', outcome = ?, stderr = ?, resolved_at = ? WHERE task_id = ?`,
+			int(jobs.OutcomeCancelled), []byte(reason), formatTime(roundTripTime(at)), taskID)
+		return err
+	})
+}
+
 // MarkCancelled transitions a Task from Pending directly to Resolved with
 // jobs.OutcomeCancelled, leaving dispatched_at NULL — the Task was cancelled
 // before it was ever sent (ADR-0013). Returns jobs.ErrTaskNotFound if the
@@ -154,6 +169,21 @@ func (t *sqliteTasks) MarkCancelledBeforeSend(ctx context.Context, taskID string
 		_, err := tx.ExecContext(ctx, `
 			UPDATE tasks SET state = 'resolved', outcome = ?, dispatched_at = NULL, resolved_at = ? WHERE task_id = ?`,
 			int(jobs.OutcomeCancelled), formatTime(roundTripTime(at)), taskID)
+		return err
+	})
+}
+
+// MarkHaltedBeforeSend transitions a Task from Dispatched to Resolved with
+// jobs.OutcomeCancelled and Stderr = reason, and sets dispatched_at back to NULL
+// — the engine marked the Task Dispatched but its mutate Job halted before the
+// send began, so the Task never left the Relay. The row is MarkHalted's, so
+// InFlight never returns it. Returns jobs.ErrTaskNotFound if the Task does not
+// exist, or jobs.ErrInvalidTaskState if it is not currently Dispatched.
+func (t *sqliteTasks) MarkHaltedBeforeSend(ctx context.Context, taskID, reason string, at time.Time) error {
+	return t.transition(ctx, taskID, jobs.TaskEventHaltBeforeSend, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `
+			UPDATE tasks SET state = 'resolved', outcome = ?, stderr = ?, dispatched_at = NULL, resolved_at = ? WHERE task_id = ?`,
+			int(jobs.OutcomeCancelled), []byte(reason), formatTime(roundTripTime(at)), taskID)
 		return err
 	})
 }

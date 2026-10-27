@@ -282,6 +282,18 @@ type ExecutionOutput struct {
 	JobID     string          `json:"job_id"`
 	JobStatus string          `json:"job_status" jsonschema:"running while any Task is unresolved (its outcome reads unspecified); complete once every Task has a terminal outcome. Poll get_job with job_id until complete."`
 	Results   []PerNodeResult `json:"results"`
+	Halt      *HaltOutput     `json:"halt,omitempty" jsonschema:"present only when a mutate Job halted on its first failure or timeout; Tasks not yet sent resolve cancelled with this reason, Tasks already in flight report their own outcomes; a read Job never halts."`
+}
+
+// HaltOutput is why a mutate Job stopped sending after its first failure or
+// timeout (execution.md, Halting a failing mutation). It is the field-for-field
+// image of controlplane.RenderedHalt, so a surface cannot drift from the shared
+// rendering. resolved has no omitempty: false is information.
+type HaltOutput struct {
+	NodeID   string `json:"node_id" jsonschema:"the Node whose Task's outcome halted the Job"`
+	Outcome  string `json:"outcome" jsonschema:"failure or timeout"`
+	Resolved bool   `json:"resolved" jsonschema:"true when that outcome is the Task's recorded result; false when the engine reported this outcome with no recorded result; the Task's real outcome may still arrive"`
+	Reason   string `json:"reason" jsonschema:"Relay-authored; also the stderr of every Task the halt left unsent"`
 }
 
 // PerNodeVerdict is one matched Node's Plan-mode result (ADR-0011):
@@ -355,6 +367,9 @@ type RunOrPlanOutput struct {
 	// JobStatus and Reattached describe a Job returned at persist.
 	JobStatus  string `json:"job_status,omitempty" jsonschema:"running while any Task is unresolved (its outcome reads unspecified); complete once every Task has a terminal outcome; absent when no Job was created. Poll get_job with job_id until complete."`
 	Reattached bool   `json:"reattached,omitempty" jsonschema:"true when this call dispatched nothing and returned the Job an earlier call created (same idempotency_key, or an approval already released)."`
+
+	// Halt is present only when the Job halted; see ExecutionOutput.Halt.
+	Halt *HaltOutput `json:"halt,omitempty" jsonschema:"present only when a mutate Job halted on its first failure or timeout; Tasks not yet sent resolve cancelled with this reason, Tasks already in flight report their own outcomes; a read Job never halts."`
 
 	// PendingApproval is set when the dispatch PARKED for human approval
 	// (ADR-0027) instead of running. When it is present, job_id is absent and

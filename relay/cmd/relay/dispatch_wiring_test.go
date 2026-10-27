@@ -806,3 +806,260 @@ func TestDispatchWiring_DeliveredResultSurvivesTeardownUntilItIsPersisted(t *tes
 		t.Errorf("task = %+v, want Resolved with the real success result", stored)
 	}
 }
+
+// TestDispatchWiring_AHaltedJobsUnsentTasksAreNeverSentAfterARestart is #1150's
+// at-most-once proof over a real store and the real Router: a mutate Job whose
+// first Task fails sends nothing further, records the halt, and after a
+// simulated restart the Reconciler has no Task of the halted Job to send
+// (invariant 4).
+func TestDispatchWiring_AHaltedJobsUnsentTasksAreNeverSentAfterARestart(t *testing.T) {
+	tasks, st := testTaskRepositoryWithStore(t)
+	reads := newSignalInFlight(tasks)
+	router, _, _ := newDispatchStack(reads, nil, nil)
+
+	nodes := []string{"node-1", "node-2", "node-3"}
+	var mu sync.Mutex
+	var requested []string // node IDs whose TaskRequest reached a Tunnel
+	for _, id := range nodes {
+		if _, err := st.Registry().Upsert(registry.Report{NodeID: id}); err != nil {
+			t.Fatalf("Upsert(%s): %v", id, err)
+		}
+		router.Register(id, func(msg *relayv1.RelayMessage) error {
+			if task := msg.GetTask(); task != nil {
+				mu.Lock()
+				requested = append(requested, id)
+				mu.Unlock()
+				// The relay-daemon answers failure; delivered off the send path.
+				go router.Deliver(id, &relayv1.TaskResult{TaskId: task.GetTaskId(), Outcome: relayv1.Outcome_OUTCOME_FAILURE})
+			}
+			return nil
+		})
+	}
+	reads.awaitReads(t, len(nodes))
+
+	q := auditquery.New(st.AuditQueries(), st.JobQueries())
+	capSvc := newCapService(t, capSeams{
+		reg:         st.Registry(),
+		authz:       allowAllTestAuthorizer{},
+		settings:    blastCaps(10, 10),
+		audit:       auditsink.New(st.Audit()),
+		freeze:      st.Freeze(),
+		auditQ:      q,
+		jobQ:        q,
+		jobsRepo:    st.Jobs(),
+		tasksRepo:   tasks,
+		conduit:     router,
+		concurrency: 1,
+	})
+	results, err := capSvc.Run(context.Background(), capability.Principal{Account: "devharness"}, capability.Selector{},
+		jobs.Action{Kind: jobs.ActionRawExec, RawExecArgv: []string{"/bin/true"}})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	jobID := results[0].JobID
+
+	mu.Lock()
+	sent := append([]string(nil), requested...)
+	mu.Unlock()
+	if len(sent) != 1 {
+		t.Fatalf("TaskRequests on Tunnels = %v, want exactly one", sent)
+	}
+	job, err := st.Jobs().GetJob(context.Background(), jobID)
+	if err != nil {
+		t.Fatalf("GetJob: %v", err)
+	}
+	if job.Halt.NodeID != sent[0] || job.Halt.Outcome != jobs.OutcomeFailure || !job.Halt.Resolved {
+		t.Errorf("Job.Halt = %+v, want the Node that was sent, failure, with a recorded result", job.Halt)
+	}
+	all, err := tasks.ByJob(context.Background(), jobID)
+	if err != nil || len(all) != len(nodes) {
+		t.Fatalf("ByJob = %d tasks, %v; want %d", len(all), err, len(nodes))
+	}
+	for _, task := range all {
+		if task.NodeID == sent[0] {
+			continue
+		}
+		if task.State != jobs.DispatchStateResolved || task.Outcome != jobs.OutcomeCancelled ||
+			!task.DispatchedAt.IsZero() || string(task.Stderr) != job.Halt.Reason() {
+			t.Errorf("unsent task %s = %v/%v dispatched %v stderr %q, want Resolved/cancelled, never dispatched, the halt's reason",
+				task.NodeID, task.State, task.Outcome, task.DispatchedAt, task.Stderr)
+		}
+	}
+	records, err := st.Audit().ByJob(context.Background(), jobID)
+	if err != nil {
+		t.Fatalf("Audit().ByJob: %v", err)
+	}
+	halts := 0
+	for _, rec := range records {
+		if rec.Kind == audit.KindJobHalt {
+			halts++
+		}
+	}
+	if halts != 1 {
+		t.Errorf("job_halt audit records = %d, want 1", halts)
+	}
+
+	// A restart keeps only the store. A second dispatch stack over it
+	// reconciles each Node as it connects and must find nothing to send.
+	reads2 := newSignalInFlight(tasks)
+	router2, _, _ := newDispatchStack(reads2, nil, nil)
+	resent := make(chan *relayv1.RelayMessage, 8)
+	for _, id := range nodes {
+		router2.Register(id, func(msg *relayv1.RelayMessage) error {
+			resent <- msg
+			return nil
+		})
+	}
+	reads2.awaitReads(t, len(nodes))
+	select {
+	case msg := <-resent:
+		t.Fatalf("a restart's reconcile sent %v for a halted Job", msg)
+	case <-time.After(500 * time.Millisecond):
+	}
+	if inFlight, err := tasks.InFlight(context.Background()); err != nil || len(inFlight) != 0 {
+		t.Errorf("InFlight after the restart = %v, %v; want empty", inFlight, err)
+	}
+}
+
+// TestDispatchWiring_AHaltClosingAfterASiblingPassedAdmitWithholdsItsSend is
+// the halt's race through the real store, Router and engine: one Task is past
+// MarkDispatched and not yet at its send guard (holdingConduit pauses it before
+// Router.Dispatch) when the other Task fails and the Job halts. The paused
+// Task's TaskRequest is never written, it resolves cancelled with the halt as
+// its reason and no DispatchedAt, and nothing is left in flight for a
+// Reconciler to send (invariant 4).
+func TestDispatchWiring_AHaltClosingAfterASiblingPassedAdmitWithholdsItsSend(t *testing.T) {
+	tasks, st := testTaskRepositoryWithStore(t)
+	reads := newSignalInFlight(tasks)
+	router, _, _ := newDispatchStack(reads, nil, nil)
+
+	nodes := []string{"node-1", "node-2", "node-3"}
+	failNow := make(chan struct{}) // the relay-daemon's failure is held until the sibling is paused
+	var mu sync.Mutex
+	requested := map[string]string{} // task ID -> node ID, TaskRequests that reached a Tunnel
+	for _, id := range nodes {
+		if _, err := st.Registry().Upsert(registry.Report{NodeID: id}); err != nil {
+			t.Fatalf("Upsert(%s): %v", id, err)
+		}
+		router.Register(id, func(msg *relayv1.RelayMessage) error {
+			if task := msg.GetTask(); task != nil {
+				mu.Lock()
+				requested[task.GetTaskId()] = id
+				mu.Unlock()
+				go func() {
+					<-failNow
+					router.Deliver(id, &relayv1.TaskResult{TaskId: task.GetTaskId(), Outcome: relayv1.Outcome_OUTCOME_FAILURE})
+				}()
+			}
+			return nil
+		})
+	}
+	reads.awaitReads(t, len(nodes))
+
+	hold := &holdingConduit{Router: router, held: make(chan string, 1), release: make(chan struct{})}
+	q := auditquery.New(st.AuditQueries(), st.JobQueries())
+	capSvc := newCapService(t, capSeams{
+		reg:         st.Registry(),
+		authz:       allowAllTestAuthorizer{},
+		settings:    blastCaps(10, 10),
+		audit:       auditsink.New(st.Audit()),
+		freeze:      st.Freeze(),
+		auditQ:      q,
+		jobQ:        q,
+		jobsRepo:    st.Jobs(),
+		tasksRepo:   tasks,
+		conduit:     hold,
+		concurrency: 2,
+	})
+
+	type runOut struct {
+		results []capability.NodeResult
+		err     error
+	}
+	done := make(chan runOut, 1)
+	go func() {
+		res, err := capSvc.Run(context.Background(), capability.Principal{Account: "devharness"}, capability.Selector{},
+			jobs.Action{Kind: jobs.ActionRawExec, RawExecArgv: []string{"/bin/true"}})
+		done <- runOut{res, err}
+	}()
+
+	var heldID string
+	select {
+	case heldID = <-hold.held:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no Task was held past MarkDispatched")
+	}
+	held := mustTask(t, tasks, heldID)
+	if held.State != jobs.DispatchStateDispatched {
+		t.Fatalf("held task = %v, want Dispatched: it must be past admit", held.State)
+	}
+	hold.mu.Lock()
+	firstID := hold.entered[0]
+	hold.mu.Unlock()
+	close(failNow) // the other Task fails while the held one waits before its guard
+
+	var halt jobs.Halt
+	deadline := time.Now().Add(5 * time.Second)
+	for !halt.Halted() {
+		job, err := st.Jobs().GetJob(context.Background(), held.JobID)
+		if err != nil {
+			t.Fatalf("GetJob: %v", err)
+		}
+		halt = job.Halt
+		if !halt.Halted() && time.Now().After(deadline) {
+			t.Fatal("the Job did not halt on the sibling's failure")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if halt.TaskID != firstID {
+		t.Fatalf("halted by %s, want the first Task %s", halt.TaskID, firstID)
+	}
+	close(hold.release)
+
+	var out runOut
+	select {
+	case out = <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return")
+	}
+	if out.err != nil {
+		t.Fatalf("Run: %v", out.err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(requested) != 1 {
+		t.Errorf("TaskRequests on Tunnels = %v, want only the failing Task", requested)
+	}
+	if _, ok := requested[heldID]; ok {
+		t.Errorf("held Task %s was written to a Tunnel after the Job halted", heldID)
+	}
+	all, err := tasks.ByJob(context.Background(), held.JobID)
+	if err != nil || len(all) != len(nodes) {
+		t.Fatalf("ByJob = %d tasks, %v; want %d", len(all), err, len(nodes))
+	}
+	for _, task := range all {
+		if task.ID == firstID {
+			if task.State != jobs.DispatchStateResolved || task.Outcome != jobs.OutcomeFailure {
+				t.Errorf("failing task = %v/%v, want Resolved/failure", task.State, task.Outcome)
+			}
+			continue
+		}
+		if task.State != jobs.DispatchStateResolved || task.Outcome != jobs.OutcomeCancelled ||
+			!task.DispatchedAt.IsZero() || string(task.Stderr) != halt.Reason() {
+			t.Errorf("task %s = %v/%v dispatched %v stderr %q, want Resolved/cancelled, never sent, the halt's reason",
+				task.ID, task.State, task.Outcome, task.DispatchedAt, task.Stderr)
+		}
+	}
+	for _, r := range out.results {
+		if r.NodeID != held.NodeID {
+			continue
+		}
+		if r.Outcome != jobs.OutcomeCancelled || string(r.Stderr) != halt.Reason() {
+			t.Errorf("result for the held Task = %v %q, want cancelled with the halt's reason", r.Outcome, r.Stderr)
+		}
+	}
+	if inFlight, err := tasks.InFlight(context.Background()); err != nil || len(inFlight) != 0 {
+		t.Errorf("InFlight = %v, %v; want empty", inFlight, err)
+	}
+}

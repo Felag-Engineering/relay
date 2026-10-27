@@ -665,3 +665,73 @@ func TestMCP_RunOperation_AuditedWithPrincipal(t *testing.T) {
 		}
 	}
 }
+
+// TestMCP_HaltedMutateJob_ReportsTheHaltOnRunAndGetJob: a mutate Job that
+// halts on its first failure reports the halt, with the Tasks it left unsent
+// cancelled for that reason, identically from raw_exec and a later get_job, and
+// the halt is audited (#1150).
+func TestMCP_HaltedMutateJob_ReportsTheHaltOnRunAndGetJob(t *testing.T) {
+	// One Task in flight at a time, so the first Node's failure leaves the
+	// second Pending to be halt-cancelled.
+	ts := newTestServerWithConcurrency(t, "", 0, 0, "", 1)
+	ts.conduit.connect(ts.nodeA, ts.nodeB)
+	ts.conduit.results[ts.nodeA] = jobs.Result{Outcome: jobs.OutcomeFailure, ExitCode: 1}
+	ts.conduit.results[ts.nodeB] = jobs.Result{Outcome: jobs.OutcomeFailure, ExitCode: 1}
+	session := ts.connect(t)
+
+	res := callTool(t, session, "raw_exec", map[string]any{"argv": []string{"/bin/true"}, "wait_seconds": 300})
+	var run mcp.RunOrPlanOutput
+	decodeResult(t, res, &run)
+
+	if run.Halt == nil {
+		t.Fatalf("raw_exec result has no halt: %+v", run)
+	}
+	if got := ts.conduit.dispatchCount(ts.nodeA) + ts.conduit.dispatchCount(ts.nodeB); got != 1 {
+		t.Fatalf("Tasks sent = %d, want exactly 1", got)
+	}
+	job, err := ts.store.Jobs().GetJob(context.Background(), run.JobID)
+	if err != nil {
+		t.Fatalf("GetJob: %v", err)
+	}
+	if !job.Halt.Halted() {
+		t.Fatalf("stored Job.Halt = %+v, want a halt", job.Halt)
+	}
+	want := mcp.HaltOutput{NodeID: job.Halt.NodeID, Outcome: "failure", Resolved: true, Reason: job.Halt.Reason()}
+	if *run.Halt != want {
+		t.Errorf("halt = %+v, want %+v", *run.Halt, want)
+	}
+
+	sawHalting, sawCancelled := false, false
+	for _, r := range run.Results {
+		switch r.NodeID {
+		case want.NodeID:
+			sawHalting = r.Outcome == "failure"
+		default:
+			sawCancelled = r.Outcome == "cancelled" && r.Stderr == want.Reason && r.ExitCode == nil
+		}
+	}
+	if !sawHalting || !sawCancelled {
+		t.Errorf("results = %+v, want the halting Node's real failure and the other Node cancelled with the halt's reason and no exit_code", run.Results)
+	}
+
+	getRes := callTool(t, session, "get_job", map[string]any{"job_id": run.JobID})
+	var got mcp.ExecutionOutput
+	decodeResult(t, getRes, &got)
+	if got.Halt == nil || *got.Halt != want {
+		t.Errorf("get_job halt = %+v, want the identical %+v", got.Halt, want)
+	}
+
+	records, err := ts.store.Audit().ByJob(context.Background(), run.JobID)
+	if err != nil {
+		t.Fatalf("Audit().ByJob: %v", err)
+	}
+	halts := 0
+	for _, rec := range records {
+		if rec.Kind == audit.KindJobHalt {
+			halts++
+		}
+	}
+	if halts != 1 {
+		t.Errorf("job_halt audit records = %d, want 1", halts)
+	}
+}

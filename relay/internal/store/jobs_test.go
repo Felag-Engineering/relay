@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -204,6 +205,176 @@ func TestCreateJob_AcceptsEveryAccountsKind(t *testing.T) {
 			}
 			if got.Requester.Kind != string(k) {
 				t.Errorf("Requester.Kind = %q, want %q", got.Requester.Kind, k)
+			}
+		})
+	}
+}
+
+// seedHaltFixture creates job-h with a Dispatched Task on node-1 and returns
+// the Task's ID.
+func seedHaltFixture(t *testing.T, st *Store) string {
+	t.Helper()
+	ctx := context.Background()
+	seedJobAndStage(t, st, "job-h", "stage-h")
+	task := jobs.Task{ID: "task-h1", JobID: "job-h", StageID: "stage-h", NodeID: "node-1", Action: testAction(), CreatedAt: time.Now().UTC()}
+	if err := st.Tasks().CreateTask(ctx, task); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if err := st.Tasks().MarkDispatched(ctx, task.ID, time.Now().UTC()); err != nil {
+		t.Fatalf("MarkDispatched: %v", err)
+	}
+	return task.ID
+}
+
+func resolveHaltFixture(t *testing.T, st *Store, taskID string, o jobs.Outcome) {
+	t.Helper()
+	if err := st.Tasks().Resolve(context.Background(), taskID, jobs.Result{Outcome: o}); err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+}
+
+// TestGetJob_NeverHaltedJobHasNoHalt: #1150, a Job that never halted (and every
+// Job older than the halt columns) reads a zero Halt.
+func TestGetJob_NeverHaltedJobHasNoHalt(t *testing.T) {
+	st, _ := openTestStore(t)
+	seedJobAndStage(t, st, "job-1", "stage-1")
+	job, err := st.Jobs().GetJob(context.Background(), "job-1")
+	if err != nil {
+		t.Fatalf("GetJob: %v", err)
+	}
+	if job.Halt.Halted() || job.Halt != (jobs.Halt{}) {
+		t.Errorf("Halt = %+v, want the zero Halt", job.Halt)
+	}
+}
+
+// TestRecordHalt_ReadBackByGetJob: both a resolved and an unresolved halt
+// round-trip.
+func TestRecordHalt_ReadBackByGetJob(t *testing.T) {
+	for _, resolved := range []bool{true, false} {
+		t.Run(fmt.Sprintf("resolved=%v", resolved), func(t *testing.T) {
+			st, _ := openTestStore(t)
+			ctx := context.Background()
+			taskID := seedHaltFixture(t, st)
+			outcome := jobs.OutcomeTimeout
+			if resolved {
+				resolveHaltFixture(t, st, taskID, outcome)
+			}
+			at := time.Date(2026, 10, 26, 12, 0, 0, 123, time.UTC)
+			h := jobs.Halt{TaskID: taskID, NodeID: "node-1", Outcome: outcome, Resolved: resolved, At: at}
+			if err := st.Jobs().RecordHalt(ctx, "job-h", h); err != nil {
+				t.Fatalf("RecordHalt: %v", err)
+			}
+			job, err := st.Jobs().GetJob(ctx, "job-h")
+			if err != nil {
+				t.Fatalf("GetJob: %v", err)
+			}
+			if job.Halt.TaskID != h.TaskID || job.Halt.NodeID != h.NodeID || job.Halt.Outcome != h.Outcome ||
+				job.Halt.Resolved != resolved || !job.Halt.At.Equal(at) {
+				t.Errorf("Halt = %+v, want %+v", job.Halt, h)
+			}
+		})
+	}
+}
+
+func TestRecordHalt_OnlyOnce(t *testing.T) {
+	st, _ := openTestStore(t)
+	ctx := context.Background()
+	taskID := seedHaltFixture(t, st)
+	h := jobs.Halt{TaskID: taskID, NodeID: "node-1", Outcome: jobs.OutcomeFailure, At: time.Now().UTC()}
+	if err := st.Jobs().RecordHalt(ctx, "job-h", h); err != nil {
+		t.Fatalf("first RecordHalt: %v", err)
+	}
+	if err := st.Jobs().RecordHalt(ctx, "job-h", h); !errors.Is(err, jobs.ErrJobAlreadyHalted) {
+		t.Errorf("second RecordHalt = %v, want ErrJobAlreadyHalted", err)
+	}
+}
+
+func TestRecordHalt_UnknownJob(t *testing.T) {
+	st, _ := openTestStore(t)
+	h := jobs.Halt{TaskID: "task-x", NodeID: "node-1", Outcome: jobs.OutcomeFailure, At: time.Now().UTC()}
+	if err := st.Jobs().RecordHalt(context.Background(), "no-such-job", h); !errors.Is(err, jobs.ErrJobNotFound) {
+		t.Errorf("RecordHalt on an unknown Job = %v, want ErrJobNotFound", err)
+	}
+}
+
+func TestRecordHalt_RefusesATaskOfAnotherJobOrNode(t *testing.T) {
+	st, _ := openTestStore(t)
+	ctx := context.Background()
+	taskID := seedHaltFixture(t, st)
+	seedJobAndStage(t, st, "job-other", "stage-other")
+	for name, tc := range map[string]struct {
+		jobID string
+		h     jobs.Halt
+	}{
+		"a Task of another Job":  {"job-other", jobs.Halt{TaskID: taskID, NodeID: "node-1", Outcome: jobs.OutcomeFailure}},
+		"another Node":           {"job-h", jobs.Halt{TaskID: taskID, NodeID: "node-2", Outcome: jobs.OutcomeFailure}},
+		"a Task that is unknown": {"job-h", jobs.Halt{TaskID: "task-none", NodeID: "node-1", Outcome: jobs.OutcomeFailure}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			tc.h.At = time.Now().UTC()
+			err := st.Jobs().RecordHalt(ctx, tc.jobID, tc.h)
+			if err == nil || errors.Is(err, jobs.ErrJobAlreadyHalted) || errors.Is(err, jobs.ErrJobNotFound) {
+				t.Fatalf("RecordHalt = %v, want a refusal of the halting Task", err)
+			}
+			job, _ := st.Jobs().GetJob(ctx, tc.jobID)
+			if job.Halt.Halted() {
+				t.Errorf("Halt = %+v, want none after a refusal", job.Halt)
+			}
+		})
+	}
+}
+
+func TestRecordHalt_RefusesANonHaltingOutcomeOrNoTask(t *testing.T) {
+	st, _ := openTestStore(t)
+	ctx := context.Background()
+	taskID := seedHaltFixture(t, st)
+	for name, h := range map[string]jobs.Halt{
+		"success":          {TaskID: taskID, NodeID: "node-1", Outcome: jobs.OutcomeSuccess},
+		"unreachable":      {TaskID: taskID, NodeID: "node-1", Outcome: jobs.OutcomeUnreachable},
+		"unspecified":      {TaskID: taskID, NodeID: "node-1"},
+		"no Task":          {NodeID: "node-1", Outcome: jobs.OutcomeFailure},
+		"no Node":          {TaskID: taskID, Outcome: jobs.OutcomeFailure},
+		"denied_by_policy": {TaskID: taskID, NodeID: "node-1", Outcome: jobs.OutcomeDeniedByPolicy},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h.At = time.Now().UTC()
+			if err := st.Jobs().RecordHalt(ctx, "job-h", h); err == nil {
+				t.Errorf("RecordHalt(%+v) = nil, want a refusal", h)
+			}
+		})
+	}
+}
+
+// TestRecordHalt_RefusesAResolvedHaltTheTaskDoesNotHold: the store makes
+// "resolved: true" impossible to record for a Task that did not resolve with
+// that outcome, while the same halt with resolved false is recorded.
+func TestRecordHalt_RefusesAResolvedHaltTheTaskDoesNotHold(t *testing.T) {
+	ctx := context.Background()
+	tests := []struct {
+		name  string
+		setup func(t *testing.T, st *Store, taskID string)
+	}{
+		{"the Task is still Dispatched", func(*testing.T, *Store, string) {}},
+		{"the Task resolved another outcome", func(t *testing.T, st *Store, taskID string) {
+			resolveHaltFixture(t, st, taskID, jobs.OutcomeSuccess)
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			st, _ := openTestStore(t)
+			taskID := seedHaltFixture(t, st)
+			tt.setup(t, st, taskID)
+			h := jobs.Halt{TaskID: taskID, NodeID: "node-1", Outcome: jobs.OutcomeFailure, Resolved: true, At: time.Now().UTC()}
+			if err := st.Jobs().RecordHalt(ctx, "job-h", h); err == nil {
+				t.Fatal("RecordHalt(resolved: true) = nil, want a refusal: the Task does not hold failure")
+			}
+			job, _ := st.Jobs().GetJob(ctx, "job-h")
+			if job.Halt.Halted() {
+				t.Errorf("Halt = %+v, want none after a refusal", job.Halt)
+			}
+			h.Resolved = false
+			if err := st.Jobs().RecordHalt(ctx, "job-h", h); err != nil {
+				t.Errorf("RecordHalt(resolved: false) = %v, want it recorded: it claims less", err)
 			}
 		})
 	}

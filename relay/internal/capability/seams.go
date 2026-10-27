@@ -409,6 +409,13 @@ const (
 	// before any Task can be dispatched. Results and Reason are empty.
 	// Appended at the end so no existing AuditKind value moves.
 	AuditKindDispatchIntent
+
+	// AuditKindJobHalt is a mutate Job's halt (execution.md, Halting a failing
+	// mutation): JobID, Action, Halt, ApprovalID and GrantID are set. Principal
+	// is not recorded, since the halt is the Relay's act and not an Account's
+	// (audit.KindJobHalt); Results and Reason are empty. Appended at the end so
+	// no existing AuditKind value moves.
+	AuditKindJobHalt
 )
 
 // ApprovalAnswer is the structured answer a Decision carries. package
@@ -487,6 +494,9 @@ type AuditEntry struct {
 	// CapCleared is the number of Nodes the blast cap cleared for dispatch; set
 	// only on AuditKindDispatchIntent.
 	CapCleared int
+
+	// Halt is the Job's halt; set only on AuditKindJobHalt.
+	Halt jobs.Halt
 }
 
 // IntentRecorder persists a Job's Pending Tasks and its dispatch-intent audit

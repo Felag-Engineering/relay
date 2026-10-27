@@ -26,12 +26,17 @@ var ErrSingleStageOnly = errors.New("jobs: a Job may have exactly one stage in v
 // ErrJobNotFound is returned when an operation targets a Job that does not exist.
 var ErrJobNotFound = errors.New("jobs: job not found")
 
+// ErrJobAlreadyHalted is returned by RecordHalt when the Job already carries a
+// halt: a Job halts once, and the first halt is the record.
+var ErrJobAlreadyHalted = errors.New("jobs: job has already halted")
+
 // ErrTaskNotFound is returned when an operation targets a Task that does not exist.
 var ErrTaskNotFound = errors.New("jobs: task not found")
 
 // ErrInvalidTaskState is returned when a Task state transition is attempted
 // out of order: MarkDispatched on a Task that is not Pending, or Resolve or
-// MarkCancelledBeforeSend on a Task that is not Dispatched. Task.Transition
+// MarkCancelledBeforeSend or MarkHaltedBeforeSend on a Task that is not
+// Dispatched. Task.Transition
 // holds the table of legal transitions; the store re-checks it against the
 // persisted row. This is the at-most-once reconciliation guard —
 // a Relay restart must never re-dispatch a Task it already resolved, and must
@@ -346,6 +351,49 @@ type Job struct {
 	ID        string
 	CreatedAt time.Time
 	Requester Requester
+	// Halt is why the Job stopped sending; the zero value means it never halted.
+	Halt Halt
+}
+
+// Halt is why a mutate Job stopped sending (execution.md, Halting a failing
+// mutation): the first Task the engine reported failure or timeout for, that
+// Task's Node and outcome, whether that outcome is recorded, and when. The zero
+// value means the Job has not halted. It is written once, by the Job engine.
+type Halt struct {
+	TaskID  string
+	NodeID  string
+	Outcome Outcome
+	// Resolved reports that Outcome is the halting Task's recorded resolution.
+	// False means the engine reported Outcome for a Task that holds no recorded
+	// result (a Conduit error, a replaced stream, a worker panic, a failed store
+	// write): its real outcome may still arrive. False is the zero value on
+	// purpose, so a Halt built without it claims less, never more.
+	Resolved bool
+	At       time.Time
+}
+
+// Halted reports whether h records a halt.
+func (h Halt) Halted() bool { return h.TaskID != "" }
+
+// Reason renders h as Relay-authored, caller-facing text. It names the Node and
+// the outcome, holds no Node-authored byte (a Node ID is Relay-minted at
+// enrollment) and says "resolved" only when h.Resolved.
+//
+// The text is part of the record: each Task the halt left unsent stores it
+// verbatim as its stderr at the halt, while a surface recomputes it from the
+// persisted Halt. A wording change therefore alters what new records say and
+// the rendered halt of older Jobs, never the stderr older Tasks already hold.
+func (h Halt) Reason() string {
+	lead := fmt.Sprintf("halted: this mutate Job stops sending after its Task on Node %q resolved %s. ",
+		h.NodeID, OutcomeName(h.Outcome))
+	if !h.Resolved {
+		lead = fmt.Sprintf("halted: this mutate Job stops sending after its Task on Node %q reported %s "+
+			"with no recorded result; that Task's real outcome may still arrive. ", h.NodeID, OutcomeName(h.Outcome))
+	}
+	return lead + fmt.Sprintf("A mutate Job sends no further Task once one fails or times out, so a bad "+
+		"change reaches at most one batch of Nodes. A Task this halt left unsent was never sent, and nothing "+
+		"ran for it on its Node; Tasks already in flight finish and report their own outcomes. Check Node %q, "+
+		"then re-target the Nodes this Job did not reach if the change is still wanted.", h.NodeID)
 }
 
 // Stage is a batch of Tasks within a Job. v1 permits exactly one Stage per
@@ -450,6 +498,13 @@ type JobRepository interface {
 	// GetJob returns the Job with the given ID, or ErrJobNotFound.
 	GetJob(ctx context.Context, id string) (Job, error)
 
+	// RecordHalt records h on jobID once. It returns ErrJobNotFound for an
+	// unknown Job and ErrJobAlreadyHalted when the Job already carries a halt,
+	// and it refuses an h whose Task is not a Task of jobID on h.NodeID, whose
+	// Outcome is not failure or timeout, or whose Resolved is true while the
+	// store does not hold that Task Resolved with Outcome.
+	RecordHalt(ctx context.Context, jobID string, h Halt) error
+
 	// Stages returns all Stages for jobID (at most one, in v1), ordered by Index.
 	Stages(ctx context.Context, jobID string) ([]Stage, error)
 }
@@ -505,6 +560,13 @@ type TaskRepository interface {
 	// Pending.
 	MarkCancelled(ctx context.Context, taskID string, at time.Time) error
 
+	// MarkHalted transitions a Task from Pending directly to Resolved with
+	// OutcomeCancelled and Stderr = reason, leaving DispatchedAt unset: its
+	// mutate Job halted before the Task was sent (TaskEventHalt). reason is
+	// Relay-authored (Halt.Reason). Returns ErrTaskNotFound if the Task does not
+	// exist, or ErrInvalidTaskState if the Task is not currently Pending.
+	MarkHalted(ctx context.Context, taskID, reason string, at time.Time) error
+
 	// MarkCancelledBeforeSend transitions a Task from Dispatched to Resolved
 	// with OutcomeCancelled, clears DispatchedAt and records the resolve time —
 	// the row is identical to MarkCancelled's. The engine marked the Task
@@ -514,6 +576,15 @@ type TaskRepository interface {
 	// ErrTaskNotFound if the Task does not exist, or ErrInvalidTaskState if the
 	// Task is not currently Dispatched.
 	MarkCancelledBeforeSend(ctx context.Context, taskID string, at time.Time) error
+
+	// MarkHaltedBeforeSend transitions a Task from Dispatched to Resolved with
+	// OutcomeCancelled and Stderr = reason, and clears DispatchedAt: the engine
+	// marked the Task Dispatched, but its mutate Job halted before the send
+	// began, so the Task never left the Relay (TaskEventHaltBeforeSend). The row
+	// is MarkHalted's. Only the engine that MarkDispatched the Task calls it, and
+	// only when nothing was sent. Returns ErrTaskNotFound if the Task does not
+	// exist, or ErrInvalidTaskState if it is not currently Dispatched.
+	MarkHaltedBeforeSend(ctx context.Context, taskID, reason string, at time.Time) error
 
 	// Get returns the Task with the given ID, or ErrTaskNotFound.
 	Get(ctx context.Context, taskID string) (Task, error)
