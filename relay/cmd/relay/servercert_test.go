@@ -247,7 +247,7 @@ func TestServerCertificateNames(t *testing.T) {
 // Minter and returns the host its join string tells a relay-daemon to dial.
 func certNamingJoinHost(t *testing.T, deps *appDeps) string {
 	t.Helper()
-	minted, err := deps.minter.Mint(context.Background(), []string{"relay:env=test"}, time.Hour, enroll.UseLimit{MaxUses: 1})
+	minted, err := deps.minter.Mint(context.Background(), nil, time.Hour, enroll.UseLimit{MaxUses: 1})
 	if err != nil {
 		t.Fatalf("mint Enrollment Token: %v", err)
 	}

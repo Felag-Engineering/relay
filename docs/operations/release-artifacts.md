@@ -54,9 +54,10 @@ Tags with a major version of 0 or with any prerelease component (`v0.*`, `v*-bet
 There are deliberately no unversioned or "latest" **binary** names: the binaries config
 management installs, above all the daemon (ADR-0014), must be pinned to an explicit version,
 and an upgrade is an explicit pin change, gated Relay-side only by `reach.min_daemon_version`.
-The Relay **image** is the evaluation artifact (ADR-0033 §5), so a `:latest` tag exists as a
-convenience, and every documented deployment, `deploy/production` included, pins the image by
-digest. There is no daemon image, ever (ADR-0033 §5).
+The Relay **image** is outside that rule because no documented deployment installs it by name: every one
+pins it by digest (ADR-0033, amended 2026-10-15), `deploy/production` included, so a tag only
+helps a person find a release. `:latest` exists for that convenience, and no documented
+deployment names it. There is no daemon image, ever (ADR-0033, amended 2026-10-15).
 
 ## Verify, then install
 
@@ -104,7 +105,9 @@ gh attestation verify "${ARTIFACT}" --repo Felag-Engineering/relay \
   --source-ref "refs/tags/v${VERSION}"
 ```
 
-The image is verified against its digest, with the same identity:
+The image is verified against its digest, with the same identity. Verifying it needs **cosign
+v3 or later**: its signature is a cosign v3 bundle stored as an OCI referrer, and cosign v2
+reports "no signatures found" for it.
 
 ```sh
 cosign verify ghcr.io/felag-engineering/relay@sha256:<digest> \
@@ -160,6 +163,17 @@ only then are `:<version>` and `:latest` created, as the last registry writes, s
 tag ever points at an unsigned image. A failure after the digest push but before the version
 tag leaves an untagged digest in the registry; a failure after the tag leaves a version
 without a Release until the re-run completes.
+
+**Bump the deployment pin after each release.** `deploy/production/docker-compose.yml` names
+one release's image by version and digest and does not follow `:latest`. Once a tag's run has
+passed, a human takes the new version's digest (the sign-and-push job's log names it, and
+`docker buildx imagetools inspect ghcr.io/felag-engineering/relay:<version>` shows the index
+digest), verifies it with cosign v3 or later exactly as in
+[Verify, then install](#verify-then-install) against `refs/tags/v<version>`, and changes the
+`image:` line to `ghcr.io/felag-engineering/relay:<version>@sha256:<digest>` in a reviewed pull
+request. An unattended run never pins a digest it resolved itself: the pin is a trust anchor,
+so a person checks it first, the same human step as the IaC role's pinned digest above. The
+stack is pinned to whichever release a human last verified, pre-releases included.
 
 The release jobs cannot be run from a tag by hand: `workflow_dispatch` is refused on a tag
 ref, because its dry run stamps a `-0.dev` version. Dispatch from a branch to rehearse
@@ -237,8 +251,8 @@ regardless.
 
 ## Out of scope (deliberate follow-ups, not omissions)
 
-- **A daemon image.** There is none, ever (ADR-0033 §5); the daemon reaches Nodes through
-  config management.
+- **A daemon image.** There is none, ever (ADR-0033, amended 2026-10-15); the daemon reaches
+  Nodes through config management.
 - **Operator-held signing keys.** Release signing is keyless, which sidesteps the deferred
   key-custody decision (the v0.8.0 operator-signing work). Revisit if a key-based scheme is
   wanted instead.
