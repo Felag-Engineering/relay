@@ -354,15 +354,12 @@ jobs:
       # and rewrites nothing (DI-24, RC-23, ADR-0033). nfpm is the one pinned under tools/nfpm, and
       # every manifest's mtime comes from SOURCE_DATE_EPOCH, so the rebuild pass, from its
       # different checkout path, must produce the same bytes; `reproducible` compares them.
-      # The catalog package is architecture-independent and built by the x86_64 passes only.
       - name: Build the packages from the staged binaries
         run: |
           set -euo pipefail
           version="${EXPECTED_TAG#v}"
-          catalog=()
-          if [ "${ARCH}" = x86_64 ]; then catalog=(--catalog); fi
           bash "$SRC/scripts/build-packages.sh" "${version}" "${ARCH}" \
-            "dist/relay-daemon-${version}-${PLATFORM}" dist/packages "${catalog[@]}" \
+            "dist/relay-daemon-${version}-${PLATFORM}" dist/packages \
             --relay "dist/relay-${version}-${PLATFORM}"
           (cd dist/packages && sha256sum -- * > "../SHA256SUMS.packages.${ARCH}")
           cat "dist/SHA256SUMS.packages.${ARCH}"
@@ -434,7 +431,6 @@ jobs:
               continue
             fi
             want=4
-            if [ "${arch}" = x86_64 ]; then want=6; fi
             n="$(find "${a}/packages" -maxdepth 1 -type f \( -name '*.deb' -o -name '*.rpm' \) | wc -l)"
             if [ "${n}" -ne "${want}" ]; then
               echo "::error::${arch}: ${n} packages built, expected ${want}"
@@ -518,8 +514,8 @@ jobs:
       #     /usr/bin/relay is the release binary (DI-24, RC-23);
       #   - their units and the example configuration and environment example are the attached
       #     standalone files, and all are in SHA256SUMS (DI-32);
-      #   - the catalog package carries the shipped catalog, and no package declares
-      #     configuration the package manager would preserve (ADR-0033, DI-29);
+      #   - each relay-daemon package carries the shipped catalog (DI-29), and no package
+      #     declares configuration the package manager would preserve (ADR-0033);
       #   - every package's identity -- name, epoch, version and architecture, computed from
       #     this release's version and the pass's architecture, never read from the package --
       #     and its whole content -- payload listing with modes and owners, no setuid,
@@ -560,9 +556,6 @@ jobs:
                   bash "${guard}" same "${f}" /usr/lib/systemd/system/relay-daemon.service dist/relay-daemon.service
                   bash "${guard}" same "${f}" /usr/share/relay-daemon/relay-daemon.env.example dist/relay-daemon.env.example
                   bash "${guard}" content "${f}" relay-daemon "${VERSION}" "${arch}"
-                  ;;
-                relay-read[_-]*)
-                  bash "${guard}" content "${f}" relay-read "${VERSION}" "${arch}"
                   ;;
                 relay_*.deb | relay-[0-9]*.rpm)
                   bash "${guard}" same "${f}" /usr/bin/relay "${relay_bin}"

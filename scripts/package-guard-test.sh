@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Proves scripts/build-packages.sh and scripts/package-guard.sh, the release's package build and
-# guards (DI-24, DI-32, RC-23), for the relay-daemon, catalog and Relay packages: two builds of
-# the same inputs from different paths, umasks and source mtimes are byte-identical; the payload
-# binary is the input binary byte for byte; the guards refuse a different binary, a missing or
-# wrong SHA256SUMS line, and a package that declares configuration files; the content guard
-# accepts the real packages and refuses, each by the check meant to catch it, a changed
-# maintainer script, a setuid or non-root entry, an extra payload file, a changed default Policy
-# or LICENSE, an extra relationship and an added trigger or scriptlet; the build refuses a
+# guards (DI-24, DI-32, RC-23), for the relay-daemon and Relay packages: two builds of the same
+# inputs from different paths, umasks and source mtimes are byte-identical; the payload binary
+# is the input binary byte for byte; the guards refuse a different binary, a missing or wrong
+# SHA256SUMS line, and a package that declares configuration files; the content guard accepts
+# the real packages and refuses, each by the check meant to catch it, a changed maintainer
+# script, a setuid or non-root entry, an extra payload file, a changed default Policy, LICENSE
+# or catalog, an extra relationship and an added trigger or scriptlet; the build refuses a
 # missing SOURCE_DATE_EPOCH, a malformed version and an unknown architecture; and the daemon's
 # maintainer scripts, run under a fake root, write nothing through a directory any account but
 # root can write.
@@ -59,15 +59,15 @@ cp "$work/one/relay-daemon" "$work/two/a/b/c/other-name"
 cp "$work/one/relay" "$work/two/a/b/c/other-relay"
 touch -d '2001-02-03' "$work/two/a/b/c/other-name" "$work/two/a/b/c/other-relay"
 
-if ! bash "$build" "$version" x86_64 "$work/one/relay-daemon" "$work/out1" --catalog --relay "$work/one/relay" >"$work/log1" 2>&1; then
+if ! bash "$build" "$version" x86_64 "$work/one/relay-daemon" "$work/out1" --relay "$work/one/relay" >"$work/log1" 2>&1; then
   cat "$work/log1"; bad "first build"; echo "package-guard-test: $pass passed, $fail failed"; exit 1
 fi
-(umask 077; bash "$build" "$version" x86_64 "$work/two/a/b/c/other-name" "$work/out2" --catalog --relay "$work/two/a/b/c/other-relay" >"$work/log2" 2>&1) \
+(umask 077; bash "$build" "$version" x86_64 "$work/two/a/b/c/other-name" "$work/out2" --relay "$work/two/a/b/c/other-relay" >"$work/log2" 2>&1) \
   || { cat "$work/log2"; bad "second build"; }
 
 shopt -s nullglob
 pkgs=("$work"/out1/*.deb "$work"/out1/*.rpm)
-if [ "${#pkgs[@]}" -eq 6 ]; then ok "six packages built"; else bad "six packages built (got ${#pkgs[@]})"; fi
+if [ "${#pkgs[@]}" -eq 4 ]; then ok "four packages built"; else bad "four packages built (got ${#pkgs[@]})"; fi
 for p in "${pkgs[@]}"; do
   n="$(basename "$p")"
   if cmp -s "$p" "$work/out2/$n"; then ok "reproducible: $n"; else bad "reproducible: $n"; fi
@@ -75,8 +75,6 @@ done
 
 deb="$(echo "$work"/out1/relay-daemon_*_amd64.deb)"
 rpmf="$(echo "$work"/out1/relay-daemon-*.x86_64.rpm)"
-read_deb="$(echo "$work"/out1/relay-read_*_all.deb)"
-read_rpm="$(echo "$work"/out1/relay-read-*.noarch.rpm)"
 relay_deb="$(echo "$work"/out1/relay_*_amd64.deb)"
 relay_rpm="$(echo "$work"/out1/relay-[0-9]*.x86_64.rpm)"
 
@@ -111,15 +109,15 @@ for p in "$deb" "$rpmf"; do
   expect_ok "$(basename "$p"): env example equals the standalone example" \
     bash "$guard" same "$p" /usr/share/relay-daemon/relay-daemon.env.example "$root/daemon/packaging/relay-daemon.env.example"
 done
-expect_ok "catalog deb carries the shipped catalog" \
-  bash "$guard" same "$read_deb" /etc/relay-daemon/templates.d/relay-read/catalog.toml "$root/daemon/packaging/templates.d/relay-read/catalog.toml"
-expect_ok "catalog rpm carries the shipped catalog" \
-  bash "$guard" same "$read_rpm" /etc/relay-daemon/templates.d/relay-read/catalog.toml "$root/daemon/packaging/templates.d/relay-read/catalog.toml"
+expect_ok "daemon deb carries the shipped catalog" \
+  bash "$guard" same "$deb" /etc/relay-daemon/templates.d/relay-read/catalog.toml "$root/daemon/packaging/templates.d/relay-read/catalog.toml"
+expect_ok "daemon rpm carries the shipped catalog" \
+  bash "$guard" same "$rpmf" /etc/relay-daemon/templates.d/relay-read/catalog.toml "$root/daemon/packaging/templates.d/relay-read/catalog.toml"
 
 # Every package listed in a sums file, and a missing or wrong line refused.
 (cd "$work/out1" && sha256sum -- *.deb *.rpm > "$work/SUMS")
 expect_ok "every package is listed" bash "$guard" listed "$work/SUMS" "${pkgs[@]}"
-grep -v relay-read_ "$work/SUMS" > "$work/SUMS.missing"
+grep -v relay-daemon_ "$work/SUMS" > "$work/SUMS.missing"
 expect_refused "a package missing from the sums file is refused" 1 bash "$guard" listed "$work/SUMS.missing" "${pkgs[@]}"
 sed "s/^[0-9a-f]\{8\}/00000000/" "$work/SUMS" > "$work/SUMS.wrong"
 expect_refused "a wrong digest is refused" 1 bash "$guard" listed "$work/SUMS.wrong" "$deb"
@@ -154,12 +152,17 @@ lacks() { ! grep -Eq "$1" <<<"$2"; }
 listing="$(dpkg-deb -c "$deb")"
 check "deb binary root 0755" lists '^-rwxr-xr-x root/root .* \./usr/bin/relay-daemon$' "$listing"
 check "deb unit root 0644" lists '^-rw-r--r-- root/root .* \./usr/lib/systemd/system/relay-daemon.service$' "$listing"
-check "daemon deb owns nothing under /etc" lacks '\./etc/' "$listing"
+# The shipped catalog is the only file the daemon packages own under /etc, so the live Policy
+# and the environment file are never package-owned.
+deb_etc_files() { awk '$1 ~ /^-/ && $6 ~ /^\.\/etc\// {print $6}' <<<"$1"; }
+rpm_etc_files() { awk '$1 ~ /^-/ && $NF ~ /^\/etc\// {print $NF}' <<<"$1"; }
+only_etc_file() { [ "$("$1" "$2")" = "$3" ]; }
+catalog_deb=./etc/relay-daemon/templates.d/relay-read/catalog.toml
+catalog_rpm=/etc/relay-daemon/templates.d/relay-read/catalog.toml
+check "daemon deb's only file under /etc is the catalog" only_etc_file deb_etc_files "$listing" "$catalog_deb"
 rlisting="$(rpm -qlvp "$rpmf" 2>/dev/null)"
 check "rpm binary root 0755" lists '^-rwxr-xr-x +1 root +root .* /usr/bin/relay-daemon$' "$rlisting"
-check "daemon rpm owns nothing under /etc" lacks ' /etc/' "$rlisting"
-check "catalog rpm requires relay-daemon" lists '^relay-daemon$' "$(rpm -qpR "$read_rpm" 2>/dev/null)"
-check "catalog deb depends on relay-daemon" lists '^relay-daemon$' "$(dpkg-deb -f "$read_deb" Depends)"
+check "daemon rpm's only file under /etc is the catalog" only_etc_file rpm_etc_files "$rlisting" "$catalog_rpm"
 relay_listing="$(dpkg-deb -c "$relay_deb")"
 check "relay deb binary root 0755" lists '^-rwxr-xr-x root/root .* \./usr/bin/relay$' "$relay_listing"
 check "relay deb owns nothing under /etc or /var" lacks '\./(etc|var)/' "$relay_listing"
@@ -172,14 +175,12 @@ check "relay rpm owns nothing under /etc or /var" lacks ' /(etc|var)/' "$relay_r
 for p in "$deb" "$rpmf"; do
   expect_ok "$(basename "$p"): content as expected" bash "$guard" content "$p" relay-daemon "$version" x86_64
 done
-for p in "$read_deb" "$read_rpm"; do
-  expect_ok "$(basename "$p"): content as expected" bash "$guard" content "$p" relay-read "$version" x86_64
-done
 for p in "$relay_deb" "$relay_rpm"; do
   expect_ok "$(basename "$p"): content as expected" bash "$guard" content "$p" relay "$version" x86_64
   expect_refused "$(basename "$p") checked as relay-daemon is refused" 1 bash "$guard" content "$p" relay-daemon "$version" x86_64
 done
-expect_refused "a daemon package checked as the catalog is refused" 1 bash "$guard" content "$deb" relay-read "$version" x86_64
+expect_refused "relay-read is not a package the guard knows" 2 bash "$guard" content "$deb" relay-read "$version" x86_64
+expect_refused "the retired --catalog flag is a usage error" 2 bash "$build" "$version" x86_64 "$work/one/relay-daemon" "$work/out3" --catalog
 expect_refused "a daemon deb checked as the Relay is refused" 1 bash "$guard" content "$deb" relay "$version" x86_64
 expect_refused "a daemon rpm checked as the Relay is refused" 1 bash "$guard" content "$rpmf" relay "$version" x86_64
 expect_refused "a malformed expected version is a usage error" 2 bash "$guard" content "$deb" relay-daemon '1.2.3"x' x86_64
@@ -200,12 +201,11 @@ cp -r "$root/tools/nfpm" "$fake/tools/nfpm"
 
 # tampered NAME EDIT...: builds packages from the fake tree after running EDIT in it, then
 # restores the tree, and prints the output directory. T_VERSION and T_ARCH override the version
-# and architecture built (the guard is still told the real ones); T_CATALOG=1 builds the
-# catalog package too, and T_RELAY=1 the Relay's packages.
+# and architecture built (the guard is still told the real ones); T_RELAY=1 builds the Relay's
+# packages too.
 tampered() {
   local name="$1"; shift
   local out="$work/t-$name" extra=()
-  if [ -n "${T_CATALOG:-}" ]; then extra+=(--catalog); fi
   if [ -n "${T_RELAY:-}" ]; then extra+=(--relay "$work/one/relay"); fi
   rm -rf "$fake.bak"; cp -r "$fake" "$fake.bak"
   (cd "$fake" && "$@") || { bad "tamper $name: edit failed"; return 1; }
@@ -229,7 +229,6 @@ refuses_both() {
   refused_for "rpm with $what is refused" "$rpm_reason" "$(echo "$out"/relay-daemon*.rpm)"
 }
 manifest=daemon/packaging/nfpm/relay-daemon.yaml
-read_manifest=daemon/packaging/nfpm/relay-read.yaml
 ident="name, epoch, version and architecture differs"
 refuses_both "a changed maintainer script" "postinst differs" "scriptlets and triggers differs" \
   "$(tampered script sh -c 'echo "touch /tmp/x" >> daemon/packaging/scripts/postinst.sh')"
@@ -244,7 +243,9 @@ refuses_both "a changed default Policy" "policy.default.toml differs" "policy.de
 refuses_both "a changed LICENSE" "LICENSE differs" "LICENSE differs" \
   "$(tampered license sh -c 'echo "changed" >> LICENSE')"
 refuses_both "an extra relationship" "control file differs" "relationships differs" \
-  "$(tampered relation sed -i 's|^mtime:|replaces:\n  - other-daemon\nconflicts:\n  - other-daemon\nprovides:\n  - other-daemon\nmtime:|' "$manifest")"
+  "$(tampered relation sed -i 's|^mtime:|depends:\n  - other-daemon\nmtime:|' "$manifest")"
+refuses_both "an injected provides" "control file differs" "relationships differs" \
+  "$(tampered provides sed -i 's|^mtime:|provides:\n  - other-daemon\nmtime:|' "$manifest")"
 refuses_both "an added trigger or scriptlet" "control archive members differs" "scriptlets and triggers differs" \
   "$(tampered trigger sed -i 's|^deb:|deb:\n  triggers:\n    interest:\n      - /usr/lib/x|; s|^rpm:|rpm:\n  scripts:\n    posttrans: "@SRC@/daemon/packaging/scripts/prerm.sh"|' "$manifest")"
 
@@ -270,15 +271,11 @@ sed -i -e 's/^Package: .*/Package: openssh-server/' -e 's/^Version: .*/Version: 
 dpkg-deb --root-owner-group -b "$rewrap/tree" "$rewrap/evil.deb" >/dev/null 2>&1 || bad "rewrap builds"
 refused_for "a hand re-wrapped deb with another name and epoch is refused" "control file differs" "$rewrap/evil.deb"
 
-# The catalog package: a changed Template and an extra payload file.
-refused_for "catalog deb with a changed Template is refused" "catalog.toml differs" \
-  "$(echo "$(T_CATALOG=1 tampered catalog sh -c 'echo "# changed" >> daemon/packaging/templates.d/relay-read/catalog.toml')"/relay-read*.deb)" relay-read
-refused_for "catalog rpm with a changed Template is refused" "catalog.toml differs" \
-  "$(echo "$work"/t-catalog/relay-read*.rpm)" relay-read
-refused_for "catalog deb with an extra payload file is refused" "payload listing differs" \
-  "$(echo "$(T_CATALOG=1 tampered catextra sed -i 's|^contents:|contents:\n  - src: "@SRC@/LICENSE"\n    dst: /etc/relay-daemon/templates.d/relay-read/extra.toml\n    file_info: {mode: 0o644, owner: root, group: root}|' "$read_manifest")"/relay-read*.deb)" relay-read
-refused_for "catalog rpm with an extra payload file is refused" "payload listing differs" \
-  "$(echo "$work"/t-catextra/relay-read*.rpm)" relay-read
+# The shipped catalog rides in the daemon packages: a changed Template and an extra Template file.
+refuses_both "a changed Template" "catalog.toml differs" "catalog.toml differs" \
+  "$(tampered catalog sh -c 'echo "# changed" >> daemon/packaging/templates.d/relay-read/catalog.toml')"
+refuses_both "an extra Template file" "payload listing differs" "payload listing differs" \
+  "$(tampered catextra sed -i 's|^contents:|contents:\n  - src: "@SRC@/LICENSE"\n    dst: /etc/relay-daemon/templates.d/relay-read/extra.toml\n    file_info: {mode: 0o644, owner: root, group: root}|' "$manifest")"
 
 # The Relay's packages, the same way. T_RELAY=1 builds them from the tampered tree.
 relay_manifest=relay/packaging/nfpm/relay.yaml

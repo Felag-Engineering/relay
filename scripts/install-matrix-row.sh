@@ -124,10 +124,6 @@ pkg_file() {
   return 0
 }
 
-# have_catalog: a relay-read package was built. The script names it only then, so it keeps
-# working once the catalog folds into relay-daemon.
-have_catalog() { [ -n "$(pkg_file new relay-read)" ]; }
-
 # need_pkgs: refuses unless the packages and the version this phase installs are present.
 need_pkgs() {
   local which n missing=""
@@ -155,9 +151,9 @@ build_set() {
   done
 }
 
-# full_set <old|new>: relay-daemon, relay-read if present, and relay. daemon_set leaves relay out.
-full_set() { build_set "$1" relay-daemon relay-read relay; }
-daemon_set() { build_set "$1" relay-daemon relay-read; }
+# full_set <old|new>: relay-daemon and relay. daemon_set leaves relay out.
+full_set() { build_set "$1" relay-daemon relay; }
+daemon_set() { build_set "$1" relay-daemon; }
 
 pm_log() { tee -a "$STATE/$PHASE.log"; }
 
@@ -204,15 +200,6 @@ pkg_installed() {
   fi
 }
 
-# deb_known <name>: dpkg still holds a record of the package, installed or removed with its
-# configuration (rc). A package with no conffile and no maintainer script leaves none on
-# remove, and apt-get cannot purge what dpkg does not know.
-deb_known() {
-  local status
-  status=$(dpkg-query -W -f '${db:Status-Status}' "$1" 2>/dev/null) || return 1
-  [ -n "$status" ] && [ "$status" != not-installed ]
-}
-
 installed_version() {
   if is_deb; then
     dpkg-query -W -f '${Version}' "$1" 2>/dev/null
@@ -244,8 +231,16 @@ versions_are_new() {
   return "$rc"
 }
 
-pkg_owns() {
-  if is_deb; then dpkg -S "$1" >/dev/null 2>&1; else rpm -qf "$1" >/dev/null 2>&1; fi
+# owned_by <name> <path>: <name> is the package that owns <path>, and no other.
+owned_by() {
+  local out
+  if is_deb; then
+    out=$(dpkg-query -S "$2" 2>/dev/null) || return 1
+    [ "$out" = "$1: $2" ]
+  else
+    out=$(rpm -qf --qf '%{NAME}\n' "$2" 2>/dev/null) || return 1
+    [ "$out" = "$1" ]
+  fi
 }
 
 # declares_no_config <name...>: no package declares configuration files.
@@ -280,9 +275,7 @@ pristine() {
   for p in "$DAEMON_ETC" "$DAEMON_STATE" /var/lib/relay-daemon-package; do
     if exists_path "$p"; then bad+=("$p present"); fi
   done
-  for n in relay-daemon relay-read; do
-    if pkg_installed "$n"; then bad+=("package $n installed"); fi
-  done
+  if pkg_installed relay-daemon; then bad+=("package relay-daemon installed"); fi
   if [ "$scope" = daemon+relay ]; then
     for p in /etc/relay /var/lib/relay /var/lib/relay-package; do
       if exists_path "$p"; then bad+=("$p present"); fi
@@ -359,13 +352,6 @@ rpm_signatures_ok() {
   return "$rc"
 }
 
-catalog_alone_is_refused() {
-  local f
-  f=$(pkg_file old relay-read)
-  if pm_install "$f" >/dev/null 2>&1; then return 1; fi
-  ! pkg_installed relay-read
-}
-
 never_started() {
   [ "$(unit_prop "$1" ExecMainStartTimestampMonotonic)" = 0 ]
 }
@@ -404,10 +390,6 @@ phase_install() {
       rpm_signatures_ok "$PKG_ROOT"/old/*.rpm "$PKG_ROOT"/new/*.rpm
   fi
 
-  if have_catalog; then
-    check DI-29 "the catalog package alone is refused: it requires the daemon" catalog_alone_is_refused
-  fi
-
   full_set old
   precondition "install the old package set" pm_install "${SET[@]}"
 
@@ -423,12 +405,8 @@ phase_install() {
   check DI-31 "the state directory is a 0700 directory" \
     bash -c '[ -d "$1" ] && [ "$(stat -c %a "$1")" = 700 ]' _ "$DAEMON_STATE"
 
-  check DI-29 "the catalog is installed and owned by a package" pkg_owns "$CATALOG"
-  if have_catalog; then
-    check DI-29 "no package declares configuration files" declares_no_config relay-daemon relay-read relay
-  else
-    check DI-29 "no package declares configuration files" declares_no_config relay-daemon relay
-  fi
+  check DI-29 "the catalog is installed and owned by relay-daemon" owned_by relay-daemon "$CATALOG"
+  check DI-29 "no package declares configuration files" declares_no_config relay-daemon relay
 
   check RC-24 "the relay account and the unit are installed, enabled per preset, never started" relay_installed_state
   check RC-24 "the install printed the configuration guide" grep_log 'relay init' install
@@ -651,11 +629,7 @@ phase_upgrade() {
     info "rpm -V after upgrade: $(rpm -V "$(rpm -qf "$CATALOG")" 2>&1 | tr '\n' ';')"
   fi
 
-  if have_catalog; then
-    check DI-33 "each package is installed at the new version" versions_are_new relay-daemon relay-read relay
-  else
-    check DI-33 "each package is installed at the new version" versions_are_new relay-daemon relay
-  fi
+  check DI-33 "each package is installed at the new version" versions_are_new relay-daemon relay
   check DI-26 "the edited Policy survives the upgrade" [ "$(sha "$POLICY")" = "$(cat "$STATE/policy-after-install")" ]
   check DI-27 "the edited env file survives the upgrade, still root:root 0600" \
     bash -c '[ "$(sha256sum < "$1" | cut -d" " -f1)" = "$2" ] && [ "$(stat -c "%U:%G %a" "$1")" = "root:root 600" ]' \
@@ -696,9 +670,7 @@ phase_remove() {
   printf '[[deny]]\nname = "file.read"\nargs = [["/etc/hostname"]]\n' >"$POLICY_DIR/50-operator.toml"
   chmod 0644 "$POLICY_DIR/50-operator.toml"
 
-  local names=(relay-daemon relay)
-  if pkg_installed relay-read; then names=(relay-read relay-daemon relay); fi
-  precondition "remove the packages" pm_remove "${names[@]}"
+  precondition "remove the packages" pm_remove relay-daemon relay
 
   check DI-31 "remove takes the binary, unit, Templates, enablement link and process" remove_took_the_payload
   check DI-31 "remove keeps the Policy, the Policy directory, the env file and the state" remove_keeps_state
@@ -739,11 +711,7 @@ purge_took_what_it_created() {
 
 phase_purge() {
   if is_deb; then
-    # relay-read ships no conffile and no maintainer script, so remove left dpkg no record
-    # of it; relay-daemon and relay keep theirs (their postrm runs the purge).
-    local names=(relay-daemon relay)
-    if have_catalog && deb_known relay-read; then names=(relay-daemon relay-read relay); fi
-    precondition "purge the packages" pm_purge "${names[@]}"
+    precondition "purge the packages" pm_purge relay-daemon relay
     check DI-31 "purge removes the Policy, env file, state and marker the package created" purge_took_what_it_created
     check DI-31 "purge names the Policy directory it left in place" grep_log 'policy.d' purge
     check RC-26 "purge moves the CA and the store aside together, root 0700, keeping the relay account" purged_state_is_aside
@@ -761,11 +729,7 @@ phase_purge() {
 
 # cycle_cleanup: the cleanup after a daemon-only cycle.
 cycle_cleanup() {
-  if is_deb; then
-    if have_catalog; then pm_purge relay-daemon relay-read; else pm_purge relay-daemon; fi
-  else
-    if have_catalog; then pm_remove relay-read relay-daemon; else pm_remove relay-daemon; fi
-  fi
+  if is_deb; then pm_purge relay-daemon; else pm_remove relay-daemon; fi
 }
 
 phase_cycles() {
@@ -815,13 +779,8 @@ phase_fips() {
 
   full_set new
   precondition "install the new package set under FIPS" pm_install "${SET[@]}"
-  if have_catalog; then
-    check DI-33 "each package is installed at the new version under FIPS" versions_are_new relay-daemon relay-read relay
-    pm_remove relay-read relay-daemon relay
-  else
-    check DI-33 "each package is installed at the new version under FIPS" versions_are_new relay-daemon relay
-    pm_remove relay-daemon relay
-  fi
+  check DI-33 "each package is installed at the new version under FIPS" versions_are_new relay-daemon relay
+  pm_remove relay-daemon relay
   reset_state
 }
 

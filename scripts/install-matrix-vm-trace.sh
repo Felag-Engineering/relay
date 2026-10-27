@@ -98,7 +98,7 @@ apt-get update
 apt-get install -y strace jq
 
 new_debs=()
-for name in relay-daemon relay-read relay; do
+for name in relay-daemon relay; do
   for f in "$PKGDIR/new/${name}_"*.deb; do
     if [ -e "$f" ]; then new_debs+=("$f"); break; fi
   done
@@ -383,7 +383,7 @@ fi
   echo
   echo "- kernel: $(uname -r)"
   echo "- systemd: $(systemctl --version | head -n 1)"
-  echo "- packages: $(dpkg-query -W -f '${Package} ${Version}; ' relay-daemon relay-read relay 2>/dev/null)"
+  echo "- packages: $(dpkg-query -W -f '${Package} ${Version}; ' relay-daemon relay 2>/dev/null)"
   echo "- installed unit vs daemon/packaging/relay-daemon.service: $unit_cmp"
   echo "- Seccomp: $seccomp_mode (want 2); NoNewPrivs: $no_new_privs (want 1); CapBnd: $cap_bnd, decoded $cap_bnd_decoded (want $cap_bnd_want, CAP_DAC_READ_SEARCH only)"
   echo "- NRestarts at the end: ${n_restarts:-0}; SIGSYS in this boot's journal: $sigsys"

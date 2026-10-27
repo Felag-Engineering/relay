@@ -13,14 +13,14 @@
 #       (no dpkg conffiles, no rpm %config): the live Policy and environment file are placed by
 #       maintainer scripts, never package-owned (ADR-0033), and the catalog's Templates are
 #       package-owned plain files (DI-29).
-#   package-guard.sh content <package> <relay-daemon|relay-read|relay> <version> <x86_64|aarch64>
+#   package-guard.sh content <package> <relay-daemon|relay> <version> <x86_64|aarch64>
 #       The package's whole content, read with the distribution's own tools and never with
 #       nfpm, equals what the repository says it must be:
 #         - its identity is the expected one, computed from <version> and <arch> and never
 #           read from the package: on .deb the whole control file equals
 #           <expected>/<name>.deb.control with only Version, Architecture and
-#           Installed-Size filled in (Package, epoch-free Version, amd64|arm64 or all); on .rpm
-#           NAME, EPOCHNUM (0), VERSION-RELEASE and ARCH (x86_64|aarch64 or noarch) are exact;
+#           Installed-Size filled in (Package, epoch-free Version, amd64|arm64); on .rpm
+#           NAME, EPOCHNUM (0), VERSION-RELEASE and ARCH (x86_64|aarch64) are exact;
 #         - its payload listing (path, type, mode, owner; and on rpm, file capabilities) equals
 #           <expected>/<name>.<deb|rpm>.files, and no entry is setuid, setgid or
 #           sticky or carries a file capability;
@@ -36,7 +36,7 @@
 #           Relay's sysusers entry, configuration template and guide, the catalog) is
 #           byte-equal to its source.
 #       <expected> and <scripts> are daemon/packaging/{expected,scripts} for relay-daemon and
-#       relay-read, and relay/packaging/{expected,scripts} for relay.
+#       relay/packaging/{expected,scripts} for relay.
 #       This is the check that does not trust the packager: both release passes run the same
 #       pinned nfpm, so their comparison proves determinism, not that nfpm put the right bytes
 #       in.
@@ -68,12 +68,12 @@ files_view() {
 # identity NAME VERSION ARCH: sets the identity the package must carry, derived from the
 # release version and architecture the caller expects and never read from the package:
 #   DEB_VERSION  <base>[~<pre>][+<meta>]-1   (no epoch)     RPM_VR  the same, pre's '-' as '_'
-#   DEB_ARCH     amd64 | arm64, or all for the catalog       RPM_ARCH  x86_64 | aarch64 | noarch
-#   RPM_ISA      the rpm architecture tag in Provides (x86-64 | aarch-64), empty for noarch
+#   DEB_ARCH     amd64 | arm64                               RPM_ARCH  x86_64 | aarch64
+#   RPM_ISA      the rpm architecture tag in Provides (x86-64 | aarch-64)
 # These are the transformations nfpm applies to a semver version; a package whose identity
 # differs, whatever produced it, is refused.
 identity() {
-  local name="$1" v="$2" arch="$3" base pre="" meta=""
+  local v="$2" arch="$3" base pre="" meta=""
   [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?(\+[0-9A-Za-z.]+)?$ ]] \
     || die "'$v' is not a release version"
   base="${v%%[-+]*}"
@@ -86,7 +86,6 @@ identity() {
     aarch64) DEB_ARCH=arm64; RPM_ARCH=aarch64; RPM_ISA=aarch-64 ;;
     *) die "unknown architecture '$arch'" ;;
   esac
-  if [ "$name" = relay-read ]; then DEB_ARCH=all; RPM_ARCH=noarch; RPM_ISA=""; fi
 }
 
 # relations_view PACKAGE: every relationship the package declares, with the EXPECTED
@@ -105,11 +104,9 @@ relations_view() {
       ;;
     *.rpm)
       vr="$RPM_VR"
-      local isa='s/^//'
-      if [ -n "$RPM_ISA" ]; then isa="s/(${RPM_ISA})/(@ISA@)/g"; fi
       for q in provides requires conflicts obsoletes recommends suggests supplements enhances; do
         rpm -qp "--$q" "$pkg" | sed "s/^/$q: /"
-      done | sed -e "s|${vr//./\\.}|@VR@|g" -e "$isa"
+      done | sed -e "s|${vr//./\\.}|@VR@|g" -e "s/(${RPM_ISA})/(@ISA@)/g"
       ;;
   esac
 }
@@ -130,7 +127,6 @@ control_expected() {
 # interpreter, and one newline after it (its --scripts query format ends each body with "\n");
 # those two are the only normalisation. The scriptlet bytes themselves must be the source's.
 rpm_scripts_expected() {
-  [ "$1" = relay-read ] && return 0
   local label src
   for pair in preinstall:preinst postinstall:postinst preuninstall:prerm postuninstall:postrm; do
     label="${pair%%:*}"; src="${pair##*:}"
@@ -152,7 +148,7 @@ content() {
   case "$pkg" in *.deb) fmt=deb; need dpkg-deb ;; *.rpm) fmt=rpm; need rpm; need rpm2cpio; need cpio ;;
     *) die "not a .deb or .rpm: $pkg" ;; esac
   case "$name" in
-    relay-daemon | relay-read) EXPECTED="$ROOT/daemon/packaging/expected"; SCRIPTS="$ROOT/daemon/packaging/scripts"; SCRIPTS_SRC=daemon/packaging/scripts ;;
+    relay-daemon) EXPECTED="$ROOT/daemon/packaging/expected"; SCRIPTS="$ROOT/daemon/packaging/scripts"; SCRIPTS_SRC=daemon/packaging/scripts ;;
     relay) EXPECTED="$ROOT/relay/packaging/expected"; SCRIPTS="$ROOT/relay/packaging/scripts"; SCRIPTS_SRC=relay/packaging/scripts ;;
     *) die "unknown package name: $name" ;;
   esac
@@ -187,17 +183,13 @@ content() {
   # Maintainer scripts.
   if [ "$fmt" = deb ]; then
     dpkg-deb --ctrl-tarfile "$pkg" | tar -t | sort > "$work/ctrl"
-    { echo ./control; echo ./md5sums
-      if [ "$name" != relay-read ]; then printf './%s\n' postinst postrm preinst prerm; fi
-    } | sort > "$work/ctrl.want"
+    { echo ./control; echo ./md5sums; printf './%s\n' postinst postrm preinst prerm; } | sort > "$work/ctrl.want"
     compare_view "control archive members" "$work/ctrl.want" "$work/ctrl"
-    if [ "$name" != relay-read ]; then
-      mkdir "$work/c"
-      dpkg-deb --ctrl-tarfile "$pkg" | tar -xf - -C "$work/c"
-      for s in preinst postinst prerm postrm; do
-        cmp -s "$work/c/$s" "$SCRIPTS/$s.sh" || refuse "$PKG_NAME: $s differs from $SCRIPTS_SRC/$s.sh"
-      done
-    fi
+    mkdir "$work/c"
+    dpkg-deb --ctrl-tarfile "$pkg" | tar -xf - -C "$work/c"
+    for s in preinst postinst prerm postrm; do
+      cmp -s "$work/c/$s" "$SCRIPTS/$s.sh" || refuse "$PKG_NAME: $s differs from $SCRIPTS_SRC/$s.sh"
+    done
   else
     rpm -qp --scripts --triggers --filetriggers "$pkg" > "$work/scripts" 2>/dev/null
     rpm_scripts_expected "$name" > "$work/scripts.want"
@@ -215,8 +207,9 @@ content() {
 /usr/share/doc/relay-daemon/LICENSE:LICENSE
 /usr/share/doc/relay-daemon/daemon-privilege-posture.md:docs/operations/daemon-privilege-posture.md
 /usr/lib/systemd/system/relay-daemon.service:daemon/packaging/relay-daemon.service
-/usr/share/relay-daemon/relay-daemon.env.example:daemon/packaging/relay-daemon.env.example"
-  elif [ "$name" = relay ]; then
+/usr/share/relay-daemon/relay-daemon.env.example:daemon/packaging/relay-daemon.env.example
+/etc/relay-daemon/templates.d/relay-read/catalog.toml:daemon/packaging/templates.d/relay-read/catalog.toml"
+  else
     pairs="/usr/lib/systemd/system/relay.service:relay/packaging/relay.service
 /usr/lib/sysusers.d/relay.conf:relay/packaging/relay.sysusers.conf
 /usr/share/relay/relay.toml.in:relay/packaging/relay.toml.in
@@ -224,8 +217,6 @@ content() {
 /usr/share/relay/configuration-guide.txt:relay/packaging/configuration-guide.txt
 /usr/share/doc/relay/configuration-guide.txt:relay/packaging/configuration-guide.txt
 /usr/share/doc/relay/LICENSE:LICENSE"
-  else
-    pairs="/etc/relay-daemon/templates.d/relay-read/catalog.toml:daemon/packaging/templates.d/relay-read/catalog.toml"
   fi
   while IFS=: read -r path src; do
     member "$pkg" "$path" > "$work/m" 2>/dev/null || refuse "$PKG_NAME has no $path"
@@ -311,7 +302,7 @@ case "$cmd" in
     echo "package-guard: $(basename "$pkg") declares no configuration files"
     ;;
   content)
-    [ "$#" -eq 5 ] || die "usage: content <package> <relay-daemon|relay-read|relay> <version> <x86_64|aarch64>"
+    [ "$#" -eq 5 ] || die "usage: content <package> <relay-daemon|relay> <version> <x86_64|aarch64>"
     content "$(realpath "$2")" "$3" "$4" "$5"
     ;;
   *) die "usage: $0 same|listed|no-config|content ..." ;;

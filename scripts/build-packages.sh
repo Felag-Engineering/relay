@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Builds the relay-daemon .deb and .rpm, optionally the relay-read catalog packages and the
-# Relay's own .deb and .rpm, from binaries the release already built and guarded (DI-24, DI-29,
-# RC-23).
+# Builds the relay-daemon .deb and .rpm, which carry the shipped read catalog, and optionally
+# the Relay's own .deb and .rpm, from binaries the release already built and guarded (DI-24,
+# DI-29, RC-23).
 #
 #   scripts/build-packages.sh <version> <x86_64|aarch64> <relay-daemon-binary> <outdir>
-#                             [--catalog] [--relay <relay-binary>]
+#                             [--relay <relay-binary>]
 #
 # Packaging builds nothing: the binary is placed byte for byte, and nothing here compiles,
 # strips or rewrites it (ADR-0033). SOURCE_DATE_EPOCH must be set (the release sets it to the
@@ -17,18 +17,16 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: $0 <version> <x86_64|aarch64> <relay-daemon-binary> <outdir> [--catalog] [--relay <relay-binary>]" >&2
+  echo "usage: $0 <version> <x86_64|aarch64> <relay-daemon-binary> <outdir> [--relay <relay-binary>]" >&2
   exit 2
 }
 
 if [ "$#" -lt 4 ]; then usage; fi
 version="$1" arch="$2" bin="$3" out="$4"
 shift 4
-catalog=no
 relay_bin=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --catalog) catalog=yes; shift ;;
     --relay) [ "$#" -ge 2 ] || usage; relay_bin="$2"; shift 2 ;;
     *) usage ;;
   esac
@@ -98,11 +96,6 @@ pkg() {
 daemon_manifest="$(render "$root/daemon/packaging/nfpm/relay-daemon.yaml")"
 pkg "$daemon_manifest" deb
 pkg "$daemon_manifest" rpm
-if [ "$catalog" = yes ]; then
-  read_manifest="$(render "$root/daemon/packaging/nfpm/relay-read.yaml")"
-  pkg "$read_manifest" deb
-  pkg "$read_manifest" rpm
-fi
 if [ -n "$relay_bin" ]; then
   relay_manifest="$(render "$root/relay/packaging/nfpm/relay.yaml")"
   pkg "$relay_manifest" deb
