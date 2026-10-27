@@ -5,7 +5,8 @@
 //! refused by name) exits non-zero, so a broken Node shows as failed and
 //! `Restart=on-failure` never mistakes it for an idle one. So does a state
 //! directory that is group- or world-writable, refused by path before anything
-//! in it is read.
+//! in it is read. It also covers the refusal to start when the identity or the
+//! dedup store cannot be opened (DI-19).
 //!
 //! Drives the compiled binary, like `shutdown_signal.rs`, with a cleared
 //! environment so nothing from the test runner reaches it.
@@ -20,7 +21,8 @@ use common::TempDir;
 use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
-use std::process::{Command, Output, Stdio};
+use std::process::{Child, Command, ExitStatus, Output, Stdio};
+use std::time::{Duration, Instant};
 
 /// A well-formed join string, so a test can tell "the join string was ignored"
 /// from "it was refused".
@@ -183,6 +185,7 @@ fn names(dir: &Path) -> Vec<String> {
     out
 }
 
+// Proves DI-19.
 #[test]
 fn partial_identity_exits_nonzero() {
     let state = TempDir::new("exit-partial-identity");
@@ -232,4 +235,144 @@ fn an_untrusted_state_dir_exits_nonzero_naming_it() {
         stderr.contains("group- or world-writable"),
         "stderr: {stderr}"
     );
+}
+
+/// How long a spawned daemon may take to exit or to dial; a refusal is immediate, so
+/// this only bounds a hang if the start were not refused.
+const DEADLINE: Duration = Duration::from_secs(15);
+
+/// The daemon against `state`, built as `run` builds it, with the Template root pointed
+/// into the state directory as well so nothing the host has installed can reach the
+/// result, and stdout and stderr piped.
+fn daemon_cmd(state: &Path, extra: &[(&str, String)]) -> Command {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_relay-daemon"));
+    cmd.env_clear()
+        .env("RELAY_STATE_DIR", state)
+        .env("RELAY_POLICY_PATH", state.join("no-such-policy.toml"))
+        .env("RELAY_TEMPLATE_DIR", state.join("no-such-templates"))
+        .env("RUST_LOG", "info")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    for (k, v) in extra {
+        cmd.env(k, v);
+    }
+    cmd
+}
+
+/// Waits for `child` to exit; past `deadline` it is killed. The status is `None` when it
+/// had to be killed. Returns the status, stdout and stderr, and always reaps.
+fn wait_bounded(mut child: Child, deadline: Duration) -> (Option<ExitStatus>, String, String) {
+    let start = Instant::now();
+    let exited = loop {
+        if child.try_wait().expect("poll the daemon").is_some() {
+            break true;
+        }
+        if start.elapsed() >= deadline {
+            let _ = child.kill();
+            break false;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    };
+    let out = child.wait_with_output().expect("reap the daemon");
+    (
+        exited.then_some(out.status),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+fn no_connection(listener: &std::net::TcpListener) -> bool {
+    matches!(
+        listener.accept(),
+        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock
+    )
+}
+
+fn local_listener() -> (std::net::TcpListener, String) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    listener.set_nonblocking(true).expect("nonblocking");
+    let addr = format!("https://{}", listener.local_addr().unwrap());
+    (listener, addr)
+}
+
+/// An identity or a dedup store that cannot be opened refuses the start: the daemon
+/// exits non-zero, dials nothing, and changes nothing in the state directory. The
+/// positive control proves the same setup, unsabotaged, does dial, so each refusal is
+/// the sabotage's and not the setup's. No chmod: the cases hold for root.
+// Proves DI-19.
+#[test]
+fn unopenable_identity_or_dedup_store_refuses_start() {
+    {
+        let state = TempDir::new("exit-di19-control");
+        seed_identity(state.path(), None);
+        let (listener, addr) = local_listener();
+        let mut child = daemon_cmd(state.path(), &[("RELAY_ADDRESS", addr)])
+            .spawn()
+            .expect("spawn relay-daemon");
+        let start = Instant::now();
+        let mut connected = false;
+        while !connected
+            && start.elapsed() < DEADLINE
+            && child.try_wait().expect("poll the daemon").is_none()
+        {
+            connected = listener.accept().is_ok();
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        let _ = child.kill();
+        let out = child.wait_with_output().expect("reap the daemon");
+        assert!(
+            connected,
+            "an unsabotaged enrolled start dials the Relay; stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    type Sabotage = fn(&Path);
+    let cases: [(&str, Sabotage, Option<&str>); 3] = [
+        (
+            "identity: key.pem is a directory",
+            |state| {
+                std::fs::remove_file(state.join("key.pem")).expect("remove key.pem");
+                std::fs::create_dir(state.join("key.pem")).expect("key.pem as a directory");
+            },
+            None,
+        ),
+        (
+            "identity: cert.pem is not a certificate",
+            |state| std::fs::write(state.join("cert.pem"), "not a pem").expect("overwrite cert"),
+            Some("do not hold a usable identity"),
+        ),
+        (
+            "dedup store: seen-tasks is a regular file",
+            |state| std::fs::write(state.join("seen-tasks"), "").expect("seen-tasks as a file"),
+            None,
+        ),
+    ];
+    for (label, sabotage, stderr_says) in cases {
+        let state = TempDir::new("exit-di19-case");
+        seed_identity(state.path(), None);
+        sabotage(state.path());
+        let (listener, addr) = local_listener();
+        let before = names(state.path());
+
+        let child = daemon_cmd(state.path(), &[("RELAY_ADDRESS", addr)])
+            .spawn()
+            .expect("spawn relay-daemon");
+        let (status, _stdout, stderr) = wait_bounded(child, DEADLINE);
+
+        let status = status.unwrap_or_else(|| panic!("{label}: the daemon kept running"));
+        assert!(
+            !status.success(),
+            "{label}: must exit non-zero, got {status:?}; stderr: {stderr}"
+        );
+        assert!(
+            no_connection(&listener),
+            "{label}: the daemon dialled the Relay"
+        );
+        assert_eq!(names(state.path()), before, "{label}: state changed");
+        if let Some(text) = stderr_says {
+            assert!(stderr.contains(text), "{label}: stderr: {stderr}");
+        }
+    }
 }

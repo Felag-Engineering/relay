@@ -635,6 +635,100 @@ mod tests {
         );
     }
 
+    /// This process's umask, read from its status file. Never set by a test: the umask
+    /// is process-global, and the strict-umask lane runs the whole suite under its own.
+    fn process_umask() -> u32 {
+        let status = std::fs::read_to_string("/proc/self/status").expect("read /proc/self/status");
+        let value = status
+            .lines()
+            .find_map(|l| l.strip_prefix("Umask:"))
+            .expect("the status file has a Umask: line");
+        u32::from_str_radix(value.trim(), 8).expect("the umask is octal")
+    }
+
+    /// Every entry under `path`, `path` included, without following symlinks.
+    fn entries_under(path: &Path, out: &mut Vec<(PathBuf, std::fs::Metadata)>) {
+        let meta = std::fs::symlink_metadata(path).expect("stat entry");
+        let is_dir = meta.is_dir();
+        out.push((path.to_path_buf(), meta));
+        if is_dir {
+            for entry in std::fs::read_dir(path).expect("read dir") {
+                entries_under(&entry.expect("dir entry").path(), out);
+            }
+        }
+    }
+
+    /// The daemon requests modes and never forces them: nothing an enrollment creates,
+    /// directories included, is wider than the umask allows. This test and the dedup
+    /// store's cover the daemon's two file writers, `identity.rs` and `dedup.rs`;
+    /// `daemon/tests/policy_never_opened_for_write.rs` pins that there are no others.
+    /// The default lane runs under the host's umask; the strict-umask lane
+    /// (`make test-strict-umask`, part of `make verify` and CI) runs this same test at
+    /// 077, which is the tightened-umask proof. Both state directory levels are missing,
+    /// so the code under test makes them.
+    // Proves DI-11.
+    #[tokio::test]
+    async fn declared_mode_is_a_ceiling_under_umask() {
+        use std::os::unix::fs::MetadataExt;
+
+        let umask = process_umask();
+        let base = TempDir::created("umask-ceiling");
+        let top = base.path().join("a");
+        let dir = top.join("state");
+        let _prepared = crate::identity::prepare_state_dir(&dir).expect("prepare_state_dir");
+
+        ensure_enrolled_with(&dir, ADDR, "test-host", 0, move |csr_pem| async move {
+            let ca_kp = rcgen::KeyPair::generate().expect("ca keygen");
+            let ca_params = rcgen::CertificateParams::new(vec![]).expect("ca params");
+            let ca_cert = ca_params.self_signed(&ca_kp).expect("ca cert");
+            let issued = crate::identity::test_ca::sign_csr(&csr_pem, &ca_params, &ca_kp);
+            Ok(("node-umask-001".to_string(), issued.pem(), ca_cert.pem()))
+        })
+        .await
+        .expect("ensure_enrolled_with should succeed");
+
+        let mut entries = Vec::new();
+        entries_under(&top, &mut entries);
+        // Two directories and the five files an enrollment writes; a stray extra, such as
+        // a lock file, is held to the same rules.
+        assert!(entries.len() >= 7, "visited only {entries:?}");
+        for (path, meta) in &entries {
+            let mode = meta.mode();
+            assert!(!meta.file_type().is_symlink(), "{path:?} is a symlink");
+            assert_eq!(
+                mode & 0o777 & umask,
+                0,
+                "{path:?} has mode {:04o}, wider than umask {umask:04o} allows",
+                mode & 0o777
+            );
+            if meta.is_dir() {
+                let parent = std::fs::symlink_metadata(path.parent().expect("parent")).unwrap();
+                assert_eq!(mode & 0o5000, 0, "{path:?} has setuid or sticky bits");
+                // mkdir inherits setgid from the parent; the daemon sets none.
+                assert_eq!(
+                    mode & 0o2000,
+                    parent.mode() & 0o2000,
+                    "{path:?} gained a setgid bit its parent lacks"
+                );
+            } else {
+                assert_eq!(mode & 0o6000, 0, "{path:?} has setuid or setgid bits");
+            }
+        }
+
+        for d in [&top, &dir] {
+            mode_assert::assert_within(d, 0o700, 0o077, "state directory");
+        }
+        mode_assert::assert_within(&dir.join("key.pem"), 0o600, 0o077, "key.pem");
+        for name in [
+            "cert.pem",
+            "ca_bundle.pem",
+            "node_id",
+            crate::identity::PERSISTED_ADDR_FILE,
+        ] {
+            mode_assert::assert_within(&dir.join(name), 0o644, 0o022, name);
+        }
+    }
+
     #[tokio::test]
     async fn enrolled_node_without_persisted_address_is_not_backfilled() {
         let dir = TempDir::new("no-backfill");
