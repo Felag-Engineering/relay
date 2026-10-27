@@ -577,12 +577,6 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 		return nil, nil, fmt.Errorf("enrollment minter: %w", err)
 	}
 	revocationSvc := revocation.NewService(denylist, conns, reg, tokenSvc, revocation.WithLogger(logger))
-	enrollSrv := enroll.NewServer(tokenSvc, relayCA, reg,
-		enroll.WithPostEnrollRevocationCheck(tokenSvc, revocationSvc),
-		enroll.WithRateLimiter(limiter),
-		enroll.WithEnrollmentObserver(appMetrics),
-		enroll.WithAttemptObserver(eventsink.Enrollment(eventBus)),
-		enroll.WithServerLogger(logger))
 
 	// policyCache is the display-only effective-Policy cache (invariant 12 /
 	// ADR-0002): the tunnel handler records what a daemon reports in
@@ -660,9 +654,17 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 	accountAdmin := capability.NewAccountAdmin(freezeControl, st.Accounts(), apiTokenSvc)
 
 	// The tag write (ADR-0050): the one writer of tag: labels, over the same
-	// Control and so the same Recorder, RoleGate and trail. The Control API is
-	// its only holder; no other surface is handed it.
+	// Control and so the same Recorder, RoleGate and trail. The Control API holds
+	// it for tag writes and the Enrollment service for a token's initial tags
+	// (WriteInitialTags); no other surface is handed it.
 	tagWriter := capability.NewTagWriter(freezeControl, reg)
+	enrollSrv := enroll.NewServer(tokenSvc, relayCA, reg,
+		enroll.WithPostEnrollRevocationCheck(tokenSvc, revocationSvc),
+		enroll.WithRateLimiter(limiter),
+		enroll.WithEnrollmentObserver(appMetrics),
+		enroll.WithAttemptObserver(eventsink.Enrollment(eventBus)),
+		enroll.WithServerLogger(logger),
+		enroll.WithInitialTagWriter(initialTagWriter{tags: tagWriter}))
 
 	// The read lane: filtered, paginated queries over the audit trail
 	// and over Jobs/Tasks — one seam, shared by every surface (invariant 10).

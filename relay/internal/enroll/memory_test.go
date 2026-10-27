@@ -24,7 +24,7 @@ func TestMemoryRepository_Save_Unknown(t *testing.T) {
 
 func TestMemoryRepository_Create_Duplicate(t *testing.T) {
 	repo := NewMemoryRepository()
-	tok := &Token{ID: "dup-id", SecretHash: []byte{1}, Scope: []string{"relay:x=1"}}
+	tok := &Token{ID: "dup-id", SecretHash: []byte{1}, InitialTags: []string{"tag:x=1"}}
 
 	if err := repo.Create(context.Background(), tok); err != nil {
 		t.Fatalf("first Create: %v", err)
@@ -39,9 +39,9 @@ func TestMemoryRepository_Create_Duplicate(t *testing.T) {
 func TestMemoryRepository_ByID_ReturnsCopy(t *testing.T) {
 	repo := NewMemoryRepository()
 	tok := &Token{
-		ID:         "copy-id",
-		SecretHash: []byte{1, 2},
-		Scope:      []string{"relay:x=1"},
+		ID:          "copy-id",
+		SecretHash:  []byte{1, 2},
+		InitialTags: []string{"tag:x=1"},
 	}
 
 	if err := repo.Create(context.Background(), tok); err != nil {
@@ -56,7 +56,7 @@ func TestMemoryRepository_ByID_ReturnsCopy(t *testing.T) {
 	// Mutate the returned copy.
 	got.Uses = 99
 	got.SecretHash[0] = 0xFF
-	got.Scope[0] = "relay:tampered=true"
+	got.InitialTags[0] = "tag:tampered=true"
 
 	// A subsequent ByID must return the original unmodified data.
 	got2, err := repo.ByID(context.Background(), "copy-id")
@@ -69,8 +69,8 @@ func TestMemoryRepository_ByID_ReturnsCopy(t *testing.T) {
 	if got2.SecretHash[0] != 1 {
 		t.Errorf("stored SecretHash[0] changed to %d, want 1", got2.SecretHash[0])
 	}
-	if got2.Scope[0] != "relay:x=1" {
-		t.Errorf("stored Scope[0] changed to %q, want relay:x=1", got2.Scope[0])
+	if got2.InitialTags[0] != "tag:x=1" {
+		t.Errorf("stored InitialTags[0] changed to %q, want tag:x=1", got2.InitialTags[0])
 	}
 }
 
@@ -78,9 +78,9 @@ func TestMemoryRepository_ByID_ReturnsCopy(t *testing.T) {
 func TestMemoryRepository_Save_PersistsMutation(t *testing.T) {
 	repo := NewMemoryRepository()
 	tok := &Token{
-		ID:         "mutate-id",
-		SecretHash: []byte{1},
-		Scope:      []string{"relay:x=1"},
+		ID:          "mutate-id",
+		SecretHash:  []byte{1},
+		InitialTags: []string{"tag:x=1"},
 	}
 
 	if err := repo.Create(context.Background(), tok); err != nil {

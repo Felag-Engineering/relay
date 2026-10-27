@@ -10,6 +10,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"log/slog"
 	"net"
 	"slices"
@@ -29,11 +30,12 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// mintToken creates an Enrollment Token in svc with the given scope and a 1-hour TTL.
-// It returns the stored *Token (for tok.ID, used in Revoke tests) and the plaintext credential.
-func mintToken(t *testing.T, svc *Service, scope []string) (*Token, string) {
+// mintToken creates an Enrollment Token in svc, minted by a human Account, naming
+// the given initial tags, with a 1-hour TTL. It returns the stored *Token (for
+// tok.ID, used in Revoke tests) and the plaintext credential.
+func mintToken(t *testing.T, svc *Service, tags []string) (*Token, string) {
 	t.Helper()
-	tok, plaintext, err := svc.Create(context.Background(), scope, time.Hour)
+	tok, plaintext, err := svc.Create(context.Background(), tags, time.Hour, asHuman)
 	if err != nil {
 		t.Fatalf("mintToken: %v", err)
 	}
@@ -57,6 +59,34 @@ func genCSR(t *testing.T, cn string) []byte {
 		t.Fatalf("genCSR: create CSR: %v", err)
 	}
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: der})
+}
+
+// writtenTags is one WriteInitialTags call a fakeTagWriter saw.
+type writtenTags struct {
+	minter  MintedBy
+	tokenID string
+	nodeID  string
+	tags    []string
+}
+
+// fakeTagWriter is an InitialTagWriter that records its calls, or fails.
+type fakeTagWriter struct {
+	calls []writtenTags
+	err   error
+
+	// checks counts CheckInitialTags calls; checkErr is what each returns.
+	checks   int
+	checkErr error
+}
+
+func (f *fakeTagWriter) CheckInitialTags(_ context.Context, _ MintedBy, _ []string) error {
+	f.checks++
+	return f.checkErr
+}
+
+func (f *fakeTagWriter) WriteInitialTags(_ context.Context, minter MintedBy, tokenID, nodeID string, tags []string) error {
+	f.calls = append(f.calls, writtenTags{minter: minter, tokenID: tokenID, nodeID: nodeID, tags: slices.Clone(tags)})
+	return f.err
 }
 
 // newEnrollServer is a test helper that wires up a Server with the provided Service.
@@ -85,27 +115,25 @@ func parseCert(t *testing.T, certPEM []byte) *x509.Certificate {
 }
 
 // TestEnroll_Success verifies the happy path: a valid token + valid CSR + node: self_labels
-// produce a signed cert (CN == NodeId, not the CSR CN), the correct CA bundle, relay: labels
-// from the token scope, and a fully-populated registry entry.
+// produce a signed cert (CN == NodeId, not the CSR CN), the correct CA bundle, relay:node-id
+// as the only relay: label stamped or assigned, the token's initial tags written as the
+// minting Account's act, and a fully-populated registry entry.
 //
-// The "relay:marker" entry (no `=`) pins splitScopeEntry's empty-value
-// semantics all the way through: RED ON step (k) or (l) dropping a no-`=`
-// entry instead of storing it with an empty value.
+// RED ON: stamping any other relay: label, or a token's tags written as
+// anyone but the Account that minted it, or not written at all.
 //
-// Note what this canNOT pin, and why nothing can: switching splitScopeEntry
-// to cut on the LAST `=` is behaviour-preserving. It is THE ONE
-// DECOMPOSITION — validateScope splits the same way it stamps — and any
-// entry carrying two `=` is refused under either cut, because `=` is outside
-// registry.WellFormedLabel's allowlist for both halves (pinned by
-// TestCreate_InvalidScope's "two equals signs" row). With zero or one `=`,
-// first and last are the same character.
-// Proves EN-12, EN-13.
+// Proves EN-41, EN-13.
 func TestEnroll_Success(t *testing.T) {
 	svc := NewService(NewMemoryRepository())
-	srv, reg, realCA := newEnrollServer(t, svc)
+	tags := &fakeTagWriter{}
+	realCA, err := catest.Generate()
+	if err != nil {
+		t.Fatalf("catest.Generate: %v", err)
+	}
+	reg := registry.NewInMemory()
+	srv := NewServer(svc, realCA, reg, WithInitialTagWriter(tags))
 
-	scope := []string{"relay:role=web", "relay:env=prod", "relay:marker"}
-	tok, plaintext := mintToken(t, svc, scope)
+	tok, plaintext := mintToken(t, svc, []string{"tag:role=web", "tag:env=prod", "tag:marker="})
 
 	req := &relayv1.EnrollRequest{
 		EnrollmentToken: plaintext,
@@ -143,25 +171,13 @@ func TestEnroll_Success(t *testing.T) {
 		t.Error("CaBundle does not match CA bundle")
 	}
 
-	// AssignedLabels must carry the relay: namespace prefix in Key.
-	if len(resp.AssignedLabels) != 3 {
-		t.Fatalf("AssignedLabels len: got %d, want 3", len(resp.AssignedLabels))
-	}
-	assignedByKey := make(map[string]string, len(resp.AssignedLabels))
-	for _, l := range resp.AssignedLabels {
-		assignedByKey[l.Key] = l.Value
-	}
-	if assignedByKey["relay:role"] != "web" {
-		t.Errorf("AssignedLabels[relay:role]: got %q, want web", assignedByKey["relay:role"])
-	}
-	if assignedByKey["relay:env"] != "prod" {
-		t.Errorf("AssignedLabels[relay:env]: got %q, want prod", assignedByKey["relay:env"])
-	}
-	if v, ok := assignedByKey["relay:marker"]; !ok || v != "" {
-		t.Errorf("AssignedLabels[relay:marker]: got (%q, present=%v), want (\"\", true)", v, ok)
+	// AssignedLabels is exactly relay:node-id with the Node's ID: no tag is a relay: label.
+	if len(resp.AssignedLabels) != 1 ||
+		resp.AssignedLabels[0].Key != "relay:node-id" || resp.AssignedLabels[0].Value != resp.NodeId {
+		t.Errorf("AssignedLabels = %v, want exactly relay:node-id=%s", resp.AssignedLabels, resp.NodeId)
 	}
 
-	// Registry entry: node: labels from self_labels (bare keys), relay: labels from scope (bare keys).
+	// Registry entry: node: labels from self_labels (bare keys), relay:node-id alone.
 	node, ok := reg.Get(resp.NodeId)
 	if !ok {
 		t.Fatal("Node not found in registry")
@@ -169,14 +185,8 @@ func TestEnroll_Success(t *testing.T) {
 	if node.NodeLabels["role"] != "web" {
 		t.Errorf("NodeLabels[role]: got %q, want web", node.NodeLabels["role"])
 	}
-	if node.RelayLabels["role"] != "web" {
-		t.Errorf("RelayLabels[role]: got %q, want web", node.RelayLabels["role"])
-	}
-	if node.RelayLabels["env"] != "prod" {
-		t.Errorf("RelayLabels[env]: got %q, want prod", node.RelayLabels["env"])
-	}
-	if v, ok := node.RelayLabels["marker"]; !ok || v != "" {
-		t.Errorf("RelayLabels[marker]: got (%q, present=%v), want (\"\", true)", v, ok)
+	if len(node.RelayLabels) != 1 || node.RelayLabels[registry.NodeIDKey] != resp.NodeId {
+		t.Errorf("RelayLabels = %v, want exactly node-id=%s", node.RelayLabels, resp.NodeId)
 	}
 	if node.EnrollingTokenID != tok.ID {
 		t.Errorf("EnrollingTokenID: got %q, want %q", node.EnrollingTokenID, tok.ID)
@@ -185,16 +195,180 @@ func TestEnroll_Success(t *testing.T) {
 	if node.Facts.Hostname != "host-1" {
 		t.Errorf("Facts.Hostname: got %q, want host-1", node.Facts.Hostname)
 	}
+
+	// The initial tags are written once, on this Node, as the minting Account.
+	if len(tags.calls) != 1 {
+		t.Fatalf("WriteInitialTags called %d times, want 1", len(tags.calls))
+	}
+	call := tags.calls[0]
+	wantMinter := MintedBy{AccountID: "acct-alice", Account: "alice", Role: "admin", Human: true}
+	if call.minter != wantMinter {
+		t.Errorf("tags written as %+v, want the minting Account %+v", call.minter, wantMinter)
+	}
+	if call.nodeID != resp.NodeId {
+		t.Errorf("tags written on %q, want %q", call.nodeID, resp.NodeId)
+	}
+	if call.tokenID != tok.ID {
+		t.Errorf("tags written naming token %q, want %q", call.tokenID, tok.ID)
+	}
+	if tags.checks != 1 {
+		t.Errorf("CheckInitialTags called %d times, want 1 (before the write)", tags.checks)
+	}
+	if !slices.Equal(call.tags, []string{"tag:role=web", "tag:env=prod", "tag:marker="}) {
+		t.Errorf("tags written = %v", call.tags)
+	}
+}
+
+// TestEnroll_NoInitialTagsWritesNone checks that a token naming no initial tag
+// enrolls without a tag write, so a server with no writer wired still enrolls it.
+//
+// Proves EN-41.
+func TestEnroll_NoInitialTagsWritesNone(t *testing.T) {
+	svc := NewService(NewMemoryRepository())
+	srv, reg, _ := newEnrollServer(t, svc)
+	_, plaintext := mintToken(t, svc, nil)
+
+	resp, err := srv.Enroll(context.Background(), &relayv1.EnrollRequest{
+		EnrollmentToken: plaintext,
+		Csr:             genCSR(t, "cn"),
+	})
+	if err != nil {
+		t.Fatalf("Enroll: %v", err)
+	}
+	node, _ := reg.Get(resp.NodeId)
+	if len(node.RelayLabels) != 1 || node.RelayLabels[registry.NodeIDKey] != resp.NodeId {
+		t.Errorf("RelayLabels = %v, want exactly node-id", node.RelayLabels)
+	}
+}
+
+// TestEnroll_InitialTagWriteFailureFailsEnrollment checks that a tag write that
+// fails fails the enrollment closed, with the same opaque error as any internal
+// failure and no distinct detail on the wire.
+//
+// Proves EN-41.
+func TestEnroll_InitialTagWriteFailureFailsEnrollment(t *testing.T) {
+	svc := NewService(NewMemoryRepository())
+	realCA, err := catest.Generate()
+	if err != nil {
+		t.Fatalf("catest.Generate: %v", err)
+	}
+	failing := &fakeTagWriter{err: errors.New("store is on fire")}
+	srv := NewServer(svc, realCA, registry.NewInMemory(), WithInitialTagWriter(failing))
+	_, plaintext := mintToken(t, svc, []string{"tag:env=prod"})
+
+	resp, err := srv.Enroll(context.Background(), &relayv1.EnrollRequest{
+		EnrollmentToken: plaintext,
+		Csr:             genCSR(t, "cn"),
+	})
+	if resp != nil || status.Code(err) != codes.Internal {
+		t.Fatalf("Enroll = (%v, %v), want Internal", resp, err)
+	}
+	if strings.Contains(err.Error(), "fire") {
+		t.Errorf("the writer's error reached the wire: %v", err)
+	}
+}
+
+// TestEnroll_InitialTagWriteFailureDenylistsTheNode checks that when the tag
+// write fails after the Node is recorded, the just-minted node_id is
+// self-denylisted so the identity enrollment signed cannot dial a Tunnel, and
+// the answer is the opaque Internal error.
+//
+// Proves EN-13.
+func TestEnroll_InitialTagWriteFailureDenylistsTheNode(t *testing.T) {
+	svc := NewService(NewMemoryRepository())
+	realCA, err := catest.Generate()
+	if err != nil {
+		t.Fatalf("catest.Generate: %v", err)
+	}
+	den := &fakeDenylister{}
+	failing := &fakeTagWriter{err: errors.New("store is on fire")}
+	srv := NewServer(svc, realCA, registry.NewInMemory(),
+		WithPostEnrollRevocationCheck(svc, den), WithInitialTagWriter(failing))
+	srv.newID = func() (string, error) { return "node-tagfail-1", nil }
+	_, plaintext := mintToken(t, svc, []string{"tag:env=prod"})
+
+	resp, err := srv.Enroll(context.Background(), &relayv1.EnrollRequest{
+		EnrollmentToken: plaintext,
+		Csr:             genCSR(t, "cn"),
+	})
+	if resp != nil || status.Code(err) != codes.Internal {
+		t.Fatalf("Enroll = (%v, %v), want Internal", resp, err)
+	}
+	if len(den.revoked) != 1 || den.revoked[0] != "node-tagfail-1" {
+		t.Errorf("denylisted = %v, want [node-tagfail-1]", den.revoked)
+	}
+}
+
+// TestEnroll_InitialTagsWithoutWriterFailsClosed checks that a token naming
+// initial tags never enrolls a Node on a server with no tag writer, rather than
+// dropping the tags silently.
+//
+// Proves EN-41.
+func TestEnroll_InitialTagsWithoutWriterFailsClosed(t *testing.T) {
+	svc := NewService(NewMemoryRepository())
+	srv, _, _ := newEnrollServer(t, svc)
+	_, plaintext := mintToken(t, svc, []string{"tag:env=prod"})
+
+	_, err := srv.Enroll(context.Background(), &relayv1.EnrollRequest{
+		EnrollmentToken: plaintext,
+		Csr:             genCSR(t, "cn"),
+	})
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("Enroll: want Internal, got %v", err)
+	}
+}
+
+// TestEnroll_RefusedMinterLeavesNoNodeAndBurnsNoUse checks that a token whose
+// minter the capability layer refuses to let write tags is turned away before
+// the use is counted, the CSR signed or the Node recorded: the wire answer is
+// the one every token rejection returns, the registry stays empty, no tag is
+// written, and the token still has every use.
+//
+// Proves EN-44.
+func TestEnroll_RefusedMinterLeavesNoNodeAndBurnsNoUse(t *testing.T) {
+	svc := NewService(NewMemoryRepository())
+	realCA, err := catest.Generate()
+	if err != nil {
+		t.Fatalf("catest.Generate: %v", err)
+	}
+	reg := registry.NewInMemory()
+	refusing := &fakeTagWriter{checkErr: errors.New("only a human Account writes tags")}
+	srv := NewServer(svc, realCA, reg, WithInitialTagWriter(refusing))
+	tok, plaintext := mintToken(t, svc, []string{"tag:env=prod"})
+
+	resp, err := srv.Enroll(context.Background(), &relayv1.EnrollRequest{
+		EnrollmentToken: plaintext,
+		Csr:             genCSR(t, "cn"),
+	})
+	if resp != nil || status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("Enroll = (%v, %v), want PermissionDenied", resp, err)
+	}
+	if strings.Contains(err.Error(), "human") {
+		t.Errorf("the refusal's reason reached the wire: %v", err)
+	}
+	if n := len(reg.List()); n != 0 {
+		t.Errorf("registry has %d Nodes after a refused minter, want 0", n)
+	}
+	if len(refusing.calls) != 0 {
+		t.Errorf("tags were written for a refused minter: %+v", refusing.calls)
+	}
+	stored, err := svc.repo.ByID(context.Background(), tok.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Uses != 0 {
+		t.Errorf("token Uses = %d after a refusal, want 0", stored.Uses)
+	}
 }
 
 // TestEnroll_IdentityNotFromCSR proves that the issued cert CN is the Relay-assigned
 // node_id and not the CN the daemon placed in the CSR (ADR-0006).
-// Proves EN-12.
+// Proves EN-41.
 func TestEnroll_IdentityNotFromCSR(t *testing.T) {
 	svc := NewService(NewMemoryRepository())
 	srv, _, _ := newEnrollServer(t, svc)
 
-	_, plaintext := mintToken(t, svc, []string{"relay:env=prod"})
+	_, plaintext := mintToken(t, svc, nil)
 
 	const csrCN = "daemon-wants-this-identity"
 	req := &relayv1.EnrollRequest{
@@ -241,7 +415,7 @@ func TestEnroll_ExpiredToken(t *testing.T) {
 	svc, clk := newTestService(t) // fakeNow defined in token_test.go
 	srv, reg, _ := newEnrollServer(t, svc)
 
-	_, plaintext := mintToken(t, svc, []string{"relay:env=prod"})
+	_, plaintext := mintToken(t, svc, nil)
 	clk.advance(2 * time.Hour) // past the 1-hour TTL
 
 	req := &relayv1.EnrollRequest{
@@ -265,7 +439,7 @@ func TestEnroll_RevokedToken(t *testing.T) {
 	svc := NewService(NewMemoryRepository())
 	srv, reg, _ := newEnrollServer(t, svc)
 
-	tok, plaintext := mintToken(t, svc, []string{"relay:env=prod"})
+	tok, plaintext := mintToken(t, svc, nil)
 	if err := svc.Revoke(context.Background(), tok.ID); err != nil {
 		t.Fatalf("Revoke: %v", err)
 	}
@@ -291,7 +465,7 @@ func TestEnroll_ExhaustedToken(t *testing.T) {
 	svc := NewService(NewMemoryRepository())
 	srv, reg, _ := newEnrollServer(t, svc)
 
-	_, pt, err := svc.Create(context.Background(), []string{"relay:env=prod"}, time.Hour, WithMaxUses(1))
+	_, pt, err := svc.Create(context.Background(), nil, time.Hour, WithMaxUses(1))
 	if err != nil {
 		t.Fatalf("Create single-use: %v", err)
 	}
@@ -328,7 +502,7 @@ func TestEnroll_BadCSR(t *testing.T) {
 	svc := NewService(NewMemoryRepository())
 	srv, reg, _ := newEnrollServer(t, svc)
 
-	_, plaintext := mintToken(t, svc, []string{"relay:env=prod"})
+	_, plaintext := mintToken(t, svc, nil)
 
 	req := &relayv1.EnrollRequest{
 		EnrollmentToken: plaintext,
@@ -350,7 +524,7 @@ func TestEnroll_BadCSR(t *testing.T) {
 func TestEnroll_SelfReportedFactsAreBounded(t *testing.T) {
 	svc := NewService(NewMemoryRepository())
 	srv, reg, _ := newEnrollServer(t, svc)
-	_, plaintext := mintToken(t, svc, []string{"relay:env=prod"})
+	_, plaintext := mintToken(t, svc, nil)
 
 	resp, err := srv.Enroll(context.Background(), &relayv1.EnrollRequest{
 		EnrollmentToken: plaintext,
@@ -384,7 +558,7 @@ func TestEnroll_RefusedFactsAreLoggedByNameNeverByValue(t *testing.T) {
 	logs := &strings.Builder{}
 	srv := NewServer(svc, realCA, registry.NewInMemory(),
 		WithServerLogger(slog.New(slog.NewJSONHandler(logs, nil))))
-	_, plaintext := mintToken(t, svc, []string{"relay:env=prod"})
+	_, plaintext := mintToken(t, svc, nil)
 
 	if _, err := srv.Enroll(context.Background(), &relayv1.EnrollRequest{
 		EnrollmentToken: plaintext,
@@ -422,7 +596,7 @@ func TestEnroll_RefusedFactsAreLoggedByNameNeverByValue(t *testing.T) {
 func TestEnroll_RefusedSelfLabelKeyIsBoundedInTheError(t *testing.T) {
 	svc := NewService(NewMemoryRepository())
 	srv, _, _ := newEnrollServer(t, svc)
-	_, plaintext := mintToken(t, svc, []string{"relay:env=prod"})
+	_, plaintext := mintToken(t, svc, nil)
 
 	huge := "node:" + strings.Repeat("k", 1<<20) + "="
 	_, err := srv.Enroll(context.Background(), &relayv1.EnrollRequest{
@@ -485,7 +659,7 @@ func TestEnroll_NonNodeSelfLabel(t *testing.T) {
 			svc := NewService(NewMemoryRepository())
 			srv, reg, _ := newEnrollServer(t, svc)
 
-			_, plaintext := mintToken(t, svc, []string{"relay:env=prod"})
+			_, plaintext := mintToken(t, svc, nil)
 
 			req := &relayv1.EnrollRequest{
 				EnrollmentToken: plaintext,
@@ -521,7 +695,7 @@ func TestEnroll_NonNodeSelfLabel(t *testing.T) {
 func TestEnroll_SelfLabelAtTheLengthBoundsIsAccepted(t *testing.T) {
 	svc := NewService(NewMemoryRepository())
 	srv, reg, _ := newEnrollServer(t, svc)
-	_, plaintext := mintToken(t, svc, []string{"relay:env=prod"})
+	_, plaintext := mintToken(t, svc, nil)
 
 	key := strings.Repeat("k", registry.MaxLabelKeyLen)
 	value := strings.Repeat("v", registry.MaxLabelValueLen)
@@ -581,7 +755,7 @@ func TestEnroll_PostUpsertRevocationCheck_ClosesRaceWindow(t *testing.T) {
 	svc := NewService(NewMemoryRepository())
 	srv, reg, den := buildRaceServer(t, svc)
 
-	tok, plaintext := mintToken(t, svc, []string{"relay:env=prod"})
+	tok, plaintext := mintToken(t, svc, nil)
 
 	// Inject newID to simulate the race: revoke the token mid-enrollment (after
 	// Validate succeeds, before Upsert) and return a deterministic node id.
@@ -619,7 +793,7 @@ func TestEnroll_PostUpsertRevocationCheck_AllowsCleanEnroll(t *testing.T) {
 	svc := NewService(NewMemoryRepository())
 	srv, _, den := buildRaceServer(t, svc)
 
-	_, plaintext := mintToken(t, svc, []string{"relay:env=prod"})
+	_, plaintext := mintToken(t, svc, nil)
 
 	req := &relayv1.EnrollRequest{
 		EnrollmentToken: plaintext,
@@ -641,7 +815,7 @@ func TestEnroll_NoPostCheck_BackwardCompatible(t *testing.T) {
 	svc := NewService(NewMemoryRepository())
 	srv, _, _ := newEnrollServer(t, svc) // plain NewServer, no option
 
-	_, plaintext := mintToken(t, svc, []string{"relay:env=prod"})
+	_, plaintext := mintToken(t, svc, nil)
 
 	req := &relayv1.EnrollRequest{
 		EnrollmentToken: plaintext,
@@ -690,10 +864,10 @@ func TestEnroll_RateLimited_PerIP(t *testing.T) {
 		MaxTrackedIPs:    100,
 	})
 
-	_, plaintext1 := mintToken(t, svc, []string{"relay:env=prod"})
-	_, plaintext2 := mintToken(t, svc, []string{"relay:env=prod"})
-	_, plaintext3 := mintToken(t, svc, []string{"relay:env=prod"})
-	_, plaintext4 := mintToken(t, svc, []string{"relay:env=prod"})
+	_, plaintext1 := mintToken(t, svc, nil)
+	_, plaintext2 := mintToken(t, svc, nil)
+	_, plaintext3 := mintToken(t, svc, nil)
+	_, plaintext4 := mintToken(t, svc, nil)
 
 	ctx1 := ctxFromIP("10.0.0.1")
 	ctx2 := ctxFromIP("10.0.0.2")
@@ -747,7 +921,7 @@ func TestEnroll_RateLimited_NoTokenOracle(t *testing.T) {
 		MaxTrackedIPs:    100,
 	})
 
-	_, validPlaintext := mintToken(t, svc, []string{"relay:env=prod"})
+	_, validPlaintext := mintToken(t, svc, nil)
 	ctx := ctxFromIP("10.0.0.42")
 
 	// Valid token — denied at the rate-limit gate before any token validation.
@@ -788,8 +962,8 @@ func TestEnroll_RateLimited_Global(t *testing.T) {
 		MaxTrackedIPs:    100,
 	})
 
-	_, pt1 := mintToken(t, svc, []string{"relay:env=prod"})
-	_, pt2 := mintToken(t, svc, []string{"relay:env=prod"})
+	_, pt1 := mintToken(t, svc, nil)
+	_, pt2 := mintToken(t, svc, nil)
 
 	// First enroll (IP-a) consumes the sole global token.
 	if _, err := srv.Enroll(ctxFromIP("10.0.0.1"), &relayv1.EnrollRequest{
@@ -821,8 +995,8 @@ func TestEnroll_RegistryAtCapacity(t *testing.T) {
 		MaxTrackedIPs:    100,
 	}, registry.WithMaxNodes(1))
 
-	_, pt1 := mintToken(t, svc, []string{"relay:env=prod"})
-	_, pt2 := mintToken(t, svc, []string{"relay:env=prod"})
+	_, pt1 := mintToken(t, svc, nil)
+	_, pt2 := mintToken(t, svc, nil)
 	ctx := ctxFromIP("10.0.0.1")
 
 	// First enroll fills the cap.
@@ -874,16 +1048,40 @@ func TestEnroll_EmptyTokenOrCSR(t *testing.T) {
 	}
 }
 
-// TestEnroll_LegacyMalformedScopeIsRefusedBeforeAnySideEffect pins seam (ii)
-// (#555): a Token whose scope predates registry.WellFormedLabel can still be
-// sitting in the Repository — an upgrade does not retroactively validate a
-// stored row — and Enroll must refuse it exactly like any other rejected
-// token, with no certificate signed and no registry row written.
+// TestEnroll_LegacyMalformedScopeIsRefusedBeforeAnySideEffect pins that a Token
+// whose legacy scope predates registry.WellFormedLabel can still be sitting in
+// the Repository — an upgrade does not retroactively validate a stored row —
+// and Enroll must refuse it exactly like any other rejected token, with no
+// certificate signed and no registry row written.
 //
-// The legacy token is written straight into the Repository, bypassing
-// Create, which now refuses this scope itself.
+// The legacy token is written straight into the Repository, bypassing Create.
 // Proves EN-26.
 func TestEnroll_LegacyMalformedScopeIsRefusedBeforeAnySideEffect(t *testing.T) {
+	assertStoredTokenRefusedBeforeAnySideEffect(t, &Token{
+		LegacyScope: []string{"relay:quarantine\u200b=on"},
+	})
+}
+
+// TestEnroll_StoredMalformedInitialTagIsRefusedBeforeAnySideEffect pins the same
+// for a stored token whose initial tags no longer hold (a row edited outside the
+// mint): no certificate, no registry row, no tag written, the same opaque
+// rejection as every other token.
+//
+// Proves EN-26, EN-40.
+func TestEnroll_StoredMalformedInitialTagIsRefusedBeforeAnySideEffect(t *testing.T) {
+	assertStoredTokenRefusedBeforeAnySideEffect(t, &Token{
+		InitialTags:        []string{"tag:quarantine\u200b=on"},
+		CreatedBy:          "alice:admin",
+		CreatedByAccountID: "acct-alice",
+		CreatedByHuman:     true,
+	})
+}
+
+// assertStoredTokenRefusedBeforeAnySideEffect seeds stored (with a known secret
+// and a live expiry) straight into a Repository and checks that Enroll refuses
+// it as any rejected token is refused, with the dedicated attempt reason.
+func assertStoredTokenRefusedBeforeAnySideEffect(t *testing.T, stored *Token) {
+	t.Helper()
 	repo := NewMemoryRepository()
 	svc := NewService(repo)
 	obs := &capturingAttemptObserver{}
@@ -891,16 +1089,13 @@ func TestEnroll_LegacyMalformedScopeIsRefusedBeforeAnySideEffect(t *testing.T) {
 
 	const secret = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 	hash := sha256.Sum256([]byte(secret))
-	legacy := &Token{
-		ID:         "deadbeefdeadbeefdeadbeefdeadbeef",
-		SecretHash: hash[:],
-		Scope:      []string{"relay:quarantine\u200b=on"},
-		ExpiresAt:  time.Now().Add(time.Hour),
+	stored.ID = "deadbeefdeadbeefdeadbeefdeadbeef"
+	stored.SecretHash = hash[:]
+	stored.ExpiresAt = time.Now().Add(time.Hour)
+	if err := repo.Create(context.Background(), stored); err != nil {
+		t.Fatalf("seeding stored token: %v", err)
 	}
-	if err := repo.Create(context.Background(), legacy); err != nil {
-		t.Fatalf("seeding legacy token: %v", err)
-	}
-	plaintext := legacy.ID + secretSep + secret
+	plaintext := stored.ID + secretSep + secret
 
 	resp, err := srv.Enroll(context.Background(), &relayv1.EnrollRequest{
 		EnrollmentToken: plaintext,
@@ -920,7 +1115,7 @@ func TestEnroll_LegacyMalformedScopeIsRefusedBeforeAnySideEffect(t *testing.T) {
 
 	revokedSvc := NewService(NewMemoryRepository())
 	revokedSrv, _, _ := newEnrollServer(t, revokedSvc)
-	revokedTok, revokedPlaintext := mintToken(t, revokedSvc, []string{"relay:env=prod"})
+	revokedTok, revokedPlaintext := mintToken(t, revokedSvc, nil)
 	if err := revokedSvc.Revoke(context.Background(), revokedTok.ID); err != nil {
 		t.Fatalf("Revoke: %v", err)
 	}
@@ -929,7 +1124,7 @@ func TestEnroll_LegacyMalformedScopeIsRefusedBeforeAnySideEffect(t *testing.T) {
 		Csr:             genCSR(t, "cn"),
 	})
 	if err.Error() != revokedErr.Error() {
-		t.Errorf("scope refusal message = %q, want identical to a revoked token's %q — a distinct message is an oracle", err.Error(), revokedErr.Error())
+		t.Errorf("stored-token refusal message = %q, want identical to a revoked token's %q — a distinct message is an oracle", err.Error(), revokedErr.Error())
 	}
 
 	// RED ON: moving the gate to step (k), which runs after

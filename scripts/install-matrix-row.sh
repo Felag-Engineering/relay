@@ -554,7 +554,7 @@ no_join_string_on_disk() {
 facts_dispatch_succeeds() {
   local i
   for ((i = 0; i < 30; i++)); do
-    relay_api POST /api/v1/operations '{"selector":"relay:env=matrix","operation":"system.facts"}'
+    relay_api POST /api/v1/operations '{"selector":"tag:env=matrix","operation":"system.facts"}'
     case "$API_STATUS" in
       200)
         if printf '%s' "$API_BODY" | jq -e '(.results | length) > 0 and all(.results[]; .outcome == "success")' >/dev/null; then
@@ -592,7 +592,7 @@ phase_join() {
 
   # The mint must name its use limit (EN-31). The Node enrolls once; a restart reuses its
   # identity, not the token.
-  relay_api POST /api/v1/enrollment-tokens '{"scope":["relay:env=matrix"],"ttl_seconds":3600,"max_uses":1}'
+  relay_api POST /api/v1/enrollment-tokens '{"initial_tags":["tag:env=matrix"],"ttl_seconds":3600,"max_uses":1}'
   precondition "the Enrollment Token mint answered 201 (got $API_STATUS)" [ "$API_STATUS" = 201 ]
   join=$(printf '%s' "$API_BODY" | jq -r '.join_string // empty')
   API_BODY=""

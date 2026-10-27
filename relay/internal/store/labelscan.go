@@ -20,8 +20,8 @@ import (
 //
 // It is EXACT, not approximate, because both write ingresses are gated:
 // protoconv.ParseNodeLabel refuses a malformed node-space value at Hello/
-// Enroll, and enroll.validateScope refuses a malformed relay-space value at
-// both Service.Create and Service.Validate (label.go's node and relay seams).
+// Enroll, and enroll.validateLegacyScope refuses a malformed relay-space value
+// of a stored legacy scope at Service.Validate (label.go's node and relay seams).
 // No tag row can predate its gate, so tags are not scanned. The population
 // this scan finds — rows written before whichever gate now applies to that
 // namespace — IS the entire affected set; there is no unaudited third path a
@@ -280,8 +280,7 @@ func declinedPart(wellFormed func(key, value string) bool, key, value string) De
 // hazard payload into a new renderer for no operational gain. In relay-space
 // the value is operator-authored rather than forged, but node_id + namespace
 // + key already identify the exact row, and the operator's authoritative
-// source for the value is the store row or the token scope they are
-// re-minting (both named in the runbook). Part is the deliberate substitute
+// source for the value is the store row (named in the runbook). Part is the deliberate substitute
 // for what the value would have told an operator: one of three bounded
 // values instead of arbitrary, possibly-hazardous bytes.
 //

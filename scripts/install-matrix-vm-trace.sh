@@ -53,7 +53,7 @@ FIXTURE_HOST=relay-matrix.test
 CAPCHECK=/etc/relay-trace-capcheck
 CAPCHECK_LINE=relay-trace-capability-ok
 DUMMY_UNIT=relay-trace-dummy.service
-SELECTOR='relay:env=matrix'
+SELECTOR='tag:env=matrix'
 
 export DEBIAN_FRONTEND=noninteractive
 umask 022

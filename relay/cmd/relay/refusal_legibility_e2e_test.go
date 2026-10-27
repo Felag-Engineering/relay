@@ -30,7 +30,7 @@ import (
 var deniedOperationArgs = map[string]any{
 	"operation":    "service.restart",
 	"args":         map[string]string{"unit": "sshd"},
-	"selector":     "relay:env=test",
+	"selector":     "tag:env=test",
 	"wait_seconds": 300,
 }
 
@@ -172,7 +172,7 @@ func TestRefusalLegibilityE2E_PlanAndApplyFrameTheSameBoundary(t *testing.T) {
 	planArgs := map[string]any{
 		"operation": "service.restart",
 		"args":      map[string]string{"unit": "sshd"},
-		"selector":  "relay:env=test",
+		"selector":  "tag:env=test",
 		"plan":      true,
 	}
 	planRes := relaytest.CallTool(t, session, "run_operation", planArgs)

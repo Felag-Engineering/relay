@@ -46,7 +46,7 @@ func TestEventSeam_RealDaemonConnectDisconnect(t *testing.T) {
 
 	lis, deps := startRealServer(t)
 
-	_, plaintext, err := deps.tokens.Create(ctx, []string{"relay:env=prod"}, time.Hour)
+	_, plaintext, err := deps.tokens.Create(ctx, nil, time.Hour)
 	if err != nil {
 		t.Fatalf("seed Enrollment Token: %v", err)
 	}

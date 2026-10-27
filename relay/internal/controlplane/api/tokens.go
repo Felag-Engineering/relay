@@ -19,17 +19,17 @@ import (
 const maxTTLSeconds = 365 * 24 * 60 * 60
 
 // mintTokenRequest is the POST /api/v1/enrollment-tokens request body.
-// Scope must be non-empty and every entry relay:-prefixed with a non-empty
-// bare key and a (possibly empty) value whose every byte is in
-// [A-Za-z0-9._-] (enforced by enroll.Service.Create -> enroll.validateScope,
-// registry.WellFormedLabel, ADR-0006) — this handler never
-// re-implements or loosens that check. The use limit is required and decided by
-// enroll.UseLimit (EN-31); this handler only passes MaxUses and Unlimited through.
+// InitialTags is optional: each entry is a tag in written form, tag:key=value,
+// checked by enroll.Service.Create through registry.ParseInitialTags
+// (EN-40, EN-42) — this handler never re-implements or loosens that check, and
+// the rule that only a human Account names a tag (EN-44) is enroll's too. The
+// use limit is required and decided by enroll.UseLimit (EN-31); this handler
+// only passes MaxUses and Unlimited through.
 type mintTokenRequest struct {
-	Scope      []string `json:"scope"`
-	TTLSeconds int64    `json:"ttl_seconds"`
-	MaxUses    int      `json:"max_uses"`
-	Unlimited  bool     `json:"unlimited"`
+	InitialTags []string `json:"initial_tags"`
+	TTLSeconds  int64    `json:"ttl_seconds"`
+	MaxUses     int      `json:"max_uses"`
+	Unlimited   bool     `json:"unlimited"`
 }
 
 // mintTokenResponse is the POST /api/v1/enrollment-tokens response body.
@@ -39,26 +39,25 @@ type mintTokenRequest struct {
 // persisted, logged, or audited (recordLifecycle below records only the
 // token's non-secret id).
 type mintTokenResponse struct {
-	ID         string   `json:"id"`
-	Token      string   `json:"token"`
-	JoinString string   `json:"join_string"`
-	Scope      []string `json:"scope"`
-	ExpiresAt  string   `json:"expires_at"`
-	MaxUses    int      `json:"max_uses"`
-	Unlimited  bool     `json:"unlimited"`
+	ID          string   `json:"id"`
+	Token       string   `json:"token"`
+	JoinString  string   `json:"join_string"`
+	InitialTags []string `json:"initial_tags"`
+	ExpiresAt   string   `json:"expires_at"`
+	MaxUses     int      `json:"max_uses"`
+	Unlimited   bool     `json:"unlimited"`
 }
 
-// handleMintToken implements POST /api/v1/enrollment-tokens: mint a scoped
-// Enrollment Token via TokenMinter.Mint, audit the mint (KindTokenMint),
+// handleMintToken implements POST /api/v1/enrollment-tokens: mint an
+// Enrollment Token naming initial tags via TokenMinter.Mint, audit the mint (KindTokenMint),
 // and return the plaintext credential exactly once (201). The mint names its use
 // limit, a positive max_uses or unlimited (EN-31); an invalid one is a 400.
 //
 // **Requires `admin`** (ADR-0032 §5), checked before the body is even
-// decoded. A token's scope becomes the enrolling Node's relay: labels, and
-// relay: is the namespace the security-sensitive lane targets (invariant 7,
-// ADR-0020) — so minting manufactures Nodes that quarantine, remediation, and
-// secret distribution will treat as authoritative. Without the floor, a viewer
-// could stamp `relay:env=prod` onto anything that presented the token.
+// decoded. Minting makes every Node that presents the token join the fleet
+// carrying its initial tags, which a Selector then targets (ADR-0050), so the
+// act is an admin's. A machine Account is refused when it names any initial
+// tag (EN-44), and any relay: label is refused naming it, whoever mints (EN-35).
 func handleMintToken(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		p, ok := principal(w, r)
@@ -80,14 +79,19 @@ func handleMintToken(d Deps) http.HandlerFunc {
 			return
 		}
 
-		opts := []enroll.Option{enroll.WithCreatedBy(p.Attribution())}
+		opts := []enroll.Option{enroll.WithMinter(p.AccountID, p)}
 		limit := enroll.UseLimit{MaxUses: req.MaxUses, Unlimited: req.Unlimited}
 
-		minted, err := d.Tokens.Mint(r.Context(), req.Scope, time.Duration(req.TTLSeconds)*time.Second, limit, opts...)
+		minted, err := d.Tokens.Mint(r.Context(), req.InitialTags, time.Duration(req.TTLSeconds)*time.Second, limit, opts...)
 		if err != nil {
-			if errors.Is(err, enroll.ErrInvalidScope) || errors.Is(err, enroll.ErrInvalidTTL) ||
+			if errors.Is(err, enroll.ErrInvalidInitialTags) || errors.Is(err, enroll.ErrInvalidTTL) ||
 				errors.Is(err, enroll.ErrInvalidUseLimit) {
 				writeProblem(w, http.StatusBadRequest, "invalid enrollment token request", err.Error())
+				return
+			}
+			if errors.Is(err, enroll.ErrInitialTagsNeedHuman) {
+				recordLifecycle(r.Context(), d, p, audit.KindRefusal, "", err.Error())
+				writeProblem(w, http.StatusForbidden, "forbidden", err.Error())
 				return
 			}
 			writeProblem(w, http.StatusInternalServerError, "mint enrollment token failed", "")
@@ -98,13 +102,13 @@ func handleMintToken(d Deps) http.HandlerFunc {
 		recordLifecycle(r.Context(), d, p, audit.KindTokenMint, "", "token_id="+tok.ID)
 
 		writeJSON(w, http.StatusCreated, mintTokenResponse{
-			ID:         tok.ID,
-			Token:      minted.Plaintext(),
-			JoinString: minted.JoinString(),
-			Scope:      tok.Scope,
-			ExpiresAt:  tok.ExpiresAt.UTC().Format(time.RFC3339),
-			MaxUses:    tok.MaxUses,
-			Unlimited:  tok.Unlimited(),
+			ID:          tok.ID,
+			Token:       minted.Plaintext(),
+			JoinString:  minted.JoinString(),
+			InitialTags: tok.InitialTags,
+			ExpiresAt:   tok.ExpiresAt.UTC().Format(time.RFC3339),
+			MaxUses:     tok.MaxUses,
+			Unlimited:   tok.Unlimited(),
 		})
 	}
 }

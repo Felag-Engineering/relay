@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -53,7 +54,7 @@ const auditChainBackfillBatch = 64
 //
 // Chaining happens exactly once, here. There is deliberately no re-chaining on
 // Open: that would bless any row inserted outside the chain.
-func chainAuditTrail(ctx context.Context, tx *sql.Tx) error {
+func chainAuditTrail(ctx context.Context, tx *sql.Tx, _ *slog.Logger) error {
 	// Before chaining, while the table can still be rewritten. The hash is over
 	// the decoded instant, so this changes no hash.
 	if _, err := tx.ExecContext(ctx, auditTSCanonicaliseSQL); err != nil {

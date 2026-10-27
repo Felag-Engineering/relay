@@ -104,16 +104,19 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 }
 
 // tagInternalWriteNames are the tag write's internal seams: the unfloored
-// recorder, the audit repository's atomic write, and the in-memory test seeder.
-// This surface reaches a tag write only through its own TagWriter seam, whose
-// method WriteTag is the capability layer's floored entry, so WriteTag is
-// deliberately not in this list.
+// recorder, the audit repository's atomic write, the in-memory test seeder, and
+// WriteInitialTags, which writes as another Account (the one that minted an
+// Enrollment Token) and so is the Enrollment service's alone. This surface
+// reaches a tag write only through its own TagWriter seam, whose method
+// WriteTag is the capability layer's floored entry, so WriteTag is deliberately
+// not in this list.
 var tagInternalWriteNames = map[string]bool{
 	"RecordTagWrite":     true,
 	"AppendWithTagWrite": true,
 	"ApplyTagChanges":    true,
 	"TagWriteRecorder":   true,
 	"TagWriteAppender":   true,
+	"WriteInitialTags":   true,
 }
 
 // tagInternalWriteViolations is the tag rule of dispatchViolations,
@@ -319,6 +322,16 @@ type Recorder interface {
 }
 `,
 			wantSubstr: "declares a seam method RecordTagWrite",
+		},
+		{
+			name: "a seam declaring the write of initial tags as another Account is refused",
+			src: `package api
+import "context"
+type Writer interface {
+	WriteInitialTags(ctx context.Context) error
+}
+`,
+			wantSubstr: "declares a seam method WriteInitialTags",
 		},
 		{
 			name: "naming the in-memory tag seeder is refused",

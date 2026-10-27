@@ -171,8 +171,8 @@ services:
   # The dev fleet's one bootstrap one-shot (docker/dev-fleet-init.sh): creates
   # the first admin (the Console admin) with `relay init`, which sets its Console
   # password and mints its first API Token, creates the dev-approver Account (and
-  # the IdP user under the OAuth overlay), mints the relay:-scoped Enrollment
-  # Token and writes its join string for the daemons, then exits. Besides the
+  # the IdP user under the OAuth overlay), mints the Enrollment
+  # Token naming initial tags and writes its join string for the daemons, then exits. Besides the
   # Relay it is the only service that mounts relay-data, and it mounts it
   # READ-WRITE (`relay init` writes the store). It runs as the Relay's uid and
   # mounts the Relay's own staged configuration read-only, because `relay init`

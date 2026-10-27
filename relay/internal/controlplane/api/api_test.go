@@ -384,7 +384,7 @@ func newTestMinter(t *testing.T, svc *enroll.Service) *enroll.Minter {
 	return m
 }
 
-// Proves EN-1, EN-4.
+// Proves EN-1, EN-4, EN-40.
 func TestHandleMintToken_Success(t *testing.T) {
 	repo := enroll.NewMemoryRepository()
 	tokenSvc := enroll.NewService(repo)
@@ -393,9 +393,9 @@ func TestHandleMintToken_Success(t *testing.T) {
 	h := newTestHandler(d)
 
 	rec := do(t, h, http.MethodPost, "/api/v1/enrollment-tokens", mintTokenRequest{
-		Scope:      []string{"relay:env=prod", "relay:role=web"},
-		TTLSeconds: 3600,
-		MaxUses:    1,
+		InitialTags: []string{"tag:env=prod", "tag:role=web"},
+		TTLSeconds:  3600,
+		MaxUses:     1,
 	})
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusCreated, rec.Body.String())
@@ -421,8 +421,8 @@ func TestHandleMintToken_Success(t *testing.T) {
 	if js.RelayAddress() != "relay.test:7654" {
 		t.Errorf("join_string address = %q, want relay.test:7654", js.RelayAddress())
 	}
-	if len(resp.Scope) != 2 || resp.Scope[0] != "relay:env=prod" || resp.Scope[1] != "relay:role=web" {
-		t.Errorf("response scope = %v, want the requested scope", resp.Scope)
+	if len(resp.InitialTags) != 2 || resp.InitialTags[0] != "tag:env=prod" || resp.InitialTags[1] != "tag:role=web" {
+		t.Errorf("response initial_tags = %v, want the requested tags", resp.InitialTags)
 	}
 	expiresAt, err := time.Parse(time.RFC3339, resp.ExpiresAt)
 	if err != nil {
@@ -441,6 +441,9 @@ func TestHandleMintToken_Success(t *testing.T) {
 	}
 	if stored.CreatedBy != testAdmin().Attribution() {
 		t.Errorf("stored token CreatedBy = %q, want %q", stored.CreatedBy, testAdmin().Attribution())
+	}
+	if !stored.CreatedByHuman {
+		t.Error("stored token does not record that a human Account minted it")
 	}
 
 	// Exactly one KindTokenMint audit Record, attributed to the principal,
@@ -464,24 +467,26 @@ func TestHandleMintToken_Success(t *testing.T) {
 	}
 }
 
-// Proves EN-24, EN-31.
-func TestHandleMintToken_InvalidScopeOrTTL(t *testing.T) {
+// Proves EN-42, EN-31.
+func TestHandleMintToken_InvalidInitialTagOrTTL(t *testing.T) {
 	cases := []struct {
 		name string
 		req  mintTokenRequest
 	}{
-		{"empty scope", mintTokenRequest{Scope: nil, TTLSeconds: 3600, MaxUses: 1}},
-		{"non-relay scope", mintTokenRequest{Scope: []string{"env=prod"}, TTLSeconds: 3600, MaxUses: 1}},
-		{"zero ttl", mintTokenRequest{Scope: []string{"relay:env=prod"}, TTLSeconds: 0, MaxUses: 1}},
-		{"negative ttl", mintTokenRequest{Scope: []string{"relay:env=prod"}, TTLSeconds: -1, MaxUses: 1}},
-		{"over-max ttl", mintTokenRequest{Scope: []string{"relay:env=prod"}, TTLSeconds: maxTTLSeconds + 1, MaxUses: 1}},
-		// #555: the scope is relay:-prefixed but fails the well-formedness
-		// gate. This is an end-to-end status check through the REAL
-		// enroll.Service (tokenSvc below), so it also pins that a violation
-		// still maps to 400 and not 500 — RED ON introducing a second
-		// sentinel without adding it to tokens.go's errors.Is list.
-		{"comma-injected second term", mintTokenRequest{Scope: []string{"relay:env=prod,node:role=web"}, TTLSeconds: 3600, MaxUses: 1}},
-		{"zero width space in key", mintTokenRequest{Scope: []string{"relay:quarantine\u200b=on"}, TTLSeconds: 3600, MaxUses: 1}},
+		{"non-tag entry", mintTokenRequest{InitialTags: []string{"env=prod"}, TTLSeconds: 3600, MaxUses: 1}},
+		{"node entry", mintTokenRequest{InitialTags: []string{"node:env=prod"}, TTLSeconds: 3600, MaxUses: 1}},
+		{"tag with no value", mintTokenRequest{InitialTags: []string{"tag:env"}, TTLSeconds: 3600, MaxUses: 1}},
+		{"zero ttl", mintTokenRequest{InitialTags: []string{"tag:env=prod"}, TTLSeconds: 0, MaxUses: 1}},
+		{"negative ttl", mintTokenRequest{InitialTags: []string{"tag:env=prod"}, TTLSeconds: -1, MaxUses: 1}},
+		{"over-max ttl", mintTokenRequest{InitialTags: []string{"tag:env=prod"}, TTLSeconds: maxTTLSeconds + 1, MaxUses: 1}},
+		// The tag is correctly prefixed but fails the well-formedness gate. This
+		// is an end-to-end status check through the REAL enroll.Service
+		// (tokenSvc below), so it also pins that a violation still maps to 400
+		// and not 500: a new sentinel must be added to tokens.go's errors.Is list.
+		{"comma-injected second term", mintTokenRequest{InitialTags: []string{"tag:env=prod,node:role=web"}, TTLSeconds: 3600, MaxUses: 1}},
+		{"zero width space in key", mintTokenRequest{InitialTags: []string{"tag:quarantine\u200b=on"}, TTLSeconds: 3600, MaxUses: 1}},
+		{"a key twice", mintTokenRequest{InitialTags: []string{"tag:env=prod", "tag:env=dev"}, TTLSeconds: 3600, MaxUses: 1}},
+		{"over-long key", mintTokenRequest{InitialTags: []string{"tag:" + strings.Repeat("k", 64) + "=v"}, TTLSeconds: 3600, MaxUses: 1}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -522,15 +527,15 @@ func TestHandleMintToken_UseLimit(t *testing.T) {
 		wantUnlimited bool
 		namesBoth     bool // the refusal detail names both max_uses and unlimited
 	}{
-		{"neither field", `{"scope":["relay:env=prod"],"ttl_seconds":3600}`, http.StatusBadRequest, 0, false, true},
-		{"max_uses 0 alone", `{"scope":["relay:env=prod"],"ttl_seconds":3600,"max_uses":0}`, http.StatusBadRequest, 0, false, true},
-		{"unlimited false alone", `{"scope":["relay:env=prod"],"ttl_seconds":3600,"unlimited":false}`, http.StatusBadRequest, 0, false, true},
-		{"max_uses 1", `{"scope":["relay:env=prod"],"ttl_seconds":3600,"max_uses":1}`, http.StatusCreated, 1, false, false},
-		{"unlimited true", `{"scope":["relay:env=prod"],"ttl_seconds":3600,"unlimited":true}`, http.StatusCreated, 0, true, false},
-		{"max_uses 0 with unlimited true", `{"scope":["relay:env=prod"],"ttl_seconds":3600,"max_uses":0,"unlimited":true}`, http.StatusCreated, 0, true, false},
-		{"max_uses 2 with unlimited true", `{"scope":["relay:env=prod"],"ttl_seconds":3600,"max_uses":2,"unlimited":true}`, http.StatusBadRequest, 0, false, false},
-		{"negative max_uses", `{"scope":["relay:env=prod"],"ttl_seconds":3600,"max_uses":-1}`, http.StatusBadRequest, 0, false, false},
-		{"negative max_uses with unlimited true", `{"scope":["relay:env=prod"],"ttl_seconds":3600,"max_uses":-1,"unlimited":true}`, http.StatusBadRequest, 0, false, false},
+		{"neither field", `{"initial_tags":["tag:env=prod"],"ttl_seconds":3600}`, http.StatusBadRequest, 0, false, true},
+		{"max_uses 0 alone", `{"initial_tags":["tag:env=prod"],"ttl_seconds":3600,"max_uses":0}`, http.StatusBadRequest, 0, false, true},
+		{"unlimited false alone", `{"initial_tags":["tag:env=prod"],"ttl_seconds":3600,"unlimited":false}`, http.StatusBadRequest, 0, false, true},
+		{"max_uses 1", `{"initial_tags":["tag:env=prod"],"ttl_seconds":3600,"max_uses":1}`, http.StatusCreated, 1, false, false},
+		{"unlimited true", `{"initial_tags":["tag:env=prod"],"ttl_seconds":3600,"unlimited":true}`, http.StatusCreated, 0, true, false},
+		{"max_uses 0 with unlimited true", `{"initial_tags":["tag:env=prod"],"ttl_seconds":3600,"max_uses":0,"unlimited":true}`, http.StatusCreated, 0, true, false},
+		{"max_uses 2 with unlimited true", `{"initial_tags":["tag:env=prod"],"ttl_seconds":3600,"max_uses":2,"unlimited":true}`, http.StatusBadRequest, 0, false, false},
+		{"negative max_uses", `{"initial_tags":["tag:env=prod"],"ttl_seconds":3600,"max_uses":-1}`, http.StatusBadRequest, 0, false, false},
+		{"negative max_uses with unlimited true", `{"initial_tags":["tag:env=prod"],"ttl_seconds":3600,"max_uses":-1,"unlimited":true}`, http.StatusBadRequest, 0, false, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -589,14 +594,14 @@ func TestHandleMintToken_UseLimit(t *testing.T) {
 	}
 }
 
-// Proves EN-24.
+// Proves EN-42.
 func TestHandleMintToken_MalformedOrUnknownField(t *testing.T) {
 	tokenSvc := enroll.NewService(enroll.NewMemoryRepository())
 	d := Deps{Tokens: newTestMinter(t, tokenSvc), Audit: &fakeAuditor{}, Now: fixedNow}
 	h := newTestHandler(d)
 
 	t.Run("malformed JSON", func(t *testing.T) {
-		rec := doRaw(t, h, http.MethodPost, "/api/v1/enrollment-tokens", `{"scope":`)
+		rec := doRaw(t, h, http.MethodPost, "/api/v1/enrollment-tokens", `{"initial_tags":`)
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
 		}
@@ -604,9 +609,85 @@ func TestHandleMintToken_MalformedOrUnknownField(t *testing.T) {
 
 	t.Run("unknown field", func(t *testing.T) {
 		rec := doRaw(t, h, http.MethodPost, "/api/v1/enrollment-tokens",
-			`{"scope":["relay:env=prod"],"ttl_seconds":3600,"unexpected_field":true}`)
+			`{"initial_tags":["tag:env=prod"],"ttl_seconds":3600,"unexpected_field":true}`)
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+		}
+	})
+
+	// A request still sending a scope, as an earlier release took, is refused as
+	// an unknown field rather than ignored: a script that expected its labels
+	// stamped must learn it did not get them.
+	t.Run("a scope body", func(t *testing.T) {
+		rec := doRaw(t, h, http.MethodPost, "/api/v1/enrollment-tokens",
+			`{"scope":["relay:env=prod"],"ttl_seconds":3600,"max_uses":1}`)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+		}
+	})
+}
+
+// Proves EN-35.
+func TestHandleMintToken_RelayLabelRefusedNamingIt(t *testing.T) {
+	for _, kind := range []accounts.Kind{accounts.KindHuman, accounts.KindMachine} {
+		t.Run(string(kind)+" admin", func(t *testing.T) {
+			tokenSvc := enroll.NewService(enroll.NewMemoryRepository())
+			auditor := &fakeAuditor{}
+			h := newRoleFixture(t, accounts.RoleAdmin, kind, Deps{Tokens: newTestMinter(t, tokenSvc), Audit: auditor})
+
+			rec := do(t, h, http.MethodPost, "/api/v1/enrollment-tokens",
+				mintTokenRequest{InitialTags: []string{"relay:env=prod"}, TTLSeconds: 3600, MaxUses: 1})
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+			}
+			if !strings.Contains(rec.Body.String(), "relay:env=prod") {
+				t.Errorf("the refusal does not name the label: %s", rec.Body.String())
+			}
+			if len(auditor.all()) != 0 {
+				t.Errorf("audit records = %d, want 0 on a rejected mint", len(auditor.all()))
+			}
+		})
+	}
+}
+
+// Proves EN-44.
+func TestHandleMintToken_MachineAccountInitialTags(t *testing.T) {
+	t.Run("naming a tag is refused", func(t *testing.T) {
+		repo := enroll.NewMemoryRepository()
+		auditor := &fakeAuditor{}
+		h := newRoleFixture(t, accounts.RoleAdmin, accounts.KindMachine,
+			Deps{Tokens: newTestMinter(t, enroll.NewService(repo)), Audit: auditor})
+
+		rec := do(t, h, http.MethodPost, "/api/v1/enrollment-tokens",
+			mintTokenRequest{InitialTags: []string{"tag:env=prod"}, TTLSeconds: 3600, MaxUses: 1})
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusForbidden, rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), "only a human Account writes tags") {
+			t.Errorf("the refusal does not say only a human Account writes tags: %s", rec.Body.String())
+		}
+		records := auditor.all()
+		if len(records) != 1 || records[0].Kind != audit.KindRefusal {
+			t.Errorf("audit records = %+v, want exactly one refusal", records)
+		}
+	})
+
+	t.Run("naming none is minted", func(t *testing.T) {
+		auditor := &fakeAuditor{}
+		h := newRoleFixture(t, accounts.RoleAdmin, accounts.KindMachine, Deps{
+			Tokens: newTestMinter(t, enroll.NewService(enroll.NewMemoryRepository())), Audit: auditor})
+
+		rec := do(t, h, http.MethodPost, "/api/v1/enrollment-tokens",
+			mintTokenRequest{TTLSeconds: 3600, MaxUses: 1})
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusCreated, rec.Body.String())
+		}
+		var resp mintTokenResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		if resp.InitialTags == nil || len(resp.InitialTags) != 0 {
+			t.Errorf("initial_tags = %#v, want an empty array", resp.InitialTags)
 		}
 	})
 }
@@ -1434,9 +1515,9 @@ func TestMintThenRevokeToken_BothProduceAuditRows(t *testing.T) {
 	h := newTestHandler(d)
 
 	mintRec := do(t, h, http.MethodPost, "/api/v1/enrollment-tokens", mintTokenRequest{
-		Scope:      []string{"relay:env=prod"},
-		TTLSeconds: 3600,
-		MaxUses:    1,
+		InitialTags: []string{"tag:env=prod"},
+		TTLSeconds:  3600,
+		MaxUses:     1,
 	})
 	if mintRec.Code != http.StatusCreated {
 		t.Fatalf("mint status = %d, want %d; body = %s", mintRec.Code, http.StatusCreated, mintRec.Body.String())

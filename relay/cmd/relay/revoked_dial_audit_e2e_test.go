@@ -77,7 +77,7 @@ func TestRevokedNode_DialAuditedThenThrottled(t *testing.T) {
 	f := startRelay(t, WithRevokedDialClock(clk.Now))
 	deps, lis := f.Deps, f.Bufconn
 
-	_, plaintext, err := deps.tokens.Create(ctx, []string{"relay:env=prod"}, time.Hour)
+	_, plaintext, err := deps.tokens.Create(ctx, nil, time.Hour)
 	if err != nil {
 		t.Fatalf("seed Enrollment Token: %v", err)
 	}

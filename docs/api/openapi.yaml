@@ -65,7 +65,7 @@ tags:
   - name: Jobs
     description: Re-read a Job's per-Node results, or cancel one in flight (ADR-0013).
   - name: Enrollment
-    description: Mint and revoke scoped Enrollment Tokens; revoke Nodes.
+    description: Mint and revoke Enrollment Tokens; revoke Nodes.
   - name: Freeze
     description: The Relay-wide emergency stop (ADR-0013).
   - name: Tags
@@ -527,24 +527,29 @@ paths:
     post:
       tags: [Enrollment]
       operationId: mintEnrollmentToken
-      summary: Mint a scoped Enrollment Token
+      summary: Mint an Enrollment Token
       description: |
-        Mints a scoped, expiring Enrollment Token (ADR-0006). The mint must
+        Mints an expiring Enrollment Token (ADR-0006). The mint must
         name its use limit: either a positive `max_uses` or `unlimited: true`.
         A mint naming neither, naming a positive `max_uses` together with
         `unlimited: true`, or naming a negative `max_uses` is refused with
-        `400`. There is no default (ADR-0031). The token's scope
-        stamps the enrolling Node's `relay:` labels, which are
-        Node-immutable and are the only namespace valid for security-lane
-        targeting (ADR-0020).
+        `400`. There is no default (ADR-0031). The token's
+        `initial_tags` are written as the enrolling Node's first tags, as the
+        minting Account's act, and are ordinary tags afterwards (ADR-0050).
+        Enrollment itself stamps only `relay:node-id`.
+
+        A `relay:` label in `initial_tags` is refused with `400` naming the
+        label, whoever mints. A machine Account naming any well-formed initial
+        tag is refused with `403`: only a human Account writes tags. A machine
+        Account naming none is unaffected.
 
         The plaintext credential is returned **once, here**, in `token` and
         inside `join_string` — it is never persisted, logged, or audited. Store
         it in a vault at this moment or mint a new one.
 
-        **Requires the `admin` role** (ADR-0032 §5). Minting stamps `relay:`
-        labels, so it is an act the control plane vouches for; a refusal is
-        recorded in the audit trail.
+        **Requires the `admin` role** (ADR-0032 §5). Minting admits Nodes that
+        carry the named tags, so it is an act the control plane vouches for; a
+        refusal is recorded in the audit trail.
       requestBody:
         required: true
         content:
@@ -1444,7 +1449,7 @@ components:
         selector:
           type: string
           description: |
-            Selector filter, e.g. `node:role=web` or `relay:env=prod`. Every term
+            Selector filter, e.g. `node:role=web` or `tag:env=prod`. Every term
             must carry a `node:`, `relay:`, `tag:` or `state:` prefix. `state:`
             is a closed, Relay-derived vocabulary (ADR-0034): the boolean
             markers `state:offline`, `state:outdated`, `state:template-unloadable`,
@@ -1717,21 +1722,20 @@ components:
 
     MintEnrollmentTokenRequest:
       type: object
-      required: [scope, ttl_seconds]
+      required: [ttl_seconds]
       properties:
-        scope:
+        initial_tags:
           type: array
+          maxItems: 64
           items: { type: string }
           description: |
-            `relay:` labels stamped on Nodes enrolling with this token. These are
-            Node-immutable and are the only namespace valid for security-lane
-            targeting (ADR-0020).
-
-            Every entry must be `relay:` plus a non-empty bare key, optionally
-            followed by `=value`; every byte of the key and of the value must be
-            in `[A-Za-z0-9._-]`. A violating entry is refused with `400` and
-            never sanitised (#555).
-          examples: [["relay:env=prod"]]
+            Zero or more tags written as the first tags of every Node enrolling
+            with this token, each in the form `tag:key=value`. The key is at most
+            63 bytes and the value at most 255, every byte in `[A-Za-z0-9._-]`;
+            a key may be named once. A violating entry is refused with `400` and
+            never sanitised, and a `relay:` label is refused with `400` naming
+            it. A machine Account naming any tag is refused with `403`.
+          examples: [["tag:env=prod"]]
         ttl_seconds:
           type: integer
           format: int64
@@ -1751,7 +1755,7 @@ components:
 
     MintedEnrollmentToken:
       type: object
-      required: [id, token, join_string, scope, expires_at, max_uses, unlimited]
+      required: [id, token, join_string, initial_tags, expires_at, max_uses, unlimited]
       properties:
         id:
           type: string
@@ -1766,9 +1770,10 @@ components:
             node-plane address, the CA fingerprint (SHA-256 over the CA
             certificate DER) and this token (ADR-0031). It is a secret,
             returned once, here, and never again.
-        scope:
+        initial_tags:
           type: array
           items: { type: string }
+          description: The initial tags the token writes, as minted; an empty array when it names none.
         expires_at: { type: string, format: date-time }
         max_uses:
           type: integer

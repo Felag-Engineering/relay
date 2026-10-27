@@ -158,7 +158,7 @@ func TestService_RevokeToken_AnotherStoreCallRunsBetweenChunks(t *testing.T) {
 	svc := revocation.NewService(d, c, reg, tokenSvc)
 	ctx := context.Background()
 
-	tok, _, err := tokenSvc.Create(ctx, []string{"relay:env=test"}, 24*time.Hour)
+	tok, _, err := tokenSvc.Create(ctx, nil, 24*time.Hour)
 	if err != nil {
 		t.Fatalf("Create token: %v", err)
 	}
@@ -353,7 +353,7 @@ func TestService_RevokeToken_StoreFailureStillRevokes(t *testing.T) {
 			svc := revocation.NewService(d, c, reg, tokenSvc)
 			ctx := context.Background()
 
-			tok, _, err := tokenSvc.Create(ctx, []string{"relay:env=test"}, 24*time.Hour)
+			tok, _, err := tokenSvc.Create(ctx, nil, 24*time.Hour)
 			if err != nil {
 				t.Fatalf("Create token: %v", err)
 			}

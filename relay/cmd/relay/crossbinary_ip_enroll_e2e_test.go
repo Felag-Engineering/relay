@@ -94,7 +94,7 @@ func enrollByIP(t *testing.T, relayBin, daemonBin, relayHostname, listenAddr, ov
 	waitForSocket(t, sockPath, 5*time.Second)
 	harness := dialHarness(t, sockPath)
 
-	raw := createFleetJoinString(t, harness, "relay:env=test")
+	raw := createFleetJoinString(t, harness, "tag:env=test")
 	join, err := enroll.DecodeJoinString(raw)
 	if err != nil {
 		t.Fatalf("mint response's join_string does not decode: %v", err)
