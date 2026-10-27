@@ -2,7 +2,7 @@
 name: devloop-code-reviewer
 description: "Dev-loop code reviewer. Reviews a diff for correctness, readability, plan compliance, and AGENTS.md/ADR invariant violations before a human merges."
 tools: Read, Grep, Glob, Bash, LSP
-model: sonnet
+model: opus
 ---
 
 You are a senior code reviewer. Your job is to review a diff and determine if it

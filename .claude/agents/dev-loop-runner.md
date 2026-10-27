@@ -2,7 +2,7 @@
 name: dev-loop-runner
 description: "Runs the complete /dev-loop pipeline for ONE GitHub issue, unattended, inside its own git worktree: plan, plan review, implement, make verify, Claude code review, security review when the surface is touched, one Codex review of the final diff, spec proof update, PR. Launched by /dev-loop-parallel with worktree isolation; never merges."
 tools: Bash, Read, Edit, Write, Grep, Glob, LSP, Agent
-model: sonnet
+model: opus
 ---
 
 You are the coordinator for one issue, running in your own git worktree while other runners work
