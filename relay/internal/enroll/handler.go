@@ -392,10 +392,14 @@ func (s *Server) Enroll(ctx context.Context, req *relayv1.EnrollRequest) (*relay
 		bare, ok := protoconv.ParseNodeLabel(l.GetKey(), l.GetValue())
 		if !ok {
 			s.attempt(ctx, AttemptEvent{Reason: AttemptMalformed, Source: source})
+			// The wire key is attacker-controlled up to the gRPC message
+			// limit; the error is bounded before it is quoted.
+			boundedKey, _ := registry.BoundLogKey(l.GetKey())
 			return nil, status.Errorf(codes.InvalidArgument,
-				"self_labels must be node:-prefixed, with a non-empty bare key and a "+
-					"(possibly empty) value whose every byte is in [A-Za-z0-9._-] (offending key: %q)",
-				l.GetKey())
+				"self_labels must be node:-prefixed, with a non-empty bare key of at most %d bytes and a "+
+					"(possibly empty) value of at most %d bytes, every byte of both in [A-Za-z0-9._-] "+
+					"(offending key: %q)",
+				registry.MaxLabelKeyLen, registry.MaxLabelValueLen, boundedKey)
 		}
 		nodeLabels[bare] = l.GetValue()
 	}
@@ -479,7 +483,13 @@ func (s *Server) Enroll(ctx context.Context, req *relayv1.EnrollRequest) (*relay
 	fp := issued.Fingerprint
 
 	// i. Map proto Facts -> registry.Facts; nil-safe.
-	facts := protoconv.FactsFromProto(req.GetFacts())
+	facts, refusedFacts := protoconv.FactsFromProtoWithRefusals(req.GetFacts())
+	if len(refusedFacts) > 0 {
+		// Field names from a closed set, never a value: the refused value is
+		// exactly what the bound decided not to trust.
+		s.logger().WarnContext(ctx, "refused malformed Facts fields; recorded as not reported",
+			"node_id", nodeID, "refused_fields", refusedFacts)
+	}
 
 	// j. Record the Node. This is the only write path for node-space labels + Facts.
 	if _, err := s.registry.Upsert(registry.Report{

@@ -870,12 +870,14 @@ func newFleetNode(d Deps, n registry.Node, certExpiringWithin time.Duration) fle
 	}
 
 	// Selector terms for the three self-reported facts, derived through
-	// nodestate.Facts rather than concatenated here — the same seam
-	// buildNodeView uses (node.go:234-242) and for the identical reason: the
-	// raw fields above arrive with no validation at the wire ingress, and
-	// nodestate.Facts is the only place permitted to turn one into a
-	// Selector-syntax string. A key nodestate refused is simply absent from
-	// the loop, leaving the matching term field at its zero value.
+	// nodestate.Facts rather than concatenated here, the same seam
+	// buildNodeView uses and for the same reason: nodestate.Facts is the only
+	// place permitted to turn one into a Selector-syntax string. The fields
+	// above are already bounded, at the Hello and Enroll ingresses and again
+	// on registry read-back (registry.DeclineMalformedSelfReport), and
+	// nodestate.Facts still applies its own render check. A key nodestate
+	// refused is simply absent from the loop, leaving the matching term field
+	// at its zero value.
 	for _, l := range nodestate.Facts(in) {
 		switch l.Key {
 		case string(nodestate.FactPolicyFingerprint):

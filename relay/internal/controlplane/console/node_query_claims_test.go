@@ -76,11 +76,13 @@ func fingerprintPanelOf(body string) string {
 // than the property. It proves the lane's numbers reach the panel; it does not
 // prove the panel's prose is correct English for every n beyond 0 and 1.
 func TestNode_FingerprintPanelReportsThePeerCounts(t *testing.T) {
+	policyFP := strings.Repeat("a", 64)
+	templateFP := strings.Repeat("e", 64)
 	reg := registry.NewInMemory()
 	for _, r := range []registry.Report{
-		{NodeID: "node-web-1", PolicyFingerprint: "sha256:aaaa", TemplateSetFingerprint: "sha256:tttt"},
-		{NodeID: "node-web-2", PolicyFingerprint: "sha256:aaaa"},
-		{NodeID: "node-web-3", PolicyFingerprint: "sha256:bbbb"},
+		{NodeID: "node-web-1", PolicyFingerprint: policyFP, TemplateSetFingerprint: templateFP},
+		{NodeID: "node-web-2", PolicyFingerprint: policyFP},
+		{NodeID: "node-web-3", PolicyFingerprint: strings.Repeat("b", 64)},
 		{NodeID: "node-bare"},
 	} {
 		if _, err := reg.Upsert(r); err != nil {
@@ -109,7 +111,7 @@ func TestNode_FingerprintPanelReportsThePeerCounts(t *testing.T) {
 			t.Errorf("Fingerprints panel = %s\nwant the template-set fingerprint's peer count %q", panel, "1 Node reports this")
 		}
 		// The counts sit beside the fingerprints they count.
-		for _, fp := range []string{"aaaa", "tttt"} {
+		for _, fp := range []string{shortHash(policyFP), shortHash(templateFP)} {
 			if !strings.Contains(panel, ">"+fp+"<") {
 				t.Errorf("Fingerprints panel = %s\nwant the reported fingerprint %q rendered", panel, fp)
 			}
@@ -199,7 +201,7 @@ func walkViewFields(t reflect.Type, flag func(reflect.StructField) string) (flag
 // absence as *Future work*: this pins today's behaviour, not a permanent ban.
 func TestNode_DetailShowsTheTemplateFingerprintAndNeverTheTemplateVocabulary(t *testing.T) {
 	const nodeID = "node-web-1"
-	const fingerprint = "sha256:tmplsetzq"
+	fingerprint := strings.Repeat("c", 64)
 
 	reg := registry.NewInMemory()
 	if _, err := reg.Upsert(registry.Report{NodeID: nodeID, TemplateSetFingerprint: fingerprint}); err != nil {

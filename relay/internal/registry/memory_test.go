@@ -20,14 +20,14 @@ func TestUpsert_RegisterGetList(t *testing.T) {
 		CertFingerprint:   "fp-a",
 		Facts:             Facts{Hostname: "host-a", OS: "linux", IPAddresses: []string{"10.0.0.1"}},
 		EnrollingTokenID:  "tok-1",
-		PolicyFingerprint: "abc123",
+		PolicyFingerprint: "abc1230000000000000000000000000000000000000000000000000000000000",
 	}.WithNodeLabels(map[string]string{"role": "web"})
 	rep2 := Report{
 		NodeID:            "node-b",
 		CertFingerprint:   "fp-b",
 		Facts:             Facts{Hostname: "host-b", OS: "linux"},
 		EnrollingTokenID:  "tok-2",
-		PolicyFingerprint: "def456",
+		PolicyFingerprint: "def4560000000000000000000000000000000000000000000000000000000000",
 	}.WithNodeLabels(map[string]string{"role": "db"})
 
 	n1, err := reg.Upsert(rep1)
@@ -49,8 +49,8 @@ func TestUpsert_RegisterGetList(t *testing.T) {
 	if !n1.LastSeen.Equal(ts) {
 		t.Errorf("LastSeen: got %v, want %v", n1.LastSeen, ts)
 	}
-	if n1.PolicyFingerprint != "abc123" {
-		t.Errorf("PolicyFingerprint: got %q, want %q", n1.PolicyFingerprint, "abc123")
+	if n1.PolicyFingerprint != "abc1230000000000000000000000000000000000000000000000000000000000" {
+		t.Errorf("PolicyFingerprint: got %q, want %q", n1.PolicyFingerprint, "abc1230000000000000000000000000000000000000000000000000000000000")
 	}
 
 	if _, err := reg.Upsert(rep2); err != nil {
@@ -64,8 +64,8 @@ func TestUpsert_RegisterGetList(t *testing.T) {
 	if got.NodeID != "node-a" {
 		t.Errorf("Get NodeID: got %q, want %q", got.NodeID, "node-a")
 	}
-	if got.PolicyFingerprint != "abc123" {
-		t.Errorf("Get PolicyFingerprint: got %q, want abc123", got.PolicyFingerprint)
+	if got.PolicyFingerprint != "abc1230000000000000000000000000000000000000000000000000000000000" {
+		t.Errorf("Get PolicyFingerprint: got %q, want the reported fingerprint", got.PolicyFingerprint)
 	}
 
 	list := reg.List()
@@ -77,11 +77,11 @@ func TestUpsert_RegisterGetList(t *testing.T) {
 		t.Errorf("List order: got [%q, %q], want [node-a, node-b]",
 			list[0].NodeID, list[1].NodeID)
 	}
-	if list[0].PolicyFingerprint != "abc123" {
-		t.Errorf("List[0] PolicyFingerprint: got %q, want abc123", list[0].PolicyFingerprint)
+	if list[0].PolicyFingerprint != "abc1230000000000000000000000000000000000000000000000000000000000" {
+		t.Errorf("List[0] PolicyFingerprint: got %q, want the reported fingerprint", list[0].PolicyFingerprint)
 	}
-	if list[1].PolicyFingerprint != "def456" {
-		t.Errorf("List[1] PolicyFingerprint: got %q, want def456", list[1].PolicyFingerprint)
+	if list[1].PolicyFingerprint != "def4560000000000000000000000000000000000000000000000000000000000" {
+		t.Errorf("List[1] PolicyFingerprint: got %q, want the reported fingerprint", list[1].PolicyFingerprint)
 	}
 }
 
@@ -327,7 +327,7 @@ func TestPolicyFingerprint_UpdatePathOverwritesPreservesProvenance(t *testing.T)
 	_, err := reg.Upsert(Report{
 		NodeID:            "node-fp",
 		EnrollingTokenID:  "tok-fp",
-		PolicyFingerprint: "fingerprint-v1",
+		PolicyFingerprint: "fe10000000000000000000000000000000000000000000000000000000000000",
 	})
 	if err != nil {
 		t.Fatalf("first upsert: %v", err)
@@ -339,15 +339,15 @@ func TestPolicyFingerprint_UpdatePathOverwritesPreservesProvenance(t *testing.T)
 	}
 
 	n, _ := reg.Get("node-fp")
-	if n.PolicyFingerprint != "fingerprint-v1" {
-		t.Errorf("after insert: PolicyFingerprint = %q, want fingerprint-v1", n.PolicyFingerprint)
+	if n.PolicyFingerprint != "fe10000000000000000000000000000000000000000000000000000000000000" {
+		t.Errorf("after insert: PolicyFingerprint = %q, want the first fingerprint", n.PolicyFingerprint)
 	}
 
 	// UPDATE: node reconnects (daemon reload) with a new Policy file → new fingerprint.
 	_, err = reg.Upsert(Report{
 		NodeID:            "node-fp",
 		EnrollingTokenID:  "tok-ignored", // must not overwrite provenance
-		PolicyFingerprint: "fingerprint-v2",
+		PolicyFingerprint: "fe20000000000000000000000000000000000000000000000000000000000000",
 	})
 	if err != nil {
 		t.Fatalf("second upsert: %v", err)
@@ -356,8 +356,8 @@ func TestPolicyFingerprint_UpdatePathOverwritesPreservesProvenance(t *testing.T)
 	n, _ = reg.Get("node-fp")
 
 	// PolicyFingerprint must be overwritten with the new value.
-	if n.PolicyFingerprint != "fingerprint-v2" {
-		t.Errorf("after update: PolicyFingerprint = %q, want fingerprint-v2", n.PolicyFingerprint)
+	if n.PolicyFingerprint != "fe20000000000000000000000000000000000000000000000000000000000000" {
+		t.Errorf("after update: PolicyFingerprint = %q, want the second fingerprint", n.PolicyFingerprint)
 	}
 	// EnrollingTokenID provenance must be preserved from the first insert.
 	if n.EnrollingTokenID != "tok-fp" {

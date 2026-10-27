@@ -12,12 +12,13 @@ import (
 // ADR-0050 decision 1).
 const MaxTagsPerNode = 64
 
-// MaxTagKeyLen and MaxTagValueLen bound a tag's key and value in bytes, so a
-// write cannot grow every Node record, the audit chain and each Node read
-// without limit. They apply to tag: only (ADR-0050).
+// MaxTagKeyLen and MaxTagValueLen bound a tag's key and value in bytes. A tag
+// takes the Label bounds (selectors-and-labels "Limits"), the same ones the
+// node: ingress applies, so a write cannot grow every Node record, the audit
+// chain and each Node read without limit (ADR-0050).
 const (
-	MaxTagKeyLen   = 63
-	MaxTagValueLen = 255
+	MaxTagKeyLen   = MaxLabelKeyLen
+	MaxTagValueLen = MaxLabelValueLen
 )
 
 // ErrTagChanged is returned by an atomic tag write when a tag no longer holds

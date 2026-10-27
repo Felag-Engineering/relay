@@ -61,7 +61,7 @@ unknown key, or a value that cannot work, is refused.
 | `control_plane.listen_address` | `:9443` | Control-plane HTTPS listen address. |
 | `ca.dir` | *(required)* | Directory for the Relay-hosted CA key and certificate, created on first start ([ca-disaster-recovery.md](ca-disaster-recovery.md)). |
 | `store.path` | *(required)* | SQLite store: registry, Jobs/Tasks, audit trail, Accounts, API Tokens, Enrollment Tokens, Freeze state. |
-| `tls.hostname` | *(required)* | Hostname in both listeners' server certificates. **Must match the name daemons dial**, or their TLS verification fails. |
+| `tls.hostname` | *(required)* | The name on the one server certificate both listeners present. **Must match the name daemons dial**, or their TLS verification fails. The certificate also names loopback and this host's addresses at start, so a daemon may dial one of this host's IPv4 addresses instead. |
 | `enrollment.ip_rate_per_minute` / `ip_burst` | `5` / `3` | Per-IP enrollment rate and burst. |
 | `enrollment.global_rate_per_minute` / `global_burst` | `50` / `10` | Global enrollment rate and burst. Raise temporarily for a large bulk enrollment. |
 | `enrollment.max_tracked_ips` | `100000` | Cap on the per-IP rate-limit bucket map. |
@@ -118,8 +118,11 @@ Subcommands, checked before the configuration is read:
 ## 3. First start
 
 On first start the Relay creates its CA in `ca.dir` (directory `0700`; `ca-key.pem` `0600`,
-`ca-cert.pem` `0644`) and issues itself a server certificate for `tls.hostname`. Both listeners
-chain to this CA:
+`ca-cert.pem` `0644`) and issues itself one server certificate, presented on both listeners, for
+`tls.hostname`, loopback and the host's addresses (up to 64, IPv4 first). The packaged unit
+permits `AF_NETLINK` for that listing; if the addresses cannot be listed the Relay logs a
+warning and the certificate names `tls.hostname` and loopback only. Both listeners chain to this
+CA:
 
 - **Node plane** (`node_plane.listen_address`): gRPC over mTLS. Daemons authenticate the Relay
   against the pinned CA; the Relay requires a client certificate for every RPC except the
@@ -319,6 +322,8 @@ container and cannot see host accounts, and any host member of GID `10001` can r
 configuration and the secrets. Set, for this container's layout:
 
 - `tls.hostname`, the name relay-daemons will dial. It becomes the server certificate's SAN.
+  Inside a container the detected addresses are the container's own, so daemons dialling through
+  a port mapping must use `tls.hostname`.
   While it is unset or still the sample's `relay.example.internal`, the container reports
   **unhealthy** and `docker inspect --format '{{json .State.Health}}' <container>` says why.
 - `node_plane.listen_address = ":7654"`, `control_plane.enabled = true` and

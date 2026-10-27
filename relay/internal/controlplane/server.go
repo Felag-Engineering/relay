@@ -52,10 +52,11 @@ type Config struct {
 	// the fleet, control-plane faces operators/AI — ADR-0009).
 	Addr string
 	// GetCertificate supplies the server certificate presented on the
-	// control-plane listener, asked once per handshake. Issued independently
-	// of the node-plane's gRPC server certificate by the composition root,
-	// which also re-issues it before it expires (ca.ServerCertificate,
-	// ADR-0031 §5).
+	// control-plane listener, asked once per handshake. The composition root
+	// hands it the same certificate the node plane presents (ADR-0031 §1) and
+	// re-issues it before it expires (ca.ServerCertificate, ADR-0031 §5). This
+	// listener's tls.Config stays its own and never asks for a client
+	// certificate.
 	//
 	// A callback rather than a tls.Certificate value: a certificate handed
 	// over once expires while the process still runs, which is how a Relay up

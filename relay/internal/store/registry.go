@@ -52,6 +52,17 @@ func (ns labelNamespace) table() string {
 	}
 }
 
+// wellFormed returns the predicate a stored pair in ns must pass to be served:
+// registry.WellFormedLabel in every namespace, and for node: also the Label
+// length bounds its ingress applies (registry.WellFormedNodeLabel). The read
+// filter and the startup scan both take it from here, so they cannot disagree.
+func (ns labelNamespace) wellFormed() func(key, value string) bool {
+	if ns == nsNode {
+		return registry.WellFormedNodeLabel
+	}
+	return registry.WellFormedLabel
+}
+
 // nodeCap and minVersion read the configured Node cap and minimum daemon
 // version at use; an unset source is no cap and no gate.
 func (r *sqliteRegistry) nodeCap() int {
@@ -620,9 +631,11 @@ func getNode(ctx context.Context, q queryer, nodeID string, declined *[nLabelNam
 		return registry.Node{}, false, fmt.Errorf("parse last_renewed_at for node %q: %w", nodeID, err)
 	}
 
-	return registry.Node{
-		NodeID:          nodeID,
-		CertFingerprint: certFingerprint,
+	// A self-reported field stored before its ingress bound existed is
+	// declined here, on every read, exactly as a stored Label is: omitted,
+	// never rewritten. The startup scan (selfreportscan.go) is what names the
+	// affected Nodes; this read stays silent for the reason labelscan.go gives.
+	self, _ := registry.DeclineMalformedSelfReport(registry.SelfReport{
 		Facts: registry.Facts{
 			Hostname:    hostname,
 			OS:          osName,
@@ -630,6 +643,15 @@ func getNode(ctx context.Context, q queryer, nodeID string, declined *[nLabelNam
 			Arch:        arch,
 			IPAddresses: ips,
 		},
+		PolicyFingerprint:      policyFingerprint,
+		TemplateSetFingerprint: templateSetFingerprint,
+		DaemonVersion:          daemonVersion,
+	})
+
+	return registry.Node{
+		NodeID:                 nodeID,
+		CertFingerprint:        certFingerprint,
+		Facts:                  self.Facts,
 		NodeLabels:             nodeLabels,
 		RelayLabels:            relayLabels,
 		TagLabels:              tagLabels,
@@ -639,18 +661,20 @@ func getNode(ctx context.Context, q queryer, nodeID string, declined *[nLabelNam
 		RenewalCount:           renewalCount,
 		LastRenewedAt:          lastRenewedAtTime,
 		EnrollingTokenID:       enrollingTokenID,
-		PolicyFingerprint:      policyFingerprint,
-		DaemonVersion:          daemonVersion,
+		PolicyFingerprint:      self.PolicyFingerprint,
+		DaemonVersion:          self.DaemonVersion,
 		RevokedAt:              revokedAtTime,
-		TemplateSetFingerprint: templateSetFingerprint,
+		TemplateSetFingerprint: self.TemplateSetFingerprint,
 	}, true, nil
 }
 
 // wellFormedLabels returns a copy of labels containing only the pairs
-// registry.WellFormedLabel accepts. It governs all three stored namespaces:
+// registry.WellFormedLabel accepts (for node:, registry.WellFormedNodeLabel,
+// which adds the length bounds). It governs all three stored namespaces:
 //
 //   - node_labels: rows written BEFORE the ingress gate existed
-//     (protoconv.ParseNodeLabel) can carry a value that was never validated.
+//     (protoconv.ParseNodeLabel) can carry a value that was never validated,
+//     or one longer than the Label length bounds.
 //   - relay_labels: rows stamped by an enrollment that ran BEFORE the
 //     ingress gate existed (enroll.validateScope) can carry a value that was
 //     never validated either. The ingress fix alone leaves these rows serving
@@ -725,9 +749,10 @@ func getNode(ctx context.Context, q queryer, nodeID string, declined *[nLabelNam
 // per Node and not per call — which is what makes the counter's HELP text
 // honest about counting events rather than distinct Labels.
 func wellFormedLabels(ns labelNamespace, labels map[string]string, declined *[nLabelNamespaces]atomic.Int64) map[string]string {
+	wellFormed := ns.wellFormed()
 	out := make(map[string]string, len(labels))
 	for k, v := range labels {
-		if registry.WellFormedLabel(k, v) {
+		if wellFormed(k, v) {
 			out[k] = v
 			continue
 		}

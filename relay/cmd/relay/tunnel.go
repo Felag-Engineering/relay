@@ -186,23 +186,24 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[relayv1.DaemonMessag
 		return status.Error(codes.Unauthenticated, "no node identity")
 	}
 
+	// Every self-reported field is accepted only in the shape a well-behaved
+	// relay-daemon sends; what fails is recorded as not reported, so the log
+	// and the registry below carry only bounded values.
+	report, refusedFields := protoconv.HelloReportFromProto(hello)
+
 	// Sanity-check: warn if hello.NodeId disagrees with the cert identity, but
 	// always use the cert identity and never let the wire value win.
 	if hello.NodeId != "" && hello.NodeId != nodeID {
 		slog.Warn("hello.node_id differs from cert identity; using cert",
 			"cert_node_id", nodeID,
-			"hello_node_id", hello.NodeId,
+			"hello_node_id", fmt.Sprintf("%q", boundedLogValue(hello.NodeId)),
 		)
 	}
 
-	hostname := ""
-	if hello.Facts != nil {
-		hostname = hello.Facts.Hostname
-	}
 	slog.Info("node connected",
 		"node_id", nodeID,
-		"daemon_version", hello.DaemonVersion,
-		"hostname", hostname,
+		"daemon_version", report.DaemonVersion,
+		"hostname", report.Facts.Hostname,
 	)
 
 	// Register this stream with the live-connection tracker so it can be torn
@@ -288,18 +289,24 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[relayv1.DaemonMessag
 		if len(refused) > 0 {
 			slog.Warn("refused malformed node labels", "node_id", nodeID,
 				"refused_count", len(refused),
-				"first_refused_key", fmt.Sprintf("%q", boundedRefusedKey(refused[0])))
+				"first_refused_key", fmt.Sprintf("%q", boundedLogValue(refused[0])))
+		}
+		// Field names from a closed set, never a value, once per connect: the
+		// refused value is exactly what this check decided not to trust.
+		if len(refusedFields) > 0 {
+			slog.Warn("refused malformed Hello fields; recorded as not reported",
+				"node_id", nodeID, "refused_fields", refusedFields)
 		}
 		if _, err := s.reg.Upsert(registry.Report{
 			NodeID:            nodeID,
 			CertFingerprint:   fp,
-			Facts:             protoconv.FactsFromProto(hello.Facts),
-			PolicyFingerprint: hello.GetPolicyFingerprint(),
-			DaemonVersion:     hello.GetDaemonVersion(),
+			Facts:             report.Facts,
+			PolicyFingerprint: report.PolicyFingerprint,
+			DaemonVersion:     report.DaemonVersion,
 			// Report-only, beside the Policy fingerprint (ADR-0021): the
 			// fleet-wide template-drift signal. Recording it never gives the
 			// Relay the power to change it (ADR-0002).
-			TemplateSetFingerprint: hello.GetTemplateSetFingerprint(),
+			TemplateSetFingerprint: report.TemplateSetFingerprint,
 		}.WithNodeLabels(labels)); err != nil {
 			slog.Warn("registry upsert on hello failed", "node_id", nodeID, "err", err)
 		}
@@ -548,10 +555,10 @@ func argMatchersToArgSets(matchers []*relayv1.ArgMatcher) [][]string {
 	return out
 }
 
-// boundedRefusedKey bounds a refused wire key for logging. It delegates to
-// registry.BoundLogKey, which owns the one rune-safe truncation for this one
-// hazard — see that function for why a second copy is not allowed.
-func boundedRefusedKey(k string) string {
+// boundedLogValue bounds an attacker-controlled wire string for a log. It
+// delegates to registry.BoundLogKey, which owns the one rune-safe truncation
+// for this one hazard — see that function for why a second copy is not allowed.
+func boundedLogValue(k string) string {
 	bounded, _ := registry.BoundLogKey(k)
 	return bounded
 }

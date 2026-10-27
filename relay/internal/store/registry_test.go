@@ -25,18 +25,18 @@ func TestSqliteRegistry_UpsertInsertUpdate(t *testing.T) {
 		CertFingerprint:        "fp-a",
 		Facts:                  registry.Facts{Hostname: "host-a", OS: "linux", IPAddresses: []string{"10.0.0.1"}},
 		EnrollingTokenID:       "tok-1",
-		PolicyFingerprint:      "abc123",
+		PolicyFingerprint:      "abc1230000000000000000000000000000000000000000000000000000000000",
 		DaemonVersion:          "1.0.0",
-		TemplateSetFingerprint: "tmpl-abc",
+		TemplateSetFingerprint: "abc0000000000000000000000000000000000000000000000000000000000000",
 	}.WithNodeLabels(map[string]string{"role": "web"}))
 	if err != nil {
 		t.Fatalf("insert: %v", err)
 	}
-	if n1.TemplateSetFingerprint != "tmpl-abc" {
-		t.Errorf("insert TemplateSetFingerprint: got %q, want tmpl-abc", n1.TemplateSetFingerprint)
+	if n1.TemplateSetFingerprint != "abc0000000000000000000000000000000000000000000000000000000000000" {
+		t.Errorf("insert TemplateSetFingerprint: got %q, want the reported fingerprint", n1.TemplateSetFingerprint)
 	}
 	if n1.NodeID != "node-a" || n1.CertFingerprint != "fp-a" || n1.Facts.Hostname != "host-a" ||
-		n1.NodeLabels["role"] != "web" || n1.PolicyFingerprint != "abc123" || n1.EnrollingTokenID != "tok-1" ||
+		n1.NodeLabels["role"] != "web" || n1.PolicyFingerprint != "abc1230000000000000000000000000000000000000000000000000000000000" || n1.EnrollingTokenID != "tok-1" ||
 		n1.DaemonVersion != "1.0.0" {
 		t.Errorf("insert result: got %#v", n1)
 	}
@@ -57,15 +57,15 @@ func TestSqliteRegistry_UpsertInsertUpdate(t *testing.T) {
 		CertFingerprint:        "fp-new",
 		Facts:                  registry.Facts{Hostname: "host-a-new", OS: "linux"},
 		EnrollingTokenID:       "tok-ignored",
-		PolicyFingerprint:      "def456",
+		PolicyFingerprint:      "def4560000000000000000000000000000000000000000000000000000000000",
 		DaemonVersion:          "1.1.0",
-		TemplateSetFingerprint: "tmpl-def",
+		TemplateSetFingerprint: "def0000000000000000000000000000000000000000000000000000000000000",
 	}.WithNodeLabels(map[string]string{"role": "db"}))
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
-	if n2.TemplateSetFingerprint != "tmpl-def" {
-		t.Errorf("update TemplateSetFingerprint: got %q, want tmpl-def (refreshed on reconnect)",
+	if n2.TemplateSetFingerprint != "def0000000000000000000000000000000000000000000000000000000000000" {
+		t.Errorf("update TemplateSetFingerprint: got %q, want the new fingerprint (refreshed on reconnect)",
 			n2.TemplateSetFingerprint)
 	}
 	if n2.CertFingerprint != "fp-new" {
@@ -77,8 +77,8 @@ func TestSqliteRegistry_UpsertInsertUpdate(t *testing.T) {
 	if n2.NodeLabels["role"] != "db" {
 		t.Errorf("update NodeLabels[role]: got %q, want db", n2.NodeLabels["role"])
 	}
-	if n2.PolicyFingerprint != "def456" {
-		t.Errorf("update PolicyFingerprint: got %q, want def456", n2.PolicyFingerprint)
+	if n2.PolicyFingerprint != "def4560000000000000000000000000000000000000000000000000000000000" {
+		t.Errorf("update PolicyFingerprint: got %q, want the new fingerprint", n2.PolicyFingerprint)
 	}
 	if n2.DaemonVersion != "1.1.0" {
 		t.Errorf("update DaemonVersion: got %q, want 1.1.0 (refreshed on reconnect)", n2.DaemonVersion)

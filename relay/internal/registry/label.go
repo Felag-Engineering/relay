@@ -125,11 +125,12 @@ import "unicode/utf8"
 // of them appears in a shipped example of either namespace, and admitting
 // them later is backwards-compatible while excluding them later is not (an
 // already-enrolled Node's label, or an already-minted token's scope, would
-// start being refused). There is no length cap: the hazard here is GRAMMAR —
-// what a value can be misread as — not size, and gRPC's own message-size
-// limit already bounds how large a Hello, Enroll or mint request (and
-// therefore this map) can be. Leaving it unbounded here is a decision, not
-// an oversight.
+// start being refused). This predicate has no length cap: the hazard here is
+// GRAMMAR, what a value can be misread as, not size. Length is a separate
+// bound, MaxLabelKeyLen and MaxLabelValueLen, held per namespace by its own
+// writer: WellFormedNodeLabel applies it to node: at the ingress and on
+// read-back, and the tag: write applies it to tag:. A relay: scope Label
+// minted by a human is not held to it, so it is not in this predicate.
 //
 // # Two write seams, one namespace (relay-space)
 //
@@ -176,6 +177,27 @@ func wellFormedLabelBytes(s string) bool {
 	return true
 }
 
+// MaxLabelKeyLen and MaxLabelValueLen bound a Label's bare key and value in
+// bytes (selectors-and-labels "Limits"). Within the safe alphabet a byte is a
+// character, so bytes and the spec's characters agree. They are applied where a
+// writer other than the Relay supplies a Label: node: through
+// WellFormedNodeLabel, and the tag: write. WellFormedLabel does not apply
+// them; see the length-cap note on its doc.
+const (
+	MaxLabelKeyLen   = 63
+	MaxLabelValueLen = 255
+)
+
+// WellFormedNodeLabel reports whether a bare node: key and its value may be
+// recorded or served: WellFormedLabel, with the key at most MaxLabelKeyLen and
+// the value at most MaxLabelValueLen bytes. The node: ingress
+// (protoconv.ParseNodeLabel) refuses a pair that fails, and the read-back of a
+// stored node: Label declines one stored before the length bound existed.
+func WellFormedNodeLabel(key, value string) bool {
+	return len(key) <= MaxLabelKeyLen && len(value) <= MaxLabelValueLen &&
+		WellFormedLabel(key, value)
+}
+
 // MaxLoggedLabelKeyBytes bounds a refused label key before it reaches a log or
 // a report.
 //
@@ -203,6 +225,8 @@ const MaxLoggedLabelKeyBytes = 128
 // there is one hazard and there must be one helper: both the Hello ingress
 // (cmd/relay/tunnel.go) and the read-back scan (internal/store) bound the same
 // attacker-influenced key for the same reason, and a second copy would drift.
+// The tunnel also bounds the wire hello.node_id with it, the same hazard: an
+// attacker-controlled string headed for a log.
 func BoundLogKey(k string) (bounded string, truncated bool) {
 	if len(k) <= MaxLoggedLabelKeyBytes {
 		return k, false

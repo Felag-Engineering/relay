@@ -526,8 +526,8 @@ func readAuditorOrNil(s *auditsink.Sink) api.ReadAuditor {
 	return s
 }
 
-// consoleTrustReader adapts the CA and the control-plane server certificate to
-// console.TrustReader.
+// consoleTrustReader adapts the CA and the server certificate both listeners
+// present to console.TrustReader.
 //
 // It lives in the composition root, like every other surface adapter in this
 // file, and that placement is what keeps package console from importing

@@ -1,6 +1,6 @@
 # One server certificate, multi-SAN, and the fingerprint-pinned join string
 
-**Status:** Accepted; amended 2026-10-16 (the wire form is a `/proto` message; `RELAY_JOIN` lives in the daemon's environment file); amended 2026-10-21 (a join string is consumed, never persisted on a Node; a mint names its use limit).
+**Status:** Accepted; amended 2026-10-16 (the wire form is a `/proto` message; `RELAY_JOIN` lives in the daemon's environment file); amended 2026-10-21 (a join string is consumed, never persisted on a Node; a mint names its use limit); amended 2026-10-21 (the daemon's address variables are renamed); amended 2026-10-26 (what the one server certificate names).
 
 ADR-0048 supersedes the 2026-10-21 amendment where a mint form defaults to one use: the form asks
 how many Nodes the token is for.
@@ -47,7 +47,8 @@ test rather than a comment.
 
 **2. The certificate carries multiple SANs**: `-hostname`, every detected non-loopback IP,
 loopback, plus a repeatable `-san` flag. `IssueServerCertificate(dnsNames, ipAddresses)` already
-takes both slices; only the call sites change.
+takes both slices; only the call sites change. *The 2026-10-26 amendment below replaces this
+naming rule; the `-hostname` and `-san` flags do not exist (ADR-0043).*
 
 The detected-IP SANs take DNS off the critical path for evaluation — a Node can dial by address
 on day one. The `-san` flag is load-bearing, because under decision 1 the daemons' internal name
@@ -229,3 +230,22 @@ relay-daemon's `RELAY_ADDR` is now `RELAY_ADDRESS` and its `RELAY_ENROLL_ENDPOIN
 `RELAY_ADDRESS`, when set, overrides the persisted value on every start. The Relay's own retired
 `RELAY_ADDR` keeps its name in the refusal list, so the two no longer share one.
 
+## Amendment (2026-10-26): what the one server certificate names
+
+Owner decision, 2026-10-26. It replaces decision 2's naming rule; decision 1 is unchanged. The
+`-hostname` and `-san` flags decision 2 names do not exist: under ADR-0043 the configuration
+file is the only source of settings.
+
+**Built.** The one server certificate names `tls.hostname` (an IP SAN when it is an address),
+loopback, and up to 64 addresses read from the host's interfaces, IPv4 first, so the cap drops
+IPv6 addresses before IPv4. The interface list skips loopback, already named, and link-local,
+multicast and unspecified addresses. The addresses are read once, at start; a rotation reuses
+them, so an address the host gains later is named only after a restart. If they cannot be read,
+the Relay still starts, warns, and names only `tls.hostname` and loopback.
+
+**Decided, built by #1186.** It also names the host of the advertised address
+(`relay-configuration.md` RC-36) and each entry of a bind-time `[tls] extra_names` list, which
+takes the role decision 2 gave `-san`. Neither is on the certificate until #1186 lands.
+
+**Accepted.** Reading the addresses needs `AF_NETLINK` in the Relay unit's sandbox (threat
+model R47), and the certificate shows them to any TLS peer (R48).

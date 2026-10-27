@@ -228,7 +228,7 @@ func newTestServerWithConcurrency(t *testing.T, accountID string, readCap, mutat
 	if _, err := reg.Upsert(registry.Report{
 		NodeID:            nodeB,
 		Facts:             registry.Facts{Hostname: "db-1", OS: "linux"},
-		PolicyFingerprint: "sha256:node-b-fingerprint",
+		PolicyFingerprint: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 		DaemonVersion:     "1.3.0",
 	}.WithNodeLabels(map[string]string{"env": "prod"})); err != nil {
 		t.Fatalf("seed node B: %v", err)

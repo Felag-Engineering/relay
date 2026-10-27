@@ -68,9 +68,9 @@ const (
 	violationSlotOther      = 2
 )
 
-// ServerCertListener names the listener whose server certificate rotated. It
-// is a closed two-value enum rather than a string so the label it renders is
-// bounded by construction, like every other label in this package.
+// ServerCertListener names a listener that presents the Relay's server
+// certificate. It is a closed two-value enum rather than a string so the label
+// it renders is bounded by construction, like every other label in this package.
 type ServerCertListener int
 
 const (
@@ -273,10 +273,13 @@ func (m *Metrics) IncEnrollment() {
 	m.enrollments.Add(1)
 }
 
-// IncServerCertRotation records one in-process re-issuance of a listener's own
-// TLS server certificate (ADR-0031 §5). A counter that stops advancing
-// is how an operator sees rotation stop; the certificate's remaining lifetime
-// after that is their warning window.
+// IncServerCertRotation records that the certificate a listener presents was
+// re-issued in-process (ADR-0031 §5). One certificate serves both listeners
+// (ADR-0031 §1), so the composition root moves every presenting listener's
+// series on one re-issue; a sum() across listeners counts each re-issue once
+// per listener and is not the number of re-issues. A counter that stops
+// advancing is how an operator sees rotation stop; the certificate's remaining
+// lifetime after that is their warning window.
 func (m *Metrics) IncServerCertRotation(l ServerCertListener) {
 	idx := int(l)
 	if idx < 0 || idx >= nServerCertListeners {

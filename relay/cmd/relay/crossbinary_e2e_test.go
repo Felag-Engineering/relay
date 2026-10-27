@@ -79,6 +79,14 @@ func relaySubprocessEnv(extra ...string) []string {
 // the process the test started: as a separate uid that is sudo, which cannot relay SIGKILL.
 func startRelaySubprocess(t *testing.T, layout *relaytest.RelayLayout, relayBin, addr, extraTOML string) (proc *relaytest.RelayProcess, gotAddr string) {
 	t.Helper()
+	return startRelaySubprocessWithHostname(t, layout, relayBin, addr, "localhost", extraTOML)
+}
+
+// startRelaySubprocessWithHostname is startRelaySubprocess with tls.hostname set to
+// hostname instead of "localhost": the one name (or IP address) the Relay's server
+// certificate and join strings carry.
+func startRelaySubprocessWithHostname(t *testing.T, layout *relaytest.RelayLayout, relayBin, addr, hostname, extraTOML string) (proc *relaytest.RelayProcess, gotAddr string) {
+	t.Helper()
 	const maxAttempts = 3
 	const startupTimeout = 10 * time.Second
 
@@ -98,8 +106,8 @@ func startRelaySubprocess(t *testing.T, layout *relaytest.RelayLayout, relayBin,
 		}
 
 		cfgPath := layout.WriteConfig(t, fmt.Sprintf(
-			"[node_plane]\nlisten_address = %q\n\n[ca]\ndir = %q\n\n[store]\npath = %q\n\n[tls]\nhostname = \"localhost\"\n\n%s",
-			a, relayCADir(layout), filepath.Join(layout.StateDir(), "relay.db"), extraTOML))
+			"[node_plane]\nlisten_address = %q\n\n[ca]\ndir = %q\n\n[store]\npath = %q\n\n[tls]\nhostname = %q\n\n%s",
+			a, relayCADir(layout), filepath.Join(layout.StateDir(), "relay.db"), hostname, extraTOML))
 		p, err := layout.Start(t, bin, env, "--config", cfgPath)
 		if err != nil {
 			t.Fatalf("start relay (attempt %d): %v", attempt, err)

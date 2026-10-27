@@ -89,6 +89,61 @@ func TestNewServer_RunsDeclinedLabelScanAtStartup(t *testing.T) {
 	}
 }
 
+// TestNewServer_RunsDeclinedSelfReportScanAtStartup is the composition-root
+// half of the self-report scan: newServer must call it on boot, so the test
+// observes the finding line it produces for a row an older Relay stored.
+func TestNewServer_RunsDeclinedSelfReportScanAtStartup(t *testing.T) {
+	cfg := baseTestConfig(t)
+
+	preSt, err := store.Open(cfg.StorePath)
+	if err != nil {
+		t.Fatalf("pre-create store.Open: %v", err)
+	}
+	const nodeID = "node-self-report-scan"
+	// Upsert applies no bound (the ingress does), so it stores the value as
+	// a Relay before the bound would have.
+	if _, err := preSt.Registry().Upsert(registry.Report{NodeID: nodeID, PolicyFingerprint: "sha256:forged"}); err != nil {
+		t.Fatalf("Upsert %s: %v", nodeID, err)
+	}
+	if err := preSt.Close(); err != nil {
+		t.Fatalf("close pre-created store: %v", err)
+	}
+
+	var logBuf bytes.Buffer
+	prevDefault := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logBuf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prevDefault) })
+
+	srv, deps, err := newServer(cfg, testStartupFiles(t, cfg))
+	if err != nil {
+		t.Fatalf("newServer: %v", err)
+	}
+	t.Cleanup(func() { deps.store.Close() })
+	t.Cleanup(srv.Stop)
+
+	var sawFinding bool
+	for _, line := range strings.Split(strings.TrimRight(logBuf.String(), "\n"), "\n") {
+		var entry struct {
+			Msg    string `json:"msg"`
+			NodeID string `json:"node_id"`
+			Field  string `json:"field"`
+		}
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			continue
+		}
+		if entry.Msg == "stored self-reported field declined on read-back" && entry.NodeID == nodeID &&
+			entry.Field == registry.FieldPolicyFingerprint {
+			sawFinding = true
+		}
+	}
+	if !sawFinding {
+		t.Errorf("no startup-scan finding naming node_id=%q and the Policy fingerprint; the ScanDeclinedSelfReports call was not made; log:\n%s", nodeID, logBuf.String())
+	}
+	if strings.Contains(logBuf.String(), "sha256:forged") {
+		t.Error("the startup scan logged the declined value; it names the field, never the value")
+	}
+}
+
 // TestNewServer_WiresLabelsDeclinedMetric asserts newServer actually sets
 // GaugeSources.LabelsDeclined to the live Store, not merely that the field
 // exists on the struct — a field added to GaugeSources but never assigned in

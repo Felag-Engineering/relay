@@ -74,6 +74,7 @@ relay/cmd/relay/console_password.go
 relay/cmd/relay/control_surfaces.go
 relay/cmd/relay/dispatch_wiring.go
 relay/cmd/relay/host_audit.go
+relay/cmd/relay/servercert.go
 relay/cmd/relay/tunnel.go
 daemon/src/scheduler.rs
 daemon/src/shutdown.rs
@@ -140,3 +141,8 @@ daemon/src/join/**
 # the install matrix boots. Each decides what the matrix proves about a package, for the
 # same reason .golangci.yml and tools/** are listed.
 docker/install-matrix/**
+
+# Added 2026-10-26 (owner decision, #1182): the one proto-aware ingress seam. It applies
+# every bound on what a Node reports about itself at Hello and Enroll, and the node:
+# namespace gate of invariant 7, so a change that loosens one must escalate.
+relay/internal/protoconv/**

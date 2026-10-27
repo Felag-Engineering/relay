@@ -222,9 +222,9 @@ func TestListNodes_ReturnsMatchesInNodeIdOrder(t *testing.T) {
 // and the peer counts the lane computes so a caller never has to enumerate.
 func TestDescribeNode_RecordsTheNodeItWasAimedAt(t *testing.T) {
 	svc, sink := registryLaneFixture(t,
-		registry.Report{NodeID: "node-1", PolicyFingerprint: "sha256:aaa", TemplateSetFingerprint: "sha256:ttt"},
-		registry.Report{NodeID: "node-2", PolicyFingerprint: "sha256:aaa"},
-		registry.Report{NodeID: "node-3", PolicyFingerprint: "sha256:bbb"},
+		registry.Report{NodeID: "node-1", PolicyFingerprint: "a256aaa000000000000000000000000000000000000000000000000000000000", TemplateSetFingerprint: "a256000000000000000000000000000000000000000000000000000000000000"},
+		registry.Report{NodeID: "node-2", PolicyFingerprint: "a256aaa000000000000000000000000000000000000000000000000000000000"},
+		registry.Report{NodeID: "node-3", PolicyFingerprint: "a256bbb000000000000000000000000000000000000000000000000000000000"},
 	)
 
 	d, err := svc.DescribeNode(context.Background(), testPrincipal, "node-1")
@@ -261,9 +261,9 @@ func TestDescribeNode_RecordsTheNodeItWasAimedAt(t *testing.T) {
 // doc comment records — no benchmark is added.
 func TestDescribeNode_CountsFingerprintPeersAndSkipsEmptyFingerprints(t *testing.T) {
 	svc, _ := registryLaneFixture(t,
-		registry.Report{NodeID: "node-1", PolicyFingerprint: "sha256:aaa", TemplateSetFingerprint: "sha256:ttt"},
-		registry.Report{NodeID: "node-2", PolicyFingerprint: "sha256:aaa"},
-		registry.Report{NodeID: "node-3", PolicyFingerprint: "sha256:bbb"},
+		registry.Report{NodeID: "node-1", PolicyFingerprint: "a256aaa000000000000000000000000000000000000000000000000000000000", TemplateSetFingerprint: "a256000000000000000000000000000000000000000000000000000000000000"},
+		registry.Report{NodeID: "node-2", PolicyFingerprint: "a256aaa000000000000000000000000000000000000000000000000000000000"},
+		registry.Report{NodeID: "node-3", PolicyFingerprint: "a256bbb000000000000000000000000000000000000000000000000000000000"},
 		registry.Report{NodeID: "node-4"},
 	)
 
@@ -468,18 +468,18 @@ func TestDescribeNode_BoundsTheNodeIdBeforeRecordingIt(t *testing.T) {
 // disclosure half: describe_node's Policy/Template views come from the same
 // call, with no second record — the record already covers this Node ID.
 func TestDescribeNode_CarriesThePolicyViewAndTemplateVocabulary(t *testing.T) {
-	policy := fakePolicyView{"node-1": policyview.Snapshot{PolicyFingerprint: "sha256:aaa", RawExecEnabled: true}}
-	vocab := fakeTemplateVocab{"node-1": nodevocab.Snapshot{Fingerprint: "sha256:ttt"}}
+	policy := fakePolicyView{"node-1": policyview.Snapshot{PolicyFingerprint: "a256aaa000000000000000000000000000000000000000000000000000000000", RawExecEnabled: true}}
+	vocab := fakeTemplateVocab{"node-1": nodevocab.Snapshot{Fingerprint: "a256000000000000000000000000000000000000000000000000000000000000"}}
 	svc, sink := registryLaneFixtureWithViews(t, policy, vocab, registry.Report{NodeID: "node-1"})
 
 	d, err := svc.DescribeNode(context.Background(), testPrincipal, "node-1")
 	if err != nil {
 		t.Fatalf("DescribeNode: %v", err)
 	}
-	if !d.PolicyReported || d.Policy.PolicyFingerprint != "sha256:aaa" {
+	if !d.PolicyReported || d.Policy.PolicyFingerprint != "a256aaa000000000000000000000000000000000000000000000000000000000" {
 		t.Errorf("Policy/PolicyReported = %+v/%v, want the fake's reported Snapshot", d.Policy, d.PolicyReported)
 	}
-	if !d.TemplatesReported || d.Templates.Fingerprint != "sha256:ttt" {
+	if !d.TemplatesReported || d.Templates.Fingerprint != "a256000000000000000000000000000000000000000000000000000000000000" {
 		t.Errorf("Templates/TemplatesReported = %+v/%v, want the fake's reported Snapshot", d.Templates, d.TemplatesReported)
 	}
 	// Still exactly one record — the Policy/Template views ride the SAME
@@ -513,14 +513,14 @@ func TestDescribeNode_AnUnwiredCacheReportsNotReportedNotAnEmptyPolicy(t *testin
 // per-Node happy path: the Template vocabulary comes back and the read is
 // recorded aimed at that Node.
 func TestListOperations_RecordsTheNodeItWasAimedAt(t *testing.T) {
-	vocab := fakeTemplateVocab{"node-1": nodevocab.Snapshot{Fingerprint: "sha256:ttt"}}
+	vocab := fakeTemplateVocab{"node-1": nodevocab.Snapshot{Fingerprint: "a256000000000000000000000000000000000000000000000000000000000000"}}
 	svc, sink := registryLaneFixtureWithViews(t, fakePolicyView{}, vocab, registry.Report{NodeID: "node-1"})
 
 	got, err := svc.ListOperations(context.Background(), testPrincipal, "node-1")
 	if err != nil {
 		t.Fatalf("ListOperations: %v", err)
 	}
-	if !got.Reported || got.Templates.Fingerprint != "sha256:ttt" {
+	if !got.Reported || got.Templates.Fingerprint != "a256000000000000000000000000000000000000000000000000000000000000" {
 		t.Errorf("OperationVocabulary = %+v, want the fake's reported Snapshot", got)
 	}
 	if len(sink.readCalls) != 1 || sink.readCalls[0].Tool != toolListOperations || sink.readCalls[0].NodeID != "node-1" {

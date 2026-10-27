@@ -11,7 +11,7 @@ import (
 // This file is the one-shot boot answer to "which Nodes carry a stored Label
 // this Relay will no longer serve" (threat model R13). getNode's
 // read-back filter (registry.go's wellFormedLabels) silently drops a pair
-// registry.WellFormedLabel refuses, and does so on every read — Get, List,
+// its namespace's predicate (labelNamespace.wellFormed) refuses, and does so on every read — Get, List,
 // and Upsert's own read-back — which is exactly why a per-read log line is
 // the wrong shape: List alone would re-log N lines per fleet listing,
 // forever, for state that never changes on its own. A scan run once per
@@ -177,7 +177,7 @@ func (s *Store) ScanDeclinedLabels(ctx context.Context) (DeclinedLabelReport, er
 }
 
 // scanDeclinedNamespace queries ns's table directly and classifies every row
-// against registry.WellFormedLabel. It deliberately does NOT go through
+// against ns.wellFormed, the predicate getNode's read filter applies. It deliberately does NOT go through
 // getNode, fetchLabels, or wellFormedLabels: loading whole Node records here
 // is wasted work, and reusing wellFormedLabels would advance the SAME
 // read-back counters getNode's readers advance (Store.LabelsDeclined),
@@ -193,6 +193,7 @@ func (s *Store) ScanDeclinedLabels(ctx context.Context) (DeclinedLabelReport, er
 // set the size of the affected fleet.
 func scanDeclinedNamespace(ctx context.Context, q queryer, ns labelNamespace) (DeclinedLabelSet, error) {
 	table := ns.table()
+	wellFormed := ns.wellFormed()
 	rows, err := q.QueryContext(ctx,
 		fmt.Sprintf(`SELECT node_id, key, value FROM %s ORDER BY node_id, key`, table)) // table is one of two fixed literals, never user input
 	if err != nil {
@@ -208,7 +209,7 @@ func scanDeclinedNamespace(ctx context.Context, q queryer, ns labelNamespace) (D
 		if err := rows.Scan(&nodeID, &key, &value); err != nil {
 			return DeclinedLabelSet{}, fmt.Errorf("scan %s row: %w", table, err)
 		}
-		if registry.WellFormedLabel(key, value) {
+		if wellFormed(key, value) {
 			continue
 		}
 
@@ -228,35 +229,33 @@ func scanDeclinedNamespace(ctx context.Context, q queryer, ns labelNamespace) (D
 			NodeID:       nodeID,
 			Key:          truncatedKey,
 			KeyTruncated: wasTruncated,
-			Part:         declinedPart(key, value),
+			Part:         declinedPart(wellFormed, key, value),
 		})
 	}
 	return set, rows.Err()
 }
 
-// declinedPart identifies which half of (key, value) registry.WellFormedLabel
-// refused, using the ONE existing predicate rather than a second copy of its
-// rule — label.go documents every seam for this predicate, and a
-// second predicate written just to answer "which half" would be the drift
-// that one predicate exists to prevent.
+// declinedPart identifies which half of (key, value) wellFormed refused, using
+// the namespace's ONE predicate (ns.wellFormed) rather than a second copy of
+// its rule: label.go documents every seam for it, and a predicate written just
+// to answer "which half" would be the drift one predicate exists to prevent.
 //
-// WellFormedLabel(key, value) decomposes to
-// (key != "" && wellFormedLabelBytes(key)) && wellFormedLabelBytes(value).
-// Probing each side in isolation, against a partner already known
-// well-formed, recovers each term without re-deriving it:
-//   - keyOK := WellFormedLabel(key, "") isolates the key, because the empty
-//     value is accepted by design (label.go).
-//   - valueOK := WellFormedLabel(declinedProbeKey, value) isolates the value,
+// Both predicates decompose into a term on the key alone and a term on the
+// value alone (WellFormedNodeLabel adds a length bound to each side). Probing
+// each side against a partner already known well-formed recovers each term
+// without re-deriving it:
+//   - keyOK := wellFormed(key, "") isolates the key, because the empty value
+//     is accepted by design (label.go).
+//   - valueOK := wellFormed(declinedProbeKey, value) isolates the value,
 //     because declinedProbeKey is a fixed well-formed key.
 //
 // This is correct for every input this function is called on (a pair
-// registry.WellFormedLabel has already refused, so at least one of keyOK/
-// valueOK is false), including an empty key (keyOK false, by
-// WellFormedLabel's own key != "" check) and an empty value (valueOK true,
-// since wellFormedLabelBytes("") is vacuously true).
-func declinedPart(key, value string) DeclinedLabelPart {
-	keyOK := registry.WellFormedLabel(key, "")
-	valueOK := registry.WellFormedLabel(declinedProbeKey, value)
+// wellFormed has already refused, so at least one of keyOK/valueOK is false),
+// including an empty key (keyOK false, by WellFormedLabel's own key != ""
+// check) and an empty value (valueOK true).
+func declinedPart(wellFormed func(key, value string) bool, key, value string) DeclinedLabelPart {
+	keyOK := wellFormed(key, "")
+	valueOK := wellFormed(declinedProbeKey, value)
 	switch {
 	case !keyOK && !valueOK:
 		return DeclinedPartBoth
