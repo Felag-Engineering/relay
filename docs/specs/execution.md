@@ -127,11 +127,12 @@ outcome recorded against that Node, not a Relay-side abandonment. There is no Jo
 
 ### Halting a failing mutation
 
-**A `mutate` Job halts on its first failure** (MVP; the code today sends every Task whatever the
-outcomes). Once one Task resolves `failure` or `timeout`, no
+**A `mutate` Job halts on its first failure** (MVP). Once one Task resolves `failure` or `timeout`, no
 further Task is sent. Every unsent Task resolves `cancelled` with the halt as its reason, and the
 Job's result says it halted, on which Node, and why. Tasks already in flight when the halt happens
 finish and report their real outcomes.
+A halt is not yet kept across a Relay restart: a Relay that restarts mid-Job may send the
+halted Job's unsent Tasks, each still at most once (#1191).
 
 - `denied_by_policy`, `unsupported` and `unreachable` **do not halt** a Job. They describe that
   Node, not the change being made.
