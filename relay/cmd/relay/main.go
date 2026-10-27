@@ -680,10 +680,13 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 		// already dispatches through.
 		router, reconciler, sink := newDispatchStack(st.Tasks(), violationRecorder{audit: auditSink, metrics: appMetrics}, logger)
 		// reconciler is captured by router's onConnect closure
-		// (dispatch_wiring.go) and fires on every Node (re)connect — this is
-		// what makes crash-mid-Job restart reconciliation happen; it is not
-		// called directly from here.
-		_ = reconciler
+		// (dispatch_wiring.go) and fires on every Node (re)connect. The sweep
+		// runs here, before srv.Serve, so no Node connects and is reconciled
+		// before a halted Job's unsent Tasks are settled; a failure refuses
+		// start-up rather than leave them for a reconnect to send.
+		if err := settleHaltedJobs(reconciler, st.HaltedJobs(), logger); err != nil {
+			return nil, nil, err
+		}
 		ts.sink = sink
 		dispatchRouter = router
 

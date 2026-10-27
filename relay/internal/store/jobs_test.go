@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -286,6 +287,53 @@ func TestRecordHalt_OnlyOnce(t *testing.T) {
 	}
 	if err := st.Jobs().RecordHalt(ctx, "job-h", h); !errors.Is(err, jobs.ErrJobAlreadyHalted) {
 		t.Errorf("second RecordHalt = %v, want ErrJobAlreadyHalted", err)
+	}
+}
+
+// TestUnsettledTasksOfHaltedJobs_ListsOnlyUnsettledTasksOfHaltedJobs: what a
+// restart settles is the Pending and Dispatched Tasks of a Job that carries a
+// halt, and nothing of a Job that does not.
+func TestUnsettledTasksOfHaltedJobs_ListsOnlyUnsettledTasksOfHaltedJobs(t *testing.T) {
+	st, _ := openTestStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	haltingID := seedHaltFixture(t, st)
+	resolveHaltFixture(t, st, haltingID, jobs.OutcomeFailure)
+	addTask := func(jobID, stageID, taskID, nodeID string, dispatch, resolve bool) {
+		task := jobs.Task{ID: taskID, JobID: jobID, StageID: stageID, NodeID: nodeID, Action: testAction(), CreatedAt: now}
+		if err := st.Tasks().CreateTask(ctx, task); err != nil {
+			t.Fatalf("CreateTask(%s): %v", taskID, err)
+		}
+		if dispatch {
+			if err := st.Tasks().MarkDispatched(ctx, taskID, now); err != nil {
+				t.Fatalf("MarkDispatched(%s): %v", taskID, err)
+			}
+		}
+		if resolve {
+			resolveHaltFixture(t, st, taskID, jobs.OutcomeSuccess)
+		}
+	}
+	addTask("job-h", "stage-h", "task-h2-pending", "node-2", false, false)
+	addTask("job-h", "stage-h", "task-h3-dispatched", "node-3", true, false)
+	addTask("job-h", "stage-h", "task-h4-resolved", "node-4", true, true)
+	if err := st.Jobs().RecordHalt(ctx, "job-h", jobs.Halt{TaskID: haltingID, NodeID: "node-1", Outcome: jobs.OutcomeFailure, Resolved: true, At: now}); err != nil {
+		t.Fatalf("RecordHalt: %v", err)
+	}
+	seedJobAndStage(t, st, "job-p", "stage-p")
+	addTask("job-p", "stage-p", "task-p1-pending", "node-2", false, false)
+	addTask("job-p", "stage-p", "task-p2-dispatched", "node-3", true, false)
+
+	got, err := st.HaltedJobs().UnsettledTasksOfHaltedJobs(ctx)
+	if err != nil {
+		t.Fatalf("UnsettledTasksOfHaltedJobs: %v", err)
+	}
+	var ids []string
+	for _, task := range got {
+		ids = append(ids, task.ID)
+	}
+	want := []string{"task-h2-pending", "task-h3-dispatched"}
+	if !slices.Equal(ids, want) {
+		t.Errorf("UnsettledTasksOfHaltedJobs = %v, want %v", ids, want)
 	}
 }
 

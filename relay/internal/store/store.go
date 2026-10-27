@@ -316,6 +316,9 @@ func (s *Store) Tasks() jobs.TaskRepository {
 	return &sqliteTasks{db: s.db}
 }
 
+// HaltedJobs returns the SQLite-backed jobs.HaltedJobRepository.
+func (s *Store) HaltedJobs() jobs.HaltedJobRepository { return &sqliteJobs{db: s.db} }
+
 // Audit returns the SQLite-backed audit.Repository.
 func (s *Store) Audit() audit.Repository {
 	return &sqliteAudit{db: s.db}

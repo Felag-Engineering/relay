@@ -131,8 +131,6 @@ outcome recorded against that Node, not a Relay-side abandonment. There is no Jo
 further Task is sent. Every unsent Task resolves `cancelled` with the halt as its reason, and the
 Job's result says it halted, on which Node, and why. Tasks already in flight when the halt happens
 finish and report their real outcomes.
-A halt is not yet kept across a Relay restart: a Relay that restarts mid-Job may send the
-halted Job's unsent Tasks, each still at most once (#1191).
 
 - `denied_by_policy`, `unsupported` and `unreachable` **do not halt** a Job. They describe that
   Node, not the change being made.
@@ -382,6 +380,7 @@ also need `make test-integration`; changes to the daemon-facing contract need th
 | A Template Job halts on its most restrictive reported class | `TestRun_TemplateJobHaltsOnTheDispatchClass` | capability |
 | The halt is recorded on the Job and in the audit trail | `TestExecution_HaltIsRecordedOnTheJobAndAudited` | capability |
 | A halted Job's unsent Tasks are never sent after a restart | `TestDispatchWiring_AHaltedJobsUnsentTasksAreNeverSentAfterARestart` | composition |
+| After a restart, no Task of a halted Job is sent, and every unsent sibling, Dispatched or Pending, resolves `cancelled` with the halt as its reason | `TestDispatchWiring_ARestartSendsNoTaskOfAHaltedJobAndCancelsEverySibling`, `TestReconciler_SettleHaltedJobs_SendsNothingAndResolvesEveryUnsentTask` | composition, capability |
 | A halted Job names the halting Node, the same on both surfaces | `TestMCP_HaltedMutateJob_ReportsTheHaltOnRunAndGetJob`, `TestControlAPI_HaltRendersIdenticallyOnBothSurfaces` | MCP, Control API |
 | No surface can dispatch outside this layer | `TestNoDispatchConstruction`, `TestDispatchSymbolsUnexported` | compile-time |
 | The layer imports nothing but registry and jobs | `.golangci.yml` depguard rule `capability-imports` | lint |

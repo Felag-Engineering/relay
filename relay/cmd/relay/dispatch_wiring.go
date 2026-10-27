@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -95,6 +96,26 @@ func (s routerSink) deliverVerdict(nodeID string, verdict *relayv1.PolicyVerdict
 // offlineResolveBudget bounds the offline sweep. A reconnecting Node's
 // Register waits behind that sweep, so it is also the longest that wait lasts.
 const offlineResolveBudget = 30 * time.Second
+
+// haltedJobsSettleBudget bounds the start-up sweep of halted Jobs, which runs
+// ahead of the listener.
+const haltedJobsSettleBudget = 30 * time.Second
+
+// settleHaltedJobs runs the Reconciler's start-up sweep of halted Jobs. It must
+// run before the Tunnel serves: a connecting Node's reconcile re-sends whatever
+// is still Dispatched.
+func settleHaltedJobs(reconciler *dispatch.Reconciler, halted jobs.HaltedJobRepository, logger *slog.Logger) error {
+	ctx, cancel := context.WithTimeout(context.Background(), haltedJobsSettleBudget)
+	defer cancel()
+	n, err := reconciler.SettleHaltedJobs(ctx, halted)
+	if n > 0 {
+		logctx.Or(logger).Info("settled the unresolved Tasks of halted Jobs", "tasks", n)
+	}
+	if err != nil {
+		return fmt.Errorf("settle halted jobs: %w", err)
+	}
+	return nil
+}
 
 // newDispatchStack builds the Router + Reconciler + taskSink triple: a Node
 // (re)connecting fires the Reconciler's re-send-for-result (ADR-0004) via

@@ -384,16 +384,39 @@ func (h Halt) Halted() bool { return h.TaskID != "" }
 // persisted Halt. A wording change therefore alters what new records say and
 // the rendered halt of older Jobs, never the stderr older Tasks already hold.
 func (h Halt) Reason() string {
-	lead := fmt.Sprintf("halted: this mutate Job stops sending after its Task on Node %q resolved %s. ",
-		h.NodeID, OutcomeName(h.Outcome))
-	if !h.Resolved {
-		lead = fmt.Sprintf("halted: this mutate Job stops sending after its Task on Node %q reported %s "+
-			"with no recorded result; that Task's real outcome may still arrive. ", h.NodeID, OutcomeName(h.Outcome))
-	}
-	return lead + fmt.Sprintf("A mutate Job sends no further Task once one fails or times out, so a bad "+
+	return h.lead() + fmt.Sprintf("A mutate Job sends no further Task once one fails or times out, so a bad "+
 		"change reaches at most one batch of Nodes. A Task this halt left unsent was never sent, and nothing "+
 		"ran for it on its Node; Tasks already in flight finish and report their own outcomes. Check Node %q, "+
 		"then re-target the Nodes this Job did not reach if the change is still wanted.", h.NodeID)
+}
+
+// lead is the sentence Reason and RestartReason open with: the halting Task's
+// Node and outcome.
+func (h Halt) lead() string {
+	if !h.Resolved {
+		return fmt.Sprintf("halted: this mutate Job stops sending after its Task on Node %q reported %s "+
+			"with no recorded result; that Task's real outcome may still arrive. ", h.NodeID, OutcomeName(h.Outcome))
+	}
+	return fmt.Sprintf("halted: this mutate Job stops sending after its Task on Node %q resolved %s. ",
+		h.NodeID, OutcomeName(h.Outcome))
+}
+
+// RestartReason renders h for a Task the Relay found marked dispatched with no
+// result when it restarted, and so did not re-send. It is Relay-authored and
+// holds no Node-authored byte. Unlike Reason it never says the Task was never
+// sent or that nothing ran: a Task is marked dispatched before it is sent, so
+// it may have reached its Node before the restart.
+func (h Halt) RestartReason() string {
+	return h.lead() + "The Relay restarted while this Task was marked dispatched with no result, and it " +
+		"sends no Task of a halted Job after a restart, so this Task was not re-sent and whether it " +
+		"reached its Node before the restart is unknown: it may have run. Check this Task's Node " +
+		"before re-targeting it."
+}
+
+// RestartResult is the Result of a Task resolved with RestartReason. Like
+// NodeOfflineResult it carries -1, the no-exit-status sentinel.
+func (h Halt) RestartResult() Result {
+	return Result{Outcome: OutcomeCancelled, ExitCode: -1, Stderr: []byte(h.RestartReason())}
 }
 
 // Stage is a batch of Tasks within a Job. v1 permits exactly one Stage per
@@ -507,6 +530,17 @@ type JobRepository interface {
 
 	// Stages returns all Stages for jobID (at most one, in v1), ordered by Index.
 	Stages(ctx context.Context, jobID string) ([]Stage, error)
+}
+
+// HaltedJobRepository is what a Relay restart reads to settle halted Jobs
+// (execution.md, Halting a failing mutation).
+type HaltedJobRepository interface {
+	// GetJob returns the Job with the given ID, or ErrJobNotFound.
+	GetJob(ctx context.Context, id string) (Job, error)
+
+	// UnsettledTasksOfHaltedJobs returns every Pending or Dispatched Task whose
+	// Job carries a halt, ordered by Job then Task ID.
+	UnsettledTasksOfHaltedJobs(ctx context.Context) ([]Task, error)
 }
 
 // TaskRepository persists Tasks and their dispatch state. Each Mark* method

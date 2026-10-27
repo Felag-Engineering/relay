@@ -22,7 +22,8 @@ const reconcileDispatchTimeout = 35 * time.Second
 // Reconciler recovers in-flight Tasks after a Relay restart or a Node
 // reconnect (ADR-0004's at-most-once-across-restart discipline): it re-sends
 // them for their result on connect, and ResolveOffline resolves them when
-// their Node goes offline. It is separate from Router so Router stays
+// their Node goes offline. SettleHaltedJobs is its start-up counterpart for
+// halted Jobs and sends nothing. It is separate from Router so Router stays
 // transport-only.
 //
 // Resend-for-result is safe ONLY because the relay-daemon dedups Task
@@ -158,6 +159,100 @@ func (r *Reconciler) ResolveOffline(ctx context.Context, nodeID string, skip map
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// SettleHaltedJobs resolves, sending nothing, every Task a halted mutate Job
+// left Pending or Dispatched when the Relay stopped, and returns how many it
+// resolved. It runs once at start, before any Node can connect, because
+// ReconcileNode re-sends every Dispatched Task and must never send one of a
+// halted Job (invariant 4, ADR-0004; execution.md, Halting a failing mutation).
+//
+// A Pending Task resolves as a live halt leaves it: Halt.Reason, no dispatch
+// time. A Dispatched one may already have been sent, so it resolves with
+// Halt.RestartResult, keeping its dispatch time, rather than claim it never
+// was. The halting Task itself, if still Dispatched, is treated the same.
+//
+// It must not run while a Job engine is live: a live halted Job's in-flight
+// Tasks finish and report their real outcomes, and only after a restart is no
+// engine left to receive them.
+//
+// ErrInvalidTaskState and ErrTaskNotFound are tolerated and not counted, as in
+// ResolveOffline: they mean the Task was resolved first. A Job that cannot be
+// read, or that the listing named but carries no halt, leaves its Tasks as they
+// are and is reported; every other error is joined and returned.
+func (r *Reconciler) SettleHaltedJobs(ctx context.Context, halted jobs.HaltedJobRepository) (int, error) {
+	survivors, err := halted.UnsettledTasksOfHaltedJobs(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("dispatch: settle halted jobs: list unsettled tasks: %w", err)
+	}
+
+	var errs []error
+	settled := 0
+	halts := make(map[string]jobs.Halt)
+	unreadable := make(map[string]bool)
+	for _, task := range survivors {
+		if unreadable[task.JobID] {
+			continue
+		}
+		h, known := halts[task.JobID]
+		if !known {
+			job, err := halted.GetJob(ctx, task.JobID)
+			if err != nil {
+				unreadable[task.JobID] = true
+				errs = append(errs, fmt.Errorf("dispatch: settle halted job %q: %w", task.JobID, err))
+				continue
+			}
+			h = job.Halt
+			halts[task.JobID] = h
+		}
+		if !h.Halted() {
+			// The listing selects only halted Jobs, so this is a store that
+			// disagrees with itself; sending nothing is the safe side.
+			unreadable[task.JobID] = true
+			errs = append(errs, fmt.Errorf("dispatch: settle halted job %q: listed as halted but carries no halt", task.JobID))
+			continue
+		}
+		ok, err := r.settleHaltedTask(ctx, task, h)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("dispatch: settle halted task %q: %w", task.ID, err))
+			continue
+		}
+		if ok {
+			settled++
+		}
+	}
+	return settled, errors.Join(errs...)
+}
+
+// settleHaltedTask resolves one Task of the halted Job h without sending it. It
+// reports false, with no error, for a Task that is not Pending or Dispatched or
+// that was resolved first.
+func (r *Reconciler) settleHaltedTask(ctx context.Context, task jobs.Task, h jobs.Halt) (bool, error) {
+	var err error
+	switch task.State {
+	case jobs.DispatchStatePending:
+		reason := h.Reason()
+		var next jobs.Task
+		next, err = task.Transition(jobs.TaskEvent{Kind: jobs.TaskEventHalt, Reason: reason}, r.now())
+		if err == nil {
+			err = r.tasks.MarkHalted(ctx, task.ID, reason, next.ResolvedAt)
+		}
+	case jobs.DispatchStateDispatched:
+		res := h.RestartResult()
+		_, err = task.Transition(jobs.TaskEvent{Kind: jobs.TaskEventResolve, Result: res}, r.now())
+		if err == nil {
+			err = r.tasks.Resolve(ctx, task.ID, res)
+		}
+	default:
+		return false, nil
+	}
+	if err != nil {
+		if errors.Is(err, jobs.ErrInvalidTaskState) || errors.Is(err, jobs.ErrTaskNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }
 
 // reconcileTask resends one in-flight Task for a Result and Resolves it.

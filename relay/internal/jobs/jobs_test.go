@@ -193,3 +193,34 @@ func TestHalt_ReasonNeverSaysResolvedOfAnUnresolvedTask(t *testing.T) {
 		t.Errorf("resolved Reason() = %q, want 'resolved failure' only", resolved)
 	}
 }
+
+// TestHalt_RestartReasonNamesTheHaltAndClaimsNoLess: a Task marked dispatched
+// at a restart may have been sent, so its text never says it was not.
+func TestHalt_RestartReasonNamesTheHaltAndClaimsNoLess(t *testing.T) {
+	for _, resolved := range []bool{true, false} {
+		h := Halt{TaskID: "task-1", NodeID: "node-7", Outcome: OutcomeTimeout, Resolved: resolved}
+		reason := h.RestartReason()
+		for _, want := range []string{`"node-7"`, OutcomeName(OutcomeTimeout), "restarted", "may have run"} {
+			if !strings.Contains(reason, want) {
+				t.Errorf("RestartReason() = %q, want it to contain %q", reason, want)
+			}
+		}
+		for _, banned := range []string{"never sent", "nothing ran"} {
+			if strings.Contains(reason, banned) {
+				t.Errorf("RestartReason() = %q, must not claim %q", reason, banned)
+			}
+		}
+		if !strings.HasPrefix(reason, h.lead()) || !strings.HasPrefix(h.Reason(), h.lead()) {
+			t.Errorf("RestartReason() and Reason() must open with the same halt sentence for resolved=%v", resolved)
+		}
+	}
+}
+
+func TestHalt_RestartResultIsCancelledWithNoExitStatus(t *testing.T) {
+	h := Halt{TaskID: "task-1", NodeID: "node-7", Outcome: OutcomeFailure, Resolved: true}
+	got := h.RestartResult()
+	if got.Outcome != OutcomeCancelled || got.ExitCode != -1 || string(got.Stderr) != h.RestartReason() ||
+		len(got.Stdout) != 0 || got.Truncated {
+		t.Errorf("RestartResult() = %+v, want cancelled, exit -1, RestartReason as stderr and nothing else", got)
+	}
+}
