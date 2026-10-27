@@ -667,6 +667,7 @@ var copyBudgets = map[string]int{
 	"/console/accounts/{account_id}/disable":                  20,
 	"/console/accounts/{account_id}/lower":                    20,
 	"/console/accounts/{account_id}/tokens/{token_id}/revoke": 20,
+	"/console/tags/confirm":                                   5,
 }
 
 // budgetPage is one page the budget test renders.
@@ -1295,6 +1296,27 @@ func TestCopyBudget_GoStringNotesAreShort(t *testing.T) {
 		{"throttleMessage(1s)", throttleMessage(time.Second), maxHeadingWords},
 		{"throttleMessage(30s)", throttleMessage(30 * time.Second), maxHeadingWords},
 	}
+	// The tag controls' sentences are Console-owned, one per capability
+	// sentinel, each followed by tagNotChanged where it is a refusal heading.
+	type row = struct {
+		name, text string
+		limit      int
+	}
+	for _, err := range append(append([]error(nil), tagBadRequests...), capability.ErrTooManyTags) {
+		rows = append(rows, row{"tagRefusalText(" + err.Error() + ")", tagRefusalText(err) + " " + tagNotChanged, maxHeadingWords})
+	}
+	_, filterRefusal := parseFleetFilter("foo")
+	rows = append(rows,
+		row{"tagNeedsFilterHeading", tagNeedsFilterHeading, maxHeadingWords},
+		row{"tagNoMatchHeading", tagNoMatchHeading, maxHeadingWords},
+		row{"tagChangedHeading", tagChangedHeading, maxHeadingWords},
+		row{"tagNodeGoneHeading", tagNodeGoneHeading, maxHeadingWords},
+		row{"tagUnconfirmedHeading", tagUnconfirmedHeading, maxHeadingWords},
+		row{"bodyTooLargeHeading", bodyTooLargeHeading, maxHeadingWords},
+		row{"tagTooManyNodesText", tagTooManyNodesText, maxHeadingWords},
+		row{"tagMissingNodesHeading", tagMissingNodesHeading([]string{"ghost-1", "ghost-2", "ghost-3", "ghost-4", "ghost-5", "ghost-6"}), maxHeadingWords},
+		row{"a refused filter on the tag confirmation page", filterRefusal.Error() + " " + tagNotChanged, maxHeadingWords},
+	)
 	if len(rows) < 13 {
 		t.Fatalf("%d rows, want at least 13", len(rows))
 	}

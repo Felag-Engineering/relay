@@ -448,11 +448,10 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 // tagInternalWriteNames are the tag write's internal seams: the unfloored
 // recorder, the audit repository's atomic write, and the in-memory test seeder.
 // The Console holds the concrete audit repository as d.audit, which offers the
-// atomic write without its floor, and this screen writes no tag (the controls
-// are a separate piece of work), so naming any of them, by selector or as a
+// atomic write without its floor, so naming any of them, by selector or as a
 // declared seam method, is refused (invariant 7, invariant 10, ADR-0050). The
-// floored entry, WriteTag, is not on this list: when the Console gains tag
-// controls it reaches a tag only through the capability layer's TagWriter.
+// floored entry, WriteTag, is not on this list: the Console writes a tag only
+// through the capability layer's TagWriter (tags.go).
 var tagInternalWriteNames = map[string]bool{
 	"RecordTagWrite":     true,
 	"AppendWithTagWrite": true,

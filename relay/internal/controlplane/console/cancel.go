@@ -42,10 +42,11 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 )
 
-// JobCanceller is the one write seam this package holds. It lives here,
-// rather than on seams.go, because seams.go's header says every seam there
-// is read-only — this is deliberately the one exception, and it gets its
-// own file to keep that claim true of seams.go without qualification.
+// JobCanceller is one of the three write seams this package holds (with
+// AccountAdministrator and TagWriter). It lives here, rather than on seams.go,
+// because seams.go's header says every seam there is read-only — a write seam
+// is deliberately the exception, and gets its own file to keep that claim true
+// of seams.go without qualification.
 //
 // *capability.Execution satisfies it. The single method mirrors
 // capability.Execution.CancelJob's signature exactly: the role floor and the

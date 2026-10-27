@@ -1815,6 +1815,14 @@ dl.kv dd { min-width: 0; }
 .confirm .confirmq { font-size: var(--text-base); margin: 0 0 var(--space-3); }
 .confirm .ctlrow { align-items: center; }
 
+/* Tag controls (02-node-detail.md "Labels", 01-fleet-view.md "Tagging a
+ * selection"). A remove form sits inline beside its tag chip; the add form and
+ * the Fleet's bulk form are one control line each. */
+.tagrm { display: inline-flex; align-items: center; margin: 0 var(--space-2) 0 0; }
+.tagrm .btn { min-height: 0; padding: 0 var(--space-2); font-size: var(--text-2xs); background: transparent; border-color: var(--border-subtle); color: var(--text-second); }
+.tagrm .btn:hover { background: var(--bg-elevated); }
+.tagadd, .tagsel { margin: var(--space-2) 0 var(--space-3); }
+
 /* The list's header row: the result line on the left, "New account" on the
  * right. The result line takes no new hue. */
 .pagehead { display: flex; justify-content: space-between; align-items: center; gap: var(--space-3); margin-bottom: var(--space-3); }

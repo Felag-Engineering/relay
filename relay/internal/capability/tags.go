@@ -29,7 +29,13 @@ var (
 	ErrTagNodeNotFound      = errors.New("capability: a tag write names a Node that is not in the registry")
 	ErrTagChanged           = errors.New("capability: a tag changed while this write was being made; reload and retry")
 	ErrTooManyTags          = errors.New("capability: a Node carries at most 64 tags")
+	ErrTagTooManyNodes      = fmt.Errorf("capability: a tag write names at most %d Nodes", MaxTagWriteNodes)
 )
+
+// MaxTagWriteNodes is the most Node IDs one tag write may name, duplicates
+// counted. How many Nodes one write may touch is decided here, so every surface
+// shares the bound (invariant 10).
+const MaxTagWriteNodes = 256
 
 // TagNodesNotFoundError names the Nodes a tag write could not find, for the
 // caller. It matches ErrTagNodeNotFound under errors.Is. The trail records
@@ -155,8 +161,8 @@ func newTagWriter(control *Control, nodes TagNodeReader, rec TagWriteRecorder) *
 //
 // Authorization runs first, so a refused caller learns nothing about the label
 // rules. Every refusal (role, human-only, a label that is not a well-formed
-// tag, no Node, an unknown Node, the 64-tag cap) is audited as a refusal
-// through refuseControl. A store conflict (ErrTagChanged) changed nothing and
+// tag, no Node, more than MaxTagWriteNodes Nodes, an unknown Node, the 64-tag
+// cap) is audited as a refusal through refuseControl. A store conflict (ErrTagChanged) changed nothing and
 // is returned unaudited. No step-up evidence is consulted.
 func (w *TagWriter) WriteTag(ctx context.Context, p Principal, req TagWrite) (TagWriteResult, error) {
 	if w.nodes == nil || w.rec == nil {
@@ -230,6 +236,9 @@ func (w *TagWriter) WriteTag(ctx context.Context, p Principal, req TagWrite) (Ta
 func tagNodeIDs(ids []string) ([]string, error) {
 	if len(ids) == 0 {
 		return nil, ErrTagNoNodes
+	}
+	if len(ids) > MaxTagWriteNodes {
+		return nil, ErrTagTooManyNodes
 	}
 	seen := make(map[string]struct{}, len(ids))
 	out := make([]string, 0, len(ids))

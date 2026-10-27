@@ -1,9 +1,11 @@
 package console
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"regexp"
@@ -229,6 +231,9 @@ func Secure(h http.Handler, log *slog.Logger) http.Handler {
 			boundUnauthenticatedBody(w, r, log)
 			valid = signInCSRFValid(r)
 		} else {
+			if !boundAuthenticatedBody(w, r, log) {
+				return
+			}
 			valid = sessionCSRFValid(r)
 		}
 		if !valid {
@@ -276,6 +281,92 @@ func boundUnauthenticatedBody(w http.ResponseWriter, r *http.Request, log *slog.
 		logctx.Or(log).WarnContext(r.Context(), "console: could not bound an unauthenticated request body", "error", err)
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, unauthenticatedBodyMaxBytes)
+}
+
+// Bounds on the body of an authenticated unsafe request, of any content type. The CSRF
+// check reads the form, so without a time bound a signed-in session could trickle any
+// POST body for as long as it liked, on the same listener that has no server-wide
+// ReadTimeout.
+const (
+	// defaultAuthenticatedBodyTimeout is how long such a body may take to arrive. The
+	// largest legitimate one is the bulk tag POST at about 258 KiB; 30 seconds admits
+	// it at under 9 KiB/s, and every other form is a few hundred bytes.
+	defaultAuthenticatedBodyTimeout = 30 * time.Second
+
+	// maxFormBodyBytes bounds every authenticated Console POST that is not the bulk
+	// tag change, the per-Node tag write among them: a CSRF token and a few short
+	// fields.
+	maxFormBodyBytes = 64 << 10
+)
+
+// authenticatedBodyTimeout is defaultAuthenticatedBodyTimeout, as a variable only so
+// this package's tests can shorten it; nothing else may change it.
+var authenticatedBodyTimeout = defaultAuthenticatedBodyTimeout
+
+// authenticatedBodyLimit is the most bytes of body an authenticated Console POST may
+// carry. Secure applies it before the CSRF token is read, which is the first read of
+// the body.
+//
+// The larger bulk limit goes to the exact, unescaped spelling of the bulk route and to
+// nothing else. ServeMux routes on the escaped path, so choosing by a decoded or
+// cleaned path would give the bulk limit to a request the mux sends to another handler
+// (/console/nodes/..%2F/tags decodes and cleans to /console/tags). Any other spelling
+// of the bulk route gets the smaller limit, which narrows and never widens.
+func authenticatedBodyLimit(r *http.Request) int64 {
+	if r.URL.Path == bulkTagsAction && r.URL.RawPath == "" {
+		return maxBulkTagBodyBytes
+	}
+	return maxFormBodyBytes
+}
+
+// bodyTooLargeHeading is the Console's own refusal of an over-size body.
+const bodyTooLargeHeading = "This request is too large to read. Nothing was changed."
+
+// boundAuthenticatedBody caps the size and the time of an authenticated unsafe
+// request's body, whatever its content type, and parses its form before the CSRF
+// token is read from it: the token read is the first read of the body, so a bound
+// applied later would bound nothing.
+//
+// The whole body is read under the deadline, not only a form-encoded one: ParseForm
+// reads nothing of any other type, so a signed-in caller with the header token could
+// otherwise trickle one past a cleared deadline, and net/http's drain after a handler
+// that never reads the body waits with no bound at all. The body is then handed on
+// from memory, at most authenticatedBodyLimit bytes.
+//
+// It refuses every read or parse error and reports false: 413 for a body over
+// authenticatedBodyLimit, 400 for any other (a read that timed out or failed, a
+// malformed escape, more fields than net/url parses). Neither the CSRF check nor a
+// handler sees a body that was only partly read.
+//
+// The read deadline is per request, for the same reason as boundUnauthenticatedBody's,
+// and is cleared once the body is read so a long-running handler is not cut by it. A
+// refused request keeps it: the server's own drain of the unread body then fails fast
+// instead of waiting on a client that is stalling.
+func boundAuthenticatedBody(w http.ResponseWriter, r *http.Request, log *slog.Logger) bool {
+	rc := http.NewResponseController(w)
+	err := rc.SetReadDeadline(time.Now().Add(authenticatedBodyTimeout))
+	if err != nil && !errors.Is(err, http.ErrNotSupported) {
+		logctx.Or(log).WarnContext(r.Context(), "console: could not bound an authenticated request body", "error", err)
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, authenticatedBodyLimit(r)))
+	if err != nil {
+		var tooBig *http.MaxBytesError
+		if errors.As(err, &tooBig) {
+			http.Error(w, bodyTooLargeHeading, http.StatusRequestEntityTooLarge)
+			return false
+		}
+		http.Error(w, "could not read the submitted form", http.StatusBadRequest)
+		return false
+	}
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "could not read the submitted form", http.StatusBadRequest)
+		return false
+	}
+	if err := rc.SetReadDeadline(time.Time{}); err != nil && !errors.Is(err, http.ErrNotSupported) {
+		logctx.Or(log).WarnContext(r.Context(), "console: could not clear an authenticated request body deadline", "error", err)
+	}
+	return true
 }
 
 // isSafeMethod reports whether m is read-only by definition.

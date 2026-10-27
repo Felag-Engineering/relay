@@ -91,18 +91,33 @@ func (l Label) String() string {
 
 // Tooltip is the term plus the namespace's one writer, shown as the chip's
 // title so a Node's labels name who wrote them without a legend
-// (02-node-detail.md "Labels"). `tag:` is the bare term: this screen renders no
-// tag chip, so no writer is described for one.
+// (02-node-detail.md "Labels").
 func (l Label) Tooltip() string {
 	switch l.Namespace {
 	case NamespaceNode:
 		return l.String() + " · set by the Node's own config management"
+	case NamespaceTag:
+		return l.String() + " · set by an operator"
 	case NamespaceRelay:
 		return l.String() + " · set by the Relay, never the Node"
 	case NamespaceState:
 		return l.String() + " · derived by the Relay"
 	}
 	return l.String()
+}
+
+// IsTag reports whether this is a `tag:` label, the one namespace a human
+// Account writes through the Console (ADR-0050).
+func (l Label) IsTag() bool { return l.Namespace == NamespaceTag }
+
+// KeyTerm is the written form of removing this label, `tag:key`, with no value.
+// A label outside the tag: namespace is written as itself, so a remove form drawn
+// beside one posts that namespace and the capability layer refuses it.
+func (l Label) KeyTerm() string {
+	if !l.IsTag() {
+		return l.String()
+	}
+	return "tag:" + l.Key
 }
 
 // SecurityLane reports whether this namespace may be targeted by the

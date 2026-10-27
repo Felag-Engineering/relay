@@ -331,6 +331,42 @@ func TestTagWriter_RefusalsAreAudited(t *testing.T) {
 	})
 }
 
+// TestTagWriter_CapsNodesPerWrite pins MaxTagWriteNodes: a write naming 256
+// Nodes is applied, and one naming 257 is refused, audited, and changes nothing.
+func TestTagWriter_CapsNodesPerWrite(t *testing.T) {
+	ids := make([]string, MaxTagWriteNodes+1)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("n%03d", i)
+	}
+	if MaxTagWriteNodes != 256 {
+		t.Fatalf("MaxTagWriteNodes = %d, want 256", MaxTagWriteNodes)
+	}
+
+	t.Run("256 accepted", func(t *testing.T) {
+		f := newTagFixture(t, ids...)
+		res, err := f.w.WriteTag(context.Background(), tagOperator, TagWrite{NodeIDs: ids[:MaxTagWriteNodes], Op: TagAdd, Label: "tag:a=b"})
+		if err != nil {
+			t.Fatalf("WriteTag(256) = %v, want success", err)
+		}
+		if len(res.Changed) != MaxTagWriteNodes {
+			t.Errorf("changed %d Nodes, want %d", len(res.Changed), MaxTagWriteNodes)
+		}
+	})
+	t.Run("257 refused", func(t *testing.T) {
+		f := newTagFixture(t, ids...)
+		_, err := f.w.WriteTag(context.Background(), tagOperator, TagWrite{NodeIDs: ids, Op: TagAdd, Label: "tag:a=b"})
+		if !errors.Is(err, ErrTagTooManyNodes) {
+			t.Fatalf("WriteTag(257) = %v, want ErrTagTooManyNodes", err)
+		}
+		if len(f.sink.entries) != 1 || f.sink.entries[0].Kind != AuditKindRefusal || len(f.sink.events) != 0 {
+			t.Errorf("entries = %+v events = %d, want one refusal and no write", f.sink.entries, len(f.sink.events))
+		}
+		if got := f.tags(t, ids[0]); len(got) != 0 {
+			t.Errorf("Node %s tags = %v, want none", ids[0], got)
+		}
+	})
+}
+
 // TestTagWriter_RefusesEveryOtherNamespace is invariant 7's request-side half:
 // no node:, relay: or state: label is written on request, for either op.
 func TestTagWriter_RefusesEveryOtherNamespace(t *testing.T) {

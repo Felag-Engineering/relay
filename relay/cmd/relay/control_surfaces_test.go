@@ -19,7 +19,9 @@ import (
 
 	"github.com/Felag-Engineering/relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/relay/relay/internal/audit"
+	"github.com/Felag-Engineering/relay/relay/internal/capability"
 	"github.com/Felag-Engineering/relay/relay/internal/controlplane"
+	"github.com/Felag-Engineering/relay/relay/internal/controlplane/console"
 	"github.com/Felag-Engineering/relay/relay/internal/controlplane/mcp"
 	"github.com/Felag-Engineering/relay/relay/internal/events"
 	"github.com/Felag-Engineering/relay/relay/internal/nodevocab"
@@ -137,6 +139,20 @@ func TestConsoleSurface_MountsTheLiveReadRouteAndTheFingerprints(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/console/events?kinds=enrollment", nil)
 	if h, pattern := mux.Handler(req); h == nil || pattern == "" {
 		t.Errorf("GET /console/events is not mounted (pattern=%q) — the Console has no live path", pattern)
+	}
+}
+
+// TestConsoleTagsOrNil_ANilWriterIsAnUntypedNil is the same typed-nil trap for
+// the tag seam: a nil *capability.TagWriter inside a non-nil console.TagWriter
+// would pass the Console's `d.Tags == nil` checks, draw the tag controls and
+// panic in WriteTag. A non-nil writer must come back as the same pointer.
+func TestConsoleTagsOrNil_ANilWriterIsAnUntypedNil(t *testing.T) {
+	if got := consoleTagsOrNil(nil); got != nil {
+		t.Errorf("consoleTagsOrNil(nil) = %#v, want an untyped nil", got)
+	}
+	w := &capability.TagWriter{}
+	if got := consoleTagsOrNil(w); got != console.TagWriter(w) {
+		t.Errorf("consoleTagsOrNil(w) = %#v, want the writer it was given", got)
 	}
 }
 

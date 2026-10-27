@@ -147,6 +147,7 @@ func TestTagRoutes_RenderRefusals(t *testing.T) {
 		{"unknown op", capability.ErrTagOpUnknown, http.StatusBadRequest, "add or remove"},
 		{"no nodes", capability.ErrTagNoNodes, http.StatusBadRequest, "at least one Node"},
 		{"bad node id", capability.ErrTagNodeIDInvalid, http.StatusBadRequest, "every Node ID"},
+		{"too many nodes", capability.ErrTagTooManyNodes, http.StatusBadRequest, "at most 256 Nodes"},
 		{"unknown node", errors.Join(missing, capability.ErrTagNodeNotFound), http.StatusNotFound, "ghost"},
 		{"vanished node", errors.Join(&capability.TagNodesNotFoundError{}, capability.ErrTagNodeNotFound), http.StatusNotFound, "no Node was changed"},
 		{"changed", capability.ErrTagChanged, http.StatusConflict, "reload and retry"},

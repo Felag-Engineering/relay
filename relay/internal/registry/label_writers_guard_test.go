@@ -102,8 +102,14 @@ func TestLabelWriters_EachHasOnlyItsDefiningCallers(t *testing.T) {
 		},
 		"AppendWithTagWrite": {"internal/auditsink/auditsink.go"},
 		"RecordTagWrite":     {"internal/capability/tags.go"},
-		"WriteTag":           {"internal/controlplane/api/tags.go"},
-		"ApplyTagChanges":    nil,
+		// The Control API and the Console are the two surfaces a human Account
+		// writes tags through, both via the capability layer's TagWriter
+		// (ADR-0050, invariants 7 and 10).
+		"WriteTag": {
+			"internal/controlplane/api/tags.go",
+			"internal/controlplane/console/tags.go",
+		},
+		"ApplyTagChanges": nil,
 	}
 	names := make([]string, 0, len(want))
 	for n := range want {

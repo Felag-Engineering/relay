@@ -211,6 +211,15 @@ func TestConsoleServesNoSeparatePreflightRoute(t *testing.T) {
 		"POST " + console.LoginPath:                                   true,
 		"POST " + console.LogoutPath:                                  true,
 		"POST /console/jobs/{job_id}/cancel":                          true,
+		// The tag controls: one POST per Node, and a bulk POST behind a GET
+		// confirmation page that lists the Nodes a filter matched. The page is
+		// a confirmation step, not a preview. It evaluates no Policy,
+		// dispatches nothing and writes nothing; the act is decided only by
+		// the POST routes, which reach the capability layer's tag write
+		// (PF-1 reviewed).
+		"POST /console/nodes/{node_id}/tags": true,
+		"GET /console/tags/confirm":          true,
+		"POST /console/tags":                 true,
 	}
 
 	if !reflect.DeepEqual(seen, want) {

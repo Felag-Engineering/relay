@@ -128,6 +128,7 @@ var tagBadRequests = []error{
 	capability.ErrTagOpUnknown,
 	capability.ErrTagNoNodes,
 	capability.ErrTagNodeIDInvalid,
+	capability.ErrTagTooManyNodes,
 }
 
 // writeTagError maps an error from the capability layer's tag write onto an

@@ -562,14 +562,14 @@ func TestComponents_ContainNoInlineScript(t *testing.T) {
 }
 
 // TestLabel_TooltipNamesTheNamespacesWriter: a chip's title is its term plus the
-// one writer its namespace has, so a Node's labels need no legend. tag: is the
-// bare term because this screen renders no tag chip (02-node-detail.md "Labels").
+// one writer its namespace has, so a Node's labels need no legend
+// (02-node-detail.md "Labels").
 func TestLabel_TooltipNamesTheNamespacesWriter(t *testing.T) {
 	for ns, want := range map[Namespace]string{
 		NamespaceNode:  "node:k=v · set by the Node's own config management",
 		NamespaceRelay: "relay:k=v · set by the Relay, never the Node",
 		NamespaceState: "state:k=v · derived by the Relay",
-		NamespaceTag:   "tag:k=v",
+		NamespaceTag:   "tag:k=v · set by an operator",
 	} {
 		l := Label{Namespace: ns, Key: "k", Value: "v"}
 		if got := l.Tooltip(); got != want {
@@ -577,6 +577,22 @@ func TestLabel_TooltipNamesTheNamespacesWriter(t *testing.T) {
 		}
 		if out := render(t, "label-chip", l); !strings.Contains(out, `title="`+template.HTMLEscapeString(l.Tooltip())+`"`) {
 			t.Errorf("%s: the chip's title is not its Tooltip: %s", ns, out)
+		}
+	}
+}
+
+// TestLabel_KeyTermIsTheRemoveTermOfATagOnly: removing a tag names tag:key with
+// no value, and a label of any other namespace is written as itself, so a remove
+// form drawn beside it would post that namespace and be refused.
+func TestLabel_KeyTermIsTheRemoveTermOfATagOnly(t *testing.T) {
+	for ns, want := range map[Namespace]string{
+		NamespaceTag:   "tag:k",
+		NamespaceNode:  "node:k=v",
+		NamespaceRelay: "relay:k=v",
+		NamespaceState: "state:k=v",
+	} {
+		if got := (Label{Namespace: ns, Key: "k", Value: "v"}).KeyTerm(); got != want {
+			t.Errorf("%s: KeyTerm = %q, want %q", ns, got, want)
 		}
 	}
 }

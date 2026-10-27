@@ -494,11 +494,10 @@ func writeFailed(w http.ResponseWriter, pg Page, err error, route, ident, undone
 // principal, nil-seam check, ParseForm, page. It returns ok=false having
 // already written the response.
 //
-// ParseForm is REQUIRED, not merely idempotent: submittedCSRFToken
-// (security.go) reads the X-CSRF-Token HEADER first and only falls back to the
-// form field, and the layout puts the token in hx-headers on <body>, so for an
-// HTMX submission Secure never parses the body at all. It is also safe on the
-// plain-form path, where the form is already parsed.
+// Secure has already parsed, and refused any unreadable form of, an authenticated
+// unsafe request, so behind it this ParseForm is a no-op. It stays for a handler
+// mounted without Secure, as the tests mount it, so that one never reads a form it
+// has not parsed.
 func writePrelude(d Deps, w http.ResponseWriter, r *http.Request, title string) (capability.Principal, Page, bool) {
 	caller, ok := principal(w, r)
 	if !ok {

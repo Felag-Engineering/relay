@@ -162,6 +162,9 @@ on every Node the current Selector matches**, the bulk form of Node detail's per
   confirmed. The Console resolves the filter to Node IDs and sends **the IDs, never the filter**,
   so the set tagged is the set confirmed even if labels change between render and click. The
   result lists the Nodes changed.
+- One bulk act covers at most **256 Nodes**. The cap is the capability layer's, so the Control API
+  holds it too; a filter matching more is refused on the confirm step with "Tag at most 256 Nodes
+  at once; narrow the filter."
 - Each change is one audit record with the Account, the Node and the old and new values.
 - Standard auth, no step-up (ADR-0020, ADR-0050): a tag gates nothing. A machine Account is
   refused. A `node:`, `relay:` or `state:` label has no edit affordance, here or anywhere.
@@ -231,11 +234,17 @@ config management.
       scrollable list by any ordinary reading. Whether that is intended is an open owner question.
 - [ ] The single offline Node in a 4,000-Node group is findable without reading any text.
 - [ ] No Fact appears on a row or in a facet.
-- [ ] No route on this screen mutates anything except the Policy alias write (D23) and the bulk
+- [x] No route on this screen mutates anything except the Policy alias write (D23) and the bulk
       tag write (MVP, ADR-0050). Neither reaches a Node; neither writes a `node:`, `relay:` or
       `state:` label.
-- [ ] The bulk tag confirmation lists the matched Nodes before anything is written, and a machine
+      **Qualified:** the alias write is not built, so the bulk tag write is the screen's one
+      mutation. It writes only `tag:` labels (`TestConsole_NoScreenOffersAnEditForANodeRelayOrStateLabel`).
+- [x] The bulk tag confirmation lists the matched Nodes before anything is written, and a machine
       Account is refused.
+      **Built.** The confirm page writes nothing and lists every matched Node, up to the 256-Node
+      cap (`TestTags_ConfirmListsTheMatchedNodesAndWritesNothing`,
+      `TestTags_TheConfirmPageAndItsPostAgreeAtTheCountBound`). A machine Account is refused by
+      the capability layer, which the Console renders (`TestTags_RefusalsRenderTheCapabilityLayersAnswer`).
 - [ ] A refused filter shows "filter not applied", its refusal under the field, and the whole
       fleet de-emphasised beneath; nothing parses the filter in the browser.
 - [ ] Every Policy fingerprint drawn on this screen shows its full hash beside its alias or letter.
