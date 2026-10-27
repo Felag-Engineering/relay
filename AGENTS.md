@@ -301,6 +301,22 @@ everything.
 - **Dogfooding:** `make dev-fleet-up` brings up a Relay and real daemons in Docker. See
   `docs/dev-fleet.md`.
 
+## MVP mode
+
+The current goal is the MVP: someone gets their fleet up in 30 minutes, as simply and as
+securely as possible. Until the MVP milestone closes:
+
+- **Simple and conservative beats complete.** Prefer a fixed, documented limit to a mechanism,
+  and the narrower behaviour to the configurable one. Never relax an invariant to get there.
+- **Decide LOW and INFO findings yourself.** Fix what is in scope and cheap; record the rest
+  in the PR body. Escalate only a real trade-off: a security-posture change, behaviour a user
+  sees, or a decision that is hard to reverse.
+- **A gap outside the issue's scope is a proposed follow-up**, written in the PR body, never
+  a fix cycle and never a reason to stop.
+- **Fix only the docs your change makes false.** Name any others in the PR body.
+- **Spend context on the change.** Grep `GLOSSARY.md` for the terms you touch; read a log by
+  its failures, never whole.
+
 ## How to work here
 
 **1. Read before writing.** GLOSSARY.md, the capability specification for what you're touching,

@@ -148,8 +148,9 @@ unattended, comment with the claim ID, label `loop:needs-human`, delete the bran
 `review-feedback.md` under `## Plan review`. (Claude alone: Codex is spent once per issue, at
 Stage 6.7, on the finished change — a Codex pass per plan is cost without coverage.)
 
-Any BLOCKING → `devloop-architect` again with the findings; overwrite `plan.md`. **Max 2
-cycles.** A BLOCKING item still standing → escalate as in Stage 3.
+Any BLOCKING → `devloop-architect` once more with the findings; overwrite `plan.md` and go on
+to Stage 5 without a second review. **One revision only.** Non-blocking findings are adopted or
+noted, never another cycle.
 
 ## Stage 5 — Implement
 
@@ -170,7 +171,11 @@ This mirrors CI gate for gate. If the diff touches `proto/`, `verify-proto` must
 skipped: grep the log for `skip` notices. **A skipped gate is reported as skipped, never as
 passed**, and a proto change with a skipped proto gate is a stop.
 
-Failure → `devloop-developer` with the failure output (fix the root cause; never skip, disable
+Never read `verify.log` whole: find failures with `grep -nE -- '--- FAIL|FAIL\b|panic:|error(\[|:)|\*\*\*'`
+and read only the failing lane's last lines. A failure the launching brief names as host-only (a
+quirk of the machine, not the diff) is recorded as such, never handed to the developer.
+
+Failure → `devloop-developer` with the failing lane's excerpt, not the log (fix the root cause; never skip, disable
 or relax a test or lint). **Max 2 attempts**, then escalate (interactive: surface; unattended:
 comment, label `loop:needs-human`, push the branch as-is with `[WIP]` so the work is not lost,
 stop).
@@ -238,9 +243,10 @@ Run `scripts/codex-review.sh security` if Stage 6.5 found security-surface paths
   reviewer` and continue. Never a pass. Copy the reason token and the model from the script's
   own stderr line; do not paraphrase.
 - **Exit 2, exit 1, or any other non-zero** → a failed gate: escalate as in Stage 3.
-- Blocking findings → back to Stage 5 **once** (re-run 5.5, and 6.6 if a spec file moved), then
-  **one more** Codex run. Anything still blocking goes under **Unresolved** in the PR body with
-  `loop:needs-human`. No third run, ever.
+- Blocking findings → back to Stage 5 **once** when the fix is inside the issue's scope (re-run
+  5.5, and 6.6 if a spec file moved). No second Codex run: record what was fixed. A finding whose
+  fix is outside the issue's scope is not attempted: it goes under **Unresolved** in the PR body as
+  a proposed follow-up issue, and the PR gets `loop:needs-human`.
 - **`codex-review: scope-partial files=<n>` on stderr** → part of this issue's own history was
   already committed before this run, so Codex reviewed only the uncommitted remainder. The PR
   body must name which committed files it did not see (the accompanying note line lists them).

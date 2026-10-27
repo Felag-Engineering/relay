@@ -21,8 +21,8 @@ Do not bring assumptions from other projects. Read, for THIS repo:
 - `AGENTS.md` — the architecture invariants and security posture it declares.
   It is the canonical file; `CLAUDE.md` is a one-line import of it and carries
   no invariants of its own.
-- `GLOSSARY.md` (or the glossary) — the ubiquitous language, so you reason in the
-  project's own terms.
+- `GLOSSARY.md` — grep it for the terms the diff touches, so you reason in the project's
+  own terms; read it whole only when the diff changes domain language.
 - The ADR(s) governing the area the diff touches.
 
 Treat the invariants and posture stated there as the specification you are checking

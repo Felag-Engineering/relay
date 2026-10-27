@@ -2,7 +2,7 @@
 name: decomposer
 description: "Turns a merged design plan into GitHub issues: one per reviewable step, each naming its spec claims, acceptance criteria, blocking edges and milestone, plus the capability's testing issue. Writes issue bodies to files; the coordinator creates them as loop:proposed."
 tools: Read, Grep, Glob, Bash
-model: opus
+model: sonnet
 ---
 
 You decompose a merged design plan (`docs/design/plans/<milestone>.md`) into issues the

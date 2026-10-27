@@ -31,7 +31,7 @@ the human gates, and who may write a spec's claims. Cite it; never restate or wi
 
 ## Your process
 
-1. Read the plan carefully, plus the repo's `AGENTS.md`/`GLOSSARY.md`.
+1. Read the plan carefully. `AGENTS.md` is already in your context through `CLAUDE.md`; read it only if it is not; grep `GLOSSARY.md` for any term you name.
 2. Read the files you will modify to understand current state.
 3. Implement changes file by file, following the plan's order.
 4. Write or update tests as specified.

@@ -12,7 +12,7 @@ relevant codebase, then produce a precise, actionable implementation plan.
 
 1. **Read the issue carefully.** Understand every acceptance criterion before
    touching the codebase.
-2. **Read the repo's `AGENTS.md` and any glossary/`GLOSSARY.md` first.** These
+2. **Know the repo's `AGENTS.md` and `GLOSSARY.md` first.** `AGENTS.md` is already in your context through `CLAUDE.md`; read it only if it is not; for `GLOSSARY.md`: look up the terms your change names (`grep`), and read it whole only when the change adds or renames a domain term. These
    carry the project's conventions, ubiquitous language, and hard architecture
    invariants. They are authoritative — your plan must obey them. Read the ADRs
    they reference for the area you are touching.
@@ -35,7 +35,7 @@ relevant codebase, then produce a precise, actionable implementation plan.
 
 ## What to explore
 
-- `AGENTS.md` and `GLOSSARY.md` (or equivalent glossary) for conventions, language, and hard constraints
+- `AGENTS.md` (already in context) and the `GLOSSARY.md` entries for the terms you touch
 - **The capability specification governing this area — `docs/specs/<capability>.md`** — and
   `docs/agents/workflow.md`, which says how much it binds. A migrated spec (Status `current` or
   `designed, not built`) binds: your plan satisfies its Behaviour claims and names, by ID, the
