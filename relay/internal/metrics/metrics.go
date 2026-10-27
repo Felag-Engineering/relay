@@ -126,17 +126,7 @@ type BuildInfo struct {
 // outcomeOrder is the rendering order of the relay_dispatches_total series —
 // unspecified last, since it is the fallback bucket rather than a real
 // resolution.
-var outcomeOrder = []jobs.Outcome{
-	jobs.OutcomeSuccess,
-	jobs.OutcomeFailure,
-	jobs.OutcomeTimeout,
-	jobs.OutcomeDeniedByPolicy,
-	jobs.OutcomeCancelled,
-	jobs.OutcomeUnreachable,
-	jobs.OutcomeVersionRefused,
-	jobs.OutcomeUnsupported,
-	jobs.OutcomeUnspecified,
-}
+var outcomeOrder = append(jobs.ResolvedOutcomes(), jobs.OutcomeUnspecified)
 
 // refusalLabel maps k to its Prometheus label value. Any unrecognized kind
 // (defensive only — capability.RefusalKind is a closed, small enum) falls
