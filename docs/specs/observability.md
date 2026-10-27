@@ -21,7 +21,7 @@ arguments or a series per Node.
 | Surface | What it is |
 |---|---|
 | **Metrics** | Prometheus text at `/metrics` on the control-plane listener, behind the same API-token authentication as every other control-plane route. There is no third listener. Built |
-| **Health endpoint** | Unauthenticated, on the control-plane listener: "serving" or "not serving" and nothing more. MVP work, not yet built |
+| **Health endpoint** | Unauthenticated, on the control-plane listener: "serving" or "not serving" and nothing more, at `/healthz` (200 or 503) |
 | **Relay logs** | Structured process logs to standard error, collected by the journal under the shipped unit. One routing-only line per audited decision |
 | **relay-daemon logs** | Structured logs on each Node, collected by that Node's journal. The daemon exposes no metrics |
 | **Control plane, MCP, Console** | Not observability surfaces. They answer questions about the fleet, which is `query.md` |
@@ -31,8 +31,8 @@ A scraper authenticates with an API Token like any other control-plane caller
 (`accounts-and-access.md`), so metrics answer only while the control plane is on. A separate
 listener that needs no token is later work (`roadmap: relay/opentelemetry`).
 
-The health endpoint is the one unauthenticated route. It answers one bit, so a load balancer or
-an init system can probe it without a credential, and it reveals nothing else.
+The health endpoint, `/healthz`, answers without a credential and carries one bit (200 serving,
+503 not serving), so a load balancer or an init system can probe it, and it reveals nothing else.
 
 ## Behaviour
 
@@ -42,11 +42,9 @@ Aggregate only. Every label is drawn from a small closed enum — dispatch outco
 reason, listener, label namespace — and the one free-form value is the build stamp, fixed for the
 process's lifetime.
 
-Built, about a dozen metrics: build info, Nodes connected, enrolled and revoked, dispatches by
+Built: build info, Nodes connected, enrolled and revoked, dispatches by
 outcome, refusals by reason, Freeze engagement, server certificate rotations by listener, protocol
-violations, Labels declined by namespace, and enrollments.
-
-Added for the MVP, because an SRE pages on them, and not yet built:
+violations, Labels declined by namespace, and enrollments; and, because an SRE pages on them:
 
 - **Certificate expiry**, for the Relay CA and the server certificate.
 - **Failed authentications.**
