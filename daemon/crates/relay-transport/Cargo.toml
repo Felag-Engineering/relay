@@ -31,6 +31,11 @@ ring = { workspace = true }
 # Wipes the Enrollment Token a decoded join string holds, and the buffers that
 # carried it, when they are dropped (DI-42). No new crate: it is already in the tree.
 zeroize = { workspace = true }
+# O_NOFOLLOW, O_NONBLOCK and ELOOP for opening the persisted Relay address.
+libc = { workspace = true }
+# The effective uid the state-file owner check compares against. No `features` key:
+# the workspace manifest explains why none may be added.
+rustix = { workspace = true }
 
 [dev-dependencies]
 relay-test-support = { workspace = true }

@@ -19,14 +19,17 @@
 //! never sees.
 //!
 //! Order. Every refusal happens before the join string is read and before any
-//! dial, and writes nothing. An existing identity is found first, so a rerun by
-//! config management exits 0 whatever its shell exports. After the read, `join`
-//! takes an exclusive lock on the state directory and looks for an identity again,
-//! so a second `join` is refused while the first runs and one that lost the race
-//! finds the first's identity. The enrollment then races an interrupt: a failed or
-//! interrupted enrollment removes what `join` created and restores what it
-//! changed, so the state directory is as it was found, and the message says what,
-//! if anything, could not be put back. A SIGKILL cannot be caught; one inside the
+//! dial, and writes nothing. An existing state directory is checked before anything
+//! in it is read: it is refused if it is a symlink, group- or world-writable, or
+//! owned by neither root nor the user `join` runs as, and `relay_addr` is opened
+//! without following a symlink under the same owner and mode rule. An existing
+//! identity is found next, so a rerun by config management exits 0 whatever its
+//! shell exports. After the read, `join` takes an exclusive lock on the state
+//! directory and looks for an identity again, so a second `join` is refused while
+//! the first runs and one that lost the race finds the first's identity. The
+//! enrollment then races an interrupt: a failed or interrupted enrollment removes
+//! what `join` created and restores what it changed, so the state directory is as
+//! it was found, and the message says what, if anything, could not be put back. A SIGKILL cannot be caught; one inside the
 //! persist leaves a partial identity, which every rerun refuses with the missing
 //! files named.
 //!
@@ -1762,50 +1765,66 @@ mod tests {
     async fn a_second_join_is_refused_while_the_first_holds_the_state_dir() {
         install_crypto_provider();
         let server = pki("localhost");
-        let text = join_for(&server, 1);
+        let (port, seen) = start_fake_relay(&server, server.ca_pem.clone()).await;
+        let text = join_for(&server, port);
         let f = fixture("join-concurrent");
+        let env = env_of(&[("RELAY_SERVER_NAME", "localhost")]);
+        let paths = &f.paths;
+        let state = f.state().to_path_buf();
 
         let first = configure(
-            &f.paths,
-            &env_of(&[]),
+            paths,
+            &env,
             false,
             input(text.clone()),
-            |_cfg| async {
-                // The first join is mid-enrollment: the state directory exists
-                // and holds nothing yet. A second join arrives now.
+            |cfg| async {
+                // The first join is mid-enrollment: it holds the lock on the state
+                // directory and has not reached the Relay. A second join arrives now.
                 let second = configure(
-                    &f.paths,
-                    &env_of(&[]),
+                    paths,
+                    &env,
                     false,
                     input(text.clone()),
-                    no_enroll,
+                    production_enroll,
                     never_interrupted,
                 )
                 .await;
                 let (code, message) = conclude(second, no_start);
                 assert_eq!(code, 1, "{message}");
-                assert!(message.contains("another relay-daemon join"), "{message}");
-                assert!(message.ends_with("nothing was changed"), "{message}");
-                assert!(f.state().is_dir(), "the first join's directory stays");
+                assert!(
+                    message.contains(&format!(
+                        "another relay-daemon join is running against {}",
+                        state.display()
+                    )),
+                    "{message}"
+                );
+                assert!(
+                    !message.contains(TOKEN) && !message.contains("glp_join_"),
+                    "{message}"
+                );
+                assert!(state.is_dir(), "the first join's directory stays");
 
-                // The first join persists after the second was turned away.
-                seed_identity(f.state(), &config::IDENTITY_FILES);
-                Ok(Identity {
-                    node_id: "node-first".to_string(),
-                    key_pem: String::new(),
-                    cert_pem: String::new(),
-                    ca_bundle_pem: String::new(),
-                })
+                production_enroll(cfg).await
             },
             never_interrupted,
         )
         .await
         .expect("the first join enrolls");
 
-        assert!(matches!(first, Joined::Enrolled { .. }), "{first:?}");
-        for name in config::IDENTITY_FILES {
-            assert!(f.state().join(name).exists(), "{name} is the first join's");
-        }
+        let Joined::Enrolled { node_id, .. } = first else {
+            panic!("want Enrolled, got {first:?}");
+        };
+        assert_eq!(node_id, "node-join-test");
+        assert_eq!(seen.calls(), 1, "the refused join never reached the Relay");
+        let identity = identity::load_identity(f.state())
+            .unwrap()
+            .expect("the first join's identity is intact");
+        assert_eq!(identity.node_id, "node-join-test");
+        assert_eq!(
+            identity::load_relay_addr(f.state()).unwrap().as_deref(),
+            Some(format!("https://127.0.0.1:{port}").as_str())
+        );
+        assert_no_secret_on_disk(f.dir.path());
     }
 
     // Proves DI-42.
@@ -2061,6 +2080,50 @@ mod tests {
             "{text}"
         );
         assert!(!f.state().exists());
+    }
+
+    #[tokio::test]
+    async fn join_refuses_an_untrusted_state_dir_before_reading() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+
+        // Group- and world-writable.
+        let f = fixture("join-writable-state-dir");
+        fs::create_dir(f.state()).unwrap();
+        fs::set_permissions(f.state(), fs::Permissions::from_mode(0o777)).unwrap();
+        // A symlink to a directory that is otherwise fine.
+        let g = fixture("join-symlinked-state-dir");
+        let real = g.dir.path().join("real");
+        fs::create_dir(&real).unwrap();
+        fs::set_permissions(&real, fs::Permissions::from_mode(0o700)).unwrap();
+        symlink(&real, g.state()).unwrap();
+
+        for fixture in [&f, &g] {
+            let before = snapshot(fixture.dir.path());
+            let err = configure(
+                &fixture.paths,
+                &env_of(&[]),
+                false,
+                no_read,
+                no_enroll,
+                never_interrupted,
+            )
+            .await
+            .expect_err("an untrusted state directory");
+            assert!(
+                matches!(
+                    &err,
+                    JoinError::Identity(ConfigError::UntrustedStateDir { state_dir, .. })
+                        if state_dir == fixture.state()
+                ),
+                "{err:?}"
+            );
+            assert!(
+                err.to_string()
+                    .contains(&fixture.state().display().to_string()),
+                "{err}"
+            );
+            assert_eq!(snapshot(fixture.dir.path()), before);
+        }
     }
 
     #[tokio::test]
