@@ -31,6 +31,13 @@ const (
 	// TaskEventCancelBeforeSend: Dispatched -> Resolved, OutcomeCancelled,
 	// for a Task marked Dispatched whose send never began.
 	TaskEventCancelBeforeSend
+	// TaskEventHalt: Pending -> Resolved, OutcomeCancelled, Stderr = Reason,
+	// for a Task its mutate Job's halt left unsent.
+	TaskEventHalt
+	// TaskEventHaltBeforeSend: Dispatched -> Resolved, OutcomeCancelled,
+	// Stderr = Reason, for a Task marked Dispatched whose Job halted before its
+	// send began.
+	TaskEventHaltBeforeSend
 )
 
 // From returns the state a Task must be in for the event to apply. This is
@@ -40,9 +47,9 @@ const (
 func (k TaskEventKind) From() (state DispatchState, ok bool) {
 	switch k {
 	case TaskEventDispatch, TaskEventUnreachable, TaskEventVersionRefused,
-		TaskEventUnsupported, TaskEventCancel:
+		TaskEventUnsupported, TaskEventCancel, TaskEventHalt:
 		return DispatchStatePending, true
-	case TaskEventResolve, TaskEventCancelBeforeSend:
+	case TaskEventResolve, TaskEventCancelBeforeSend, TaskEventHaltBeforeSend:
 		return DispatchStateDispatched, true
 	default:
 		return 0, false
@@ -54,7 +61,7 @@ type TaskEvent struct {
 	Kind TaskEventKind
 	// Result is the daemon's report; TaskEventResolve only.
 	Result Result
-	// Reason is the Relay-authored Stderr text; TaskEventUnsupported only.
+	// Reason is the Relay-authored Stderr text; TaskEventUnsupported, TaskEventHalt and TaskEventHaltBeforeSend only.
 	Reason string
 }
 
@@ -95,8 +102,15 @@ func (t Task) Transition(ev TaskEvent, now time.Time) (Task, error) {
 		next.Stderr = []byte(ev.Reason)
 	case TaskEventCancel:
 		next.Outcome = OutcomeCancelled
+	case TaskEventHalt:
+		next.Outcome = OutcomeCancelled
+		next.Stderr = []byte(ev.Reason)
 	case TaskEventCancelBeforeSend:
 		next.Outcome = OutcomeCancelled
+		next.DispatchedAt = time.Time{}
+	case TaskEventHaltBeforeSend:
+		next.Outcome = OutcomeCancelled
+		next.Stderr = []byte(ev.Reason)
 		next.DispatchedAt = time.Time{}
 	}
 	next.State = DispatchStateResolved

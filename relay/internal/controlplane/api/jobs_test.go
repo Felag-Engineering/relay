@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -352,5 +353,71 @@ func TestJobRoutes_RequireAuthentication(t *testing.T) {
 		if rec.Code != http.StatusUnauthorized {
 			t.Errorf("%s %s: status = %d, want 401", rt.method, rt.path, rec.Code)
 		}
+	}
+}
+
+// haltedFakeJobs is a Job the capability layer halted on node-1, with one
+// halt-cancelled sibling.
+func haltedFakeJobs(resolved bool) fakeJobs {
+	h := jobs.Halt{TaskID: "task-1", NodeID: "node-1", Outcome: jobs.OutcomeFailure, Resolved: resolved}
+	return fakeJobs{
+		job: jobs.Job{ID: "job-1", Halt: h},
+		tasks: []jobs.Task{
+			{NodeID: "node-1", State: jobs.DispatchStateResolved, Outcome: jobs.OutcomeFailure, ExitCode: 1},
+			{NodeID: "node-2", State: jobs.DispatchStateResolved, Outcome: jobs.OutcomeCancelled, Stderr: []byte(h.Reason())},
+		},
+	}
+}
+
+// decodeHalt returns the "halt" object of a response body, or nil if the key is
+// absent.
+func decodeHalt(t *testing.T, body []byte) map[string]any {
+	t.Helper()
+	var m map[string]any
+	if err := json.Unmarshal(body, &m); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	halt, ok := m["halt"]
+	if !ok {
+		return nil
+	}
+	obj, ok := halt.(map[string]any)
+	if !ok {
+		t.Fatalf("halt = %#v, want an object", halt)
+	}
+	return obj
+}
+
+// TestGetJob_ReportsTheHalt: #1150, a halted Job's halt reaches the caller as
+// exactly node_id, outcome, resolved and reason.
+func TestGetJob_ReportsTheHalt(t *testing.T) {
+	for _, resolved := range []bool{true, false} {
+		jr := haltedFakeJobs(resolved)
+		h := newJobFixture(t, accounts.RoleViewer, &fakeExecutor{}, jr, &fakeReadAuditor{})
+
+		rec := do(t, h, http.MethodGet, "/api/v1/jobs/job-1", nil)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200; body %s", rec.Code, rec.Body.String())
+		}
+		halt := decodeHalt(t, rec.Body.Bytes())
+		want := map[string]any{
+			"node_id": "node-1", "outcome": "failure", "resolved": resolved, "reason": jr.job.Halt.Reason(),
+		}
+		if !reflect.DeepEqual(halt, want) {
+			t.Errorf("resolved=%v: halt = %#v, want %#v", resolved, halt, want)
+		}
+	}
+}
+
+func TestGetJob_NoHaltKeyWhenTheJobDidNotHalt(t *testing.T) {
+	jr := fakeJobs{job: jobs.Job{ID: "job-1"}, tasks: []jobs.Task{{NodeID: "n1", Outcome: jobs.OutcomeSuccess}}}
+	h := newJobFixture(t, accounts.RoleViewer, &fakeExecutor{}, jr, &fakeReadAuditor{})
+
+	rec := do(t, h, http.MethodGet, "/api/v1/jobs/job-1", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body %s", rec.Code, rec.Body.String())
+	}
+	if halt := decodeHalt(t, rec.Body.Bytes()); halt != nil {
+		t.Errorf("halt = %#v, want the key absent", halt)
 	}
 }

@@ -12,9 +12,9 @@ import (
 var legalTransitions = map[DispatchState][]TaskEventKind{
 	DispatchStatePending: {
 		TaskEventDispatch, TaskEventUnreachable, TaskEventVersionRefused,
-		TaskEventUnsupported, TaskEventCancel,
+		TaskEventUnsupported, TaskEventCancel, TaskEventHalt,
 	},
-	DispatchStateDispatched: {TaskEventResolve, TaskEventCancelBeforeSend},
+	DispatchStateDispatched: {TaskEventResolve, TaskEventCancelBeforeSend, TaskEventHaltBeforeSend},
 }
 
 func isLegal(s DispatchState, k TaskEventKind) bool {
@@ -36,7 +36,7 @@ func TestTaskTransition_Table(t *testing.T) {
 	states := []DispatchState{DispatchStatePending, DispatchStateDispatched, DispatchStateResolved, DispatchState(99)}
 	known := []TaskEventKind{
 		TaskEventDispatch, TaskEventResolve, TaskEventUnreachable, TaskEventVersionRefused,
-		TaskEventUnsupported, TaskEventCancel, TaskEventCancelBeforeSend,
+		TaskEventUnsupported, TaskEventCancel, TaskEventCancelBeforeSend, TaskEventHalt, TaskEventHaltBeforeSend,
 	}
 	unknown := []TaskEventKind{0, 99}
 
@@ -98,9 +98,13 @@ func TestTaskTransition_Table(t *testing.T) {
 			want{state: DispatchStateResolved, outcome: OutcomeCancelled, dispatchedAt: dispatchedAt, resolvedAt: now}},
 		{DispatchStateDispatched, TaskEvent{Kind: TaskEventCancelBeforeSend},
 			want{state: DispatchStateResolved, outcome: OutcomeCancelled, resolvedAt: now}},
+		{DispatchStatePending, TaskEvent{Kind: TaskEventHalt, Reason: "halted: stops sending"},
+			want{state: DispatchStateResolved, outcome: OutcomeCancelled, stderr: "halted: stops sending", dispatchedAt: dispatchedAt, resolvedAt: now}},
+		{DispatchStateDispatched, TaskEvent{Kind: TaskEventHaltBeforeSend, Reason: "halted: stops sending"},
+			want{state: DispatchStateResolved, outcome: OutcomeCancelled, stderr: "halted: stops sending", resolvedAt: now}},
 	}
-	if len(legal) != 7 {
-		t.Fatalf("the table has 7 legal transitions, the test lists %d", len(legal))
+	if len(legal) != 9 {
+		t.Fatalf("the table has 9 legal transitions, the test lists %d", len(legal))
 	}
 	for _, c := range legal {
 		in := Task{ID: "t1", State: c.from, DispatchedAt: dispatchedAt}

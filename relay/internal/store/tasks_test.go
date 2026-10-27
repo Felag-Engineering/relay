@@ -530,3 +530,138 @@ func TestByJob(t *testing.T) {
 		t.Fatalf("ByJob job-1: got %d tasks, want 2", len(got))
 	}
 }
+
+// TestMarkHalted_ResolvesCancelledWithTheReasonNeverDispatched is the store
+// contract for a Task a mutate Job's halt left unsent (#1150): Pending moves
+// straight to Resolved/OutcomeCancelled with the halt's reason as Stderr, no
+// DispatchedAt, and the Task is absent from InFlight. A Dispatched or unknown
+// Task is refused with the usual sentinels.
+func TestMarkHalted_ResolvesCancelledWithTheReasonNeverDispatched(t *testing.T) {
+	st, _ := openTestStore(t)
+	ctx := context.Background()
+	seedJobAndStage(t, st, "job-1", "stage-1")
+	taskRepo := st.Tasks()
+
+	for _, id := range []string{"task-1", "task-2"} {
+		task := jobs.Task{ID: id, JobID: "job-1", StageID: "stage-1", NodeID: "node-" + id, Action: testAction(), CreatedAt: time.Now().UTC()}
+		if err := taskRepo.CreateTask(ctx, task); err != nil {
+			t.Fatalf("CreateTask(%s): %v", id, err)
+		}
+	}
+
+	resolvedAt := time.Date(2026, 10, 26, 0, 0, 0, 0, time.UTC)
+	const reason = "halted: this mutate Job stops sending"
+	if err := taskRepo.MarkHalted(ctx, "task-1", reason, resolvedAt); err != nil {
+		t.Fatalf("MarkHalted: %v", err)
+	}
+	got, err := taskRepo.Get(ctx, "task-1")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.State != jobs.DispatchStateResolved || got.Outcome != jobs.OutcomeCancelled {
+		t.Errorf("after MarkHalted: state=%v outcome=%v, want Resolved/Cancelled", got.State, got.Outcome)
+	}
+	if string(got.Stderr) != reason {
+		t.Errorf("Stderr = %q, want %q", got.Stderr, reason)
+	}
+	if !got.DispatchedAt.IsZero() {
+		t.Errorf("DispatchedAt = %v, want zero (never dispatched)", got.DispatchedAt)
+	}
+	if !got.ResolvedAt.Equal(resolvedAt) {
+		t.Errorf("ResolvedAt = %v, want %v", got.ResolvedAt, resolvedAt)
+	}
+
+	if err := taskRepo.MarkDispatched(ctx, "task-2", time.Now().UTC()); err != nil {
+		t.Fatalf("MarkDispatched(task-2): %v", err)
+	}
+	if err := taskRepo.MarkHalted(ctx, "task-2", reason, time.Now().UTC()); !errors.Is(err, jobs.ErrInvalidTaskState) {
+		t.Errorf("MarkHalted on a dispatched Task: want ErrInvalidTaskState, got %v", err)
+	}
+	if err := taskRepo.MarkHalted(ctx, "does-not-exist", reason, time.Now().UTC()); !errors.Is(err, jobs.ErrTaskNotFound) {
+		t.Errorf("MarkHalted on an unknown Task: want ErrTaskNotFound, got %v", err)
+	}
+
+	inFlight, err := taskRepo.InFlight(ctx)
+	if err != nil {
+		t.Fatalf("InFlight: %v", err)
+	}
+	for _, task := range inFlight {
+		if task.ID == "task-1" {
+			t.Errorf("InFlight contains task-1: a halt-cancelled Task was never dispatched")
+		}
+	}
+}
+
+// TestMarkHaltedBeforeSend_ResolvesADispatchedTaskAsNeverSent: a Task marked
+// Dispatched whose Job halted before its send becomes Resolved/Cancelled with
+// the halt's reason as Stderr and DispatchedAt cleared, is absent from InFlight,
+// and survives a reopen. Only a Dispatched Task is accepted.
+func TestMarkHaltedBeforeSend_ResolvesADispatchedTaskAsNeverSent(t *testing.T) {
+	st, path := openTestStore(t)
+	ctx := context.Background()
+	seedJobAndStage(t, st, "job-1", "stage-1")
+	taskRepo := st.Tasks()
+
+	for _, id := range []string{"task-1", "task-2"} {
+		task := jobs.Task{ID: id, JobID: "job-1", StageID: "stage-1", NodeID: "node-" + id, Action: testAction(), CreatedAt: time.Now().UTC()}
+		if err := taskRepo.CreateTask(ctx, task); err != nil {
+			t.Fatalf("CreateTask(%s): %v", id, err)
+		}
+	}
+	const reason = "halted: this mutate Job stops sending"
+	if err := taskRepo.MarkHaltedBeforeSend(ctx, "task-2", reason, time.Now().UTC()); !errors.Is(err, jobs.ErrInvalidTaskState) {
+		t.Errorf("on Pending: want ErrInvalidTaskState, got %v", err)
+	}
+	if err := taskRepo.MarkHaltedBeforeSend(ctx, "does-not-exist", reason, time.Now().UTC()); !errors.Is(err, jobs.ErrTaskNotFound) {
+		t.Errorf("unknown task: want ErrTaskNotFound, got %v", err)
+	}
+
+	if err := taskRepo.MarkDispatched(ctx, "task-1", time.Now().UTC()); err != nil {
+		t.Fatalf("MarkDispatched: %v", err)
+	}
+	resolvedAt := time.Date(2026, 10, 26, 0, 0, 0, 0, time.UTC)
+	if err := taskRepo.MarkHaltedBeforeSend(ctx, "task-1", reason, resolvedAt); err != nil {
+		t.Fatalf("MarkHaltedBeforeSend: %v", err)
+	}
+	if err := taskRepo.MarkHaltedBeforeSend(ctx, "task-1", reason, resolvedAt); !errors.Is(err, jobs.ErrInvalidTaskState) {
+		t.Errorf("on Resolved: want ErrInvalidTaskState, got %v", err)
+	}
+
+	check := func(label string, repo jobs.TaskRepository) {
+		t.Helper()
+		got, err := repo.Get(ctx, "task-1")
+		if err != nil {
+			t.Fatalf("%s: Get: %v", label, err)
+		}
+		if got.State != jobs.DispatchStateResolved || got.Outcome != jobs.OutcomeCancelled {
+			t.Errorf("%s: got %v/%v, want Resolved/Cancelled", label, got.State, got.Outcome)
+		}
+		if string(got.Stderr) != reason {
+			t.Errorf("%s: Stderr = %q, want %q", label, got.Stderr, reason)
+		}
+		if !got.DispatchedAt.IsZero() {
+			t.Errorf("%s: DispatchedAt = %v, want zero (never sent)", label, got.DispatchedAt)
+		}
+		if !got.ResolvedAt.Equal(resolvedAt) {
+			t.Errorf("%s: ResolvedAt = %v, want %v", label, got.ResolvedAt, resolvedAt)
+		}
+		inFlight, err := repo.InFlight(ctx)
+		if err != nil {
+			t.Fatalf("%s: InFlight: %v", label, err)
+		}
+		if len(inFlight) != 0 {
+			t.Errorf("%s: InFlight = %v, want empty", label, inFlight)
+		}
+	}
+	check("before reopen", taskRepo)
+
+	if err := st.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	st2, err := Open(path)
+	if err != nil {
+		t.Fatalf("re-Open: %v", err)
+	}
+	t.Cleanup(func() { st2.Close() })
+	check("after reopen", st2.Tasks())
+}

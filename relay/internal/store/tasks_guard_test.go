@@ -30,8 +30,10 @@ func TestTaskRepository_GuardAgreesWithTransition(t *testing.T) {
 		jobs.TaskEventUnsupported:      func(id string) error { return repo.MarkUnsupported(ctx, id, "r", at) },
 		jobs.TaskEventCancel:           func(id string) error { return repo.MarkCancelled(ctx, id, at) },
 		jobs.TaskEventCancelBeforeSend: func(id string) error { return repo.MarkCancelledBeforeSend(ctx, id, at) },
+		jobs.TaskEventHalt:             func(id string) error { return repo.MarkHalted(ctx, id, "r", at) },
+		jobs.TaskEventHaltBeforeSend:   func(id string) error { return repo.MarkHaltedBeforeSend(ctx, id, "r", at) },
 	}
-	if len(apply) != 7 {
+	if len(apply) != 9 {
 		t.Fatalf("expected one repository method per event kind, have %d", len(apply))
 	}
 

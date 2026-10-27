@@ -96,6 +96,8 @@ type NodeResult struct {
 type dispatchResult struct {
 	jobID   string
 	results []NodeResult
+	// halt is the Job's halt, zero if it did not halt.
+	halt jobs.Halt
 }
 
 // dispatcher executes an already-built dispatch. Both the interface and its

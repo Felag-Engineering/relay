@@ -155,15 +155,30 @@ func convertVerdict(v controlplane.RenderedVerdict) PerNodeVerdict {
 
 // renderJob re-reads jobID via results (the injected JobResultReader) and
 // renders every one of its Tasks as a PerNodeResult, sorted by NodeID for a
-// stable response, with the Job's status (controlplane.RenderJobState). It is
+// stable response, with the Job's status and halt (controlplane.RenderJob). It is
 // the shared rendering path for run_operation/raw_exec's own result (once
 // exec.Start returns a Job) and get_job's polling re-read of the same Job later.
 func renderJob(ctx context.Context, results JobResultReader, jobID string) (ExecutionOutput, error) {
-	rendered, status, err := controlplane.RenderJobState(ctx, results, jobID)
+	rendered, err := controlplane.RenderJob(ctx, results, jobID)
 	if err != nil {
 		return ExecutionOutput{}, err
 	}
-	return ExecutionOutput{JobID: jobID, JobStatus: status, Results: controlplane.MapSlice(rendered, perNodeResultFromRendered)}, nil
+	return ExecutionOutput{
+		JobID:     jobID,
+		JobStatus: rendered.Status,
+		Results:   controlplane.MapSlice(rendered.Results, perNodeResultFromRendered),
+		Halt:      haltOutput(rendered.Halt),
+	}, nil
+}
+
+// haltOutput is the struct conversion HaltOutput exists for: a rendered halt,
+// or nil for a Job that did not halt.
+func haltOutput(h *controlplane.RenderedHalt) *HaltOutput {
+	if h == nil {
+		return nil
+	}
+	out := HaltOutput(*h)
+	return &out
 }
 
 // renderRunError translates an error returned by Executor.Start into the tool
@@ -385,7 +400,7 @@ func dispatch(ctx context.Context, exec Executor, results JobResultReader, p cap
 	if err != nil {
 		return RunOrPlanOutput{}, nil, err
 	}
-	return RunOrPlanOutput{JobID: out.JobID, Results: out.Results, JobStatus: out.JobStatus, Reattached: sj.Reattached}, nil, nil
+	return RunOrPlanOutput{JobID: out.JobID, Results: out.Results, JobStatus: out.JobStatus, Halt: out.Halt, Reattached: sj.Reattached}, nil, nil
 }
 
 // dispatchOpts are the two presentation inputs of a real (non-plan) call: how
@@ -591,7 +606,7 @@ func answerThenDispatch(
 		if err != nil {
 			return nil, RunOrPlanOutput{}, r.reattachError(err)
 		}
-		out := RunOrPlanOutput{JobID: job.JobID, Results: job.Results, JobStatus: job.JobStatus}
+		out := RunOrPlanOutput{JobID: job.JobID, Results: job.Results, JobStatus: job.JobStatus, Halt: job.Halt}
 		out.Decision = r.decisionOutput(out)
 		return nil, out, nil
 

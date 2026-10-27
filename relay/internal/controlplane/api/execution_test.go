@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -1007,5 +1008,22 @@ func TestPreflightRender_CarriesRuleReference(t *testing.T) {
 		if _, ok := wire.Verdicts[1][key]; ok {
 			t.Errorf("node-b carries %q, want every rule key absent", key)
 		}
+	}
+}
+
+// TestRawExec_ResponseCarriesTheHalt: a dispatch response reports the halt of
+// the Job it created the same way GET /jobs/{id} does (#1150).
+func TestRawExec_ResponseCarriesTheHalt(t *testing.T) {
+	exec := &fakeExecutor{runResults: []capability.NodeResult{{NodeID: "node-1", JobID: "job-1"}}}
+	jr := haltedFakeJobs(true)
+	h := newExecFixture(t, accounts.RoleAdmin, exec, jr)
+
+	rec := do(t, h, http.MethodPost, "/api/v1/raw-exec", rawExecRequest{Argv: []string{"/bin/true"}})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body %s", rec.Code, rec.Body.String())
+	}
+	want := map[string]any{"node_id": "node-1", "outcome": "failure", "resolved": true, "reason": jr.job.Halt.Reason()}
+	if halt := decodeHalt(t, rec.Body.Bytes()); !reflect.DeepEqual(halt, want) {
+		t.Errorf("halt = %#v, want %#v", halt, want)
 	}
 }

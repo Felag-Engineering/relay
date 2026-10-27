@@ -72,9 +72,15 @@ func (j *sqliteJobs) AddStage(ctx context.Context, stage jobs.Stage) error {
 func (j *sqliteJobs) GetJob(ctx context.Context, id string) (jobs.Job, error) {
 	var createdAt string
 	var requesterID, requesterName, requesterKind sql.NullString
+	var haltTaskID, haltNodeID, haltedAt sql.NullString
+	var haltOutcome sql.NullInt64
+	var haltResolved int64
 	err := j.db.QueryRowContext(ctx,
-		`SELECT created_at, requester_account_id, requester_account_name, requester_kind FROM jobs WHERE job_id = ?`, id).
-		Scan(&createdAt, &requesterID, &requesterName, &requesterKind)
+		`SELECT created_at, requester_account_id, requester_account_name, requester_kind,
+			halt_task_id, halt_node_id, halt_outcome, halt_resolved, halted_at
+		FROM jobs WHERE job_id = ?`, id).
+		Scan(&createdAt, &requesterID, &requesterName, &requesterKind,
+			&haltTaskID, &haltNodeID, &haltOutcome, &haltResolved, &haltedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return jobs.Job{}, jobs.ErrJobNotFound
 	}
@@ -85,7 +91,7 @@ func (j *sqliteJobs) GetJob(ctx context.Context, id string) (jobs.Job, error) {
 	if err != nil {
 		return jobs.Job{}, fmt.Errorf("parse created_at for job %q: %w", id, err)
 	}
-	return jobs.Job{
+	job := jobs.Job{
 		ID:        id,
 		CreatedAt: t,
 		Requester: jobs.Requester{
@@ -93,7 +99,73 @@ func (j *sqliteJobs) GetJob(ctx context.Context, id string) (jobs.Job, error) {
 			AccountName: requesterName.String,
 			Kind:        requesterKind.String,
 		},
-	}, nil
+	}
+	if haltTaskID.Valid {
+		at, err := parseTime(haltedAt)
+		if err != nil {
+			return jobs.Job{}, fmt.Errorf("parse halted_at for job %q: %w", id, err)
+		}
+		job.Halt = jobs.Halt{
+			TaskID:   haltTaskID.String,
+			NodeID:   haltNodeID.String,
+			Outcome:  jobs.Outcome(haltOutcome.Int64),
+			Resolved: haltResolved != 0,
+			At:       at,
+		}
+	}
+	return job, nil
+}
+
+// RecordHalt records h on jobID once, in one statement. The WHERE clause makes
+// the store the check on the halt's honesty: the halting Task must be a Task of
+// the Job on h.NodeID, and a Resolved halt is recorded only for a Task the
+// store holds Resolved with h.Outcome (Resolved is terminal, so the check
+// cannot go stale). It returns jobs.ErrJobNotFound for an unknown Job and
+// jobs.ErrJobAlreadyHalted when the Job already carries a halt.
+func (j *sqliteJobs) RecordHalt(ctx context.Context, jobID string, h jobs.Halt) error {
+	if !h.Halted() || h.NodeID == "" {
+		return fmt.Errorf("store: halt of job %q names no Task or Node", jobID)
+	}
+	if h.Outcome != jobs.OutcomeFailure && h.Outcome != jobs.OutcomeTimeout {
+		return fmt.Errorf("store: halt of job %q has outcome %q; only failure or timeout halts a Job",
+			jobID, jobs.OutcomeName(h.Outcome))
+	}
+	resolved := 0
+	if h.Resolved {
+		resolved = 1
+	}
+	res, err := j.db.ExecContext(ctx, `
+		UPDATE jobs SET halt_task_id = ?, halt_node_id = ?, halt_outcome = ?, halt_resolved = ?, halted_at = ?
+		WHERE job_id = ? AND halt_task_id IS NULL
+		AND EXISTS (SELECT 1 FROM tasks WHERE task_id = ? AND job_id = ? AND node_id = ?
+			AND (? = 0 OR (state = 'resolved' AND outcome = ?)))`,
+		h.TaskID, h.NodeID, int(h.Outcome), resolved, formatTime(roundTripTime(h.At)),
+		jobID,
+		h.TaskID, jobID, h.NodeID, resolved, int(h.Outcome))
+	if err != nil {
+		return fmt.Errorf("record halt of job %q: %w", jobID, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("record halt of job %q: rows affected: %w", jobID, err)
+	}
+	if n > 0 {
+		return nil
+	}
+
+	var existing sql.NullString
+	err = j.db.QueryRowContext(ctx, `SELECT halt_task_id FROM jobs WHERE job_id = ?`, jobID).Scan(&existing)
+	if errors.Is(err, sql.ErrNoRows) {
+		return jobs.ErrJobNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("record halt of job %q: %w", jobID, err)
+	}
+	if existing.Valid {
+		return jobs.ErrJobAlreadyHalted
+	}
+	return fmt.Errorf("store: task %q on node %q is not a Task of job %q holding the halt's recorded outcome",
+		h.TaskID, h.NodeID, jobID)
 }
 
 // Stages returns all Stages for jobID, ordered by Index (at most one, in v1).

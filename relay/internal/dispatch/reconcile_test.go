@@ -104,6 +104,23 @@ func (f *fakeTaskRepository) MarkUnsupported(_ context.Context, taskID, reason s
 	return nil
 }
 
+func (f *fakeTaskRepository) MarkHalted(_ context.Context, taskID, reason string, _ time.Time) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	task, ok := f.tasks[taskID]
+	if !ok {
+		return jobs.ErrTaskNotFound
+	}
+	if task.State != jobs.DispatchStatePending {
+		return jobs.ErrInvalidTaskState
+	}
+	task.State = jobs.DispatchStateResolved
+	task.Outcome = jobs.OutcomeCancelled
+	task.Stderr = []byte(reason)
+	f.tasks[taskID] = task
+	return nil
+}
+
 func (f *fakeTaskRepository) MarkVersionRefused(_ context.Context, taskID string, _ time.Time) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -148,6 +165,24 @@ func (f *fakeTaskRepository) MarkCancelledBeforeSend(_ context.Context, taskID s
 	}
 	task.State = jobs.DispatchStateResolved
 	task.Outcome = jobs.OutcomeCancelled
+	task.DispatchedAt = time.Time{}
+	f.tasks[taskID] = task
+	return nil
+}
+
+func (f *fakeTaskRepository) MarkHaltedBeforeSend(_ context.Context, taskID, reason string, _ time.Time) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	task, ok := f.tasks[taskID]
+	if !ok {
+		return jobs.ErrTaskNotFound
+	}
+	if task.State != jobs.DispatchStateDispatched {
+		return jobs.ErrInvalidTaskState
+	}
+	task.State = jobs.DispatchStateResolved
+	task.Outcome = jobs.OutcomeCancelled
+	task.Stderr = []byte(reason)
 	task.DispatchedAt = time.Time{}
 	f.tasks[taskID] = task
 	return nil

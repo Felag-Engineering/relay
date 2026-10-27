@@ -204,6 +204,28 @@ const statusPendingApproval = "pending_approval"
 type executionResponse struct {
 	JobID   string          `json:"job_id,omitempty"`
 	Results []perNodeResult `json:"results"`
+	Halt    *haltResponse   `json:"halt,omitempty"`
+}
+
+// haltResponse is why a mutate Job stopped sending after its first failure or
+// timeout (execution.md, Halting a failing mutation). It is the field-for-field
+// image of controlplane.RenderedHalt, so a surface cannot drift from the shared
+// rendering. resolved has no omitempty: false is information.
+type haltResponse struct {
+	NodeID   string `json:"node_id"`
+	Outcome  string `json:"outcome"`
+	Resolved bool   `json:"resolved"`
+	Reason   string `json:"reason"`
+}
+
+// haltResponseFrom is the struct conversion haltResponse exists for: a
+// rendered halt, or nil for a Job that did not halt.
+func haltResponseFrom(h *controlplane.RenderedHalt) *haltResponse {
+	if h == nil {
+		return nil
+	}
+	out := haltResponse(*h)
+	return &out
 }
 
 // ---------------------------------------------------------------------------
@@ -490,13 +512,18 @@ func renderPlan(pr capability.PlanResult) planResponse {
 }
 
 // renderJob re-reads jobID and renders every one of its Tasks, sorted by
-// NodeID for a stable response (controlplane.RenderJobResults).
+// NodeID for a stable response, with its halt when the capability layer halted
+// it (controlplane.RenderJob).
 func renderJob(ctx context.Context, results JobResultReader, jobID string) (executionResponse, error) {
-	rendered, err := controlplane.RenderJobResults(ctx, results, jobID)
+	rendered, err := controlplane.RenderJob(ctx, results, jobID)
 	if err != nil {
 		return executionResponse{}, err
 	}
-	return executionResponse{JobID: jobID, Results: controlplane.MapSlice(rendered, perNodeResultFromRendered)}, nil
+	return executionResponse{
+		JobID:   jobID,
+		Results: controlplane.MapSlice(rendered.Results, perNodeResultFromRendered),
+		Halt:    haltResponseFrom(rendered.Halt),
+	}, nil
 }
 
 // perNodeResultFromTask renders one jobs.Task (controlplane.RenderTaskResult).

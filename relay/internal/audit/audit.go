@@ -223,6 +223,21 @@ const (
 	// (TagWriteAppender).
 	KindTagWrite = "tag_write"
 
+	// KindJobHalt records a mutate Job stopping sending after its first
+	// failure or timeout (execution.md, Halting a failing mutation). It is the
+	// Relay's act, not an Account's: Principal and Attribution are empty (the
+	// reasoning of KindProtocolViolation) and the Job's requester is one join
+	// away on job_id. An approval-released Job's ApprovalID and GrantID are
+	// carried, as on every kind. NodeID is the halting Node.
+	//
+	// Outcome stays unspecified, since it is meaningful only on KindDispatch,
+	// so an outcome=failure query never mixes in halt rows. Reason is
+	// Relay-authored key=value text from closed vocabularies and Relay-minted
+	// IDs: "halting_task_id=ID halting_outcome=failure|timeout
+	// halting_task_resolved=true|false". It never carries Stdout, Stderr,
+	// Truncated, Args or RawExecArgv.
+	KindJobHalt = "job_halt"
+
 	// The Console's human authentication lane
 	// (docs/design/console/12-login.md). Every attempt is recorded, successful
 	// or not — this is the first link in the chain the UI advisory requires
@@ -337,6 +352,7 @@ var allKinds = []string{
 	KindAPITokenRevoke,
 	KindPolicyAlias,
 	KindTagWrite,
+	KindJobHalt,
 }
 
 // Kinds returns every Kind this package defines, in declaration order.
@@ -420,6 +436,7 @@ var notAnAuthFailureKinds = []string{
 	KindAPITokenRevoke,
 	KindPolicyAlias,
 	KindTagWrite,
+	KindJobHalt,
 }
 
 // AuthFailureKinds is every Kind recording a credential that was submitted

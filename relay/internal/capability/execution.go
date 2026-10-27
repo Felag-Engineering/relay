@@ -23,16 +23,17 @@
 //     but persist-then-dispatch and persist-then-send still hold per Task:
 //     every Task is Pending before any dispatch goroutine starts, and each
 //     goroutine does MarkDispatched before Conduit.Dispatch.
-//   - Cancel is re-checked by the Conduit immediately before each wire write,
-//     through jobs.WithSendGuard. The guard commits the withhold itself
-//     (MarkCancelledBeforeSend: Dispatched -> Resolved/Cancelled, DispatchedAt
-//     cleared), inside the Router's per-Task critical section, so a Reconciler
-//     resend of the same Task is ordered against it: it either already sent
-//     (and the worker then sends too, resolving truthfully) or reads Resolved
-//     and sends nothing. What remains is cancel's best-effort residual under
-//     ADR-0013: a Task already inside the Tunnel write, and a Task a Reconciler
-//     sent whose Dispatch finished before the worker reached its guard (see
-//     dispatch/reconcile.go).
+//   - Cancel and halt are re-checked by the Conduit immediately before each
+//     wire write, through jobs.WithSendGuard. The guard commits the withhold
+//     itself (MarkCancelledBeforeSend, or MarkHaltedBeforeSend for a halt:
+//     Dispatched -> Resolved/Cancelled, DispatchedAt cleared), inside the
+//     Router's per-Task critical section, so a Reconciler resend of the same
+//     Task is ordered against it: it either already sent (and the worker then
+//     sends too, resolving truthfully) or reads Resolved and sends nothing. A
+//     cancel wins over a halt. What remains is cancel's best-effort residual
+//     under ADR-0013: a Task already inside the Tunnel write, and a Task a
+//     Reconciler sent whose Dispatch finished before the worker reached its
+//     guard (see dispatch/reconcile.go).
 //   - On restart, the Relay reconciles via TaskRepository.InFlight(): those
 //     Tasks may be safely re-sent-for-result because the relay-daemon dedups
 //     Task execution by Task ID (ADR-0004) — resend is safe ONLY because of
@@ -49,6 +50,17 @@
 //     Version-refused Tasks (MarkVersionRefused, ADR-0014) are the same
 //     shape: an outdated Node's Task never leaves Pending, so it too is
 //     never part of InFlight() reconciliation.
+//   - A mutate Job's halt (halt.go; execution.md, Halting a failing mutation)
+//     never sends and never rewrites a Task that was sent. It moves a Pending
+//     Task to Resolved (TaskEventHalt, MarkHalted), and a Task its worker
+//     marked Dispatched but whose send had not begun when the halt closed, to
+//     Resolved through the send guard (TaskEventHaltBeforeSend,
+//     MarkHaltedBeforeSend). Either way the Task is never in InFlight(), so a
+//     restart's Reconciler has nothing of theirs to send. A Task whose send
+//     began before the halt, the halting Task itself included when its send did
+//     not complete, stays in flight: the Reconciler re-sends it on restart or
+//     reconnect for its result and the relay-daemon dedups by task_id (invariant
+//     4), so the halt adds no execution.
 package capability
 
 import (
@@ -140,12 +152,21 @@ const DefaultDispatchConcurrency = 16
 // carries no panic value: the run error reaches callers.
 var errDispatchPanicked = errors.New("capability: dispatch worker panicked")
 
-// jobGate is the per-Job cancel gate. Holding mu across "is it cancelled? then
-// MarkDispatched" makes "no Task is dispatched after the cancel is recorded"
-// structural rather than a matter of timing.
+// jobGate is the per-Job cancel-and-halt gate. Holding mu across "is it
+// cancelled or halted? then MarkDispatched" makes "no Task is dispatched after
+// the cancel or the halt is recorded" structural rather than a matter of
+// timing.
+//
+// A Task whose outcome might halt the Job is deciding from the moment the
+// engine has its Conduit answer until the halt closes the gate or the Task is
+// found not to halt it: admit waits meanwhile, so no sibling slips through
+// while the engine reads the store to learn that outcome.
 type jobGate struct {
 	mu        sync.Mutex
+	cond      *sync.Cond // on mu; wakes admit when the gate changes
 	cancelled bool
+	halt      jobs.Halt // zero until the Job halts
+	deciding  map[string]struct{}
 }
 
 // isCancelled reports whether the Job's cancel has been recorded. A nil gate
@@ -163,18 +184,102 @@ func (g *jobGate) markCancelled() {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.cancelled = true
+	g.wake()
+}
+
+// wake releases every admit waiting on the gate. Callers hold mu.
+func (g *jobGate) wake() {
+	if g.cond != nil {
+		g.cond.Broadcast()
+	}
+}
+
+// markHalted records h as the Job's halt if the Job has neither halted nor been
+// cancelled, and reports whether h's Task now owns the halt: true when it set
+// it, and true again for the same Task later, so a halt closed provisionally
+// before the Task's outcome is persisted is not refused when the engine closes
+// it again. The first halt wins. A cancelled Job is not halted: the cancel
+// already stopped what the halt would. A nil gate records nothing. It only
+// locks, compares and assigns: no allocation, no I/O, nothing that can panic.
+func (g *jobGate) markHalted(h jobs.Halt) bool {
+	if g == nil {
+		return false
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.halt.Halted() {
+		return g.halt.TaskID == h.TaskID
+	}
+	if g.cancelled {
+		return false
+	}
+	g.halt = h
+	g.wake()
+	return true
+}
+
+// settleHalt sets whether taskID's halt holds a recorded result, once the
+// engine knows. It does nothing unless taskID owns the halt.
+func (g *jobGate) settleHalt(taskID string, resolved bool) {
+	if g == nil {
+		return
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.halt.TaskID == taskID {
+		g.halt.Resolved = resolved
+	}
+}
+
+// haltedBy returns the Job's halt, if any. A nil gate never halts.
+func (g *jobGate) haltedBy() (jobs.Halt, bool) {
+	if g == nil {
+		return jobs.Halt{}, false
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.halt, g.halt.Halted()
+}
+
+// beginDeciding marks taskID's outcome as possibly halting the Job, so admit
+// waits until endDeciding or a halt or cancel. A nil gate has nothing to hold.
+func (g *jobGate) beginDeciding(taskID string) {
+	if g == nil {
+		return
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.deciding == nil {
+		g.deciding = make(map[string]struct{})
+	}
+	g.deciding[taskID] = struct{}{}
+}
+
+// endDeciding releases beginDeciding for taskID; it is idempotent.
+func (g *jobGate) endDeciding(taskID string) {
+	if g == nil {
+		return
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	delete(g.deciding, taskID)
+	g.wake()
 }
 
 // admit runs mark (a MarkDispatched closure) under the gate lock, and only if
-// the Job is not cancelled; otherwise it returns (false, nil) without calling
-// mark. A nil gate calls mark unconditionally.
+// the Job is neither cancelled nor halted; otherwise it returns (false, nil)
+// without calling mark. It first waits out every Task still deciding whether it
+// halts the Job. A nil gate calls mark unconditionally.
 func (g *jobGate) admit(mark func() error) (admitted bool, err error) {
 	if g == nil {
 		return true, mark()
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if g.cancelled {
+	for g.cond != nil && len(g.deciding) > 0 && !g.cancelled && !g.halt.Halted() {
+		g.cond.Wait()
+	}
+	if g.cancelled || g.halt.Halted() {
 		return false, nil
 	}
 	return true, mark()
@@ -194,6 +299,7 @@ func (e *jobEngine) openGate(jobID string) (*jobGate, func()) {
 		panic(fmt.Sprintf("capability: jobEngine.run: Job %q is already running in this process", jobID))
 	}
 	g := &jobGate{}
+	g.cond = sync.NewCond(&g.mu)
 	e.gates[jobID] = g
 	return g, func() {
 		e.gatesMu.Lock()
@@ -456,7 +562,7 @@ func (e *jobEngine) persist(ctx context.Context, d dispatch, detach bool) (pj *p
 			TimeoutSeconds: d.action.TimeoutSeconds,
 			CreatedAt:      e.now(),
 		}
-		pending = append(pending, pendingTask{task: task, outdated: n.Outdated, unsupported: unsupported})
+		pending = append(pending, pendingTask{task: task, outdated: n.Outdated, unsupported: unsupported, class: d.action.RiskClass})
 		return nil
 	}
 	for _, x := range d.excluded {
@@ -509,8 +615,19 @@ func (e *jobEngine) fanOut(pj *persistedJob) (dispatchResult, error) {
 	results := make([]NodeResult, len(pending))
 	errs := make([]error, len(pending))
 	resolve := func(i int, pt pendingTask) {
+		// Released however the Task ends, panic included.
+		defer gate.endDeciding(pt.task.ID)
 		res, err := e.dispatchOneRecovered(runCtx, gate, pt)
 		errs[i] = err
+		// Still on the worker, inside its errgroup slot: the halt settles and
+		// records before this slot can take another Task, so the dispatch bound
+		// is unchanged. dispatchOne has usually closed the gate already, before
+		// persisting the outcome; this closes it for any path that could not.
+		if h, halted := gate.haltedBy(); haltsJob(pt.class, res.Outcome) || (halted && h.TaskID == pt.task.ID) {
+			if hErr := e.halt(runCtx, jobID, gate, pt.task, res.Outcome, err); hErr != nil {
+				errs[i] = errors.Join(errs[i], hErr)
+			}
+		}
 		results[i] = NodeResult{
 			NodeID:    pt.task.NodeID,
 			Outcome:   res.Outcome,
@@ -561,7 +678,8 @@ func (e *jobEngine) fanOut(pj *persistedJob) (dispatchResult, error) {
 		Outcomes:   outcomes,
 	})
 
-	return dispatchResult{jobID: jobID, results: results}, errors.Join(errs...)
+	halt, _ := gate.haltedBy()
+	return dispatchResult{jobID: jobID, results: results, halt: halt}, errors.Join(errs...)
 }
 
 // publishJobEvent publishes ev via e.events if one is wired. newJobEngine
@@ -584,10 +702,24 @@ func (e *jobEngine) publishJobEvent(ev JobEvent) {
 // unsupported, when non-empty, marks a Task whose Node was excluded from a
 // Template dispatch (ADR-0042): it is resolved unsupported with this
 // Relay-authored reason and never sent.
+//
+// class is the dispatch's risk class, which decides whether this Task's
+// failure halts its Job (haltsJob): the Job's class, not the Task's own.
 type pendingTask struct {
 	task        jobs.Task
 	outdated    bool
 	unsupported string
+	class       jobs.RiskClass
+}
+
+// closeGateOn closes gate on this Task's outcome o if o halts its Job, before
+// anything is persisted for it, and reports whether it did. The halt is
+// provisional: halt (halt.go) settles whether the outcome is recorded.
+func (e *jobEngine) closeGateOn(gate *jobGate, pt pendingTask, o jobs.Outcome) bool {
+	if !haltsJob(pt.class, o) {
+		return false
+	}
+	return gate.markHalted(jobs.Halt{TaskID: pt.task.ID, NodeID: pt.task.NodeID, Outcome: o, At: e.now()})
 }
 
 // dispatchOneRecovered runs dispatchOne and turns a panic into this Task's
@@ -611,22 +743,29 @@ func (e *jobEngine) dispatchOneRecovered(ctx context.Context, gate *jobGate, pt 
 		if r == nil {
 			return
 		}
-		attrs := []any{
-			"job_id", pt.task.JobID, "task_id", pt.task.ID, "node_id", pt.task.NodeID,
-			"panic_type", fmt.Sprintf("%T", r), "stack", string(debug.Stack()),
-		}
-		// runtime.Error's marker method, without importing runtime.
-		if re, ok := r.(interface {
-			error
-			RuntimeError()
-		}); ok {
-			attrs = append(attrs, "panic", re.Error())
-		}
+		attrs := panicLogAttrs(r, "job_id", pt.task.JobID, "task_id", pt.task.ID, "node_id", pt.task.NodeID)
 		e.logger().ErrorContext(ctx, "capability: dispatch worker panicked; Task reported as failed, store state left as-is", attrs...)
 		res = jobs.Result{Outcome: jobs.OutcomeFailure}
 		err = fmt.Errorf("capability: task %q on node %q: %w", pt.task.ID, pt.task.NodeID, errDispatchPanicked)
+		// The earliest point a panic is seen: nothing stands between it and the gate.
+		e.closeGateOn(gate, pt, res.Outcome)
 	}()
 	return e.dispatchOne(ctx, gate, pt)
+}
+
+// panicLogAttrs returns attrs plus the recovered panic's type and stack for the
+// server-side log, and its message only for a runtime.Error, whose text carries
+// no Task data.
+func panicLogAttrs(r any, attrs ...any) []any {
+	attrs = append(attrs, "panic_type", fmt.Sprintf("%T", r), "stack", string(debug.Stack()))
+	// runtime.Error's marker method, without importing runtime.
+	if re, ok := r.(interface {
+		error
+		RuntimeError()
+	}); ok {
+		attrs = append(attrs, "panic", re.Error())
+	}
+	return attrs
 }
 
 // dispatchOne carries one persisted (Pending) Task through the rest of its
@@ -648,12 +787,14 @@ func (e *jobEngine) dispatchOneRecovered(ctx context.Context, gate *jobGate, pt 
 // check (Execution.Run) — outdated Nodes still matched the Selector and still
 // count against the cap (invariant 5); only the send is refused.
 //
-// gate is the Job's cancel gate (nil means ungated). Once the Job's cancel is
-// recorded, no Task is MarkDispatched: MarkDispatched runs under the gate lock
-// and only if the Job is not cancelled. Because of the early cancelled check, a
-// cancelled Job's outdated or offline Node reports Cancelled rather than
-// VersionRefused or Unreachable — deliberate, and what a pre-dispatch
-// MarkCancelled already produced under sequential dispatch.
+// gate is the Job's cancel-and-halt gate (nil means ungated). Once the Job's
+// cancel or halt is recorded, no Task is MarkDispatched: MarkDispatched runs
+// under the gate lock and only if the Job is neither cancelled nor halted.
+// Because of the early checks, a cancelled or halted Job's outdated or offline
+// Node reports Cancelled rather than VersionRefused or Unreachable —
+// deliberate, and what a pre-dispatch MarkCancelled already produced under
+// sequential dispatch. A halted Job's never-sent Tasks resolve through
+// resolveHalted, with the halt as their reason; a cancel wins over a halt.
 //
 // run persists every Task Pending before dispatching any of them, so a
 // concurrent CancelJob (ADR-0013) can legitimately MarkCancelled a Task
@@ -669,9 +810,11 @@ func (e *jobEngine) dispatchOneRecovered(ctx context.Context, gate *jobGate, pt 
 // through the Conduit's per-Task serialisation. The guard takes gate.mu, so it
 // can wait behind another worker's MarkDispatched inside admit, and it commits
 // a withhold itself: Dispatched -> Resolved/Cancelled with DispatchedAt
-// cleared (MarkCancelledBeforeSend). jobs.ErrSendWithheld is the one Conduit
-// error that does not leave the Task Dispatched, and only when the gate
-// confirms the cancel. The guard also withholds when the store no longer holds
+// cleared (MarkCancelledBeforeSend, or MarkHaltedBeforeSend with the halt's
+// reason when a sibling's halt closed the gate after this Task passed admit; a
+// cancel wins). jobs.ErrSendWithheld is the one Conduit error that does not
+// leave the Task Dispatched, and only when the gate confirms the cancel or
+// halt. The guard also withholds when the store no longer holds
 // the Task Dispatched, and then dispatchOne returns the stored resolution.
 func (e *jobEngine) dispatchOne(ctx context.Context, gate *jobGate, pt pendingTask) (jobs.Result, error) {
 	task := pt.task
@@ -694,6 +837,9 @@ func (e *jobEngine) dispatchOne(ctx context.Context, gate *jobGate, pt pendingTa
 	// after a cancel.
 	if gate.isCancelled() {
 		return e.resolveCancelled(ctx, task)
+	}
+	if h, halted := gate.haltedBy(); halted {
+		return e.resolveHalted(ctx, task, h)
 	}
 
 	if pt.outdated {
@@ -732,8 +878,13 @@ func (e *jobEngine) dispatchOne(ctx context.Context, gate *jobGate, pt pendingTa
 		return err
 	})
 	if !admitted {
-		// The Job was cancelled first; this Task was never sent.
-		return e.resolveCancelled(ctx, task)
+		// The Job was cancelled or halted first; this Task was never sent. A
+		// cancel wins over a halt.
+		if gate.isCancelled() {
+			return e.resolveCancelled(ctx, task)
+		}
+		h, _ := gate.haltedBy()
+		return e.resolveHalted(ctx, task, h)
 	}
 	if err != nil {
 		// A concurrent CancelJob may have MarkCancelled this Task while it
@@ -751,15 +902,27 @@ func (e *jobEngine) dispatchOne(ctx context.Context, gate *jobGate, pt pendingTa
 	// already sent this Task would be contradicted by a "never sent" record.
 	var committed bool // written only by the guard, on Dispatch's goroutine
 	var commitErr error
-	var leftDispatched bool // written only by the guard, on Dispatch's goroutine
+	var leftDispatched bool   // written only by the guard, on Dispatch's goroutine
+	var haltedWith *jobs.Halt // the halt the guard withheld for; written only by the guard
 	sendCtx := jobs.WithSendGuard(ctx, func() bool {
+		// A side effect on purpose, in both withholds: the commit must sit
+		// inside the Router's per-Task critical section, where a Reconciler
+		// resend of this Task is ordered against it. See withholdCancelled.
 		if gate.isCancelled() {
-			// A side effect on purpose: the commit must sit inside the
-			// Router's per-Task critical section, where a Reconciler resend
-			// of this Task is ordered against it. See withholdCancelled.
 			committed = true
 			_, commitErr = e.advance(dispatched, jobs.TaskEvent{Kind: jobs.TaskEventCancelBeforeSend}, func(n jobs.Task) error {
 				return e.tasksRepo.MarkCancelledBeforeSend(ctx, n.ID, n.ResolvedAt)
+			})
+			return true
+		}
+		// A sibling's halt closed the gate after this Task passed admit. The
+		// halting Task's own guard ran before its halt could close, so a halt
+		// of this Task's own is never seen here.
+		if h, halted := gate.haltedBy(); halted && h.TaskID != task.ID {
+			committed = true
+			haltedWith = &h
+			_, commitErr = e.advance(dispatched, jobs.TaskEvent{Kind: jobs.TaskEventHaltBeforeSend, Reason: h.Reason()}, func(n jobs.Task) error {
+				return e.tasksRepo.MarkHaltedBeforeSend(ctx, n.ID, h.Reason(), n.ResolvedAt)
 			})
 			return true
 		}
@@ -780,13 +943,33 @@ func (e *jobEngine) dispatchOne(ctx context.Context, gate *jobGate, pt pendingTa
 	sendCtx, settlement := jobs.WithSettlement(sendCtx)
 	defer settlement.Settle()
 	result, dispatchErr := e.conduit.Dispatch(sendCtx, task.NodeID, task)
+	// The engine has its answer: close the gate before anything is persisted
+	// or read, so no sibling is admitted once the engine has seen a halting
+	// outcome. A Conduit error is only a failure the engine reports; what the
+	// store holds for the Task decides, below, so the gate holds admission
+	// until the worker has decided (jobGate).
 	if dispatchErr != nil {
-		if errors.Is(dispatchErr, jobs.ErrSendWithheld) && !leftDispatched && gate.isCancelled() {
-			if committed {
+		// A Task the guard withheld is cancelled, never a failure: it cannot halt.
+		if haltsJob(pt.class, jobs.OutcomeFailure) && !committed {
+			gate.beginDeciding(task.ID)
+		}
+	} else {
+		e.closeGateOn(gate, pt, result.Outcome)
+	}
+	if dispatchErr != nil {
+		if errors.Is(dispatchErr, jobs.ErrSendWithheld) && !leftDispatched {
+			switch {
+			case committed && haltedWith != nil:
+				return e.haltWithheldOutcome(ctx, task, *haltedWith, commitErr)
+			case committed:
 				return e.withheldOutcome(ctx, task, commitErr)
+			case gate.isCancelled():
+				// A Conduit that withheld without consulting the guard.
+				return e.withholdCancelled(ctx, dispatched)
 			}
-			// A Conduit that withheld without consulting the guard.
-			return e.withholdCancelled(ctx, dispatched)
+			if h, halted := gate.haltedBy(); halted && h.TaskID != task.ID {
+				return e.withholdHalted(ctx, dispatched, h)
+			}
 		}
 		// The store comes first: the Router's offline hook may have resolved
 		// this Task already, and a reconnect may have made the Node Connected

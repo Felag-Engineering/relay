@@ -155,7 +155,7 @@ var rowKindOrder = []rowKind{
 var activityNonCallKinds = []string{
 	audit.KindFreezeEngage, audit.KindFreezeRelease,
 	audit.KindNodeRevoke, audit.KindTokenMint, audit.KindTokenRevoke,
-	audit.KindProtocolViolation, audit.KindRevokedNodeDial, audit.KindPolicyAlias, audit.KindTagWrite,
+	audit.KindProtocolViolation, audit.KindRevokedNodeDial, audit.KindPolicyAlias, audit.KindTagWrite, audit.KindJobHalt,
 	audit.KindConfigReload, audit.KindConfigReloadRefused,
 }
 
