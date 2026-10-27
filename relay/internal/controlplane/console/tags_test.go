@@ -772,6 +772,18 @@ func allRenderedFormPages(t *testing.T, role accounts.Role) map[string]string {
 		}
 		pages[path] = contentOf(rec.Body.String())
 	}
+
+	// The sweep fixture's fingerprints are malformed, so it draws no alias
+	// editor; the alias fixture's pages are added under their own keys.
+	ah := newTestHandler(aliasSweepFixture(true), role)
+	for _, path := range aliasSweepPaths {
+		rec := get(t, ah, path)
+		if rec.Code != http.StatusOK {
+			t.Errorf("%s as %s = %d, want 200", path, role, rec.Code)
+			continue
+		}
+		pages["alias/"+path] = contentOf(rec.Body.String())
+	}
 	return pages
 }
 
@@ -782,8 +794,9 @@ var (
 	ariaLabelAttr = regexp.MustCompile(`\baria-label="([^"]*)"`)
 
 	// pinnedPostActions are the only POST targets any screen draws: sign in
-	// and out, Cancel, the five Account writes and the two tag writes. A
-	// future route that writes a label fails here until it is named.
+	// and out, Cancel, the five Account writes, the two tag writes and the Policy
+	// alias write. A future route that writes a label fails here until it is
+	// named.
 	pinnedPostActions = regexp.MustCompile(`^(` + strings.Join([]string{
 		regexp.QuoteMeta(LoginPath), regexp.QuoteMeta(LogoutPath),
 		`/console/jobs/[^/]+/cancel`,
@@ -792,6 +805,7 @@ var (
 		`/console/api-tokens/[^/]+/revoke`,
 		`/console/nodes/[^/]+/tags`,
 		`/console/tags`,
+		`/console/policy-aliases`,
 	}, "|") + `)$`)
 )
 
@@ -857,7 +871,7 @@ func TestConsole_NoScreenOffersAnEditForANodeRelayOrStateLabel(t *testing.T) {
 		"POST /console/accounts/{account_id}/enabled",
 		"POST /console/accounts/{account_id}/tokens",
 		"POST /console/api-tokens/{token_id}/revoke",
-		nodeTagsPattern, bulkTagsPattern,
+		nodeTagsPattern, bulkTagsPattern, policyAliasesPattern,
 	}
 	slices.Sort(want)
 	if !slices.Equal(writes, want) {

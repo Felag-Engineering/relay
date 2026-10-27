@@ -1,6 +1,6 @@
 # Query
 
-**Status:** designed, not built, as of `2026-10-25`.
+**Status:** designed, not built, as of `2026-10-27`.
 **Claim prefix:** `QRY`
 
 ## Purpose
@@ -114,9 +114,14 @@ to query, author or alter Policy over the wire; a live hypothetical is `policy-p
   filter names a Policy only by its fingerprint.
 - **QRY-32** An alias attaches to a fingerprint only — never to a Node, Label, Selector or group —
   and records nothing about which Nodes should carry that fingerprint.
+- **QRY-33** Wherever an alias is rendered, the full fingerprint it names is rendered beside it;
+  an alias is never shown in place of the fingerprint.
 - **QRY-34** One fingerprint has at most one alias, and one alias names at most one fingerprint.
   An alias is held in the Relay's store, survives a restart, and stays attached to its fingerprint
   whether or not any Node currently reports it.
+- **QRY-35** The Console's Fleet view, Node detail and Compare screen read aliases through the
+  capability read lane, and the Console offers the write to a human `admin` only, from the Fleet
+  view's fingerprint facet and Node detail's Fingerprints panel.
 - **QRY-36** The Control API and MCP carry no alias, on any read, and expose no alias write.
 - **QRY-37** Setting, renaming or clearing an alias takes no step-up: an alias gates nothing.
 
@@ -220,7 +225,9 @@ needs the proto gates.
 | QRY-30 | `TestPolicyAliasAdmin_RecordsTheActorFingerprintOldAndNewValue`, `TestRecordPolicyAlias_ReasonCarriesFingerprintOldAndNew`, `TestPolicyAliasAdmin_ChangeIsNotMadeWhenItsRecordCannotBeWritten`, `TestAppendWithPolicyAlias_AnUnwritableRecordLeavesTheAliasUnchanged`, `TestAppendWithPolicyAlias_SetRenameClearWriteOneRecordEach` | capability, audit sink, store |
 | QRY-31 | `TestPolicyAliases_ReachOnlyTheAliasAdminAndTheReadLane`, `TestPolicyAlias_NoWireOrResolutionPackageImportsIt`, `TestPolicyAlias_IsNeverASelectorTerm`, `TestPolicyAliasAdmin_NoChangeRecordsNothing` (the last asserts no decision input changes) | capability, compile-time |
 | QRY-32 | `TestPolicyAliasShapes_NameNoNodeLabelOrSelector`, `TestPolicyAliases_TableHoldsAFingerprintAndANameOnly`, `TestPolicyAliasAdmin_SetsAnAliasForAFingerprintNoNodeReports` | capability, store |
+| QRY-33 | `TestPolicyAliases_EveryAliasIsDrawnBesideItsFullFingerprint` (Fleet headline, facet and table, Node detail and Compare: every alias directly before its full hash, no well-formed fingerprint drawn short); supporting: `TestPolicyAliases_UnaliasedFingerprintsTakeLettersInOrderOfFirstAppearance`, `TestCompare_AFingerprintCarriesOneLetterInEveryColumn`, `TestPolicyAliases_NoLetterOrAliasCarriesColourOrRanking`, `TestPolicyAliases_AMachinePrincipalIsDrawnNoAliasName` (the letter, which stands for an alias where none is set, is also drawn beside the full hash), `TestPolicyAliases_FiltersAndLinksCarryTheHashNeverTheAlias` (links name the hash, never the alias) | Console |
 | QRY-34 | `TestAppendWithPolicyAlias_OneAliasPerFingerprint`, `TestAppendWithPolicyAlias_OneFingerprintPerAlias`, `TestPolicyAliases_SurviveARestart`, `TestPolicyAliases_StayAttachedWithNoNodeReportingTheFingerprint` | store |
+| QRY-35 | Read half: `TestPolicyAliases_FleetNodeDetailAndCompareReadThroughTheRecordedLane`, `TestPolicyAliases_AnUnrecordableAliasReadRefusesThePage`, `TestPolicyAliases_ReadsOnlyWhenTheyAreDrawn`. Offer half: `TestPolicyAliases_TheEditControlIsOfferedToAHumanAdminOnly` (a human `admin`; not a viewer, operator, machine or unrecognised-kind Account; Fleet facet and Node detail only, never the headline, table or Compare), `TestPolicyAliasesOffered_RequiresAWiredWriterAHumanAndTheAdminRoute`, `TestPolicyAliases_TheEditorCarriesWhatTheWriteNeeds`, `TestFleet_EveryPolicyFingerprintCarriesItsEditorAtScale`. End to end through the real composition root: `TestConsolePolicyAliases_AHumanAdminSetsRenamesAndClearsThroughTheRealCapabilityLayer` | Console, capability, e2e |
 | QRY-36 | `TestMCP_CarriesNoPolicyAlias`, `TestControlAPI_CarriesNoPolicyAlias`; write half structural: `TestDispatchViolations_Fixtures` (MCP, API: flags any selector naming a Policy alias) | MCP, API |
 | QRY-37 | `TestPolicyAliasAdmin_TakesNoStepUp`, `TestAuthorizeControl_PolicyAliasIsAdminAndHumanOnly` | capability, authz |
 | QRY-38 | `TestPolicyAliasAdmin_Refusals`, `TestAuthorizeControl_PolicyAliasIsAdminAndHumanOnly`, `TestSetPolicyAlias_StoresTheTrimmedValueAndAcceptsTheLengthBoundary`, `TestClearPolicyAlias_NotSetIsNotAnError`, `TestValidPolicyFingerprint`, `TestNormalizePolicyAlias`, `TestAppendWithPolicyAlias_RefusesAMalformedCall` | capability, authz, store |
@@ -248,8 +255,6 @@ Claims with **no row**, and so nothing checking them:
 |---|---|---|
 | QRY-25 | `list_operations` takes a Selector and reports each Operation reachable across the matched Nodes — description, typed slots and allowed values, risk class, and which Nodes report it; a single Node ID is the one-Node case. Retires the Node-ID-only half of QRY-12 and the vocabulary row in *Performance*. | After MVP |
 | QRY-29 | A human Account with the `admin` role can set, rename or clear the **Policy alias** of a well-formed Policy fingerprint through the capability layer. | MVP |
-| QRY-33 | Wherever an alias is rendered, the full fingerprint it names is rendered beside it; an alias is never shown in place of the fingerprint. | MVP |
-| QRY-35 | The Console's Fleet view, Node detail and Compare screen read aliases through the capability read lane, and the Console offers the write to a human `admin` only, from the Fleet view's fingerprint facet and Node detail's Fingerprints panel. | MVP |
 | QRY-39 | No query surface can set Labels, modify Policy, load Templates, refresh a daemon snapshot, issue a Policy verdict or dispatch an Operation: each adapter's structural guard forbids every write seam but the alias write (QRY-29), and every dispatch seam. Replaces QRY-24 when promoted. | After MVP |
 
 ## Out of scope

@@ -1035,6 +1035,10 @@ func (q *endlessQueries) QueryJobs(_ context.Context, _ capability.Principal, f 
 	}, nil
 }
 
+func (q *endlessQueries) PolicyAliases(context.Context, capability.Principal) (map[string]string, error) {
+	return nil, capability.ErrPolicyAliasesUnavailable
+}
+
 func (q *endlessQueries) QueryTasks(context.Context, capability.Principal, capability.TaskFilter, capability.PageRequest) (capability.TaskPage, error) {
 	return capability.TaskPage{}, nil
 }
@@ -1182,6 +1186,10 @@ func (q *scriptedQueries) AuditCounts(context.Context, capability.Principal, cap
 
 func (q *scriptedQueries) AuditReach(context.Context, capability.Principal, capability.AuditFilter) (capability.Reach, error) {
 	return capability.Reach{}, nil
+}
+
+func (q *scriptedQueries) PolicyAliases(context.Context, capability.Principal) (map[string]string, error) {
+	return nil, capability.ErrPolicyAliasesUnavailable
 }
 
 func (q *scriptedQueries) QueryTasks(context.Context, capability.Principal, capability.TaskFilter, capability.PageRequest) (capability.TaskPage, error) {

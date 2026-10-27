@@ -82,7 +82,10 @@ type surfaceDeps struct {
 	// console.AccountAdmin.
 	accountAdmin *capability.AccountAdmin
 	// tagWriter backs api.TagWriter and console.Deps.Tags; MCP never holds it.
-	tagWriter        *capability.TagWriter
+	tagWriter *capability.TagWriter
+	// policyAliasAdmin backs console.Deps.AliasWriter only; the Control API and
+	// MCP never hold it.
+	policyAliasAdmin *capability.PolicyAliasAdmin
 	jobs             jobs.JobRepository
 	tasks            jobs.TaskRepository
 	enrollmentMinter *enroll.Minter
@@ -340,7 +343,7 @@ func (consoleSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		// layer's (authz.go), as is the decision that a successful read
 		// records nothing — the latter an open question, in front of a human.
 		Accounts: d.accountAdmin,
-		// Cancel: one of the Console's two write seams. d.execution
+		// Cancel: one of the Console's write seams. d.execution
 		// already implements CancelJob — the same method the Control API and
 		// MCP call — so no adapter is built for it; the role floor is
 		// operator, the scope beyond it differs by Account kind (human: any
@@ -365,6 +368,12 @@ func (consoleSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		// it. Through the helper, never `Tags: d.tagWriter` — see
 		// consoleTagsOrNil for the typed-nil trap.
 		Tags: consoleTagsOrNil(d.tagWriter),
+		// AliasWriter: the Console's fourth write seam. The same
+		// *capability.PolicyAliasAdmin that decides the admin and human-Account
+		// floor, the name rules, uniqueness and the audit row; the Console only
+		// offers the control to a human admin. Through the helper for the
+		// typed-nil reason consoleTagsOrNil documents.
+		AliasWriter: consolePolicyAliasesOrNil(d.policyAliasAdmin),
 	})
 	mux.Handle("/console/", console.Secure(consoleMux, d.logger))
 }
@@ -524,6 +533,15 @@ func consoleEventsOrNil(b *events.Bus) console.EventReader {
 // a non-nil interface would pass the Console's `d.Tags == nil` checks, draw the
 // tag controls and panic in WriteTag.
 func consoleTagsOrNil(w *capability.TagWriter) console.TagWriter {
+	if w == nil {
+		return nil
+	}
+	return w
+}
+
+// consolePolicyAliasesOrNil returns w as a console.PolicyAliasWriter, or an
+// untyped nil when w is nil, for the reason consoleTagsOrNil documents.
+func consolePolicyAliasesOrNil(w *capability.PolicyAliasAdmin) console.PolicyAliasWriter {
 	if w == nil {
 		return nil
 	}

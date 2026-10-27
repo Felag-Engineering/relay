@@ -30,7 +30,6 @@ import (
 	"maps"
 	"net/http"
 	"net/url"
-	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -128,6 +127,9 @@ type fleetNode struct {
 	TemplateFingerprint string
 	DaemonVersion       string
 
+	// PolicyFP is PolicyFingerprint as the table's Policy cell draws it.
+	PolicyFP policyFP
+
 	// policyTerm, templateTerm and versionTerm are the Selector terms the
 	// facet rail links to for the three fields above — never the raw values
 	// themselves. Unexported because no template may render them (precedent:
@@ -180,6 +182,12 @@ type facetValue struct {
 	Href string
 
 	Count int
+
+	// FP is set on a Policy fingerprint facet's value that is a reported,
+	// well-formed fingerprint: the facet draws it in full with its alias or
+	// letter, and AliasEdit is the Edit alias form beside it for a human admin.
+	FP        *policyFP
+	AliasEdit *policyAliasForm
 
 	// Chip renders this value through the shared label-chip component when the
 	// value IS a label. The State facet listed `offline` and
@@ -452,6 +460,9 @@ const groupCards = 40
 type headlineFingerprint struct {
 	Hash  string
 	Count int
+	// FP is Hash with the alias or letter the page names it by, set by
+	// nameFleetFingerprints. The headline only draws well-formed values.
+	FP policyFP
 }
 
 // headlineFingerprints bounds how many fingerprints the headline lists. Policy
@@ -461,9 +472,6 @@ type headlineFingerprint struct {
 // listed is stated as a number. The list is in count-descending order, so the
 // cap hides the rarest fingerprints.
 const headlineFingerprints = 8
-
-// sha256Hex is the only shape of Policy fingerprint the headline draws in full.
-var sha256Hex = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 // wallGroup is one run of cells in the fleet-wide wall, kept together and
 // labelled.
@@ -576,6 +584,15 @@ func handleFleet(d Deps) http.HandlerFunc {
 		v := buildFleetView(d, nodes, listing.Eval.CertExpiringWithin, r.URL.Query().Get("filter"), r.URL.Query().Get("group"))
 		p.Scripts = []string{freshnessScript}
 
+		// One recorded alias read per render, made only when the page draws a
+		// well-formed fingerprint. The headline is built over the same matched
+		// set as every card and row, so any such fingerprint is in it.
+		aliases, aliasesAvailable, err := readPolicyAliases(r.Context(), d, caller, len(v.PolicyFingerprints) > 0)
+		if err != nil {
+			readFailed(w, err, policyAliasesReadWhat)
+			return
+		}
+
 		// The page states its age relative to when it was rendered, so a copy
 		// shown from the HTTP cache would claim "rendered just now" about an old
 		// read. A back navigation therefore re-reads, which is an audited read
@@ -592,6 +609,17 @@ func handleFleet(d Deps) http.HandlerFunc {
 		// one disclosure, one record.
 		v.Pin = buildPinState(resolveIn(nodes), pins, fleetPath, "pin")
 		pinRows(v.Groups, pins)
+		var edit *policyAliasForm
+		if aliasesAvailable && policyAliasesOffered(d, caller) {
+			edit = &policyAliasForm{
+				Action:    policyAliasesAction,
+				CSRFToken: p.CSRFToken,
+				Filter:    v.Filter,
+				Group:     v.GroupParam(),
+				Pin:       v.Pin.Raw,
+			}
+		}
+		nameFleetFingerprints(&v, newFPNamer(aliases), edit)
 		if v.FilterOK && strings.TrimSpace(v.Filter) != "" && v.Matched > 0 &&
 			tagsOffered(d, accounts.Role(caller.Role), confirmTagsPattern) {
 			v.TagSelection = &fleetTagSelection{
@@ -603,6 +631,46 @@ func handleFleet(d Deps) http.HandlerFunc {
 			}
 		}
 		renderScreen(w, p, fleetTmpl, v)
+	}
+}
+
+// nameFleetFingerprints names every well-formed Policy fingerprint the page
+// draws, in draw order so letters follow first appearance: the headline, then
+// each card's Policy fingerprint facet and deviation rows. A closed card is
+// walked too, because its body is in the page. When edit is non-nil each facet
+// value also gets its Edit alias form.
+func nameFleetFingerprints(v *fleetView, n *fpNamer, edit *policyAliasForm) {
+	for i := range v.PolicyFingerprints {
+		v.PolicyFingerprints[i].FP = n.name(v.PolicyFingerprints[i].Hash)
+	}
+	for gi := range v.Groups {
+		g := &v.Groups[gi]
+		for fi := range g.Facets {
+			if g.Facets[fi].Title != policyFingerprintFacetTitle || g.Facets[fi].LabelKey {
+				continue
+			}
+			for vi := range g.Facets[fi].Values {
+				val := &g.Facets[fi].Values[vi]
+				hash, ok := strings.CutPrefix(val.key, facetValuePrefix)
+				if !ok {
+					continue
+				}
+				fp := n.name(hash)
+				if !fp.Valid {
+					continue
+				}
+				val.FP = &fp
+				if edit != nil {
+					form := *edit
+					form.Fingerprint = hash
+					form.Alias = fp.Alias
+					val.AliasEdit = &form
+				}
+			}
+		}
+		for di := range g.Deviations {
+			g.Deviations[di].PolicyFP = n.name(g.Deviations[di].PolicyFingerprint)
+		}
 	}
 }
 
@@ -818,7 +886,7 @@ func buildHeadline(v *fleetView, nodes []fleetNode) {
 	// would bury the page or spoof its wording.
 	fps := make([]headlineFingerprint, 0, len(tally))
 	for hash, count := range tally {
-		if !sha256Hex.MatchString(hash) {
+		if !capability.ValidPolicyFingerprint(hash) {
 			malformed++
 			continue
 		}
@@ -889,6 +957,7 @@ func newFleetNode(d Deps, n registry.Node, certExpiringWithin time.Duration) fle
 		Quarantined:         nodestate.Quarantined(n),
 		Revoked:             !n.RevokedAt.IsZero(),
 		PolicyFingerprint:   n.PolicyFingerprint,
+		PolicyFP:            policyFP{Hash: n.PolicyFingerprint, Valid: capability.ValidPolicyFingerprint(n.PolicyFingerprint)},
 		TemplateFingerprint: n.TemplateSetFingerprint,
 		DaemonVersion:       n.DaemonVersion,
 		Unreported:          unreported(n),
@@ -1455,6 +1524,10 @@ func daemonVersionFacet(nodes []fleetNode, link linkContext) (facet, bool) {
 		func(full string) string { return full })
 }
 
+// policyFingerprintFacetTitle is the facet's title, which nameFleetFingerprints
+// finds it by.
+const policyFingerprintFacetTitle = "Policy fingerprint"
+
 // policyFingerprintFacet builds the Policy fingerprint facet; false when no Node contributes a value.
 //
 // Policy fingerprint is BUCKETED by the FULL self-reported value, not the
@@ -1468,7 +1541,7 @@ func daemonVersionFacet(nodes []fleetNode, link linkContext) (facet, bool) {
 // with no recorded fingerprint; real values are keyed through facetValueKey so
 // a Node self-reporting the literal "not reported" never joins the sentinel row.
 func policyFingerprintFacet(nodes []fleetNode, link linkContext) (facet, bool) {
-	return reportedValueFacet("Policy fingerprint", nodes, link,
+	return reportedValueFacet(policyFingerprintFacetTitle, nodes, link,
 		func(n fleetNode) (value, term string) { return n.PolicyFingerprint, n.policyTerm },
 		shortHash)
 }
@@ -1767,7 +1840,7 @@ var fleetTmpl = newScreen("fleet", `
     <span class="ssfig"><b>{{.PolicyFingerprintCount}}</b> Policy {{plural .PolicyFingerprintCount "fingerprint" "fingerprints"}}</span>
   </div>
   {{if or .PolicyFingerprints .PolicyFingerprintMalformed .PolicyFingerprintUnreported}}<ul class="ssfps">
-    {{range .PolicyFingerprints}}<li><code class="fphash">{{.Hash}}</code> <b>{{.Count}}</b></li>{{end}}
+    {{range .PolicyFingerprints}}<li>{{template "policy-fp" .FP}} <b>{{.Count}}</b></li>{{end}}
     {{if .PolicyFingerprintsElided}}<li class="dim">{{.PolicyFingerprintsElided}} more Policy {{plural .PolicyFingerprintsElided "fingerprint" "fingerprints"}} not listed</li>{{end}}
     {{if .PolicyFingerprintMalformed}}<li class="dim">{{.PolicyFingerprintMalformed}} malformed, not listed</li>{{end}}
     {{if .PolicyFingerprintUnreported}}<li>not reported <b>{{.PolicyFingerprintUnreported}}</b></li>{{end}}
@@ -1812,9 +1885,10 @@ var fleetTmpl = newScreen("fleet", `
         {{range .Values}}
         <div class="frow">
           {{if .Fenced}}<span class="chip fenced">{{.Fenced}}</span>
+          {{else if .FP}}{{if .Targetable}}<a href="{{.Href}}{{$.Pin.Param}}">{{template "policy-fp" .FP}}</a>{{else}}<span>{{template "policy-fp" .FP}}</span>{{end}}
           {{else if .Targetable}}<a href="{{.Href}}{{$.Pin.Param}}">{{if .Chip}}{{template "label-chip" .Chip}}{{else}}{{.Label}}{{end}}</a>
           {{else}}<span>{{if .Chip}}{{template "label-chip" .Chip}}{{else}}{{.Label}}{{end}}</span>{{end}}
-          <b>{{.Count}}</b>
+          <b>{{.Count}}</b>{{with .AliasEdit}}{{template "alias-edit" .}}{{end}}
         </div>
         {{end}}
         {{with .Hint}}<div class="fhint">{{.}}</div>{{end}}
@@ -1843,7 +1917,7 @@ var fleetTmpl = newScreen("fleet", `
               {{if .Unreported}}<span class="chip unreported" title="Missing a recorded daemon version or Policy fingerprint; not a state: label, not targetable.">not reported</span>{{end}}
               {{range .States}}{{template "label-chip" .}}{{end}}</div></td>{{end}}
             <td data-label="Labels"><div class="lblcell">{{range .Labels}}{{template "label-chip" .}}{{end}}</div></td>
-            <td data-label="Policy">{{if .PolicyFingerprint}}<code title="{{.PolicyFingerprint}}">{{short .PolicyFingerprint}}</code>{{else}}<span class="dim">not reported</span>{{end}}</td>
+            <td data-label="Policy">{{if .PolicyFingerprint}}{{template "policy-fp" .PolicyFP}}{{else}}<span class="dim">not reported</span>{{end}}</td>
             <td class="num" data-label="Last seen">{{.LastSeen}}</td>
             <td class="pincell" id="pin-{{.ID}}" data-label="Pin to compare"><form class="pinform" method="get" action="/console/#pin-{{.ID}}">
               {{with $.Filter}}<input type="hidden" name="filter" value="{{.}}">{{end}}

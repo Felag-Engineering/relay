@@ -231,6 +231,13 @@ var consoleReadAudit = map[string]readAuditRule{
 			"with its Principal and old and new values, and a refusal as a refusal; no step-up",
 	},
 
+	// ── Policy alias write ────────────────────────────────────────────────
+	"POST " + policyAliasesAction: {
+		path: "",
+		why: "a write, not a read: the capability layer records each change as policy_alias " +
+			"with its Principal and old and new values, and a refusal as a refusal; no step-up",
+	},
+
 	// ── The Accounts confirmation pages (#1046) ──────────────────────────
 	//
 	// These DO read Account data, so they sit outside "Not data reads". Each

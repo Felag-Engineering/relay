@@ -996,6 +996,20 @@ details.filters[open] > summary::before { transform: rotate(45deg); }
 .frow { display: flex; justify-content: space-between; gap: var(--space-2); align-items: center; font-size: var(--text-sm); padding: 2px 0; color: var(--text-second); }
 .frow b { font-variant-numeric: tabular-nums; color: var(--text-primary); font-weight: var(--weight-medium); }
 
+/* Policy aliases. A name is identifier text, verbatim: no text-transform. The
+ * letter is a neutral label for one page and carries no hue. */
+.fpalias { color: var(--text-primary); font-weight: var(--weight-medium); overflow-wrap: anywhere; }
+.fpletter {
+  font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-second);
+  border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); padding: 0 var(--space-1);
+}
+.frow:has(.aliasedit) { flex-wrap: wrap; }
+.frow > a, .frow > span { min-width: 0; }
+.aliasedit { display: inline-block; font-size: var(--text-sm); }
+.aliasedit summary { cursor: pointer; color: var(--text-second); text-decoration: underline; }
+.aliasedit form { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin-top: var(--space-1); }
+.aliasedit label { display: inline-flex; align-items: center; gap: var(--space-1); }
+
 /* --- Tables --------------------------------------------------------------- */
 /* overflow-x rather than wrapping: a Node id broken across two lines is no
  * longer a token an operator can select, copy, or compare at a glance, and

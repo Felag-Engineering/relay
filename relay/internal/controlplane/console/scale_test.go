@@ -347,3 +347,79 @@ func TestJob_TenThousandNodesRenderWithoutAList(t *testing.T) {
 // squashSpace collapses runs of whitespace, so an assertion about a SENTENCE
 // survives the template being re-wrapped.
 func squashSpace(s string) string { return strings.Join(strings.Fields(s), " ") }
+
+// policyFingerprintsAtScale builds nodes Nodes over 40 shards and distinct
+// Policy fingerprints, all connected: node i is in shard-(i%40) and reports the
+// well-formed fingerprint i%distinct, so with 40 dividing distinct each shard
+// holds distinct/40 fingerprints.
+func policyFingerprintsAtScale(nodes, distinct int) []registry.Node {
+	out := make([]registry.Node, 0, nodes)
+	for i := 0; i < nodes; i++ {
+		out = append(out, registry.Node{
+			NodeID:            "node-" + strconv.Itoa(i),
+			NodeLabels:        map[string]string{"shard": "shard-" + strconv.Itoa(i%40)},
+			PolicyFingerprint: fmt.Sprintf("%064x", i%distinct),
+			DaemonVersion:     "0.6.0",
+			LastSeen:          testNow.Add(-4 * time.Second),
+			Connected:         true,
+		})
+	}
+	return out
+}
+
+// maxFleetPageBytes is the owner's bound on the Fleet page at the aliased
+// scale: 1,000 distinct fingerprints, each with its Edit alias control.
+const maxFleetPageBytes = 2_000_000
+
+// Proves QRY-35.
+//
+// Every well-formed fingerprint a Fleet facet draws carries its Edit alias
+// control, with no cap and no sentence about withheld controls, and the page
+// stays within the owner's size bound. The fixture is 2,000 Nodes in 40 shards
+// (exactly groupCards) over 1,000 distinct fingerprints, 25 to a card; the
+// 2,000-Node count keeps the 10,000-cell wall from using up the bound, so the
+// test measures the editors.
+//
+// Measured: the page is 1,352,101 bytes as a human admin (aliases of about ten
+// characters on every second fingerprint).
+func TestFleet_EveryPolicyFingerprintCarriesItsEditorAtScale(t *testing.T) {
+	nodes := policyFingerprintsAtScale(2000, 1000)
+	aliases := map[string]string{}
+	for i := 0; i < 1000; i += 2 {
+		aliases[fmt.Sprintf("%064x", i)] = "alias-" + strconv.Itoa(i)
+	}
+	d, _, _ := aliasDeps(aliases, nodes...)
+
+	rec := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/?group=shard")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /console/?group=shard = %d, want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	t.Logf("the Fleet page is %d bytes as a human admin", len(body))
+
+	editors := map[string]bool{}
+	for _, fp := range editorsOn(body) {
+		editors[fp] = true
+	}
+	if len(editors) != 1000 {
+		t.Errorf("%d distinct fingerprints carry an editor, want 1000", len(editors))
+	}
+	for i := 0; i < 1000; i++ {
+		fp := fmt.Sprintf("%064x", i)
+		if !editors[fp] || !strings.Contains(body, `<code class="fphash">`+fp+`</code>`) {
+			t.Errorf("fingerprint %d is not drawn in full with its editor", i)
+			break
+		}
+	}
+	if strings.Contains(strings.ToLower(body), "withheld") {
+		t.Error("the page says controls were withheld")
+	}
+	if len(body) > maxFleetPageBytes {
+		t.Errorf("the Fleet page is %d bytes, over the owner's bound of %d", len(body), maxFleetPageBytes)
+	}
+
+	viewer := get(t, newTestHandler(d, accounts.RoleViewer), "/console/?group=shard").Body.String()
+	if got := len(editorsOn(viewer)); got != 0 {
+		t.Errorf("a viewer sees %d editors", got)
+	}
+}

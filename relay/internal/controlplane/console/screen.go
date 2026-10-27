@@ -350,6 +350,14 @@ func (l *auditLatch) QueryTasks(ctx context.Context, p capability.Principal, f c
 	return res, l.latch(err)
 }
 
+// PolicyAliases latches an unauditable read like the others: without this
+// override the alias read would get past the latch through the embedded
+// QueryReader.
+func (l *auditLatch) PolicyAliases(ctx context.Context, p capability.Principal) (map[string]string, error) {
+	aliases, err := l.QueryReader.PolicyAliases(ctx, p)
+	return aliases, l.latch(err)
+}
+
 // RecordEventSubscription is here for the same reason every other method on
 // this type is: an un-overridden QueryReader method would bypass the latch
 // silently, which is precisely the hole this type's doc comment claims not

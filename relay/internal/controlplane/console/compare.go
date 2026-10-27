@@ -312,6 +312,11 @@ type compareRow struct {
 	Key    string
 	Values []string
 
+	// FPs is set on the Policy fingerprint row only, aligned with Values: each
+	// value with the alias or letter the page names it by. Differs never reads
+	// it; a difference is the hash, not its name.
+	FPs []policyFP
+
 	// Differs is set when the columns do not all say the same thing. It is
 	// the only judgement this screen makes, and it is string inequality.
 	Differs bool
@@ -405,10 +410,43 @@ func handleCompare(d Deps) http.HandlerFunc {
 		if refusedUnaudited(w, lane, "the pinned Nodes' registry records") {
 			return
 		}
+		// The alias read is its own recorded read, made only on a page not
+		// already refused, so a failure of it is named as the aliases and never
+		// as the pinned Nodes' records.
+		if err := nameComparedFingerprints(r.Context(), d, caller, &v); err != nil {
+			readFailed(w, err, policyAliasesReadWhat)
+			return
+		}
 		v.Truncated = overflow
 		v.applyRowView(showAllRows(q))
 		renderScreen(w, p, compareTmpl, v)
 	}
+}
+
+// policyFingerprintRowKey names the row whose values are Policy fingerprints.
+const policyFingerprintRowKey = "Policy fingerprint"
+
+// nameComparedFingerprints sets the Policy fingerprint row's FPs, naming each
+// column in order with one namer so a fingerprint has one letter across the
+// columns. It reads the aliases once, and only when some column holds a
+// well-formed fingerprint. Compare offers no editor at any role.
+func nameComparedFingerprints(ctx context.Context, d Deps, caller capability.Principal, v *compareView) error {
+	i := slices.IndexFunc(v.FingerprintRows, func(r compareRow) bool { return r.Key == policyFingerprintRowKey })
+	if i < 0 {
+		return nil
+	}
+	row := &v.FingerprintRows[i]
+	draws := slices.ContainsFunc(row.Values, capability.ValidPolicyFingerprint)
+	aliases, _, err := readPolicyAliases(ctx, d, caller, draws)
+	if err != nil {
+		return err
+	}
+	namer := newFPNamer(aliases)
+	row.FPs = make([]policyFP, len(row.Values))
+	for j, value := range row.Values {
+		row.FPs[j] = namer.name(value)
+	}
+	return nil
 }
 
 // pinnedResolution is one pinned id's DescribeNode result — resolved
@@ -484,7 +522,7 @@ func buildCompareView(ctx context.Context, d Deps, caller capability.Principal, 
 		snaps = append(snaps, snap)
 		v.Columns = append(v.Columns, col)
 
-		v.FingerprintRows = appendCell(v.FingerprintRows, "Policy fingerprint", fingerprintText(n.PolicyFingerprint))
+		v.FingerprintRows = appendCell(v.FingerprintRows, policyFingerprintRowKey, fingerprintText(n.PolicyFingerprint))
 		v.FingerprintRows = appendCell(v.FingerprintRows, "Template set", templateText(n.TemplateSetFingerprint))
 	}
 
@@ -700,9 +738,9 @@ var compareTmpl = newScreen("compare", `
     </tr>
   </thead>
   <tbody>
-    {{range .FingerprintRows}}<tr{{if .Differs}} data-diff="1"{{end}}>
-      <th scope="row" class="cmpkey">{{.Key}}</th>
-      {{range $i, $v := .Values}}<td data-label="{{with index $.Columns $i}}{{with .Hostname}}{{.}} (self-reported) · {{end}}{{.ID}}{{end}}"><code>{{$v}}</code></td>{{end}}
+    {{range $row := .FingerprintRows}}<tr{{if $row.Differs}} data-diff="1"{{end}}>
+      <th scope="row" class="cmpkey">{{$row.Key}}</th>
+      {{range $i, $v := $row.Values}}<td data-label="{{with index $.Columns $i}}{{with .Hostname}}{{.}} (self-reported) · {{end}}{{.ID}}{{end}}">{{if $row.FPs}}{{with index $row.FPs $i}}{{if .Valid}}{{template "policy-fp" .}}{{else}}<code>{{$v}}</code>{{end}}{{end}}{{else}}<code>{{$v}}</code>{{end}}</td>{{end}}
     </tr>{{end}}
     {{range .PolicyRows}}<tr{{if .Differs}} data-diff="1"{{end}}>
       <th scope="row" class="cmpkey">{{.Key}}</th>

@@ -147,7 +147,7 @@ type Deps struct {
 	// one subject where being wrong is worst.
 	Accounts AccountReader
 
-	// Cancel is one of the Console's three write seams (cancel.go): the
+	// Cancel is one of the Console's write seams (cancel.go): the
 	// same capability.Execution.CancelJob the Control API and MCP call. The role
 	// floor is operator; the scope beyond that floor differs by Account kind
 	// (human: any Job, machine: only a Job it requested). Both the
@@ -180,6 +180,15 @@ type Deps struct {
 	// only renders what it decided (invariant 10, ADR-0050). Nil means no tag
 	// control renders and the routes answer unavailable.
 	Tags TagWriter
+
+	// AliasWriter is the Console's fourth write seam (policyaliases.go): the
+	// same capability.PolicyAliasAdmin the capability layer owns. The admin and
+	// human-Account floor, the name rules, uniqueness and the audit record are
+	// its and never this package's (invariant 10). The control is offered only
+	// to a human admin (policyAliasesOffered), and alias names are read and
+	// drawn only for a human (readPolicyAliases). Nil means no control renders
+	// and the route answers unavailable.
+	AliasWriter PolicyAliasWriter
 }
 
 // logger resolves Deps.Logger, falling back to slog.Default() when unset.
@@ -264,7 +273,7 @@ func Routes(d Deps) []Route {
 		// "/console/" catch-all (method-less) for every path this table does
 		// not claim; {$} is still required so an unclaimed path reaches THAT
 		// catch-all's styled 404 rather than this handler.
-		{"GET", "/console/{$}", NavEntry{Group: NavObserve, Label: "Fleet", Order: 10, Under: []string{"/console/nodes", "/console/compare", "/console/tags"}}, accounts.RoleViewer, handleFleet},
+		{"GET", "/console/{$}", NavEntry{Group: NavObserve, Label: "Fleet", Order: 10, Under: []string{"/console/nodes", "/console/compare", "/console/tags", policyAliasesAction}}, accounts.RoleViewer, handleFleet},
 		{"GET", "/console/nodes/{node_id}", NavEntry{}, accounts.RoleViewer, handleNode},
 		{"GET", "/console/activity", NavEntry{Group: NavObserve, Label: "Activity", Order: 30, Under: []string{"/console/jobs"}}, accounts.RoleViewer, handleActivity},
 		{"GET", "/console/jobs/{job_id}", NavEntry{}, accounts.RoleViewer, handleJob},
@@ -442,6 +451,14 @@ func Routes(d Deps) []Route {
 		{"POST", "/console/nodes/{node_id}/tags", NavEntry{}, accounts.RoleOperator, handleWriteNodeTag},
 		{"GET", "/console/tags/confirm", NavEntry{}, accounts.RoleOperator, handleConfirmTags},
 		{"POST", "/console/tags", NavEntry{}, accounts.RoleOperator, handleWriteTags},
+
+		// Policy aliases (policyaliases.go): set, rename or clear one alias from
+		// Fleet's facet or Node detail. MinRole admin narrows to
+		// authz.ControlPolicyAlias's own floor and widens nothing; the
+		// human-Account-only rule is the capability layer's, the backstop behind
+		// Secure's CSRF check, which refuses a bearer-lane POST before routing.
+		// The path owns itself and sits outside /console/nodes/.
+		{"POST", policyAliasesAction, NavEntry{}, accounts.RoleAdmin, handleWritePolicyAlias},
 	}
 }
 

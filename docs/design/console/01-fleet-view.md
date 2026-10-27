@@ -146,6 +146,8 @@ D23; the capability is `docs/specs/query.md`.
 - **Edit alias** opens a small server-rendered form — the alias, a Save, and a Clear where one is
   set — posted with the CSRF token. It is offered only to a human `admin`; for every other role it
   is absent, not disabled. No step-up: an alias gates nothing.
+- A machine Account that renders this page is drawn no alias name and no control, only the
+  letter and the full hash; the Console makes no alias read for it.
 - The write goes through the capability layer, which decides who may make it and records it on the
   audit trail with the old and the new value; the Console decides nothing.
 - An alias is display only: the hash is always drawn beside it, every filter and link still carries
@@ -237,8 +239,10 @@ config management.
 - [x] No route on this screen mutates anything except the Policy alias write (D23) and the bulk
       tag write (MVP, ADR-0050). Neither reaches a Node; neither writes a `node:`, `relay:` or
       `state:` label.
-      **Qualified:** the alias write is not built, so the bulk tag write is the screen's one
-      mutation. It writes only `tag:` labels (`TestConsole_NoScreenOffersAnEditForANodeRelayOrStateLabel`).
+      **Built.** The two writes are `POST /console/policy-aliases` and the bulk tag write. The
+      alias write reaches only the capability layer's `PolicyAliasAdmin` and the tag write writes
+      only `tag:` labels (`TestConsole_NoScreenOffersAnEditForANodeRelayOrStateLabel`,
+      `TestPolicyAliases_TheEditControlIsOfferedToAHumanAdminOnly`).
 - [x] The bulk tag confirmation lists the matched Nodes before anything is written, and a machine
       Account is refused.
       **Built.** The confirm page writes nothing and lists every matched Node, up to the 256-Node
@@ -247,7 +251,13 @@ config management.
       the capability layer, which the Console renders (`TestTags_RefusalsRenderTheCapabilityLayersAnswer`).
 - [ ] A refused filter shows "filter not applied", its refusal under the field, and the whole
       fleet de-emphasised beneath; nothing parses the filter in the browser.
-- [ ] Every Policy fingerprint drawn on this screen shows its full hash beside its alias or letter.
+- [x] Every Policy fingerprint drawn on this screen shows its full hash beside its alias or letter.
+      **Built.** The headline, the facet and the deviation table draw the alias or letter before
+      the full hash (`TestPolicyAliases_EveryAliasIsDrawnBesideItsFullFingerprint`,
+      `TestPolicyAliases_UnaliasedFingerprintsTakeLettersInOrderOfFirstAppearance`). A reported
+      value that is not a well-formed fingerprint is drawn short, as before, with neither name,
+      letter nor control (`TestFleet_NodeRowTitleNeverCarriesAMalformedHelloFingerprint`,
+      `TestFleet_ACollidingShortHashDoesNotHijackTheHonestBucket`).
 
 ## Open
 
