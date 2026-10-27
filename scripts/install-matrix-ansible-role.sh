@@ -539,7 +539,7 @@ API_TOKEN=$(printf '%s\n' "$PW" | node_i runuser -u relay -- relay init --config
 PW=""
 precondition "relay init printed an API token" [ -n "$API_TOKEN" ]
 echo "::add-mask::$API_TOKEN"
-relay_api POST /api/v1/enrollment-tokens '{"scope":["relay:env=role"],"ttl_seconds":3600,"max_uses":1}'
+relay_api POST /api/v1/enrollment-tokens '{"initial_tags":["tag:env=role"],"ttl_seconds":3600,"max_uses":1}'
 precondition "the Enrollment Token mint answered 201 (got $API_STATUS)" [ "$API_STATUS" = 201 ]
 JOIN=$(printf '%s' "$API_BODY" | jq -r '.join_string // empty')
 TOKEN=$(printf '%s' "$API_BODY" | jq -r '.token // empty')
