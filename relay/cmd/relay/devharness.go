@@ -147,9 +147,12 @@ func installDevHarness(cfg Config, deps *appDeps) (stop func(), err error) {
 	router, reconciler, sink := newDispatchStack(deps.tasks, harnessAudit, deps.logger)
 	// reconciler is captured by router's onConnect closure (dispatch_wiring.go)
 	// and fires on every Node registration, including reconnects — this is
-	// what makes the crash-mid-Job test's restart reconciliation happen; it
-	// is not called directly from here.
-	_ = reconciler
+	// what makes the crash-mid-Job test's restart reconciliation happen.
+	// ReconcileNode is not called directly from here. The start-up sweep runs
+	// first, as in newServer, so a failure leaves deps untouched.
+	if err := settleHaltedJobs(reconciler, deps.store.HaltedJobs(), harnessAudit, deps.logger); err != nil {
+		return nil, fmt.Errorf("devharness: %w", err)
+	}
 	deps.tunnel.sink = sink
 
 	rec := capability.NewRecorder(harnessAudit, nil, deps.logger)

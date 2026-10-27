@@ -479,6 +479,24 @@ func (s *Sink) RecordProtocolViolation(ctx context.Context, ev jobs.ProtocolViol
 	})
 }
 
+// RecordHaltedSettlement records the outcome the start-up sweep of halted Jobs
+// stored for a Task it did not send, as a KindDispatch row: the Relay's act, so
+// no Principal, Attribution, Selector or arguments. Stderr is the Relay-authored
+// reason the Task holds; the sweep never has Node-produced bytes.
+func (s *Sink) RecordHaltedSettlement(ctx context.Context, task jobs.Task, res jobs.Result) error {
+	return s.append(ctx, audit.Record{
+		Timestamp:     s.now(),
+		Kind:          audit.KindDispatch,
+		JobID:         task.JobID,
+		NodeID:        task.NodeID,
+		ActionKind:    actionKindString(task.Action.Kind),
+		OperationName: task.Action.OperationName,
+		Outcome:       res.Outcome,
+		Reason:        "settled_after_restart=halted_job task_id=" + task.ID,
+		Stderr:        res.Stderr,
+	})
+}
+
 // accountAdminReason renders e's Reason string, carrying the field names
 // the trail has always used for these actions, so existing trail queries
 // and dashboards built against those strings keep working:

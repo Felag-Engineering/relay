@@ -58,9 +58,11 @@
 //     MarkHaltedBeforeSend). Either way the Task is never in InFlight(), so a
 //     restart's Reconciler has nothing of theirs to send. A Task whose send
 //     began before the halt, the halting Task itself included when its send did
-//     not complete, stays in flight: the Reconciler re-sends it on restart or
+//     not complete, stays in flight: the Reconciler re-sends it on a live
 //     reconnect for its result and the relay-daemon dedups by task_id (invariant
-//     4), so the halt adds no execution.
+//     4), so the halt adds no execution. After a Relay restart,
+//     SettleHaltedJobs resolves it failure with Halt.RestartReason before any
+//     Node connects, sending nothing.
 package capability
 
 import (

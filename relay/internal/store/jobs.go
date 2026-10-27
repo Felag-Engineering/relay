@@ -16,6 +16,7 @@ type sqliteJobs struct {
 }
 
 var _ jobs.JobRepository = (*sqliteJobs)(nil)
+var _ jobs.HaltedJobRepository = (*sqliteJobs)(nil)
 
 // CreateJob persists a new Job, including its Requester, in one write.
 //
@@ -186,4 +187,14 @@ func (j *sqliteJobs) Stages(ctx context.Context, jobID string) ([]jobs.Stage, er
 		out = append(out, s)
 	}
 	return out, rows.Err()
+}
+
+// UnsettledTasksOfHaltedJobs returns every Pending or Dispatched Task whose Job
+// carries a halt, ordered by Job then Task ID. A NULL halt_task_id means the
+// Job never halted.
+func (j *sqliteJobs) UnsettledTasksOfHaltedJobs(ctx context.Context) ([]jobs.Task, error) {
+	return queryTasks(ctx, j.db,
+		`WHERE state IN ('pending', 'dispatched')
+		   AND job_id IN (SELECT job_id FROM jobs WHERE halt_task_id IS NOT NULL)
+		 ORDER BY job_id, task_id`)
 }
