@@ -56,12 +56,13 @@ unknown key, or a value that cannot work, is refused.
 | Key | Default | Meaning |
 |---|---|---|
 | `node_plane.listen_address` | `:7654` | Node-plane gRPC listen address (mTLS; daemons dial this). |
-| `node_plane.advertised_address` | `tls.hostname` on the listen port | The address a join string tells a relay-daemon to dial. Its host must be `tls.hostname`. |
+| `node_plane.advertised_address` | `tls.hostname` on the listen port | The address a join string tells a relay-daemon to dial. Its host must be `tls.hostname` or an entry of `tls.extra_names`; the server certificate names it. Set it when daemons reach the Relay through a port mapping or NAT. |
 | `control_plane.enabled` | `false` | Enable the control-plane listener (MCP + `/api/v1` + `/metrics`). |
 | `control_plane.listen_address` | `:9443` | Control-plane HTTPS listen address. |
 | `ca.dir` | *(required)* | Directory for the Relay-hosted CA key and certificate, created on first start ([ca-disaster-recovery.md](ca-disaster-recovery.md)). |
 | `store.path` | *(required)* | SQLite store: registry, Jobs/Tasks, audit trail, Accounts, API Tokens, Enrollment Tokens, Freeze state. |
-| `tls.hostname` | *(required)* | The name on the one server certificate both listeners present. **Must match the name daemons dial**, or their TLS verification fails. The certificate also names loopback and this host's addresses at start, so a daemon may dial one of this host's IPv4 addresses instead. |
+| `tls.hostname` | *(required)* | The name on the one server certificate both listeners present. **Must match the name daemons dial** (or that name must be an entry of `tls.extra_names`), or their TLS verification fails. The certificate also names loopback and this host's addresses at start, so a daemon may dial one of this host's IPv4 addresses instead. It must be a DNS name or an address a daemon can dial: a wildcard, an unspecified, multicast, broadcast or link-local address, or an IPv4-mapped IPv6 one refuses start. |
+| `tls.extra_names` | *(unset)* | Further DNS names and IP addresses the server certificate names, at most 32; a wildcard, a malformed entry or an empty list refuses start, naming the entry's position. An internationalised name is written in its `xn--` form. Use it when daemons or a browser reach the Relay by a name other than `tls.hostname`: through a load balancer, under a second DNS name, or at a NAT address. Read only at start: a reload that changes it is refused and a restart applies it. |
 | `enrollment.ip_rate_per_minute` / `ip_burst` | `5` / `3` | Per-IP enrollment rate and burst. |
 | `enrollment.global_rate_per_minute` / `global_burst` | `50` / `10` | Global enrollment rate and burst. Raise temporarily for a large bulk enrollment. |
 | `enrollment.max_tracked_ips` | `100000` | Cap on the per-IP rate-limit bucket map. |
@@ -93,7 +94,7 @@ files like the configuration, `0640 root:relay`.
 
 **Reload.** `kill -HUP <relay-pid>` re-reads `relay.toml` all-or-nothing. A change to a
 setting that needs a restart (listeners, the Console, `ca.dir`, `store.path`,
-`tls.hostname`, `[oauth]`) is refused by name and nothing changes. No API sets or raises any
+`tls.hostname`, `tls.extra_names`, `[oauth]`) is refused by name and nothing changes. No API sets or raises any
 of these values (invariant 11).
 
 Subcommands, checked before the configuration is read:
@@ -119,9 +120,10 @@ Subcommands, checked before the configuration is read:
 
 On first start the Relay creates its CA in `ca.dir` (directory `0700`; `ca-key.pem` `0600`,
 `ca-cert.pem` `0644`) and issues itself one server certificate, presented on both listeners, for
-`tls.hostname`, loopback and the host's addresses (up to 64, IPv4 first). The packaged unit
+`tls.hostname`, each `tls.extra_names` entry, loopback and the host's addresses (up to 64, IPv4
+first). The packaged unit
 permits `AF_NETLINK` for that listing; if the addresses cannot be listed the Relay logs a
-warning and the certificate names `tls.hostname` and loopback only. Both listeners chain to this
+warning and the certificate names all of those except the host's addresses. Both listeners chain to this
 CA:
 
 - **Node plane** (`node_plane.listen_address`): gRPC over mTLS. Daemons authenticate the Relay
@@ -279,7 +281,8 @@ password. Choose a long one.
 
 The host port on the left of `7654:7654` is what relay-daemons dial and what a join string
 carries. Publish it on any other host port and you must set
-`node_plane.advertised_address = "<tls.hostname>:<host port>"` in `relay.toml` (RC-36).
+`node_plane.advertised_address = "<tls.hostname>:<host port>"` (or a host listed in
+`tls.extra_names`) in `relay.toml` (RC-36).
 
 **Do not expose `7654` to the internet** unless you must: the global enrollment bucket is
 shared by every source, so anyone who can reach the port can spend it and deny enrollment to
@@ -324,7 +327,7 @@ configuration and the secrets. Set, for this container's layout:
 
 - `tls.hostname`, the name relay-daemons will dial. It becomes the server certificate's SAN.
   Inside a container the detected addresses are the container's own, so daemons dialling through
-  a port mapping must use `tls.hostname`.
+  a port mapping must dial `tls.hostname` or an entry of `tls.extra_names`.
   While it is unset or still the sample's `relay.example.internal`, the container reports
   **unhealthy** and `docker inspect --format '{{json .State.Health}}' <container>` says why.
 - `node_plane.listen_address = ":7654"`, `control_plane.enabled = true` and

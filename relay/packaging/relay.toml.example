@@ -36,7 +36,10 @@
 
 # The address a join string tells a relay-daemon to dial. When unset it is
 # tls.hostname on the port of listen_address. If set, its host must be
-# tls.hostname: the daemons verify the server certificate against it.
+# tls.hostname or an entry of tls.extra_names: the server certificate names
+# both, and the daemons verify it against the host they dial. Set it when
+# daemons reach this Relay at another address, such as through a port mapping
+# or NAT.
 # advertised_address = "relay.example.internal:7654"
 
 # ---------------------------------------------------------------------------
@@ -102,9 +105,21 @@ path = "/var/lib/relay/relay.db"
 # A join string tells daemons to dial it. The certificate also names 127.0.0.1,
 # ::1 and up to 64 of this host's addresses as they are when the Relay starts,
 # so a daemon may instead dial one of this host's IPv4 addresses (RELAY_ADDRESS
-# in its environment). Any other name a daemon or a browser dials must be this
-# one.
+# in its environment). Any other name a daemon or a browser dials must be an
+# entry of extra_names. It must be a DNS name or an address a daemon can dial:
+# a wildcard, an unspecified, multicast, broadcast or link-local address, or an
+# IPv4-mapped IPv6 one refuses start.
 hostname = "relay.example.internal"
+
+# Further names the server certificate carries, each a DNS name or an IP
+# address: a load balancer's name, a DNS name other than hostname, or a NAT
+# address daemons dial. Write an internationalised name in its xn-- form.
+# At most 32; a wildcard or a malformed entry refuses start, and so does an
+# empty list: omit the key instead. Every entry is visible on the certificate
+# to any peer that completes a TLS handshake, so list only names you are
+# content to disclose. Read only at start: a reload that changes the list is
+# refused, and a restart applies it.
+# extra_names = ["relay-lb.example.internal", "203.0.113.10"]
 
 # ---------------------------------------------------------------------------
 # OAuth: humans authenticating through an external IdP

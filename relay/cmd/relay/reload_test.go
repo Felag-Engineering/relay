@@ -81,8 +81,15 @@ func (f *reloadFixture) toml(extra string) string {
 
 func newReloadFixture(t *testing.T) *reloadFixture {
 	t.Helper()
+	return newReloadFixtureWith(t, "")
+}
+
+// newReloadFixtureWith is newReloadFixture over a configuration whose [tls]
+// section also holds tlsExtra, written as further keys of that section.
+func newReloadFixtureWith(t *testing.T, tlsExtra string) *reloadFixture {
+	t.Helper()
 	f := &reloadFixture{t: t, dir: t.TempDir(), logBuf: &reloadLogBuffer{}}
-	f.body = f.toml("[reach]\nmutate_blast_cap = 5\n[log]\nformat = \"text\"\n")
+	f.body = f.toml(tlsExtra + "[reach]\nmutate_blast_cap = 5\n[log]\nformat = \"text\"\n")
 	f.logs = newSwapHandler(newLogHandler(f.logBuf, mustParse(t, f.body).Log))
 	prev := slog.Default()
 	slog.SetDefault(slog.New(f.logs))
@@ -246,6 +253,47 @@ func TestReloader_RefusalLeavesEverythingUntouched(t *testing.T) {
 				t.Fatalf("config_reload_refused records = %d, want 1", len(recs))
 			}
 			want, err := auditsink.HostConfigReloadRefusedRecord("x", recs[0].Timestamp, tc.stage, tc.keys)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if recs[0].Reason != want.Reason {
+				t.Errorf("Reason = %q, want %q", recs[0].Reason, want.Reason)
+			}
+		})
+	}
+}
+
+// Proves RC-47.
+func TestReloader_ExtraNamesChangeRefusedRestartRequired(t *testing.T) {
+	const logTail = "[reach]\nmutate_blast_cap = 5\n[log]\nformat = \"text\"\n"
+	for _, tc := range []struct{ name, running, next string }{
+		{"a list added", "", "extra_names = [\"lb.example.test\"]\n"},
+		{"a list changed", "extra_names = [\"lb.example.test\"]\n", "extra_names = [\"lb2.example.test\"]\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newReloadFixtureWith(t, tc.running)
+			liveBefore := f.deps.live.cur.Load()
+			f.body = f.toml(tc.next + logTail)
+
+			if _, err := f.r.reload(context.Background()); err == nil {
+				t.Fatal("reload succeeded, want a refusal")
+			}
+			if f.deps.live.cur.Load() != liveBefore {
+				t.Error("a refused reload replaced the snapshot")
+			}
+			for _, want := range []string{"restart required", "tls.extra_names"} {
+				if !strings.Contains(f.logBuf.String(), want) {
+					t.Errorf("log = %q, want it to contain %q", f.logBuf.String(), want)
+				}
+			}
+			if len(f.records(audit.KindConfigReload)) != 0 {
+				t.Error("a refused reload wrote a config_reload record")
+			}
+			recs := f.records(audit.KindConfigReloadRefused)
+			if len(recs) != 1 {
+				t.Fatalf("config_reload_refused records = %d, want 1", len(recs))
+			}
+			want, err := auditsink.HostConfigReloadRefusedRecord("x", recs[0].Timestamp, auditsink.ReloadRefusedRestart, []string{"tls.extra_names"})
 			if err != nil {
 				t.Fatal(err)
 			}
