@@ -98,11 +98,12 @@ import "unicode/utf8"
 //
 // # Why empty value is accepted
 //
-// Node-space provenance: relay-daemon's only source of node: labels is
-// RELAY_NODE_LABELS, parsed by parse_node_labels (daemon/src/enroll.rs) as
-// comma-and-`=`-split pairs; a bare `role` entry with no `=` yields
-// ("role", ""). capability.ParseSelector agrees: "node:role=" parses to one
-// Predicate with Key "role" and an empty Value.
+// Node-space provenance: relay-daemon's node: labels are RELAY_NODE_LABELS,
+// parsed by parse_node_labels (the relay-transport crate's enroll module) as
+// comma-and-`=`-split pairs, plus the hostname, os and arch labels it declares
+// by default; a bare `role` entry with no `=` yields ("role", "").
+// capability.ParseSelector agrees: "node:role=" parses to one Predicate with
+// Key "role" and an empty Value.
 //
 // Relay-space provenance is the same shape from the other side: a scope
 // entry written without `=` (`relay:marker`) is split by enroll/handler.go
