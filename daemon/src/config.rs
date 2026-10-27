@@ -119,7 +119,10 @@ pub enum IdentityState {
 /// group- or world-writable, or owned by neither root nor `euid`. An absent one
 /// holds no identity, and `join` creates it.
 fn check_state_dir(state_dir: &Path, euid: u32) -> Result<(), ConfigError> {
-    let meta = match std::fs::symlink_metadata(state_dir) {
+    // A trailing slash makes lstat follow a final symlink, so look at the path
+    // rebuilt from its components, which drops it.
+    let probe: std::path::PathBuf = state_dir.components().collect();
+    let meta = match std::fs::symlink_metadata(&probe) {
         Ok(meta) => meta,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(source) => {
@@ -1028,6 +1031,12 @@ mod tests {
             assert!(message.contains(&path.display().to_string()), "{message}");
             assert!(message.contains(reason), "{message}");
         }
+
+        // A trailing slash must not let lstat follow the symlink.
+        let slashed = std::path::PathBuf::from(format!("{}/", link.display()));
+        let err = check_state_dir(&slashed, euid)
+            .expect_err("a symlink with a trailing slash is refused");
+        assert!(err.to_string().contains("symlink"), "{err}");
 
         let ok = base.path().join("ok");
         mode_dir(&ok, 0o755);
