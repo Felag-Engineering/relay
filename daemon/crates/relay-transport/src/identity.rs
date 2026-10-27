@@ -636,6 +636,8 @@ fn write_atomic(dir: &Path, name: &str, content: &[u8], mode: u32) -> Result<()>
 /// handshake, not on first RPC. Fails closed on any non-`https://` endpoint.
 /// Every channel pings the Relay with HTTP/2 keepalive, idle or not
 /// ([`crate::tunnel::KEEPALIVE_INTERVAL`]).
+/// The server name is `domain` when set, else the endpoint's host (an IPv6
+/// literal without brackets, verified against an IP SAN).
 pub(crate) async fn build_channel(
     endpoint: String,
     domain: Option<String>,
@@ -647,8 +649,14 @@ pub(crate) async fn build_channel(
     if let Some(id) = client_identity {
         tls = tls.identity(id);
     }
-    if let Some(d) = domain {
-        tls = tls.domain_name(d);
+    // tonic would otherwise name the server `uri.host()`, which keeps an IPv6
+    // literal's brackets and is not a valid name.
+    let server_name = domain.or_else(|| {
+        let uri: tonic::transport::Uri = endpoint.parse().ok()?;
+        crate::pin::uri_host(&uri).map(str::to_owned)
+    });
+    if let Some(name) = server_name {
+        tls = tls.domain_name(name);
     }
     Ok(Endpoint::from_shared(endpoint)?
         .http2_keep_alive_interval(crate::tunnel::KEEPALIVE_INTERVAL)

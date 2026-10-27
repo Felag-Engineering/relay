@@ -228,6 +228,9 @@ pub fn log_connect_failure(err: &IdentityError, relay: &str, retry_in: Duration)
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::fake_relay::{
+        pki, start_fake_relay, start_fake_relay_on_ipv6_loopback,
+    };
     use std::sync::Arc;
     use tokio::net::TcpListener;
     use tokio::time::Duration;
@@ -348,6 +351,66 @@ mod tests {
             debug.contains("InvalidCertificate") || debug.to_lowercase().contains("invalid peer certificate"),
             "wrong-CA dial must fail with a certificate-validation error (CA pin), not a generic transport error: {debug}"
         );
+    }
+
+    /// Dials `https://{host}:{port}` with no server name override, pinning
+    /// `ca_pem`. The fake Relay requests no client certificate, so the only
+    /// check under test is the client's verification of the Relay.
+    async fn dial_fake_relay(host: &str, port: u16, ca_pem: &str) -> Result<Channel> {
+        let id = make_identity_with_ca(ca_pem);
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(5),
+            connect_mtls(format!("https://{host}:{port}"), None, &id),
+        )
+        .await;
+        let Ok(dial_result) = outcome else {
+            panic!("dial did not resolve within the timeout: {outcome:?}");
+        };
+        dial_result
+    }
+
+    // Regression for #1187: tonic names the server by the URI host, brackets
+    // included, which is not a valid name.
+    #[tokio::test]
+    async fn ipv6_literal_relay_is_verified_by_its_ip_san_with_no_server_name() {
+        let server = pki("::1");
+        let Some((port, _)) =
+            start_fake_relay_on_ipv6_loopback(&server, server.ca_pem.clone()).await
+        else {
+            return;
+        };
+        dial_fake_relay("[::1]", port, &server.ca_pem)
+            .await
+            .expect("an IPv6 literal whose certificate names it must connect");
+    }
+
+    // Regression for #1187: the IP is verified, not skipped.
+    #[tokio::test]
+    async fn ipv6_literal_relay_whose_certificate_lacks_that_ip_is_refused() {
+        let server = pki("2001:db8::1");
+        let Some((port, _)) =
+            start_fake_relay_on_ipv6_loopback(&server, server.ca_pem.clone()).await
+        else {
+            return;
+        };
+        let err = dial_fake_relay("[::1]", port, &server.ca_pem)
+            .await
+            .expect_err("a certificate that does not name the dialled IP must be refused");
+        let debug = format!("{err:?}");
+        assert!(
+            debug.contains("NotValidForName"),
+            "must be refused by name verification, not the CA pin or a name-parse failure: {debug}"
+        );
+    }
+
+    // Regression for #1187: an IPv4 literal behaves as before.
+    #[tokio::test]
+    async fn ipv4_literal_relay_is_verified_by_its_ip_san_with_no_server_name() {
+        let server = pki("127.0.0.1");
+        let (port, _) = start_fake_relay(&server, server.ca_pem.clone()).await;
+        dial_fake_relay("127.0.0.1", port, &server.ca_pem)
+            .await
+            .expect("an IPv4 literal whose certificate names it must connect");
     }
 
     /// A non-https endpoint is rejected before any network dial is attempted.

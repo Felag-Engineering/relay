@@ -27,7 +27,8 @@ pub struct Pki {
     leaf_key_pem: String,
 }
 
-/// Mints a CA and a leaf for `leaf_name`.
+/// Mints a CA and a leaf for `leaf_name`; an IP address string becomes an IP SAN,
+/// anything else a DNS SAN.
 pub fn pki(leaf_name: &str) -> Pki {
     let ca_key = rcgen::KeyPair::generate().expect("ca key");
     let mut ca_params = rcgen::CertificateParams::new(vec![]).expect("ca params");
@@ -144,9 +145,19 @@ impl Service<http::Request<tonic::body::Body>> for FakeEnrollment {
 }
 
 async fn start(server: &Pki, answer: Answer) -> (u16, Arc<Seen>) {
+    start_at(server, answer, ([127, 0, 0, 1], 0).into())
+        .await
+        .expect("bind")
+}
+
+async fn start_at(
+    server: &Pki,
+    answer: Answer,
+    addr: std::net::SocketAddr,
+) -> std::io::Result<(u16, Arc<Seen>)> {
     let _ = rustls::crypto::ring::default_provider().install_default();
-    let incoming = TcpIncoming::bind("127.0.0.1:0".parse().unwrap()).expect("bind");
-    let port = incoming.local_addr().expect("local_addr").port();
+    let incoming = TcpIncoming::bind(addr)?;
+    let port = incoming.local_addr()?.port();
     let seen = Arc::new(Seen::default());
     let svc = FakeEnrollment {
         seen: Arc::clone(&seen),
@@ -160,7 +171,7 @@ async fn start(server: &Pki, answer: Answer) -> (u16, Arc<Seen>) {
     tokio::spawn(async move {
         let _ = builder.serve_with_incoming(svc, incoming).await;
     });
-    (port, seen)
+    Ok((port, seen))
 }
 
 /// Starts the fake Relay presenting `server`'s leaf and CA, answering `Enroll`
@@ -173,6 +184,25 @@ pub async fn start_fake_relay(server: &Pki, ca_bundle_pem: String) -> (u16, Arc<
         },
     )
     .await
+}
+
+/// As [`start_fake_relay`], listening on the IPv6 loopback `[::1]`. `None`, after
+/// printing `skipped: ...` to stderr, when `[::1]` cannot be bound (IPv6 disabled
+/// on this host), so a caller skips loudly rather than passing silently.
+pub async fn start_fake_relay_on_ipv6_loopback(
+    server: &Pki,
+    ca_bundle_pem: String,
+) -> Option<(u16, Arc<Seen>)> {
+    let answer = Answer::Enrolled {
+        ca_bundle_pem: Arc::new(ca_bundle_pem),
+    };
+    match start_at(server, answer, (std::net::Ipv6Addr::LOCALHOST, 0).into()).await {
+        Ok(started) => Some(started),
+        Err(e) => {
+            eprintln!("skipped: IPv6 loopback [::1] cannot be bound here: {e}");
+            None
+        }
+    }
 }
 
 /// As [`start_fake_relay`], but every `Enroll` is refused with

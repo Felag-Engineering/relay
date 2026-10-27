@@ -743,7 +743,9 @@ mod join_enroll {
     use super::*;
     use crate::identity::{load_identity, load_relay_addr};
     use crate::pin::sha256;
-    use crate::test_support::fake_relay::{pki, start_fake_relay};
+    use crate::test_support::fake_relay::{
+        pki, start_fake_relay, start_fake_relay_on_ipv6_loopback,
+    };
     use crate::test_support::TempDir;
     use rustls_pki_types::pem::PemObject;
     use rustls_pki_types::CertificateDer;
@@ -767,6 +769,18 @@ mod join_enroll {
                 hostname: "join-test".to_string(),
                 ..Default::default()
             },
+        }
+    }
+
+    /// As [`enroll_cfg`], dialling the IPv6 loopback with no server name override.
+    fn enroll_cfg_ipv6(port: u16, pin: [u8; 32], state_dir: &Path) -> EnrollConfig {
+        let endpoint = format!("https://[::1]:{port}");
+        EnrollConfig {
+            join: JoinString::new(format!("[::1]:{port}"), pin, "tok-join-secret".to_string()),
+            endpoint: endpoint.clone(),
+            relay_addr: endpoint,
+            tls_server_name: None,
+            ..enroll_cfg(port, pin, state_dir)
         }
     }
 
@@ -843,6 +857,52 @@ mod join_enroll {
         let cfg = enroll_cfg(port, sha256(&server.ca_der), dir.path());
         assert!(enroll(&cfg).await.is_err());
         assert_eq!(seen.enroll_calls.load(Ordering::SeqCst), 0);
+    }
+
+    // Regression for #1187: an IPv6 literal is verified against the certificate's
+    // IP SAN, by both the pinning probe and the Enroll channel.
+    #[tokio::test]
+    async fn ipv6_literal_relay_enrolls_by_its_ip_san_with_no_server_name() {
+        let server = pki("::1");
+        let Some((port, seen)) =
+            start_fake_relay_on_ipv6_loopback(&server, server.ca_pem.clone()).await
+        else {
+            return;
+        };
+        let dir = TempDir::new("join-ipv6-enrolls");
+
+        let cfg = enroll_cfg_ipv6(port, sha256(&server.ca_der), dir.path());
+        enroll(&cfg)
+            .await
+            .expect("an IPv6 literal whose certificate names it enrolls");
+
+        assert_eq!(seen.calls(), 1);
+        assert!(load_identity(dir.path()).unwrap().is_some());
+        assert_eq!(
+            load_relay_addr(dir.path()).unwrap().as_deref(),
+            Some(format!("https://[::1]:{port}").as_str())
+        );
+    }
+
+    // Regression for #1187. The pin matches, so only the name check can refuse
+    // this, and the pinning probe does: it strips the brackets and verifies the
+    // name before any Enroll channel is built. It guards EN-7 for an IPv6
+    // literal; the channel's own refusal is proved in tunnel.rs.
+    #[tokio::test]
+    async fn ipv6_literal_relay_whose_certificate_lacks_that_ip_sends_no_token() {
+        let server = pki("2001:db8::1");
+        let Some((port, seen)) =
+            start_fake_relay_on_ipv6_loopback(&server, server.ca_pem.clone()).await
+        else {
+            return;
+        };
+        let dir = TempDir::new("join-ipv6-wrong-ip");
+
+        let cfg = enroll_cfg_ipv6(port, sha256(&server.ca_der), dir.path());
+        assert!(enroll(&cfg).await.is_err());
+        assert_eq!(seen.calls(), 0);
+        assert!(seen.tokens.lock().unwrap().is_empty());
+        assert!(load_identity(dir.path()).unwrap().is_none());
     }
 
     // Proves DI-43.

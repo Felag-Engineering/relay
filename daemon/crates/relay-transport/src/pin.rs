@@ -160,18 +160,22 @@ impl ServerCertVerifier for PinVerifier {
     }
 }
 
-/// Splits `https://host:port` into the host and port to dial. IPv6 hosts keep
-/// no brackets.
-fn host_port(endpoint: &str) -> Result<(String, u16), PinError> {
-    let uri: tonic::transport::Uri = endpoint.parse().map_err(|_| PinError::BadEndpoint)?;
-    let host = uri.host().ok_or(PinError::BadEndpoint)?;
+/// The host of `uri` as a TLS server name: an IPv6 literal without its
+/// brackets, so it is checked against an IP SAN. `None` for an empty host.
+pub(crate) fn uri_host(uri: &tonic::transport::Uri) -> Option<&str> {
+    let host = uri.host()?;
     let host = host
         .strip_prefix('[')
         .and_then(|h| h.strip_suffix(']'))
         .unwrap_or(host);
-    if host.is_empty() {
-        return Err(PinError::BadEndpoint);
-    }
+    (!host.is_empty()).then_some(host)
+}
+
+/// Splits `https://host:port` into the host and port to dial. IPv6 hosts keep
+/// no brackets.
+fn host_port(endpoint: &str) -> Result<(String, u16), PinError> {
+    let uri: tonic::transport::Uri = endpoint.parse().map_err(|_| PinError::BadEndpoint)?;
+    let host = uri_host(&uri).ok_or(PinError::BadEndpoint)?;
     Ok((host.to_string(), uri.port_u16().unwrap_or(443)))
 }
 
@@ -385,6 +389,14 @@ mod tests {
         assert_eq!(
             host_port("https://[::1]:7654").unwrap(),
             ("::1".to_string(), 7654)
+        );
+        assert_eq!(
+            host_port("https://127.0.0.1:7654").unwrap(),
+            ("127.0.0.1".to_string(), 7654)
+        );
+        assert_eq!(
+            host_port("https://[2001:db8::1]:7443").unwrap(),
+            ("2001:db8::1".to_string(), 7443)
         );
     }
 }
