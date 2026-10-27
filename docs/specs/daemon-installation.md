@@ -149,8 +149,9 @@ Relay never pushes a binary (invariant 14).
   rules never take effect.
 - **DI-13** A umask that leaves the state directory unusable fails the Task before it runs, so no
   Task ever runs unrecorded; dedup markers are written no wider than owner read and write.
-- **DI-18** No Relay surface (MCP, the Control API, the Console or the Node transport) installs,
-  configures or upgrades a daemon. There is no such path to refuse.
+- **DI-18** No Relay surface (MCP, the Control API, the Console or the Node transport) offers to
+  install, configure or upgrade a daemon. A package install reaches a Node only as an Operation its
+  own Policy allows, and the shipped default allows none (DI-6).
 - **DI-19** The daemon refuses to start if its identity or its dedup store cannot be opened.
 - **DI-20** An unreadable Policy file, or a missing one with no fragment beside it, leaves the
   daemon running with a deny-all Policy: every Task is denied rather than the daemon refusing to
