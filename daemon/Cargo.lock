@@ -1122,12 +1122,14 @@ name = "relay-transport"
 version = "0.0.0"
 dependencies = [
  "base64 0.23.1",
+ "libc",
  "prost",
  "rcgen",
  "relay-log",
  "relay-proto",
  "relay-test-support",
  "ring",
+ "rustix",
  "rustls",
  "rustls-pki-types",
  "thiserror",

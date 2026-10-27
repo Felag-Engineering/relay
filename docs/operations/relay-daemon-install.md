@@ -63,6 +63,12 @@ Fail-closed behaviors to know about (all deliberate):
   environment file is noticed. Remove the line, then enroll with `relay-daemon join`.
 - **Broken configuration → refuse to run.** A partial identity (some but not all of
   `key.pem`, `cert.pem`, `ca_bundle.pem`, `node_id`) exits non-zero.
+- **Untrusted state directory or address file → refuse to run.** A state directory that is a
+  symlink, group- or world-writable, or not owned by root, and a `relay_addr` that is a
+  symlink, not a regular file, group- or world-writable, or not owned by root, stop both
+  `relay-daemon join` and the unit before anything in the directory is read. The error names
+  the path. The package and the unit (`StateDirectoryMode=0700`) create the directory
+  root-owned `0700`.
 - **No Relay address → refuse to run.** An enrolled daemon with neither `RELAY_ADDRESS` nor a
   persisted address exits non-zero, naming `RELAY_ADDRESS`; there is no localhost default. A
   Node with no persisted address works only while `RELAY_ADDRESS` is set; nothing backfills it.

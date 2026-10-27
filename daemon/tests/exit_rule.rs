@@ -3,7 +3,9 @@
 //! log line and dials nothing. A partial identity, an identity with no Relay
 //! address from either source, or a set `RELAY_JOIN` (it is not a setting and is
 //! refused by name) exits non-zero, so a broken Node shows as failed and
-//! `Restart=on-failure` never mistakes it for an idle one.
+//! `Restart=on-failure` never mistakes it for an idle one. So does a state
+//! directory that is group- or world-writable, refused by path before anything
+//! in it is read.
 //!
 //! Drives the compiled binary, like `shutdown_signal.rs`, with a cleared
 //! environment so nothing from the test runner reaches it.
@@ -209,4 +211,25 @@ fn identity_without_address_exits_nonzero() {
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("RELAY_ADDRESS"), "stderr: {stderr}");
+}
+
+#[test]
+fn an_untrusted_state_dir_exits_nonzero_naming_it() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let state = TempDir::new("exit-untrusted-state-dir");
+    seed_identity(state.path(), None);
+    std::fs::set_permissions(state.path(), std::fs::Permissions::from_mode(0o777))
+        .expect("loosen the state dir");
+    let out = run(state.path(), &[("RELAY_ADDRESS", "https://127.0.0.1:1")]);
+    assert!(!out.status.success(), "got {:?}", out.status);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains(&state.path().display().to_string()),
+        "stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("group- or world-writable"),
+        "stderr: {stderr}"
+    );
 }

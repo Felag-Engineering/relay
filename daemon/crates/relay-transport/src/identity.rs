@@ -7,7 +7,7 @@
 
 use std::collections::BTreeSet;
 use std::fs::{self, File, OpenOptions, TryLockError};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
@@ -51,6 +51,8 @@ pub enum IdentityError {
     StateDir { path: PathBuf, reason: String },
     #[error("another relay-daemon join is running against {}", path.display())]
     JoinRunning { path: PathBuf },
+    #[error("refusing to read {}: it {reason}", path.display())]
+    UntrustedStateFile { path: PathBuf, reason: String },
 }
 
 /// File in the state directory holding the Node-plane Relay address persisted
@@ -119,16 +121,98 @@ pub(crate) fn persist_relay_addr(dir: &Path, addr: &str) -> Result<()> {
     Ok(())
 }
 
-/// Loads the persisted Relay address from `dir`.
+/// Whether a file owned by `uid` is trusted by a process running as `euid`:
+/// root, or the user the daemon runs as. This is the Policy file's rule. Under the
+/// packaged unit (`User=root`) it means root only.
+pub fn owner_is_trusted(uid: u32, euid: u32) -> bool {
+    uid == 0 || uid == euid
+}
+
+/// What a state-directory entry is required to be.
+#[derive(Clone, Copy)]
+pub enum StateEntry {
+    Dir,
+    File,
+}
+
+/// Why `meta`, taken without following a symlink, is not a trustworthy `want`, or
+/// `None` when it is. The one statement of the state-directory checks, in order:
+/// a symlink, the wrong type, group- or world-writable, an owner that is neither
+/// root nor `euid`.
+pub fn untrusted_reason(meta: &fs::Metadata, want: StateEntry, euid: u32) -> Option<String> {
+    let kind = meta.file_type();
+    if kind.is_symlink() {
+        return Some("is a symlink".to_string());
+    }
+    match want {
+        StateEntry::Dir if !kind.is_dir() => return Some("is not a directory".to_string()),
+        StateEntry::File if !kind.is_file() => return Some("is not a regular file".to_string()),
+        _ => {}
+    }
+    let mode = meta.mode();
+    if mode & 0o022 != 0 {
+        return Some(format!(
+            "is group- or world-writable (mode {:04o})",
+            mode & 0o777
+        ));
+    }
+    let uid = meta.uid();
+    if !owner_is_trusted(uid, euid) {
+        return Some(format!(
+            "is owned by uid {uid}, which is neither root nor the user this runs as"
+        ));
+    }
+    None
+}
+
+/// Opens `path` without following a symlink and refuses it unless it is a regular
+/// file that only root or `euid` can write. `Ok(None)` when it is absent.
 ///
-/// `Ok(None)` when the file (or directory) is absent or empty. Any other read
-/// error, or a value that fails validation, is an `Err`: fail closed.
-pub fn load_relay_addr(dir: &Path) -> Result<Option<String>> {
-    let raw = match fs::read_to_string(dir.join(PERSISTED_ADDR_FILE)) {
-        Ok(raw) => raw,
+/// The checks run on the opened descriptor, so the file checked is the file read.
+/// `O_NOFOLLOW` guards only the last component: the parent is the state directory,
+/// which `config::identity_state` checks.
+fn open_state_file_as(path: &Path, euid: u32) -> Result<Option<File>> {
+    let file = match OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+    {
+        Ok(file) => file,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) if e.raw_os_error() == Some(libc::ELOOP) => {
+            return Err(IdentityError::UntrustedStateFile {
+                path: path.to_path_buf(),
+                reason: "is a symlink".to_string(),
+            })
+        }
         Err(e) => return Err(e.into()),
     };
+    let meta = file.metadata()?;
+    match untrusted_reason(&meta, StateEntry::File, euid) {
+        Some(reason) => Err(IdentityError::UntrustedStateFile {
+            path: path.to_path_buf(),
+            reason,
+        }),
+        None => Ok(Some(file)),
+    }
+}
+
+fn open_state_file(path: &Path) -> Result<Option<File>> {
+    open_state_file_as(path, rustix::process::geteuid().as_raw())
+}
+
+/// Loads the persisted Relay address from `dir`.
+///
+/// The file is opened without following a symlink and is refused unless it is a
+/// regular file that only root or the daemon's user can write. `Ok(None)` when the
+/// file (or directory) is absent or empty. Any other read error, or a value that
+/// fails validation, is an `Err`: fail closed.
+pub fn load_relay_addr(dir: &Path) -> Result<Option<String>> {
+    let Some(mut file) = open_state_file(&dir.join(PERSISTED_ADDR_FILE))? else {
+        return Ok(None);
+    };
+    let mut raw = String::new();
+    file.read_to_string(&mut raw)?;
     let value = raw.trim();
     if value.is_empty() {
         return Ok(None);
@@ -309,7 +393,8 @@ pub fn check_state_dir_creatable(dir: &Path) -> Result<()> {
 /// A state directory made ready for one enrollment by [`prepare_state_dir`]. It
 /// holds the exclusive lock that keeps a second `relay-daemon join` out, and it
 /// remembers what was there so [`PreparedStateDir::roll_back`] can put the
-/// directory back as found. A successful enrollment just drops it.
+/// directory back as found. A successful enrollment just drops it. A run the lock
+/// refused never removes a directory another join holds.
 pub struct PreparedStateDir {
     dir: PathBuf,
     /// The directories `prepare_state_dir` created, innermost first.
@@ -352,6 +437,23 @@ fn remove_created(created: &[PathBuf]) -> Vec<PathBuf> {
         }
     }
     Vec::new()
+}
+
+/// The error for a run the lock refused. A run that lost the lock to another join
+/// removes nothing and reports no leftover: a directory it made is in use by the
+/// join holding the lock, so it is neither deleted nor listed as left behind. Any
+/// other failure removes what this run created.
+fn lock_refused(source: IdentityError, created: Vec<PathBuf>) -> PrepareError {
+    match source {
+        IdentityError::JoinRunning { .. } => PrepareError {
+            source,
+            leftovers: Vec::new(),
+        },
+        _ => PrepareError {
+            leftovers: remove_created(&created),
+            source,
+        },
+    }
 }
 
 /// How many times the create and the lock are tried when the directory is replaced
@@ -428,8 +530,9 @@ fn lock_state_dir(dir: &Path) -> Result<Option<File>, IdentityError> {
 /// proves it writable. Records which directories it created and which enrollment
 /// files were already there, after the lock, so what it records is what no other
 /// `join` can be changing. A second `join` against the directory is refused while
-/// the lock is held. A failure removes what this call created before it returns,
-/// and an error that cannot be undone carries the directories left behind.
+/// the lock is held, and never removes a directory the join holding it uses. A
+/// failure removes what this call created before it returns, and an error that
+/// cannot be undone carries the directories left behind.
 ///
 /// Only `relay-daemon join` calls this, immediately before it enrolls.
 pub fn prepare_state_dir(dir: &Path) -> Result<PreparedStateDir, PrepareError> {
@@ -451,12 +554,8 @@ pub fn prepare_state_dir(dir: &Path) -> Result<PreparedStateDir, PrepareError> {
                     });
                 }
             }
-            Err(source) => {
-                return Err(PrepareError {
-                    source,
-                    leftovers: remove_created(&created),
-                })
-            }
+            // A lost lock removes nothing: see `lock_refused`.
+            Err(source) => return Err(lock_refused(source, created)),
         }
     };
 
@@ -472,12 +571,26 @@ pub fn prepare_state_dir(dir: &Path) -> Result<PreparedStateDir, PrepareError> {
         .collect();
     let prior_relay_addr = if existed.contains(PERSISTED_ADDR_FILE) {
         let path = dir.join(PERSISTED_ADDR_FILE);
-        match fs::read(&path) {
+        // An address that cannot be read cannot be put back after an overwrite, and one
+        // that is a symlink or insecure is not read at all.
+        let read = match open_state_file(&path) {
+            Ok(Some(mut file)) => {
+                let mut bytes = Vec::new();
+                file.read_to_end(&mut bytes)
+                    .map(|_| bytes)
+                    .map_err(|e| state_dir_io(&path, e))
+            }
+            // Recorded as present under the lock, then gone: something outside join
+            // removed it.
+            Ok(None) => Err(state_dir_io(&path, std::io::ErrorKind::NotFound.into())),
+            Err(IdentityError::Io(e)) => Err(state_dir_io(&path, e)),
+            Err(e) => Err(e),
+        };
+        match read {
             Ok(bytes) => Some(bytes),
-            // An address that cannot be read cannot be put back after an overwrite.
-            Err(e) => {
+            Err(source) => {
                 return Err(PrepareError {
-                    source: state_dir_io(&path, e),
+                    source,
                     leftovers: remove_created(&created),
                 })
             }
@@ -958,7 +1071,7 @@ mod tests {
         let base = TempDir::created("prepare-unreadable-addr");
         let dir = base.path().join("state");
         fs::create_dir(&dir).unwrap();
-        // Present but not readable as a file.
+        // Present but not a regular file.
         let addr = dir.join(PERSISTED_ADDR_FILE);
         fs::create_dir(&addr).unwrap();
 
@@ -966,10 +1079,127 @@ mod tests {
             .err()
             .expect("an address that cannot be restored");
         assert!(
-            matches!(&err.source, IdentityError::StateDir { path, .. } if path == &addr),
+            matches!(
+                &err.source,
+                IdentityError::UntrustedStateFile { path, reason }
+                    if path == &addr && reason == "is not a regular file"
+            ),
             "{err:?}"
         );
         assert!(err.leftovers.is_empty(), "{err:?}");
+    }
+
+    #[test]
+    fn prepare_state_dir_refuses_a_symlinked_relay_addr() {
+        let base = TempDir::created("prepare-symlinked-addr");
+        let dir = base.path().join("state");
+        fs::create_dir(&dir).unwrap();
+        let target = base.path().join("target");
+        fs::write(&target, "secret-bytes").unwrap();
+        let addr = dir.join(PERSISTED_ADDR_FILE);
+        std::os::unix::fs::symlink(&target, &addr).unwrap();
+
+        let err = prepare_state_dir(&dir)
+            .err()
+            .expect("a symlinked address is not read");
+        assert!(
+            matches!(&err.source, IdentityError::UntrustedStateFile { path, .. } if path == &addr),
+            "{err:?}"
+        );
+        assert!(err.leftovers.is_empty(), "{err:?}");
+        assert_eq!(fs::read(&target).unwrap(), b"secret-bytes");
+    }
+
+    #[test]
+    fn a_prepare_that_loses_the_lock_never_removes_the_directory_it_made() {
+        let base = TempDir::created("prepare-lost-lock");
+        let dir = base.path().join("outer").join("state");
+        let created = create_missing(&dir).expect("create");
+        assert_eq!(created.len(), 2, "{created:?}");
+        let _held = lock_state_dir(&dir).unwrap().expect("the holder's lock");
+        let source = lock_state_dir(&dir).expect_err("the lock is held");
+
+        let err = lock_refused(source, created.clone());
+        assert!(
+            matches!(&err.source, IdentityError::JoinRunning { path } if path == &dir),
+            "{err:?}"
+        );
+        assert!(err.leftovers.is_empty(), "{err:?}");
+        assert!(dir.is_dir(), "the lock holder's directory stays");
+
+        // Any other refusal still removes what this run made.
+        let other = IdentityError::StateDir {
+            path: dir.clone(),
+            reason: "boom".to_string(),
+        };
+        let err = lock_refused(other, created);
+        assert!(err.leftovers.is_empty(), "{err:?}");
+        assert!(!dir.exists());
+    }
+
+    // -----------------------------------------------------------------------
+    // The persisted address is opened as a trust file
+    // -----------------------------------------------------------------------
+
+    fn addr_in(label: &str) -> (TempDir, PathBuf) {
+        let dir = TempDir::created(label);
+        let addr = dir.path().join(PERSISTED_ADDR_FILE);
+        fs::write(&addr, "https://relay.test:7654").unwrap();
+        (dir, addr)
+    }
+
+    #[test]
+    fn load_relay_addr_refuses_a_symlink_naming_it() {
+        let (dir, addr) = addr_in("relay-addr-symlink");
+        let target = dir.path().join("target");
+        fs::rename(&addr, &target).unwrap();
+        std::os::unix::fs::symlink(&target, &addr).unwrap();
+
+        let err = load_relay_addr(dir.path()).expect_err("a symlink is refused");
+        assert!(
+            matches!(&err, IdentityError::UntrustedStateFile { path, .. } if path == &addr),
+            "{err:?}"
+        );
+        let message = err.to_string();
+        assert!(message.contains(&addr.display().to_string()), "{message}");
+        assert!(message.contains("symlink"), "{message}");
+    }
+
+    #[test]
+    fn load_relay_addr_refuses_a_group_or_world_writable_file() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (dir, addr) = addr_in("relay-addr-writable");
+        for mode in [0o664, 0o646] {
+            fs::set_permissions(&addr, fs::Permissions::from_mode(mode)).unwrap();
+            let err = load_relay_addr(dir.path()).expect_err("a writable file is refused");
+            let message = err.to_string();
+            assert!(message.contains(&addr.display().to_string()), "{message}");
+            assert!(message.contains(&format!("{mode:04o}")), "{message}");
+            assert!(!message.contains("relay.test"), "{message}");
+        }
+    }
+
+    #[test]
+    fn state_file_owned_by_another_user_is_refused() {
+        let (_dir, addr) = addr_in("relay-addr-owner");
+        let uid = fs::metadata(&addr).unwrap().uid();
+        // As root the file is moved to another user and root is the running user;
+        // otherwise the running user is pretended to be someone else.
+        let euid = if uid == 0 {
+            std::os::unix::fs::chown(&addr, Some(65534), Some(65534)).unwrap();
+            0
+        } else {
+            uid + 1
+        };
+        assert!(owner_is_trusted(0, euid) && !owner_is_trusted(65534, euid));
+
+        let err = open_state_file_as(&addr, euid).expect_err("a foreign owner is refused");
+        assert!(
+            matches!(&err, IdentityError::UntrustedStateFile { path, .. } if path == &addr),
+            "{err:?}"
+        );
+        assert!(err.to_string().contains("neither root nor"), "{err}");
     }
 
     #[test]

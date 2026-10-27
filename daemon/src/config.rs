@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use crate::enroll::{node_labels_from_env, parse_node_labels, state_dir_from_env};
 use crate::enroll::{EnrollConfig, EnrollError};
 use crate::gen::Facts;
-use crate::identity::{load_relay_addr, validate_endpoint_scheme, IdentityError};
+use crate::identity::{self, load_relay_addr, validate_endpoint_scheme, IdentityError};
 use relay_transport::join_string::{JoinString, JoinStringError};
 
 /// The longest join string `relay-daemon join` reads. A real join string is well
@@ -95,6 +95,8 @@ pub enum ConfigError {
         state_dir: PathBuf,
         source: std::io::Error,
     },
+    #[error("refusing to read the state directory {}: it {reason}", state_dir.display())]
+    UntrustedStateDir { state_dir: PathBuf, reason: String },
 }
 
 /// What a start does, decided before any network or Config read.
@@ -113,9 +115,39 @@ pub enum IdentityState {
     Complete,
 }
 
+/// Refuses an existing `state_dir` that is a symlink, not a directory,
+/// group- or world-writable, or owned by neither root nor `euid`. An absent one
+/// holds no identity, and `join` creates it.
+fn check_state_dir(state_dir: &Path, euid: u32) -> Result<(), ConfigError> {
+    // A trailing slash makes lstat follow a final symlink, so look at the path
+    // rebuilt from its components, which drops it.
+    let probe: std::path::PathBuf = state_dir.components().collect();
+    let meta = match std::fs::symlink_metadata(&probe) {
+        Ok(meta) => meta,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(source) => {
+            return Err(ConfigError::IdentityUnreadable {
+                state_dir: state_dir.to_path_buf(),
+                source,
+            })
+        }
+    };
+    match identity::untrusted_reason(&meta, identity::StateEntry::Dir, euid) {
+        Some(reason) => Err(ConfigError::UntrustedStateDir {
+            state_dir: state_dir.to_path_buf(),
+            reason,
+        }),
+        None => Ok(()),
+    }
+}
+
 /// Reports which of the four identity files exist in `state_dir`. A directory
-/// that does not exist holds no identity.
+/// that does not exist holds no identity. An existing state directory that is a
+/// symlink, not a directory, group- or world-writable, or owned by neither root
+/// nor the daemon's user is refused before anything in it is read: this is the
+/// first look into the directory for both `join` and the unit start.
 pub fn identity_state(state_dir: &Path) -> Result<IdentityState, ConfigError> {
+    check_state_dir(state_dir, rustix::process::geteuid().as_raw())?;
     let mut missing = Vec::new();
     for name in IDENTITY_FILES {
         match std::fs::symlink_metadata(state_dir.join(name)) {
@@ -149,8 +181,8 @@ pub fn refuse_retired_settings(get: impl Fn(&str) -> Option<OsString>) -> Result
 }
 
 /// Decides what this start does (DI-25). Only a Node with no identity file at
-/// all is `Unconfigured`; a partial identity is an error, so a broken Node
-/// shows as failed rather than idle.
+/// all is `Unconfigured`; a partial identity or an untrusted state directory is
+/// an error, so a broken Node shows as failed rather than idle.
 pub fn plan_startup(state_dir: &Path) -> Result<StartupPlan, ConfigError> {
     match identity_state(state_dir)? {
         IdentityState::Complete => Ok(StartupPlan::Enrolled),
@@ -946,5 +978,85 @@ mod tests {
                 other => panic!("want PartialIdentity, got {other:?}"),
             }
         }
+    }
+
+    // --- the state directory is checked before it is read -------------------
+
+    fn mode_dir(path: &Path, mode: u32) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::create_dir_all(path).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    #[test]
+    fn an_untrusted_state_dir_is_refused_naming_it() {
+        use std::os::unix::fs::MetadataExt;
+
+        let base = crate::test_support::TempDir::created("state-dir-untrusted");
+        let euid = rustix::process::geteuid().as_raw();
+
+        let real = base.path().join("real");
+        mode_dir(&real, 0o700);
+        let link = base.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let group = base.path().join("group-writable");
+        mode_dir(&group, 0o720);
+        let world = base.path().join("world-writable");
+        mode_dir(&world, 0o702);
+        let file = base.path().join("a-file");
+        std::fs::write(&file, "x").unwrap();
+        // Owned by someone who is neither root nor the running user.
+        let foreign = base.path().join("foreign");
+        mode_dir(&foreign, 0o700);
+        let foreign_euid = if std::fs::metadata(&foreign).unwrap().uid() == 0 {
+            std::os::unix::fs::chown(&foreign, Some(65534), Some(65534)).unwrap();
+            0
+        } else {
+            euid + 1
+        };
+
+        for (path, as_euid, reason) in [
+            (&link, euid, "symlink"),
+            (&group, euid, "group- or world-writable"),
+            (&world, euid, "group- or world-writable"),
+            (&file, euid, "not a directory"),
+            (&foreign, foreign_euid, "neither root nor"),
+        ] {
+            let err = check_state_dir(path, as_euid).expect_err("refused");
+            assert!(
+                matches!(&err, ConfigError::UntrustedStateDir { state_dir, .. } if state_dir == path),
+                "{err:?}"
+            );
+            let message = err.to_string();
+            assert!(message.contains(&path.display().to_string()), "{message}");
+            assert!(message.contains(reason), "{message}");
+        }
+
+        // A trailing slash must not let lstat follow the symlink.
+        let slashed = std::path::PathBuf::from(format!("{}/", link.display()));
+        let err = check_state_dir(&slashed, euid)
+            .expect_err("a symlink with a trailing slash is refused");
+        assert!(err.to_string().contains("symlink"), "{err}");
+
+        let ok = base.path().join("ok");
+        mode_dir(&ok, 0o755);
+        check_state_dir(&real, euid).expect("0700 is accepted");
+        check_state_dir(&ok, euid).expect("0755 is accepted");
+        check_state_dir(&base.path().join("absent"), euid).expect("absent holds no identity");
+    }
+
+    #[test]
+    fn plan_startup_refuses_an_untrusted_state_dir_before_reading_it() {
+        let base = crate::test_support::TempDir::created("plan-untrusted");
+        let dir = base.path().join("state");
+        // A partial identity would be PartialIdentity if the directory were read.
+        seed(&dir, &["key.pem"]);
+        mode_dir(&dir, 0o777);
+
+        let err = plan_startup(&dir).err().expect("refused");
+        assert!(
+            matches!(err, ConfigError::UntrustedStateDir { .. }),
+            "{err:?}"
+        );
     }
 }
