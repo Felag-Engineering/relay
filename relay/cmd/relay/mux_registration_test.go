@@ -155,6 +155,9 @@ func TestMuxRegistrationsAreTheKnownSites(t *testing.T) {
 			// the request, and every method but GET and HEAD goes on to "/".
 			`server.go New: public.Handle("/{$}")`,
 			`server.go New: public.Handle(ProtectedResourceMetadataPath)`,
+			// The health bit: a GET that reads one bit, writes nothing and names no
+			// configuration (RC-11, invariant 11).
+			`server.go New: public.Handle(health.Pattern)`,
 		}
 		if !slices.Equal(got, want) {
 			t.Errorf("handler registrations in the control-plane server changed:\n  got:  %q\n  want: %q\n"+

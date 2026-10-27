@@ -97,6 +97,13 @@ type Repository interface {
 	// emit one audit record per expiry — an approval that lapses is a fact the
 	// trail must carry, not an absence.
 	ExpirePending(ctx context.Context, now time.Time) ([]Request, error)
+
+	// CountWaiting returns how many Requests are StatePending with a deadline
+	// after now: the ones an approver can still answer. It is one count, with
+	// no Request rows or Decisions loaded, and it backs the approvals-waiting
+	// gauge. The boundary is the one PastDeadline and ExpirePending share, so a
+	// Request is waiting exactly until the sweeper would retire it.
+	CountWaiting(ctx context.Context, now time.Time) (int, error)
 }
 
 // GrantRepository persists batch/window Grants (ADR-0027 decision 12).

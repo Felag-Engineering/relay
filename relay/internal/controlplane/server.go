@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Felag-Engineering/relay/relay/internal/controlplane/health"
 	"github.com/Felag-Engineering/relay/relay/internal/logctx"
 )
 
@@ -84,8 +85,9 @@ type Config struct {
 // and MCP inherit auth simply by mounting handlers on Mux() — the one control
 // path (invariant 10, ADR-0009/0010).
 type Server struct {
-	mux  *http.ServeMux
-	http *http.Server
+	mux    *http.ServeMux
+	http   *http.Server
+	health *health.Status
 }
 
 // rootRedirect is the fixed GET / redirect (Config.RootRedirect). Every other
@@ -118,25 +120,25 @@ func New(cfg Config, authn *Authenticator) *Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/ping", handlePing)
 
-	// The ONE unauthenticated route on this listener: RFC 9728
-	// protected-resource metadata (ADR-0024).
-	//
-	// It has to be reachable without a credential, because it is what tells a
-	// harness *how to get one* — a metadata document behind the auth it
-	// describes is a locked door with the key inside. This is the same shape
-	// as the daemon plane's single `certless` exemption for Enroll
-	// (internal/transport), and it is deliberately expressed the same way:
-	// one exact path, registered in one place, wrapped around the
-	// authenticated mux rather than punched through it.
-	//
-	// It discloses an issuer URL and a resource identifier, both public by
-	// definition, and 404s when no IdP is configured. Besides it, only the fixed
-	// GET / redirect (Config.RootRedirect) answers before authentication, and it
-	// reads nothing from the request. Everything else on this listener — every
-	// other "/" — goes through Middleware.
+	// What answers before authentication, each registered here on `public` and
+	// wrapped around the authenticated mux rather than punched through it (the
+	// same shape as the daemon plane's single `certless` exemption for Enroll,
+	// internal/transport):
+	//   - RFC 9728 protected-resource metadata (ADR-0024). It has to be reachable
+	//     without a credential, because it tells a harness *how to get one*. It
+	//     discloses an issuer URL and a resource identifier, both public by
+	//     definition, and 404s when no IdP is configured.
+	//   - The health bit: serving or not serving, nothing else. It reads nothing
+	//     from the request (package health).
+	//   - The fixed GET / redirect (Config.RootRedirect), which reads nothing from
+	//     the request.
+	//   - The Console's sign-in page, through Middleware's public predicate.
+	// Everything else on this listener goes through Middleware.
 	authenticated := authn.Middleware(mux)
+	status := &health.Status{}
 	public := http.NewServeMux()
 	public.Handle(ProtectedResourceMetadataPath, authn.MetadataHandler())
+	public.Handle(health.Pattern, status)
 	if cfg.RootRedirect != "" {
 		public.Handle("/{$}", rootRedirect(cfg.RootRedirect, authenticated))
 	}
@@ -160,7 +162,8 @@ func New(cfg Config, authn *Authenticator) *Server {
 	}
 
 	return &Server{
-		mux: mux,
+		mux:    mux,
+		health: status,
 		http: &http.Server{
 			Addr:      cfg.Addr,
 			Handler:   withRequestID(public),
@@ -189,21 +192,30 @@ func (s *Server) Mux() *http.ServeMux {
 // Serve runs the control-plane HTTPS server on lis until Shutdown is called,
 // terminating and closing lis. It returns http.ErrServerClosed on a clean
 // Shutdown.
+//
+// The health bit reads "serving" from here until Serve returns or Shutdown
+// begins.
 func (s *Server) Serve(lis net.Listener) error {
+	s.health.SetServing(true)
+	defer s.health.SetServing(false)
 	return s.http.ServeTLS(lis, "", "")
 }
 
 // ListenAndServe binds s.http.Addr and runs the control-plane HTTPS server
 // until Shutdown is called. It returns http.ErrServerClosed on a clean
-// Shutdown.
+// Shutdown. The health bit follows Serve's.
 func (s *Server) ListenAndServe() error {
+	s.health.SetServing(true)
+	defer s.health.SetServing(false)
 	return s.http.ListenAndServeTLS("", "")
 }
 
 // Shutdown gracefully stops the server, independent of any other listener the
 // Relay runs (node-plane gRPC in particular): shutting down a Server here
-// never affects the node plane, and vice versa.
+// never affects the node plane, and vice versa. The health bit turns to "not
+// serving" first, so a load balancer stops sending before connections drain.
 func (s *Server) Shutdown(ctx context.Context) error {
+	s.health.SetServing(false)
 	return s.http.Shutdown(ctx)
 }
 

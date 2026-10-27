@@ -21,8 +21,8 @@
 // process's lifetime, so the series cardinality is exactly one per running
 // Relay — the standard Prometheus build-info idiom. The values are injected by
 // the composition root (main.go passes internal/version's linker-set
-// variables), which is why this package still imports nothing but capability
-// and jobs.
+// variables), which is why this package imports nothing from the Relay but
+// capability and jobs. Every label is a closed enum.
 package metrics
 
 import (
@@ -32,6 +32,7 @@ import (
 	"slices"
 	"strconv"
 	"sync/atomic"
+	"time"
 
 	"github.com/Felag-Engineering/relay/relay/internal/capability"
 	"github.com/Felag-Engineering/relay/relay/internal/jobs"
@@ -83,6 +84,110 @@ const (
 // nServerCertListeners is the number of ServerCertListener values.
 const nServerCertListeners = 2
 
+// Certificate names a certificate the Relay holds whose remaining lifetime is
+// reported. A closed enum, so the label it renders is bounded by construction.
+type Certificate int
+
+const (
+	// CertificateRelayCA is the Relay CA certificate, which every Node pins.
+	CertificateRelayCA Certificate = iota
+	// CertificateServer is the one server certificate both listeners present.
+	CertificateServer
+)
+
+// certificateLabel maps c to its Prometheus label value.
+func certificateLabel(c Certificate) string {
+	if c == CertificateServer {
+		return "server"
+	}
+	return "relay_ca"
+}
+
+// certificateOrder is the rendering order of the
+// relay_certificate_remaining_seconds series.
+var certificateOrder = []Certificate{CertificateRelayCA, CertificateServer}
+
+// AuthSurface names the control-plane surface a refused authentication
+// arrived on. A closed enum: AuthSurfaceOther is the zero value and the
+// fallback, so a path the Relay does not recognise still counts somewhere.
+type AuthSurface int
+
+const (
+	// AuthSurfaceOther is any control-plane path that is not one of the three below.
+	AuthSurfaceOther AuthSurface = iota
+	// AuthSurfaceControlAPI is the Control API.
+	AuthSurfaceControlAPI
+	// AuthSurfaceMCP is the MCP server.
+	AuthSurfaceMCP
+	// AuthSurfaceConsole is the Console.
+	AuthSurfaceConsole
+)
+
+// nAuthSurfaces is the number of AuthSurface values.
+const nAuthSurfaces = 4
+
+// authSurfaceLabel maps s to its Prometheus label value.
+func authSurfaceLabel(s AuthSurface) string {
+	switch s {
+	case AuthSurfaceControlAPI:
+		return "control_api"
+	case AuthSurfaceMCP:
+		return "mcp"
+	case AuthSurfaceConsole:
+		return "console"
+	default:
+		return "other"
+	}
+}
+
+// authSurfaceOrder is the rendering order of the relay_auth_failures_total
+// series; the fallback surface is last and still rendered.
+var authSurfaceOrder = []AuthSurface{
+	AuthSurfaceControlAPI,
+	AuthSurfaceMCP,
+	AuthSurfaceConsole,
+	AuthSurfaceOther,
+}
+
+// The reasons any surface can be refused for; they index
+// Metrics.authRefusals.
+const (
+	authReasonNoCredential = 0
+	authReasonRejected     = 1
+)
+
+// ConsoleAuthFailure names a Console password failure. Each renders only with
+// surface="console".
+type ConsoleAuthFailure int
+
+const (
+	// ConsoleSignInFailed is a sign-in with a wrong password or unknown username.
+	ConsoleSignInFailed ConsoleAuthFailure = iota
+	// ConsoleSignInThrottled is a sign-in refused because of repeated failures.
+	ConsoleSignInThrottled
+	// ConsoleStepUpFailed is a step-up re-authentication with a wrong password.
+	ConsoleStepUpFailed
+	// ConsoleStepUpThrottled is a step-up refused because of repeated failures.
+	ConsoleStepUpThrottled
+)
+
+// nConsoleAuthFailures is the number of ConsoleAuthFailure values.
+const nConsoleAuthFailures = 4
+
+// consoleAuthFailureLabel maps f to its Prometheus label value.
+func consoleAuthFailureLabel(f ConsoleAuthFailure) string {
+	switch f {
+	case ConsoleSignInThrottled:
+		return "sign_in_throttled"
+	case ConsoleStepUpFailed:
+		return "step_up_failed"
+	case ConsoleStepUpThrottled:
+		return "step_up_throttled"
+	default:
+		return "sign_in_failed"
+	}
+}
+
 // GaugeSources supplies the live values behind each gauge. Any field left nil
 // is skipped at scrape time (its metric is omitted entirely), which keeps
 // unit tests that only care about counters simple.
@@ -112,6 +217,13 @@ type GaugeSources struct {
 	// the other's enum, exactly as Nodes above reads registry.Count without
 	// internal/registry importing this package. nil omits both series.
 	LabelsDeclined func() (node, relay int64)
+	// ApprovalsWaiting returns the number of approval Requests waiting for an
+	// answer. An error omits the gauge, and so does nil.
+	ApprovalsWaiting func() (int, error)
+	// CertificateRemaining returns how long a certificate the Relay holds stays
+	// valid, at scrape time. ok=false omits that one series; when neither is ok
+	// the whole family is omitted, and so it is when the field is nil.
+	CertificateRemaining func(Certificate) (remaining time.Duration, ok bool)
 }
 
 // BuildInfo is the Relay binary's build identity as exposed on /metrics. The
@@ -226,6 +338,10 @@ type Metrics struct {
 	certRotation         [nServerCertListeners]atomic.Int64
 	violations           [nViolationRules]atomic.Int64
 	violationsUnrecorded atomic.Int64
+
+	// authRefusals is indexed [AuthSurface][authReason*].
+	authRefusals        [nAuthSurfaces][2]atomic.Int64
+	consoleAuthFailures [nConsoleAuthFailures]atomic.Int64
 }
 
 var _ capability.MetricsSink = (*Metrics)(nil)
@@ -297,6 +413,35 @@ func (m *Metrics) IncProtocolViolationUnrecorded() {
 	m.violationsUnrecorded.Add(1)
 }
 
+// IncAuthRefusal records one request the control-plane authenticator refused.
+// credentialPresented separates reason "rejected" (a credential was offered
+// and failed) from "no_credential". It is never handed the credential, and a
+// credential's specific failure is deliberately not distinguishable here. Not
+// on capability.MetricsSink: the authenticator calls it through a narrow
+// interface.
+func (m *Metrics) IncAuthRefusal(s AuthSurface, credentialPresented bool) {
+	idx := int(s)
+	if idx < 0 || idx >= nAuthSurfaces {
+		idx = int(AuthSurfaceOther)
+	}
+	reason := authReasonNoCredential
+	if credentialPresented {
+		reason = authReasonRejected
+	}
+	m.authRefusals[idx][reason].Add(1)
+}
+
+// IncConsoleAuthFailure records one Console password failure. An unrecognised
+// kind falls back to ConsoleSignInFailed, the most alarming kind: that
+// over-counts rather than hides. It always renders with surface="console".
+func (m *Metrics) IncConsoleAuthFailure(f ConsoleAuthFailure) {
+	idx := int(f)
+	if idx < 0 || idx >= nConsoleAuthFailures {
+		idx = int(ConsoleSignInFailed)
+	}
+	m.consoleAuthFailures[idx].Add(1)
+}
+
 // Handler returns the http.Handler that serves the Prometheus text
 // exposition. It is reached only through the control-plane mux's existing
 // bearer-auth middleware (relay/cmd/relay/control_surfaces.go); this package
@@ -314,6 +459,7 @@ func (m *Metrics) serveMetrics(w http.ResponseWriter, _ *http.Request) {
 	buf = appendRefusals(buf, &m.refusals)
 	buf = appendCounter(buf, "relay_enrollments_total", "Total successful Node enrollments.", m.enrollments.Load())
 	buf = appendCertRotations(buf, &m.certRotation)
+	buf = m.appendAuthFailures(buf)
 	buf = appendProtocolViolations(buf, &m.violations)
 	buf = appendCounter(buf, "relay_protocol_violations_unrecorded_total",
 		"Total protocol violations the Relay refused but could not durably record in the audit trail.",
@@ -326,8 +472,8 @@ func (m *Metrics) serveMetrics(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write(buf)
 }
 
-// appendGauges appends the connected/enrolled/revoked/freeze gauge series,
-// skipping any whose GaugeSources field is nil, and — on a sampler error —
+// appendGauges appends the connected/enrolled/revoked/freeze, approvals-waiting
+// and certificate-remaining gauge series, skipping any whose GaugeSources field is nil, and — on a sampler error —
 // logging at debug and omitting that gauge line rather than emitting a false
 // value.
 func (m *Metrics) appendGauges(buf []byte) []byte {
@@ -362,6 +508,43 @@ func (m *Metrics) appendGauges(buf []byte) []byte {
 		}
 	}
 
+	if m.src.ApprovalsWaiting != nil {
+		waiting, err := m.src.ApprovalsWaiting()
+		if err != nil {
+			slog.Debug("metrics: read approvals waiting failed", "err", err)
+		} else {
+			buf = appendGauge(buf, "relay_approvals_waiting",
+				"Approval Requests waiting for an answer: pending and not past their deadline.", int64(waiting))
+		}
+	}
+
+	return m.appendCertificateRemaining(buf)
+}
+
+// appendCertificateRemaining renders relay_certificate_remaining_seconds,
+// truncated to whole seconds. The server series can fall toward zero on an idle
+// Relay, because that leaf is re-issued at the next handshake rather than on a
+// timer: alert on the relay_ca series.
+func (m *Metrics) appendCertificateRemaining(buf []byte) []byte {
+	if m.src.CertificateRemaining == nil {
+		return buf
+	}
+	var samples []labelledValue
+	for _, c := range certificateOrder {
+		remaining, ok := m.src.CertificateRemaining(c)
+		if !ok {
+			continue
+		}
+		samples = append(samples, labelledValue{certificateLabel(c), int64(remaining / time.Second)})
+	}
+	if len(samples) == 0 {
+		return buf
+	}
+	buf = appendFamilyHeader(buf, "relay_certificate_remaining_seconds",
+		"Seconds until a certificate the Relay holds expires, by certificate; negative once expired.", "gauge")
+	for _, s := range samples {
+		buf = fmt.Appendf(buf, "relay_certificate_remaining_seconds{certificate=%q} %d\n", s.label, s.value)
+	}
 	return buf
 }
 
@@ -390,6 +573,29 @@ func appendCertRotations(buf []byte, rotations *[nServerCertListeners]atomic.Int
 	}
 	return appendLabelledCounter(buf, "relay_server_cert_rotations_total",
 		"Total in-process re-issuances of the Relay's own TLS server certificate, by listener.", "listener", samples)
+}
+
+// appendAuthFailures renders relay_auth_failures_total: every pair that can be
+// counted, zeros included, so no count is silently dropped. The Console's
+// password failures render only with surface="console".
+func (m *Metrics) appendAuthFailures(buf []byte) []byte {
+	const name = "relay_auth_failures_total"
+	buf = appendFamilyHeader(buf, name,
+		"Total refused authentications on the control-plane listener, by surface and reason.", "counter")
+	for _, s := range authSurfaceOrder {
+		surface := authSurfaceLabel(s)
+		counts := &m.authRefusals[int(s)]
+		buf = appendTwoLabelSample(buf, name, "surface", surface, "reason", "no_credential", counts[authReasonNoCredential].Load())
+		buf = appendTwoLabelSample(buf, name, "surface", surface, "reason", "rejected", counts[authReasonRejected].Load())
+		if s != AuthSurfaceConsole {
+			continue
+		}
+		for f := range ConsoleAuthFailure(nConsoleAuthFailures) {
+			buf = appendTwoLabelSample(buf, name, "surface", surface, "reason",
+				consoleAuthFailureLabel(f), m.consoleAuthFailures[int(f)].Load())
+		}
+	}
+	return buf
 }
 
 func appendProtocolViolations(buf []byte, violations *[nViolationRules]atomic.Int64) []byte {
@@ -471,6 +677,12 @@ func appendLabelledCounter(buf []byte, name, help, label string, samples []label
 		buf = fmt.Appendf(buf, "%s{%s=%q} %d\n", name, label, s.label, s.value)
 	}
 	return buf
+}
+
+// appendTwoLabelSample appends one sample of a two-label counter family. Label
+// values go through %q, like every other labelled series here.
+func appendTwoLabelSample(buf []byte, name, label1, value1, label2, value2 string, n int64) []byte {
+	return fmt.Appendf(buf, "%s{%s=%q,%s=%q} %d\n", name, label1, value1, label2, value2, n)
 }
 
 func boolToInt64(b bool) int64 {

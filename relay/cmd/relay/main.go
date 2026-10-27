@@ -318,6 +318,10 @@ func serverCertObserver(m *metrics.Metrics, listeners ...metrics.ServerCertListe
 // refusing to start, because a detector must never be a gate.
 const declinedScanBudget = 30 * time.Second
 
+// approvalsWaitingTimeout bounds the approvals-waiting count a scrape runs, so
+// a scrape never holds the single store connection longer than this.
+const approvalsWaitingTimeout = 2 * time.Second
+
 // newServer is the one production entry point: it builds the composition
 // root with an empty serverHooks, so no test-only seam is ever populated on
 // the path main takes. See newServerWithHooks and serverHooks
@@ -450,6 +454,9 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 	// below), independent of Config.ControlEnabled; only the /metrics HTTP
 	// surface itself is gated on ControlEnabled (no control listener
 	// otherwise), mirroring every other control-plane surface.
+	// serverCert is assigned below, before any listener serves; the
+	// scrape-time certificate closure reads it.
+	var serverCert *ca.ServerCertificate
 	appMetrics := metrics.New(metrics.GaugeSources{
 		Connected: conns.Count,
 		Nodes:     reg.Count,
@@ -466,6 +473,32 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 		// off the Store rather than duplicated here — see
 		// Store.LabelsDeclined and metrics.GaugeSources.LabelsDeclined.
 		LabelsDeclined: st.LabelsDeclined,
+		// One indexed count per scrape, bounded by approvalsWaitingTimeout. A
+		// Request past its deadline cannot be answered; the sweeper retires it
+		// within approval.DefaultSweepInterval, so it is not counted as waiting.
+		ApprovalsWaiting: func() (int, error) {
+			ctx, cancel := context.WithTimeout(context.Background(), approvalsWaitingTimeout)
+			defer cancel()
+			return st.Approvals().CountWaiting(ctx, time.Now())
+		},
+		CertificateRemaining: func(c metrics.Certificate) (time.Duration, bool) {
+			var notAfter time.Time
+			switch c {
+			case metrics.CertificateRelayCA:
+				notAfter = relayCA.NotAfter()
+			case metrics.CertificateServer:
+				// The leaf is re-issued at the next handshake, so on an idle
+				// Relay this can fall toward zero: alert on the relay_ca series.
+				if serverCert == nil {
+					return 0, false
+				}
+				notAfter = serverCert.NotAfter()
+			}
+			if notAfter.IsZero() {
+				return 0, false
+			}
+			return time.Until(notAfter), true
+		},
 	})
 
 	// The Relay's one TLS server certificate, presented on both listeners
@@ -491,7 +524,7 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 	if cfg.ControlEnabled {
 		presentedOn = append(presentedOn, metrics.ListenerControlPlane)
 	}
-	serverCert, err := relayCA.NewServerCertificate(names.DNSNames, names.IPAddresses,
+	serverCert, err = relayCA.NewServerCertificate(names.DNSNames, names.IPAddresses,
 		ca.WithRotationObserver(serverCertObserver(appMetrics, presentedOn...)))
 	if err != nil {
 		return nil, nil, fmt.Errorf("issue server certificate: %w", err)
@@ -756,10 +789,11 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 			// auditSink, not a nil Auditor: consoleauth FAILS a sign-in it
 			// cannot record, and handing it nothing to record with would turn
 			// that fail-closed property into a silent no-op, as a nil sink
-			// would for every read record.
+			// would for every read record. The counter wraps it and always
+			// delegates.
 			consoleAuthSvc = consoleauth.NewService(
 				st.Accounts(), st.Passwords(), consoleSessions,
-				consoleauth.NewThrottle(), auditSink,
+				consoleauth.NewThrottle(), loginAuditCounter{next: auditSink, metrics: appMetrics},
 				consoleauth.WithStepUpWindow(cfg.ConsoleStepUpWindow),
 				consoleauth.WithLogger(logger),
 			)
@@ -789,6 +823,7 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 			)
 		}
 
+		authOpts = append(authOpts, controlplane.WithAuthFailureCounter(appMetrics))
 		authn := controlplane.NewAuthenticator(apiTokenSvc, authOpts...)
 		controlCfg := controlplane.Config{Addr: cfg.ControlAddr, GetCertificate: serverCert.GetCertificate}
 		if cfg.ConsoleEnabled {
