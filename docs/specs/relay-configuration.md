@@ -56,7 +56,7 @@ a reload or restart. The Relay installs from an OS package or as a container ima
   bind-time setting, refuses the whole reload, logs the setting and that a restart is required,
   and leaves the running configuration untouched. The bind-time settings are the listen
   addresses, the advertised address (RC-36), the CA directory, the store path, the certificate
-  hostname, whether the control plane and Admin Console are enabled, and the OAuth identity
+  hostname and its extra names (RC-47), whether the control plane and Admin Console are enabled, and the OAuth identity
   provider. A failed reload never exits the process. Every reload is audited, attributed to the
   Relay's host rather than to any Account, the way the Freeze signal's host lever is, listing
   what changed.

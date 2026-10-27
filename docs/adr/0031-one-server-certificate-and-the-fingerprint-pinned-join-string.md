@@ -241,11 +241,11 @@ loopback, and up to 64 addresses read from the host's interfaces, IPv4 first, so
 IPv6 addresses before IPv4. The interface list skips loopback, already named, and link-local,
 multicast and unspecified addresses. The addresses are read once, at start; a rotation reuses
 them, so an address the host gains later is named only after a restart. If they cannot be read,
-the Relay still starts, warns, and names only `tls.hostname` and loopback.
+the Relay still starts, warns, and names everything else on this list.
 
-**Decided, built by #1186.** It also names the host of the advertised address
-(`relay-configuration.md` RC-36) and each entry of a bind-time `[tls] extra_names` list, which
-takes the role decision 2 gave `-san`. Neither is on the certificate until #1186 lands.
+It also names the host of the advertised address (`relay-configuration.md` RC-36) and each
+entry of a bind-time `[tls] extra_names` list, which takes the role decision 2 gave `-san`
+(RC-46, RC-47).
 
 **Accepted.** Reading the addresses needs `AF_NETLINK` in the Relay unit's sandbox (threat
 model R47), and the certificate shows them to any TLS peer (R48).
