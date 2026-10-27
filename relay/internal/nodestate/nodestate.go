@@ -116,9 +116,8 @@ const (
 	FactTemplateFingerprint Fact = "template-fingerprint"
 )
 
-// TemplateUnloadable is the literal the daemon reports in place of a
-// template-set fingerprint when its local set failed to load (ADR-0021).
-const TemplateUnloadable = "unloadable"
+// TemplateUnloadable is registry.TemplateUnloadable; see its doc.
+const TemplateUnloadable = registry.TemplateUnloadable
 
 // Label is one derived `state:` term.
 type Label struct {
@@ -238,13 +237,15 @@ func CertExpiringWindow(leafValidity time.Duration, fraction float64) time.Durat
 //
 // A fact whose value fails validFactValue is likewise omitted, never
 // sanitised in place: DaemonVersion, PolicyFingerprint and
-// TemplateSetFingerprint are self-reported by the Node (tunnel.go copies
-// Hello straight into registry.Report with no validation at that ingress),
-// and String renders them unescaped into Selector grammar that every surface
-// then advertises as directly targetable. Silently truncating or escaping a
-// hostile value would still let a Node choose what gets rendered; omitting it
-// is what keeps the closed vocabulary closed on the value side, not only the
-// key side (the key side was already closed by KeyKind).
+// TemplateSetFingerprint are self-reported by the Node (the Hello ingress
+// admits only the daemon's shapes, protoconv.HelloReportFromProto, and this
+// check stays the render-side closure for a value recorded before that gate or
+// by any other path), and String renders them unescaped into Selector grammar
+// that every surface then advertises as directly targetable. Silently
+// truncating or escaping a hostile value would still let a Node choose what
+// gets rendered; omitting it is what keeps the closed vocabulary closed on the
+// value side, not only the key side (the key side was already closed by
+// KeyKind).
 func Facts(in Input) []Label {
 	var out []Label
 	if v := in.Node.DaemonVersion; v != "" && validFactValue(v) {
@@ -267,9 +268,10 @@ func Facts(in Input) []Label {
 var factNamespacePrefixes = []string{"node:", "relay:", "tag:", "state:"}
 
 // validFactValue reports whether v is safe to render unescaped into Selector
-// grammar (capability.ParseSelector). A Node's self-reported fact values
-// arrive with no validation at the wire ingress, so this is the vocabulary's
-// closure on the VALUE side: a Node sending
+// grammar (capability.ParseSelector). A Node's self-reported fact values are
+// shape-checked at the Hello ingress (protoconv.HelloReportFromProto), and this
+// is the vocabulary's closure on the VALUE side for a value recorded before
+// that gate or by any other path: a Node sending
 // `Hello.daemon_version = "1.4.2, tag:x=y"` must not be able to inject a
 // second Selector term merely by being rendered as `state:daemon-version=…`.
 //
@@ -310,7 +312,8 @@ var factNamespacePrefixes = []string{"node:", "relay:", "tag:", "state:"}
 //     closed alphabet (semver over `[0-9A-Za-z.+-]`, and `[0-9a-f]{64}` or
 //     `unloadable`), so rejecting anything outside ASCII plus that alphabet
 //     would close this class structurally. That is a follow-up, not this
-//     check.
+//     check. The Hello ingress allowlist closes this class for new Hello
+//     reports; this blocklist alone still admits it.
 //
 //   - a value starting with one of the four namespace prefixes could pose as
 //     a second term the moment it lands beside any comma downstream, even one

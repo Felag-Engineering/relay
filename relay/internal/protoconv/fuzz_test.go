@@ -2,10 +2,13 @@ package protoconv_test
 
 import (
 	"fmt"
+	"net/netip"
+	"strings"
 	"testing"
 
 	"github.com/Felag-Engineering/relay/relay/internal/capability"
 	"github.com/Felag-Engineering/relay/relay/internal/protoconv"
+	"github.com/Felag-Engineering/relay/relay/internal/registry"
 	relayv1 "github.com/Felag-Engineering/relay/relay/internal/relay/v1"
 	"google.golang.org/protobuf/proto"
 )
@@ -31,11 +34,18 @@ func FuzzParseNodeLabel(f *testing.F) {
 	// The measured payload (#504's evidence): before the fix this rendered as
 	// two Selector predicates, the second spelled relay:.
 	f.Add("node:role", "web, relay:quarantine=on")
+	// One byte over each Label length bound.
+	f.Add("node:"+strings.Repeat("k", registry.MaxLabelKeyLen+1), "x")
+	f.Add("node:role", strings.Repeat("v", registry.MaxLabelValueLen+1))
 
 	f.Fuzz(func(t *testing.T, key, value string) {
 		bare, ok := protoconv.ParseNodeLabel(key, value)
 		if !ok {
 			return
+		}
+		if len(bare) > registry.MaxLabelKeyLen || len(value) > registry.MaxLabelValueLen {
+			t.Fatalf("ParseNodeLabel accepted a %d-byte key and %d-byte value, past the Label bounds",
+				len(bare), len(value))
 		}
 		sel, err := capability.ParseSelector(fmt.Sprintf("node:%s=%s", bare, value))
 		if err != nil {
@@ -56,8 +66,10 @@ func FuzzParseNodeLabel(f *testing.F) {
 
 // FuzzFactsFromProto drives FactsFromProto with wire bytes: proto.Unmarshal
 // into relayv1.Facts, then convert. A non-proto payload is rejected by
-// Unmarshal (not a crash) and returned early. Property: FactsFromProto must
-// never panic or hang on any successfully-unmarshalled Facts.
+// Unmarshal (not a crash) and returned early. Properties: FactsFromProto must
+// never panic or hang on any successfully-unmarshalled Facts, every text field it
+// records passes registry.WellFormedSelfReportedText, and every address it
+// records is a plain IP.
 func FuzzFactsFromProto(f *testing.F) {
 	seed, err := proto.Marshal(&relayv1.Facts{
 		Hostname:    "h",
@@ -78,6 +90,17 @@ func FuzzFactsFromProto(f *testing.F) {
 		if proto.Unmarshal(data, &pf) != nil {
 			return // rejected non-proto input, not a crash
 		}
-		_ = protoconv.FactsFromProto(&pf)
+		got := protoconv.FactsFromProto(&pf)
+		for _, text := range []string{got.Hostname, got.OS, got.Kernel, got.Arch} {
+			if !registry.WellFormedSelfReportedText(text) {
+				t.Fatalf("FactsFromProto recorded an unbounded text field: %.100q", text)
+			}
+		}
+		for _, ip := range got.IPAddresses {
+			addr, err := netip.ParseAddr(ip)
+			if err != nil || addr.Zone() != "" {
+				t.Fatalf("FactsFromProto recorded a non-IP address: %.100q", ip)
+			}
+		}
 	})
 }

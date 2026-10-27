@@ -125,6 +125,11 @@ nothing.
 
 - Per Node: at most 64 declared `node:` labels and at most 64 tags.
 - A key is at most 63 characters and a value at most 255, both within the safe character set.
+- The length limits hold today for `node:` and `tag:`. A `node:` label over a limit is dropped
+  at `Hello`, refuses the whole `Enroll` (`enrollment.md`), and is dropped on read if it was
+  stored before the limit existed; it is never truncated. A `relay:` label stamped from a token
+  scope is not yet held to the length limits. The per-Node counts are not yet enforced for
+  `node:`.
 
 ### What a compromised Node can and cannot forge
 

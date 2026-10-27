@@ -7,6 +7,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/Felag-Engineering/relay/relay/internal/registry"
 )
 
 // policyalias.go is the Policy alias capability: the admin-only audited write
@@ -79,16 +81,7 @@ func (l *ReadLane) PolicyAliases(ctx context.Context, p Principal) (map[string]s
 // SHA-256 rendering. Exported so a surface consumes the rule rather than
 // re-deriving it.
 func ValidPolicyFingerprint(fp string) bool {
-	if len(fp) != 64 {
-		return false
-	}
-	for i := 0; i < len(fp); i++ {
-		c := fp[i]
-		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
-			return false
-		}
-	}
-	return true
+	return registry.WellFormedFingerprint(fp)
 }
 
 // NormalizePolicyAlias returns the alias that is stored for s, or the rule it

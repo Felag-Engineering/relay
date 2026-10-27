@@ -374,29 +374,35 @@ func TestDeclinedPart_ClassifiesEveryQuadrant(t *testing.T) {
 
 	cases := []struct {
 		name       string
+		ns         labelNamespace
 		key, value string
 		want       DeclinedLabelPart
 	}{
 		// The three the scan actually produces.
-		{"malformed key only", "a=b", "web", DeclinedPartKey},
-		{"malformed value only", "env", "prod, relay:quarantine=on", DeclinedPartValue},
-		{"both malformed", "a=b", "prod, relay:quarantine=on", DeclinedPartBoth},
+		{"malformed key only", nsRelay, "a=b", "web", DeclinedPartKey},
+		{"malformed value only", nsRelay, "env", "prod, relay:quarantine=on", DeclinedPartValue},
+		{"both malformed", nsRelay, "a=b", "prod, relay:quarantine=on", DeclinedPartBoth},
 
 		// An empty key is malformed BY ITSELF (WellFormedLabel's key != ""
 		// check), with a value that is fine — so "key", not "both".
-		{"empty key, well-formed value", "", "web", DeclinedPartKey},
+		{"empty key, well-formed value", nsRelay, "", "web", DeclinedPartKey},
 		// An empty VALUE is well-formed by design, so a bad key with an empty
 		// value is still "key" alone.
-		{"malformed key, empty value", "a=b", "", DeclinedPartKey},
+		{"malformed key, empty value", nsRelay, "a=b", "", DeclinedPartKey},
 		// Empty key AND malformed value: both halves genuinely fail.
-		{"empty key, malformed value", "", "a,b", DeclinedPartBoth},
+		{"empty key, malformed value", nsRelay, "", "a,b", DeclinedPartBoth},
+
+		// node: adds the Label length bounds to each half.
+		{"node: over-long key", nsNode, strings.Repeat("k", 64), "web", DeclinedPartKey},
+		{"node: over-long value", nsNode, "role", strings.Repeat("v", 256), DeclinedPartValue},
+		{"node: both over-long", nsNode, strings.Repeat("k", 64), strings.Repeat("v", 256), DeclinedPartBoth},
 	}
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			if got := declinedPart(c.key, c.value); got != c.want {
-				t.Errorf("declinedPart(%q, %q) = %q, want %q", c.key, c.value, got, c.want)
+			if got := declinedPart(c.ns.wellFormed(), c.key, c.value); got != c.want {
+				t.Errorf("declinedPart(%.20q, %.20q) = %q, want %q", c.key, c.value, got, c.want)
 			}
 		})
 	}
@@ -414,7 +420,7 @@ func TestDeclinedPart_ClassifiesEveryQuadrant(t *testing.T) {
 	// caller that forgets to pre-filter has something to find. If this
 	// assertion ever fails, the fix is probably not to update it — it is to ask
 	// whether the new caller is honouring the precondition.
-	if got := declinedPart("env", "prod"); got != DeclinedPartValue {
+	if got := declinedPart(nsRelay.wellFormed(), "env", "prod"); got != DeclinedPartValue {
 		t.Errorf("declinedPart on a WELL-FORMED pair = %q, want %q — not because that is correct, "+
 			"but because it is what the default arm does and a caller violating the precondition "+
 			"needs the behaviour documented", got, DeclinedPartValue)
