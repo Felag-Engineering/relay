@@ -134,3 +134,64 @@ func TestInMemory_ApplyTagChangesEnforcesTheCap(t *testing.T) {
 		t.Errorf("replace and remove on a full Node: %v", err)
 	}
 }
+
+// Proves EN-35, EN-40.
+func TestParseInitialTags(t *testing.T) {
+	long := func(n int) string { return strings.Repeat("a", n) }
+	many := make([]string, 0, registry.MaxTagsPerNode+1)
+	for i := 0; i <= registry.MaxTagsPerNode; i++ {
+		many = append(many, fmt.Sprintf("tag:k%d=v", i))
+	}
+
+	t.Run("well-formed tags parse to bare keys and values", func(t *testing.T) {
+		got, err := registry.ParseInitialTags([]string{"tag:env=prod", "tag:marker=", "tag:" + long(63) + "=" + long(255)})
+		if err != nil {
+			t.Fatalf("ParseInitialTags: %v", err)
+		}
+		if len(got) != 3 || got["env"] != "prod" || got["marker"] != "" || got[long(63)] != long(255) {
+			t.Errorf("parsed %v", got)
+		}
+	})
+	t.Run("none is an empty set", func(t *testing.T) {
+		for _, in := range [][]string{nil, {}} {
+			got, err := registry.ParseInitialTags(in)
+			if err != nil || len(got) != 0 {
+				t.Errorf("ParseInitialTags(%v) = %v, %v", in, got, err)
+			}
+		}
+	})
+	t.Run("a relay: label is refused naming it", func(t *testing.T) {
+		_, err := registry.ParseInitialTags([]string{"tag:ok=1", "relay:node-id=x"})
+		var tagErr *registry.InitialTagError
+		if !errors.As(err, &tagErr) || !errors.Is(err, registry.ErrInitialTagRelayLabel) {
+			t.Fatalf("err = %v, want an InitialTagError wrapping ErrInitialTagRelayLabel", err)
+		}
+		if tagErr.Entry != "relay:node-id=x" || !strings.Contains(err.Error(), "relay:node-id=x") {
+			t.Errorf("the refusal does not name the entry: %v", err)
+		}
+	})
+	t.Run("everything else that is not a tag is refused", func(t *testing.T) {
+		for _, bad := range []string{
+			"env=prod", "node:env=prod", "state:x=y", "TAG:env=prod", "tag:env", "tag:=v", "tag:", "",
+			"tag:a b=c", "tag:a=b=c", "tag:a=b,node:c=d", "tag:k\u200b=v", "tag:" + long(64) + "=v", "tag:k=" + long(256),
+		} {
+			if _, err := registry.ParseInitialTags([]string{bad}); !errors.Is(err, registry.ErrInitialTagMalformed) {
+				t.Errorf("%q: err = %v, want ErrInitialTagMalformed", bad, err)
+			}
+		}
+	})
+	t.Run("a key twice and too many keys are refused", func(t *testing.T) {
+		if _, err := registry.ParseInitialTags([]string{"tag:env=prod", "tag:env=dev"}); !errors.Is(err, registry.ErrInitialTagKeyTwice) {
+			t.Errorf("key twice: err = %v", err)
+		}
+		if _, err := registry.ParseInitialTags(many); !errors.Is(err, registry.ErrTooManyTags) {
+			t.Errorf("%d tags: err = %v, want ErrTooManyTags", len(many), err)
+		}
+	})
+	t.Run("a long entry is bounded before it is quoted", func(t *testing.T) {
+		_, err := registry.ParseInitialTags([]string{"tag:" + long(100000) + "=v"})
+		if err == nil || len(err.Error()) > 1024 {
+			t.Fatalf("want a bounded refusal, got %v", err)
+		}
+	})
+}

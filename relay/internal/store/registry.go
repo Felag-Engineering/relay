@@ -719,13 +719,13 @@ func getNode(ctx context.Context, q queryer, nodeID string, declined *[nLabelNam
 //
 // This does NOT delete or rewrite the stored row: node-space storage is the
 // Node's own self-description, and relay-space storage is the Relay's own
-// stamp from a token scope (both invariant 7, ADR-0006) — the Relay declining
+// stamp (both invariant 7, ADR-0006) — the Relay declining
 // to SERVE a value is not the same act as the Relay MODIFYING one. For
 // node_labels the legitimate way for the row to heal is the Node's own next
 // Hello, which replaces the whole set via replaceLabels. For relay_labels
 // there is no equivalent self-heal: the only production writer is
 // SetRelayLabels, whose only caller is enrollment, which builds its map from
-// a token scope and never from a read — Upsert's internal getNode (line 358)
+// the Node's ID and never from a read — Upsert's internal getNode (line 358)
 // is read-only, so there is no read-modify-write path that could turn this
 // filter into a delete. STANDING OBLIGATION: a future admin relay-label
 // writer (ADR-0020's incident ladder) must preserve that — it must never

@@ -385,15 +385,15 @@ LAN address (or `0.0.0.0`) and run step 3's `up -d` again. Sign in at
 `https://<tls.hostname>:9443/console/`. The browser warns because the certificate chains to the
 Relay's private CA; trust `relay-ca-cert.pem` rather than clicking through.
 
-**6. Mint an Enrollment Token** ([enrollment.md](enrollment.md) explains the scope; the `relay:`
-labels it stamps are what the security lane targets). From the Relay host:
+**6. Mint an Enrollment Token** ([enrollment.md](enrollment.md) explains the initial tags; they
+are written on every Node the token enrolls, as ordinary tags). From the Relay host:
 
 ```console
 $ curl --cacert relay-ca-cert.pem \
     --resolve <tls.hostname>:9443:127.0.0.1 \
     -H "Authorization: Bearer $RELAY_TOKEN" \
     -H 'Content-Type: application/json' \
-    -d '{"scope":["relay:env=lab"],"ttl_seconds":86400,"max_uses":10}' \
+    -d '{"initial_tags":["tag:env=lab"],"ttl_seconds":86400,"max_uses":10}' \
     https://<tls.hostname>:9443/api/v1/enrollment-tokens
 ```
 

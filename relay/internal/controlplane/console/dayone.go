@@ -205,7 +205,7 @@ var dayOneTmpl = newScreen("dayone", `
     {{if .CanMint}}
     <p><b>Add Nodes</b> is not built yet.</p>
     {{else}}
-    <p>An <code>admin</code> mints the Enrollment Token; its scope becomes the joining Node&#39;s <code>relay:</code> labels.</p>
+    <p>An <code>admin</code> mints the Enrollment Token; the initial tags it names become each joining Node&#39;s first tags.</p>
     {{end}}
     <p class="note">The walkthrough is <code>docs/quickstart.md</code>, not published with this build.</p>
   </div>

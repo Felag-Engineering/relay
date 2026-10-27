@@ -7,23 +7,26 @@ import "unicode/utf8"
 // term, forever" (capability.ParseSelector). The rule is Selector grammar,
 // which does not know or care which namespace it is parsing, so it is the
 // ONE predicate for the question, owned here rather than in protoconv, enroll
-// or the renderer. It currently governs EIGHT seams — counted as one per
-// place a value can be REFUSED or DECLINED, which is why the relay-space
-// write side is two of them and the node-space write side is one:
+// or the renderer. It currently governs NINE seams — counted as one per
+// place a value can be REFUSED or DECLINED, which is why the tag-space
+// Enrollment Token side is two of them and the node-space write side is one:
 //
 //   - node-space write ingress: protoconv.ParseNodeLabel. One seam, two
 //     callers — Hello (cmd/relay/tunnel.go) and Enroll's self_labels
 //     (enroll/handler.go) — because both reach the same refusal.
 //   - node-space read-back: store/registry.go's getNode, via
 //     wellFormedLabels(nodeLabels) — closes legacy rows the gate never saw.
-//   - relay-space mint: enroll.validateScope from Service.Create, refusing a
-//     fresh scope before a token carrying it can exist.
-//   - relay-space enrollment: enroll.validateScope from Service.Validate,
-//     refusing an ALREADY-STORED scope that predates this gate. A separate
-//     seam, not a second caller of the first one: it refuses a value Create
-//     never saw — see "Two write seams, one namespace" below.
+//   - relay-space enrollment: enroll.validateLegacyScope from
+//     Service.Validate, refusing an ALREADY-STORED relay: scope that an earlier
+//     release minted. A new mint carries no relay: label at all.
 //   - relay-space read-back: store/registry.go's getNode, via
 //     wellFormedLabels(relayLabels) — closes legacy rows the gate never saw.
+//   - tag-space mint: ParseInitialTags from enroll.Service.Create, refusing
+//     fresh initial tags before a token carrying them can exist.
+//   - tag-space enrollment: ParseInitialTags from enroll.Service.Validate,
+//     refusing ALREADY-STORED initial tags that no longer hold. A separate
+//     seam, not a second caller of the first one: it refuses a value Create
+//     never saw — see "Two write seams, one namespace" below.
 //   - tag-space write ingress: capability.ParseTagLabel, from
 //     TagWriter.WriteTag — refuses a tag before any change is built.
 //   - tag-space store write: the store's AppendWithTagWrite and
@@ -36,7 +39,7 @@ import "unicode/utf8"
 // startup scan, plus the relay_labels_declined_total counter at the
 // read-back seams above — but not a further SEAM: both are READERS of this
 // predicate, reporting what it refuses or declines; neither one itself
-// refuses or declines anything. The count above stays EIGHT.
+// refuses or declines anything. The count above stays NINE.
 //
 // Why one predicate for every namespace, not one each: `registry` carries no proto
 // dependency (registry.go's package doc), so a predicate that must be
@@ -129,19 +132,20 @@ import "unicode/utf8"
 // GRAMMAR, what a value can be misread as, not size. Length is a separate
 // bound, MaxLabelKeyLen and MaxLabelValueLen, held per namespace by its own
 // writer: WellFormedNodeLabel applies it to node: at the ingress and on
-// read-back, and the tag: write applies it to tag:. A relay: scope Label
-// minted by a human is not held to it, so it is not in this predicate.
+// read-back, and the tag: write and an Enrollment Token's initial tags apply
+// it to tag:. A legacy relay: scope Label minted by a human is not held to it,
+// so it is not in this predicate.
 //
-// # Two write seams, one namespace (relay-space)
+// # Two write seams, one namespace (an Enrollment Token's initial tags)
 //
-// Unlike node-space, which has exactly one write ingress (protoconv), the
-// relay-space rule must be enforced at TWO points against the SAME scope
-// value: enroll.Service.Create (a fresh mint) and enroll.Service.Validate
-// (an already-stored token whose scope predates this gate — SQLite persists
-// it across restarts and upgrades, and a token minted before the gate
-// existed does not retroactively become well-formed). Closing only Create
-// leaves every pre-gate token free to keep stamping a malformed relay-space
-// label forever. See enroll.validateScope and enroll.Service.Validate.
+// Unlike node-space, which has exactly one write ingress (protoconv), an
+// Enrollment Token's initial tags must be checked at TWO points against the
+// SAME value: enroll.Service.Create (a fresh mint) and enroll.Service.Validate
+// (an already-stored token — SQLite persists it across restarts and upgrades,
+// and a stored row is not retroactively well-formed). Closing only Create
+// leaves a stored row free to write a malformed tag on every Node it enrolls.
+// A legacy relay: scope is checked the same second way, by
+// enroll.validateLegacyScope. See ParseInitialTags and enroll.Service.Validate.
 //
 // # What this predicate does NOT cover
 //

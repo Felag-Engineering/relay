@@ -258,12 +258,11 @@ func (*RoleGate) AuthorizeApprovalDecision(_ context.Context, p capability.Princ
 // ADMINS today — humanOnly: true would be a silent behaviour change on a live
 // surface. Narrowing to human-only is an owner decision, to be recorded on
 // the issue, not settled here.
-// Enrollment sits at admin because a token's scope becomes the enrolling
-// Node's relay: labels — the namespace the security-sensitive lane targets
-// (invariant 7, ADR-0020) — so minting manufactures Nodes the quarantine and
-// secret-distribution paths will treat as authoritative. That is a more
-// durable position than any single dispatch, which is why it cannot sit
-// below the role that may run one.
+// Enrollment sits at admin because a token admits Nodes to the fleet carrying
+// the initial tags it names, which a Selector then targets (ADR-0050), so
+// minting manufactures Nodes dispatches will reach. That is a more durable
+// position than any single dispatch, which is why it cannot sit below the role
+// that may run one.
 //
 // Cancel's ROLE floor is not human-only: an AI-agent must be able to stop
 // its own dispatch. Whether it may reach ANY Job or only its own is a

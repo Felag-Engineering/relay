@@ -162,12 +162,13 @@ func dispatchViolations(fileName string, file *ast.File, strictCapabilityIdents 
 // every file, relaxed or not: no MCP tool writes a tag (ADR-0050 decision 2),
 // so this surface may not select an identifier that names the tag write
 // (capability.TagWriter, capability.NewTagWriter, TagWriteRecorder,
-// audit.TagWriteAppender, AppendWithTagWrite, RecordTagWrite, WriteTag) or the
-// in-memory seeder ApplyTagChanges, whatever the receiver or package, nor
+// audit.TagWriteAppender, AppendWithTagWrite, RecordTagWrite, WriteTag,
+// WriteInitialTags) or the in-memory seeder ApplyTagChanges, whatever the receiver or package, nor
 // declare a seam method that does. Reading tags (TagLabels) is not a write.
 func tagWriteViolations(fileName string, file *ast.File) []string {
 	isTagWrite := func(name string) bool {
-		return strings.Contains(name, "TagWrite") || strings.Contains(name, "WriteTag") || name == "ApplyTagChanges"
+		return strings.Contains(name, "TagWrite") || strings.Contains(name, "WriteTag") ||
+			strings.Contains(name, "InitialTag") || name == "ApplyTagChanges"
 	}
 	var violations []string
 	ast.Inspect(file, func(n ast.Node) bool {
@@ -450,6 +451,14 @@ func f(x audit.Repository) {
 `,
 			strict:     false,
 			wantSubstr: "references TagWriteAppender",
+		},
+		{
+			name: "a selector writing initial tags is refused",
+			src: `package mcp
+func f(x interface{ WriteInitialTags() }) { x.WriteInitialTags() }
+`,
+			strict:     false,
+			wantSubstr: "references WriteInitialTags",
 		},
 		{
 			name: "the in-memory tag seeder is refused",

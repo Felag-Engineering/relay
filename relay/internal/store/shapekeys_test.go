@@ -277,7 +277,7 @@ func TestOpen_AppliesMigration0022AndBackfills(t *testing.T) {
 		if m.version > 21 {
 			continue
 		}
-		if err := applyMigration(ctx, db, m); err != nil {
+		if err := applyMigration(ctx, db, m, discardLogger()); err != nil {
 			t.Fatalf("apply %s: %v", m.name, err)
 		}
 		applied++

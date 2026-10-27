@@ -92,12 +92,13 @@ func (n *e2eNode) verdictCh() chan *relayv1.PolicyVerdict {
 	return n.disp.verdicts[n.nodeID]
 }
 
-// mintJoinString mints an Enrollment Token scoped to scope through deps' one
-// Minter and returns the join string carrying it — the value the Control API's
-// mint response hands an operator, and the only thing a test daemon is given.
-func mintJoinString(t *testing.T, deps *appDeps, scope ...string) string {
+// mintJoinString mints, as a human admin, an Enrollment Token naming initialTags
+// through deps' one Minter and returns the join string carrying it — the value
+// the Control API's mint response hands an operator, and the only thing a test
+// daemon is given.
+func mintJoinString(t *testing.T, deps *appDeps, initialTags ...string) string {
 	t.Helper()
-	minted, err := deps.minter.Mint(context.Background(), scope, time.Hour, enroll.UseLimit{Unlimited: true})
+	minted, err := deps.minter.Mint(context.Background(), initialTags, time.Hour, enroll.UseLimit{Unlimited: true}, testHumanMinter)
 	if err != nil {
 		t.Fatalf("mint Enrollment Token: %v", err)
 	}
@@ -131,7 +132,7 @@ func startDaemonNode(t *testing.T, policyTOML string) *e2eNode {
 
 	handle := relaytest.StartDaemon(t, relaytest.DaemonConfig{
 		Bin:        daemonBin,
-		JoinString: mintJoinString(t, deps, "relay:env=test"),
+		JoinString: mintJoinString(t, deps, "tag:env=test"),
 		StateDir:   stateDir,
 		PolicyPath: policyPath,
 		Hostname:   "e2e-test-node",

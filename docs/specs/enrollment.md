@@ -1,6 +1,6 @@
 # Enrollment
 
-**Status:** designed, not built, as of `2026-10-26`.
+**Status:** designed, not built, as of `2026-10-27`.
 **Claim prefix:** `EN`
 **Governed by:** ADR-0005, ADR-0006, ADR-0010, ADR-0017, ADR-0020, ADR-0030, ADR-0031,
 ADR-0022, ADR-0032, ADR-0033, ADR-0034, ADR-0048, ADR-0050; invariants 6, 7, 10, 11.
@@ -38,9 +38,9 @@ alone, it says so.
   request body. A mint is audited with the actor's attribution and the public token ID.
 - **EN-2** A token has a positive TTL of at most one year and an optional positive `max_uses`.
   A missing or non-positive `max_uses` is unlimited.
-- **EN-3** A token carries a scope: one or more well-formed `relay:` Labels, each rendering
-  as exactly one Selector term. A scope entry that is not such a Label refuses the mint and is
-  never rewritten.
+- **EN-40** A mint names zero or more **initial tags**, each a well-formed `tag:` label rendering
+  as exactly one Selector term; a mint may name none. An entry that is not such a label refuses
+  the mint and is never rewritten (ADR-0050).
 - **EN-4** The Relay returns the plaintext `id.secret` credential, and the join string built
   from it, only in the successful mint response. It stores a hash of the secret, never the
   plaintext; logs and lifecycle audit records carry only the public ID and non-secret metadata.
@@ -74,10 +74,12 @@ alone, it says so.
 - **EN-11** The Relay rejects an empty token or an empty CSR. It rejects the whole request if a
   declared Label is not a well-formed `node:` Label, whose key is at most 63 characters and
   whose value at most 255; it never accepts a `relay:` or `tag:` Label submitted by a Node.
-- **EN-12** After a valid token is accepted, the Relay generates the `node_id`, signs the CSR
-  under that identity, creates the registry record, stamps the token's scope as the Node's
-  `relay:` Labels, and records the token ID and the time as the Node's enrollment provenance.
-  The CSR subject never selects the identity.
+- **EN-41** After a valid token is accepted, the Relay generates the `node_id`, signs the CSR
+  under that identity, creates the registry record, stamps `relay:node-id` (EN-38), writes the
+  token's initial tags on the Node, and records the token ID and the time as the Node's enrollment
+  provenance. It writes no other `relay:` label, and the CSR subject never selects the identity.
+  Once written, an initial tag is an ordinary tag: how it is written, audited and later changed is
+  `selectors-and-labels.md` (ADR-0050).
 - **EN-13** Certificate signing and registry writes occur only after token validation. A
   rejected enrollment creates neither a certificate nor a registry record. A successful
   response carries the assigned ID, the certificate and the CA bundle.
@@ -110,6 +112,15 @@ alone, it says so.
   per-Node recording fails, revocation still completes and the Control API reports the
   shortfall rather than leaving a Node live.
 
+### Upgrade
+
+- **EN-45** On upgrade, every `relay:` label other than `relay:node-id` that an earlier release
+  wrote from a token's scope is copied to a `tag:` label of the same key and value, and an unused
+  token minted with a scope writes that scope as initial tags. Each copy is attributed to the
+  human Account that minted the token, as EN-41 attributes initial tags; labels from a token a
+  machine Account minted are not copied, and the upgrade lists their Nodes for a person to tag
+  (ADR-0050).
+
 ### Surfaces today
 
 - **EN-21** The Console shows enrollment attempts, accepted and rejected, and each Node's
@@ -120,9 +131,15 @@ alone, it says so.
 ## Refusals
 
 - **EN-23** A non-`admin` Control API caller cannot mint or revoke an Enrollment Token.
-- **EN-24** A mint request with a scope entry that is not a well-formed `relay:` Label, an
+- **EN-35** A mint that names any `relay:` label is refused, and the refusal names the label. A
+  mint takes only initial tags (EN-40); `relay:node-id` is written by the enrollment itself
+  (EN-38) and never named at mint (ADR-0050). Extends EN-42 when promoted.
+- **EN-42** A mint request naming an initial tag that is not a well-formed `tag:` label, an
   invalid TTL, malformed JSON or an unknown request field is refused; nothing is sanitized into
-  another Label.
+  another label (ADR-0050).
+- **EN-44** A mint by a machine Account that names any initial tag is refused, and the refusal
+  says only a human Account writes tags (ADR-0050). A machine Account's mint naming no tag is
+  unaffected.
 - **EN-25** An enrollment request with no token or no CSR, a malformed or non-`node:` declared
   Label, an invalid CSR, a full registry, or a rate-limit excess is refused. Rate-limit and
   capacity refusals are `ResourceExhausted`; missing inputs and malformed Node data are
@@ -141,23 +158,14 @@ alone, it says so.
 ## Designed, not built
 
 EN-31 bounds a token and replaces EN-2; the promoting PR lands it, with the owner retiring EN-2
-and its proof rows, together. EN-36, EN-38 and EN-39 carry ADR-0048. EN-35 and EN-40 to EN-42 carry
-ADR-0050: a token names initial tags, and `relay:` holds only keys a Relay action defines.
-EN-43 fixes the rate limits.
+and its proof rows, together. EN-36 and EN-39 carry ADR-0048. EN-43 fixes the rate limits.
 
 | Claim | Statement | Milestone |
 |---|---|---|
 | EN-31 | A token has a positive TTL of at most one year. A mint request names a positive `max_uses` or asks explicitly for unlimited use; one that does neither is refused. A surface that offers a mint form asks how many Nodes the token is for, sets the use limit to that number and the TTL to two hours by default, so a used-up or expired token needs no revoke (ADR-0048); the Control API takes explicit values and has no default. Replaces EN-2 when promoted. | v0.6.5 — Install Path: relay init, join string, packages |
-| EN-35 | A mint that names any `relay:` label is refused, and the refusal names the label. A mint takes only initial tags (EN-40); `relay:node-id` is written by the enrollment itself (EN-38) and never named at mint (ADR-0050). Extends EN-42 when promoted. | MVP |
 | EN-36 | The Console mints an Enrollment Token through the same capability action and `admin` floor as the Control API, asking how many Nodes it is for (EN-31), and shows the join string once, apart from the command that consumes it (EN-39) (ADR-0048; #434). | MVP |
-| EN-38 | Every enrollment stamps `relay:node-id` with the Node's Relay-assigned ID on the Node it records. Only the enrollment action writes it, no mint may name it (EN-35), and the Node cannot change it. Becomes part of EN-41 when promoted (ADR-0048). | v0.6.5 — Install Path: relay init, join string, packages |
 | EN-39 | `relay init` shows a freshly minted join string once, apart from the command that consumes it: the command is `sudo relay-daemon join`, and the string is pasted at its prompt, so it is never part of a command line (ADR-0048). | v0.6.5 — Install Path: relay init, join string, packages |
-| EN-40 | A mint names zero or more **initial tags**, each a well-formed `tag:` label rendering as exactly one Selector term; a mint may name none. An entry that is not such a label refuses the mint and is never rewritten (ADR-0050). Replaces EN-3 when promoted. | MVP |
-| EN-41 | After a valid token is accepted, the Relay generates the `node_id`, signs the CSR under that identity, creates the registry record, stamps `relay:node-id` (EN-38), writes the token's initial tags on the Node, and records the token ID and the time as the Node's enrollment provenance. It writes no other `relay:` label, and the CSR subject never selects the identity. Once written, an initial tag is an ordinary tag: how it is written, audited and later changed is `selectors-and-labels.md` (ADR-0050). Replaces EN-12 when promoted. | MVP |
-| EN-42 | A mint request naming an initial tag that is not a well-formed `tag:` label, an invalid TTL, malformed JSON or an unknown request field is refused; nothing is sanitized into another label (ADR-0050). Replaces EN-24 when promoted. | MVP |
 | EN-43 | The per-source and global enrollment rate limits are fixed constants, not settings. The per-source limit admits about 60 enrollments a minute from one address, so some 200 Nodes behind one NAT address join in minutes; the global limit stays the guard against a flood. Both still apply before token validation (EN-10). Extends EN-10 when promoted. | MVP |
-| EN-44 | A mint by a machine Account that names any initial tag is refused, and the refusal says only a human Account writes tags (ADR-0050). A machine Account's mint naming no tag is unaffected. | MVP |
-| EN-45 | On upgrade, every `relay:` label other than `relay:node-id` that an earlier release wrote from a token's scope is copied to a `tag:` label of the same key and value, and an unused token minted with a scope writes that scope as initial tags. Each copy is attributed to the human Account that minted the token, as EN-41 attributes initial tags; labels from a token a machine Account minted are not copied, and the upgrade lists their Nodes for a person to tag (ADR-0050). | MVP |
 
 ## Out of scope
 
@@ -198,7 +206,6 @@ Generated by `make spec-proof` from the tests that name the claim they prove.
 | Claim | Proven by | Seam |
 |---|---|---|
 | EN-1 | `TestHandleMintToken_Success`, `TestMintToken_RequiresAdmin` | API |
-| EN-3 | `TestCreate_InvalidScope`, `TestCreate_WellFormedScopeAccepted` | enroll |
 | EN-4 | `TestCreate_StoresHashedReturnsPlaintextOnce`, `TestHandleMintToken_Success` | API, enroll |
 | EN-5 | `TestMaxUses_Concurrent`, `TestReusable_ValidatesRepeatedly` | enroll |
 | EN-7 | `ipv6_literal_relay_whose_certificate_lacks_that_ip_sends_no_token`, `pin_match_enrolls`, `pin_match_with_wrong_server_name_sends_no_token`, `pin_mismatch_sends_no_token` | daemon |
@@ -206,29 +213,40 @@ Generated by `make spec-proof` from the tests that name the claim they prove.
 | EN-9 | `TestServerCertificate_OneLeafOnBothListenersOnlyTheNodePlaneAsksForAClientCert`, `TestUnaryInterceptor_CertlessEnroll_PassesWithoutIdentity`, `TestUnaryInterceptor_RenewWithoutPeerCert_Refused` | Node plane, Relay |
 | EN-10 | `TestEnroll_RateLimited_Global`, `TestEnroll_RateLimited_NoTokenOracle`, `TestEnroll_RateLimited_PerIP` | enroll |
 | EN-11 | `TestEnroll_EmptyTokenOrCSR`, `TestEnroll_NonNodeSelfLabel`, `TestEnroll_SelfLabelAtTheLengthBoundsIsAccepted` | enroll |
-| EN-12 | `TestEnroll_IdentityNotFromCSR`, `TestEnroll_Success` | enroll |
-| EN-13 | `TestEnroll_InvalidToken`, `TestEnroll_Success` | enroll |
+| EN-13 | `TestEnroll_InitialTagWriteFailureDenylistsTheNode`, `TestEnroll_InvalidToken`, `TestEnroll_Success` | enroll |
 | EN-15 | `TestEnroll_PostUpsertRevocationCheck_ClosesRaceWindow` | enroll |
 | EN-17 | `TestRenew_IgnoresCSRSubject`, `TestRenew_MissingNodeID` | enroll |
 | EN-18 | `TestSQLiteRegistry_ProvenanceSurvivesARestart` | store |
 | EN-19 | `TestService_RevokeToken_RecordsEveryCascadedNode`, `TestService_RevokeToken_RecordsNodeFoundOnRescan` | revocation |
 | EN-20 | `TestRevokeTokenCascade_PersistsOneRowPerNode`, `TestService_RevokeToken_RecordFailureDoesNotStopTheCascade`, `TestService_RevokeToken_ToleratesUnknownToken` | API, revocation |
 | EN-23 | `TestMintToken_RequiresAdmin`, `TestRevokeToken_RequiresAdmin` | API |
-| EN-24 | `TestHandleMintToken_InvalidScopeOrTTL`, `TestHandleMintToken_MalformedOrUnknownField` | API |
 | EN-25 | `TestEnroll_BadCSR`, `TestEnroll_EmptyTokenOrCSR`, `TestEnroll_NonNodeSelfLabel`, `TestEnroll_RegistryAtCapacity` | enroll |
-| EN-26 | `TestEnroll_ExhaustedToken`, `TestEnroll_ExpiredToken`, `TestEnroll_LegacyMalformedScopeIsRefusedBeforeAnySideEffect`, `TestEnroll_RevokedToken` | enroll |
+| EN-26 | `TestEnroll_ExhaustedToken`, `TestEnroll_ExpiredToken`, `TestEnroll_LegacyMalformedScopeIsRefusedBeforeAnySideEffect`, `TestEnroll_RevokedToken`, `TestEnroll_StoredMalformedInitialTagIsRefusedBeforeAnySideEffect` | enroll |
 | EN-27 | `pin_mismatch_sends_no_token` | daemon |
 | EN-29 | `TestUnaryInterceptor_RevokedAfterConnect_RenewRefused` | Node plane |
 | EN-30 | `TestCrossBinary_RestartWithoutJoinOrAddrUsesPersistedState`, `join_enroll_config_never_reads_a_ca_path_or_a_bare_token`, `join_enrolls_in_process_and_persists_identity`, `join_pin_applies_to_an_overridden_address`, `join_takes_no_ca_bundle_path_and_no_bare_token` | Relay, daemon |
 | EN-32 | `TestCrossBinary_RestartWithoutJoinOrAddrUsesPersistedState`, `fresh_enroll_persists_identity`, `idempotency_no_op_when_identity_present`, `join_enrolls_in_process_and_persists_identity`, `plan_has_two_outcomes`, `unenrolled_start_never_dials` | Relay, daemon |
 | EN-33 | `a_failure_after_the_relay_answered_says_a_node_may_be_recorded`, `fresh_enroll_fails_closed_on_key_cert_mismatch`, `join_failed_persist_leaves_no_partial_identity`, `join_interrupted_during_enrollment_persists_nothing`, `join_pin_mismatch_sends_no_token_and_leaves_nothing_on_disk`, `join_token_rejected_leaves_nothing_on_disk`, `join_unreachable_relay_leaves_nothing_on_disk`, `unconfigured_node_exits_zero`, `unenrolled_start_never_dials` | daemon |
+| EN-35 | `TestCreate_RelayLabelRefusedNamingIt`, `TestHandleMintToken_RelayLabelRefusedNamingIt`, `TestParseInitialTags` | API, enroll, registry |
+| EN-40 | `TestCreate_InitialTagMalformedRefused`, `TestCreate_InitialTagsWellFormedAccepted`, `TestEnroll_StoredMalformedInitialTagIsRefusedBeforeAnySideEffect`, `TestHandleMintToken_Success`, `TestParseInitialTags`, `TestParseInitialTags_AgreesWithParseTagLabel`, `TestTagWriter_WriteInitialTags_Refusals`, `TestValidate_StoredMalformedInitialTagRefusedBeforeAUse` | API, capability, enroll, registry |
+| EN-41 | `TestControlAPI_InitialTagsAreOrdinaryTags`, `TestEnroll_IdentityNotFromCSR`, `TestEnroll_InitialTagWriteFailureFailsEnrollment`, `TestEnroll_InitialTagsWithoutWriterFailsClosed`, `TestEnroll_NoInitialTagsWritesNone`, `TestEnroll_Success`, `TestTagWriter_WriteInitialTags_OneRecordPerTagAttributedToTheMinter`, `TestValidate_Valid_ReturnsGrant`, `TestWriteInitialTags_RecordsNameTheEnrollmentToken` | Relay, auditsink, capability, enroll |
+| EN-42 | `TestHandleMintToken_InvalidInitialTagOrTTL`, `TestHandleMintToken_MalformedOrUnknownField` | API |
+| EN-44 | `TestCreate_MachineAccountNamingTagsRefused`, `TestEnroll_RefusedMinterLeavesNoNodeAndBurnsNoUse`, `TestHandleMintToken_MachineAccountInitialTags`, `TestTagWriter_CheckInitialTags_DecidesBeforeAnyNodeExists`, `TestTagWriter_WriteInitialTags_RefusesAMachineMinter`, `TestValidate_StoredMachineMintedTagsRefusedBeforeAUse` | API, capability, enroll |
+| EN-45 | `TestMigration0033_ScopeLabelsBecomeTagsAndTheAuditChainVerifies`, `TestMigration0033_UnusedHumanTokenEnrollsWithItsScopeAsTags`, `TestMigration0033_UsedHumanTokenIsNotConvertedAndIsListed` | store |
 
 Unproven: EN-2, EN-16, EN-21, EN-22.
-Designed claims a test already cites: EN-31 (`TestHandleMintToken_InvalidScopeOrTTL`, `TestHandleMintToken_UseLimit`, `TestMinter_Mint_UseLimitMustBeNamed`).
+Designed claims a test already cites: EN-31 (`TestHandleMintToken_InvalidInitialTagOrTTL`, `TestHandleMintToken_UseLimit`, `TestMinter_Mint_UseLimitMustBeNamed`).
 <!-- proof:end -->
 
 ## Retired
 
+- **EN-3** — `2026-10-27` — a token carried a scope of `relay:` Labels; replaced by EN-40.
+- **EN-12** — `2026-10-27` — enrollment stamped the token's scope as the Node's `relay:` Labels;
+  replaced by EN-41.
+- **EN-24** — `2026-10-27` — a mint with a malformed `relay:` scope entry was refused; replaced by
+  EN-42.
+- **EN-38** — `2026-10-27` — the `relay:node-id` stamp as a claim of its own; folded into EN-41,
+  which writes it and no other `relay:` label.
 - **EN-6** — `2026-10-25` — the join string's contract named no reader; replaced by EN-30, under
   which `relay-daemon join` consumes it and the unit start reads none.
 - **EN-14** — `2026-10-25` — the daemon enrolled at start and the join string was inert after;

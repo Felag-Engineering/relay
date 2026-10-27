@@ -49,7 +49,7 @@ fleet; it only renders these files with `docker compose config`.
 | --- | --- |
 | `relay` | The Go Relay. Node-plane gRPC on `:7654`, control-plane HTTPS (MCP + `/api/v1`) on `:9443` — distinct listeners, distinct published ports. Runs as UID 10001 with no capabilities, a read-only root filesystem, `/tmp` on tmpfs and `relay-data` as its one writable volume, which holds the CA and the SQLite store. |
 | `relay-config` | A one-shot, on the Relay image, that stages `deploy/test/relay.toml` and `deploy/test/approval-gates.json` onto the `relay-etc` volume (see [Prerequisites](#prerequisites)), hands `init`'s two output volumes to UID 10001, then exits. The Relay starts only after it exits 0. |
-| `init` | A one-shot, on the Relay image, running as UID 10001 like the Relay (`relay init` refuses root) and reading the same read-only `relay-etc` volume: runs `relay init` to create the first admin, the Console `admin` (with its password and first API Token, see [The Admin Console](#the-admin-console)), creates `dev-approver` (with its token — the approval gate forbids self-approval, see [The approval gate](#the-approval-gate)), mints a `relay:`-scoped Enrollment Token through `POST /api/v1/enrollment-tokens` and writes the response's join string for the daemons, then exits. If it fails, no daemon starts. |
+| `init` | A one-shot, on the Relay image, running as UID 10001 like the Relay (`relay init` refuses root) and reading the same read-only `relay-etc` volume: runs `relay init` to create the first admin, the Console `admin` (with its password and first API Token, see [The Admin Console](#the-admin-console)), creates `dev-approver` (with its token — the approval gate forbids self-approval, see [The approval gate](#the-approval-gate)), mints an Enrollment Token naming the initial tags `tag:env=dev` and `tag:fleet=dev` through `POST /api/v1/enrollment-tokens` and writes the response's join string for the daemons, then exits. If it fails, no daemon starts. |
 | `daemon-1..3` | Three relay-daemons (Rust, musl static binary). Each has a baked, root-owned Policy fixture and a private state volume, enrolls on first start, and reports health once it has a persisted identity. The two `role=web` Nodes (`daemon-1`, `daemon-2`) also run the dev-fleet demo service; `daemon-3` (`role=db`) loads a different Policy fixture and runs no demo service. |
 | `daemon-4..9` (demo fleet only) | Six more relay-daemons, in `deploy/demo/` and not in this fleet. See [The demo fleet](#the-demo-profile). |
 
@@ -68,9 +68,9 @@ Security-relevant choices, made explicit:
   `relay-daemon join` (never an argument, never an environment variable): `join` pins the
   Relay's CA from the join string's fingerprint before sending the token, and writes the CA to
   the daemon's own state volume.
-- **The Enrollment Token is `relay:`-scoped.** It can only join Nodes, never call the API or
-  run Operations. Enrollment stamps `relay:env=dev` and `relay:fleet=dev` onto each Node; these
-  are the labels your Selectors target.
+- **The Enrollment Token names initial tags.** It can only join Nodes, never call the API or
+  run Operations. Enrollment writes `tag:env=dev` and `tag:fleet=dev` onto each Node as tags
+  (and stamps `relay:node-id`); these are the labels your Selectors target.
 - **The control-plane credential is minted at runtime, not committed.** The control plane
   accepts only per-Account API Tokens (ADR-0023), so the `init` one-shot runs `relay init`
   against the Relay's store to create the first admin and its first API Token, and writes the
@@ -187,8 +187,9 @@ $ docker compose -f deploy/test/docker-compose.yml ps
 $ docker compose -f deploy/test/docker-compose.yml logs relay
 ```
 
-You should see three `node enrolled` lines, each with `relay_label_count=2` (the token's
-`relay:env=dev` and `relay:fleet=dev`; the log counts labels and does not print them).
+You should see three `node enrolled` lines, each with `initial_tag_count=2` (the token's
+`tag:env=dev` and `tag:fleet=dev`) and `relay_label_count=1` (`relay:node-id`); the log counts
+labels and does not print them.
 
 **Richer check: list the fleet registry over MCP.** With the client set up as in
 [Connecting Claude Code](#connecting-claude-code), call:
@@ -200,7 +201,7 @@ list_nodes()
 The result is a `nodes` array of three, each with its `node_id`, `node_labels`,
 `relay_labels` and `policy_fingerprint`. `node:` and `relay:` labels come back as separate
 maps, never merged, so you can always tell which namespace set a label (ADR-0006). Pass an
-optional `selector` to filter, e.g. `list_nodes(selector="relay:env=dev")`.
+optional `selector` to filter, e.g. `list_nodes(selector="tag:env=dev")`.
 
 ## Drive the fleet over MCP
 
@@ -259,7 +260,7 @@ answered retry must re-send the call unchanged, `wait_seconds` included.
 Happy path: fan `system.facts` (no arguments, `read` class) across every dev Node:
 
 ```
-run_operation(selector="relay:env=dev", operation="system.facts")
+run_operation(selector="tag:env=dev", operation="system.facts")
 ```
 
 Read a file, the `file.read` example from `list_operations`. The dev image bakes in
@@ -267,12 +268,12 @@ Read a file, the `file.read` example from `list_operations`. The dev image bakes
 `/etc/shadow`, so this succeeds on every Node:
 
 ```
-run_operation(selector="relay:env=dev", operation="file.read", args={"path":"/etc/os-release"})
+run_operation(selector="tag:env=dev", operation="file.read", args={"path":"/etc/os-release"})
 ```
 
 Policy-denied: `service.restart sshd`. The fixture Policy allows `service.restart` only for
 `nginx` and `php-fpm`, so the daemon refuses it. Aim it at the one `role=db` Node: on
-`relay:env=dev` it reaches three Nodes, a fleet-wide mutate, which the
+`tag:env=dev` it reaches three Nodes, a fleet-wide mutate, which the
 [approval gate](#the-approval-gate) parks for a human before any Node sees it.
 
 ```
@@ -304,7 +305,7 @@ Two rules:
 
 The fan-out threshold leaves **both** paths reachable: a mutate on one Node runs straight
 through; the same mutate fleet-wide parks. Here `node:role=db` is one Node and runs, while
-`relay:env=dev` (three) waits for a human. In the demo fleet `node:role=db` parks too;
+`tag:env=dev` (three) waits for a human. In the demo fleet `node:role=db` parks too;
 read [its runbook](#the-demo-profile) before presenting.
 
 Security-relevant choices, made explicit:
@@ -404,7 +405,7 @@ structured mutate is `service.restart` on the web Nodes, through the shim.
 Preflight without dispatching:
 
 ```
-raw_exec(selector="relay:env=dev", argv=["/usr/local/bin/dev-fleet-service","status"], plan=true)
+raw_exec(selector="tag:env=dev", argv=["/usr/local/bin/dev-fleet-service","status"], plan=true)
 ```
 
 returns per-Node verdicts allow/allow/deny, with no parking and no execution.
@@ -412,7 +413,7 @@ returns per-Node verdicts allow/allow/deny, with no parking and no execution.
 The repair:
 
 ```
-raw_exec(selector="relay:env=dev", argv=["/usr/local/bin/dev-fleet-service","restart"])
+raw_exec(selector="tag:env=dev", argv=["/usr/local/bin/dev-fleet-service","restart"])
 ```
 
 returns a `pending_approval` result (every Raw Exec parks under
@@ -425,7 +426,7 @@ An independent read, through a different Operation and tier, proves the mutate h
 it before and after the restart:
 
 ```
-run_operation(selector="relay:env=dev", operation="file.read", args={"path":"/var/lib/dev-fleet-service/state"})
+run_operation(selector="tag:env=dev", operation="file.read", args={"path":"/var/lib/dev-fleet-service/state"})
 ```
 
 `pid` and `started_epoch` both change on the web Nodes; the db Node fails to read a file it
@@ -448,7 +449,7 @@ Policy allows both, and the db fixture's has no rule for either.
 Call them like any Operation (ADR-0042):
 
 ```
-run_operation(selector="relay:env=dev", operation="svc.status")
+run_operation(selector="tag:env=dev", operation="svc.status")
 ```
 
 returns `success` on the web Nodes and `denied_by_policy` on the db Node, which has the
@@ -477,7 +478,7 @@ else `relay-demo`.
 ```console
 $ scripts/dev-fleet-mcp.sh init                 # export CA + both credentials
 $ scripts/dev-fleet-mcp.sh call list_nodes      # ordinary client (no Tasks capability)
-$ scripts/dev-fleet-mcp.sh call-tasks run_operation '{"selector":"relay:env=dev","operation":"pkg.install","args":{"name":"nginx"}}'
+$ scripts/dev-fleet-mcp.sh call-tasks run_operation '{"selector":"tag:env=dev","operation":"pkg.install","args":{"name":"nginx"}}'
 $ scripts/dev-fleet-mcp.sh task-get <taskId>
 $ scripts/dev-fleet-mcp.sh task-cancel <taskId>
 $ scripts/dev-fleet-mcp.sh raw tasks/update '{}' # served? it must not be

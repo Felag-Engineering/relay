@@ -94,13 +94,13 @@ func controlAPIRequest(t *testing.T, client *http.Client, method, url, token str
 // as an outside HTTP caller would, over the wire, not via package api's
 // internal types).
 type mintTokenAPIResponse struct {
-	ID         string   `json:"id"`
-	Token      string   `json:"token"`
-	JoinString string   `json:"join_string"`
-	Scope      []string `json:"scope"`
-	ExpiresAt  string   `json:"expires_at"`
-	MaxUses    int      `json:"max_uses"`
-	Unlimited  bool     `json:"unlimited"`
+	ID          string   `json:"id"`
+	Token       string   `json:"token"`
+	JoinString  string   `json:"join_string"`
+	InitialTags []string `json:"initial_tags"`
+	ExpiresAt   string   `json:"expires_at"`
+	MaxUses     int      `json:"max_uses"`
+	Unlimited   bool     `json:"unlimited"`
 }
 
 // TestControlAPI_MintEnrollmentToken_ReturnsJoinString: the mint response
@@ -119,7 +119,7 @@ func TestControlAPI_MintEnrollmentToken_ReturnsJoinString(t *testing.T) {
 	f := startRelay(t, WithControlPlane(), WithConfig(func(c *Config) { c.Addr = ":7654" }))
 
 	resp := controlAPIRequest(t, f.ClientFor(""), http.MethodPost, f.ControlBase+"/api/v1/enrollment-tokens",
-		f.Credential, map[string]any{"scope": []string{"relay:env=prod"}, "ttl_seconds": 3600, "max_uses": 1})
+		f.Credential, map[string]any{"initial_tags": []string{"tag:env=prod"}, "ttl_seconds": 3600, "max_uses": 1})
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("mint status = %d, want %d", resp.StatusCode, http.StatusCreated)
@@ -201,8 +201,8 @@ func TestControlAPI_EnrollmentTokenLifecycle(t *testing.T) {
 
 	mintResp := controlAPIRequest(t, client, http.MethodPost, base+"/api/v1/enrollment-tokens",
 		credential, map[string]any{
-			"scope":       []string{"relay:env=prod"},
-			"ttl_seconds": 3600,
+			"initial_tags": []string{"tag:env=prod"},
+			"ttl_seconds":  3600,
 			// The limit must exceed the enrollments made before the revoke, so the
 			// refusal below proves the revoke and not exhaustion.
 			"max_uses": 2,
@@ -268,7 +268,7 @@ func TestControlAPI_NodeRevoke(t *testing.T) {
 
 	// Seed an Enrollment Token via the test-only deps.tokens path (mirrors
 	// lifecycle_e2e_test.go) — this test's focus is node revoke, not mint.
-	_, plaintext, err := deps.tokens.Create(ctx, []string{"relay:env=prod"}, time.Hour)
+	_, plaintext, err := deps.tokens.Create(ctx, nil, time.Hour)
 	if err != nil {
 		t.Fatalf("seed Enrollment Token: %v", err)
 	}
@@ -479,7 +479,7 @@ func TestControlAPI_RequiresCredential(t *testing.T) {
 		path   string
 		body   any
 	}{
-		{http.MethodPost, "/api/v1/enrollment-tokens", map[string]any{"scope": []string{"relay:env=prod"}, "ttl_seconds": 3600}},
+		{http.MethodPost, "/api/v1/enrollment-tokens", map[string]any{"initial_tags": []string{"tag:env=prod"}, "ttl_seconds": 3600}},
 		{http.MethodDelete, "/api/v1/enrollment-tokens/does-not-matter", nil},
 		{http.MethodPost, "/api/v1/nodes/does-not-matter/revoke", nil},
 		{http.MethodPost, "/api/v1/freeze/engage", nil},
@@ -1040,7 +1040,7 @@ func TestMintEnrollmentToken_JoinStringUsesAdvertisedAddress(t *testing.T) {
 				c.ControlAddr = "127.0.0.1:0"
 			}))
 			resp := controlAPIRequest(t, f.ClientFor(""), http.MethodPost, f.ControlBase+"/api/v1/enrollment-tokens",
-				f.Credential, map[string]any{"scope": []string{"relay:env=prod"}, "ttl_seconds": 3600, "max_uses": 1})
+				f.Credential, map[string]any{"initial_tags": []string{"tag:env=prod"}, "ttl_seconds": 3600, "max_uses": 1})
 			defer resp.Body.Close()
 			if resp.StatusCode != http.StatusCreated {
 				t.Fatalf("mint status = %d, want %d", resp.StatusCode, http.StatusCreated)

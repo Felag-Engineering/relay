@@ -10,6 +10,7 @@ import (
 
 	"github.com/Felag-Engineering/relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/relay/relay/internal/capability"
+	"github.com/Felag-Engineering/relay/relay/internal/enroll"
 	"github.com/Felag-Engineering/relay/relay/internal/relaytest"
 )
 
@@ -50,6 +51,11 @@ func testAdmin() capability.Principal {
 		Kind:    string(accounts.KindHuman),
 	}
 }
+
+// testHumanMinter mints an Enrollment Token as the founding admin's shape, a
+// human Account, so a token a test mints directly may name initial tags: only a
+// human Account does, and enrollment writes them as that Account's act.
+var testHumanMinter = enroll.WithMinter("acct-test-admin", testAdmin())
 
 // bootstrapCredential creates the founding admin Account in deps' store if it
 // is absent, mints it an API Token and returns the plaintext — the in-process

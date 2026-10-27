@@ -181,6 +181,11 @@ const (
 	QuarantineOn = "on"
 )
 
+// NodeIDKey is the bare relay-space key every enrollment stamps with the Node's
+// Relay-assigned ID. Selector syntax renders it `relay:node-id`; it is the only
+// relay: label enrollment writes (ADR-0050, ADR-0048).
+const NodeIDKey = "node-id"
+
 // Quarantined reports whether n carries the quarantine fence.
 //
 // The one place the test is written. A caller that inlines

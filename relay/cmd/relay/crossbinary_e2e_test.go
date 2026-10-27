@@ -295,7 +295,7 @@ func TestCrossBinary_RelayDaemonLoopback(t *testing.T) {
 
 	tokenResp := harness.call(t, map[string]any{
 		"op":          "create_token",
-		"labels":      []string{"relay:env=test"},
+		"labels":      []string{"tag:env=test"},
 		"ttl_seconds": 3600,
 	})
 	joinString, _ := tokenResp["join_string"].(string)
@@ -372,10 +372,14 @@ func TestCrossBinary_RelayDaemonLoopback(t *testing.T) {
 	if _, ok := getNodeResp["node_labels"]; !ok {
 		t.Error("get_node: node_labels missing from response")
 	}
+	tagLabels, _ := getNodeResp["tag_labels"].(map[string]any)
+	if tagLabels["env"] != "test" {
+		t.Errorf("get_node: tag_labels[env] = %v, want %q (written from create_token's initial tags)",
+			tagLabels["env"], "test")
+	}
 	relayLabels, _ := getNodeResp["relay_labels"].(map[string]any)
-	if relayLabels["env"] != "test" {
-		t.Errorf("get_node: relay_labels[env] = %v, want %q (stamped from create_token's scope)",
-			relayLabels["env"], "test")
+	if relayLabels["node-id"] != getNodeResp["node_id"] || len(relayLabels) != 1 {
+		t.Errorf("get_node: relay_labels = %v, want exactly node-id = the Node's ID", relayLabels)
 	}
 
 	// -------------------------------------------------------------------

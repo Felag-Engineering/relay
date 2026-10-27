@@ -16,7 +16,8 @@ import (
 // label_writes_guard_test.go pins that each label table has exactly the write
 // sites its namespace's writer owns (invariant 7, ADR-0006, ADR-0050):
 //
-//   - tag_labels is mutated in AppendWithTagWrite and nowhere else;
+//   - tag_labels is mutated in writeTagChanges and nowhere else, and writeTagChanges is
+//     called only from AppendWithTagWrite and copyRelayLabelsToTags;
 //   - node_labels is rewritten through replaceLabels in Upsert only, and
 //     relay_labels in SetRelayLabels only;
 //   - replaceLabels, whose SQL names its table through fmt.Sprintf and so never
@@ -66,11 +67,14 @@ func labelWriteViolations(dir string) ([]string, error) {
 					}
 					upper := strings.ToUpper(s)
 					mutates := strings.Contains(upper, "INSERT") || strings.Contains(upper, "UPDATE") || strings.Contains(upper, "DELETE")
-					if mutates && strings.Contains(s, "tag_labels") && fn != "AppendWithTagWrite" {
+					if mutates && strings.Contains(s, "tag_labels") && fn != "writeTagChanges" {
 						out = append(out, base+": "+fn+" mutates tag_labels")
 					}
 				case *ast.CallExpr:
 					id, ok := x.Fun.(*ast.Ident)
+					if ok && id.Name == "writeTagChanges" && fn != "AppendWithTagWrite" && fn != "copyRelayLabelsToTags" {
+						out = append(out, base+": "+fn+" calls writeTagChanges")
+					}
 					if !ok || id.Name != "replaceLabels" || len(x.Args) < 3 {
 						return true
 					}
@@ -147,7 +151,9 @@ func TestLabelTables_Fixtures(t *testing.T) {
 	}
 	write("legit.go", `package store
 
-func (a *x) AppendWithTagWrite() { exec("INSERT INTO tag_labels (a) VALUES (?)") }
+func (a *x) AppendWithTagWrite() { _ = writeTagChanges(ctx, tx, c, p) }
+func writeTagChanges()                 { exec("INSERT INTO tag_labels (a) VALUES (?)") }
+func copyRelayLabelsToTags()           { _ = writeTagChanges(ctx, tx, c, p) }
 func (r *x) Upsert()             { replaceLabels(ctx, tx, nsNode.table(), id, m) }
 func (r *x) SetRelayLabels()     { replaceLabels(ctx, tx, nsRelay.table(), id, m) }
 func (ns ns) table() string      { _ = nsTag; return "tag_labels" }
@@ -167,6 +173,10 @@ func viaVar()      { replaceLabels(ctx, tx, someTable, id, m) }
 
 func leaks() { _ = nsTag }
 `)
+	write("bad_caller.go", `package store
+
+func sneaky() { _ = writeTagChanges(ctx, tx, c, p) }
+`)
 	// A _test.go file never counts.
 	write("ignored_test.go", `package store
 
@@ -178,6 +188,7 @@ func inTest() { exec("INSERT INTO tag_labels (a) VALUES (?)"); _ = nsTag }
 		t.Fatal(err)
 	}
 	want := []string{
+		"bad_caller.go: sneaky calls writeTagChanges",
 		"bad_ns.go: leaks names nsTag",
 		"bad_replace.go: routeAround hands replaceLabels a table other than nsNode or nsRelay",
 		"bad_replace.go: routeAround names nsTag",
