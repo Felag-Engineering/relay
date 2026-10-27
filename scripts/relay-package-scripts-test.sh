@@ -757,7 +757,9 @@ case_purge_moves_state_aside_and_removes_created_config() { # deb
   expect "the marker directory remains" absent "$MARK"
   expect "the account flags are gone" test -e "$R/account-user" -a -e "$R/account-group"
   top="$(grep -Fxn -- "-h root:root $STATE :: $s_i" "$R/chown.log" | head -n 1 | cut -d: -f1)"
-  rec="$(grep -n -- "^-h root:root $STATE $STATE/ca " "$R/chown.log" | head -n 1 | cut -d: -f1)"
+  # find lists a directory's entries in the filesystem's order, so the walk's call names ca/
+  # somewhere after $STATE, not necessarily first.
+  rec="$(grep -n -- "^-h root:root $STATE " "$R/chown.log" | grep -F -- " $STATE/ca " | head -n 1 | cut -d: -f1)"
   expect "the re-owns did not run, by the pre-move path and inode, top directory first" \
     test -n "$top" -a -n "$rec" -a "$top" -lt "$rec"
   expect "the walk did not re-own the files inside" \
