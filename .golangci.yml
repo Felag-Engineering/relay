@@ -206,6 +206,7 @@ linters:
             - github.com/Felag-Engineering/relay/relay/internal/capability$
             - github.com/Felag-Engineering/relay/relay/internal/controlplane$
             - github.com/Felag-Engineering/relay/relay/internal/enroll$
+            - github.com/Felag-Engineering/relay/relay/internal/harnesssetup$
             - github.com/Felag-Engineering/relay/relay/internal/jobs$
             - github.com/Felag-Engineering/relay/relay/internal/nodestate$
             - github.com/Felag-Engineering/relay/relay/internal/opvocab$
@@ -389,6 +390,25 @@ linters:
           allow:
             - context$
             - log/slog$
+
+        # The Harness setup renderer builds text around a live credential and never
+        # reaches the CA, the store or configuration.
+        harnesssetup-imports:
+          list-mode: strict
+          files:
+            - "**/internal/harnesssetup/*.go"
+            - "!$test"
+          allow:
+            - bytes$
+            - encoding/json$
+            - encoding/pem$
+            - errors$
+            - fmt$
+            - log/slog$
+            - net$
+            - net/url$
+            - strings$
+            - github.com/Felag-Engineering/relay/relay/internal/accounts$
 
         # The event bus must never be able to name a result type: capability.NodeResult,
         # jobs.Task and the mcp wire structs carry captured output, and a bus that can

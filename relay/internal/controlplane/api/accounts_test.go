@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -18,6 +19,7 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/authz"
 	"github.com/Felag-Engineering/relay/relay/internal/capability"
 	"github.com/Felag-Engineering/relay/relay/internal/controlplane"
+	"github.com/Felag-Engineering/relay/relay/internal/harnesssetup"
 	"github.com/Felag-Engineering/relay/relay/internal/registry"
 	"github.com/Felag-Engineering/relay/relay/internal/store"
 )
@@ -66,6 +68,23 @@ func newIdentityFixture(t *testing.T) *identityFixture {
 // fault without a second copy of the wiring.
 func newIdentityFixtureWith(t *testing.T, wrap func(capability.AccountStore) capability.AccountStore) *identityFixture {
 	t.Helper()
+	return buildIdentityFixture(t, wrap, harnesssetup.Target{})
+}
+
+// newIdentityFixtureWithHarness is newIdentityFixture with a harness target
+// wired, so a mint renders its harness_setup.
+func newIdentityFixtureWithHarness(t *testing.T) *identityFixture {
+	t.Helper()
+	target, err := harnesssetup.NewTarget("relay.example:7654", "0.0.0.0:9443",
+		[]byte("-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"))
+	if err != nil {
+		t.Fatalf("harnesssetup.NewTarget: %v", err)
+	}
+	return buildIdentityFixture(t, func(s capability.AccountStore) capability.AccountStore { return s }, target)
+}
+
+func buildIdentityFixture(t *testing.T, wrap func(capability.AccountStore) capability.AccountStore, target harnesssetup.Target) *identityFixture {
+	t.Helper()
 
 	st, err := store.Open(filepath.Join(t.TempDir(), "relay.db"))
 	if err != nil {
@@ -113,6 +132,7 @@ func newIdentityFixtureWith(t *testing.T, wrap func(capability.AccountStore) cap
 		AccountAdmin: capSvc.AccountAdmin,
 		Audit:        &fakeAuditor{}, // unused by the identity routes; kept so Register never sees a nil Auditor.
 		Now:          fixedNow,
+		HarnessSetup: target,
 	})
 
 	return &identityFixture{
@@ -299,8 +319,149 @@ func TestIdentityAPI_PlaintextAppearsOnlyInTheMintResponse(t *testing.T) {
 
 	// The audit record for the mint carries the token's id, never its secret.
 	for _, r := range f.auditRecords(t) {
-		if strings.Contains(r.Reason, secret) {
-			t.Errorf("audit reason %q contains the plaintext credential", r.Reason)
+		if whole := fmt.Sprintf("%+v", r); strings.Contains(whole, secret) {
+			t.Errorf("audit record %+v contains the plaintext credential", r)
+		}
+		marshaled, err := json.Marshal(r)
+		if err != nil {
+			t.Fatalf("marshal audit record: %v", err)
+		}
+		if strings.Contains(string(marshaled), secret) {
+			t.Errorf("audit record %s contains the plaintext credential", marshaled)
+		}
+	}
+}
+
+func TestIdentityAPI_MintResponseIsNotCacheable(t *testing.T) {
+	f := newIdentityFixtureWithHarness(t)
+	acct, _ := f.mintFor(t, "ci", accounts.RoleViewer)
+
+	ttl := int64(0)
+	rec := f.call(t, f.bootstrap, http.MethodPost, "/api/v1/accounts/"+acct.ID+"/tokens",
+		mintAPITokenRequest{Name: "second", TTLSeconds: &ttl})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("mint: status %d, body %s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control = %q, want %q", got, "no-store")
+	}
+}
+
+// mintHarness creates an Account of the given kind and mints it a token through
+// the route, returning the decoded response.
+func (f *identityFixture) mintHarness(t *testing.T, name string, kind accounts.Kind) mintAPITokenResponse {
+	t.Helper()
+	acct, err := f.store.Accounts().Create(context.Background(), accounts.Account{
+		Name: name, Kind: kind, Role: accounts.RoleViewer, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("create %s account: %v", kind, err)
+	}
+	ttl := int64(0)
+	rec := f.call(t, f.bootstrap, http.MethodPost, "/api/v1/accounts/"+acct.ID+"/tokens",
+		mintAPITokenRequest{Name: "harness", TTLSeconds: &ttl})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("mint: status %d, body %s", rec.Code, rec.Body.String())
+	}
+	var minted mintAPITokenResponse
+	decodeInto(t, rec, &minted)
+	return minted
+}
+
+func TestIdentityAPI_MintRendersTheHarnessSetupForAHumanAccount(t *testing.T) {
+	f := newIdentityFixtureWithHarness(t)
+	minted := f.mintHarness(t, "alice", accounts.KindHuman)
+
+	h := minted.HarnessSetup
+	if h == nil {
+		t.Fatal("the mint response carries no harness_setup")
+	}
+	if h.MCPURL != "https://relay.example:9443/mcp" {
+		t.Errorf("mcp_url = %q", h.MCPURL)
+	}
+	if !strings.HasPrefix(h.CACertificate, "-----BEGIN CERTIFICATE-----") {
+		t.Errorf("ca_certificate = %q", h.CACertificate)
+	}
+	for name, block := range map[string]string{
+		"claude_code": h.ClaudeCode, "claude_code_mcp_json": h.ClaudeCodeMCPJSON,
+		"check": h.Check,
+	} {
+		if !strings.Contains(block, minted.Token) {
+			t.Errorf("%s does not carry the minted token: %q", name, block)
+		}
+	}
+	if h.Gleipnir != "" {
+		t.Errorf("a human Account's mint rendered a Gleipnir block: %q", h.Gleipnir)
+	}
+}
+
+func TestIdentityAPI_MintRendersGleipnirForAMachineAccount(t *testing.T) {
+	f := newIdentityFixtureWithHarness(t)
+	minted := f.mintHarness(t, "ci", accounts.KindMachine)
+
+	if minted.HarnessSetup == nil {
+		t.Fatal("the mint response carries no harness_setup")
+	}
+	if !strings.Contains(minted.HarnessSetup.Gleipnir, minted.Token) {
+		t.Errorf("gleipnir does not carry the minted token: %q", minted.HarnessSetup.Gleipnir)
+	}
+}
+
+func TestIdentityAPI_MintWithNoHarnessTargetOmitsHarnessSetup(t *testing.T) {
+	f := newIdentityFixture(t)
+	acct, _ := f.mintFor(t, "ci", accounts.RoleViewer)
+
+	ttl := int64(0)
+	rec := f.call(t, f.bootstrap, http.MethodPost, "/api/v1/accounts/"+acct.ID+"/tokens",
+		mintAPITokenRequest{Name: "second", TTLSeconds: &ttl})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("mint: status %d, body %s", rec.Code, rec.Body.String())
+	}
+	var raw map[string]json.RawMessage
+	decodeInto(t, rec, &raw)
+	if _, present := raw["harness_setup"]; present {
+		t.Error("harness_setup is present with no target wired")
+	}
+	if _, present := raw["token"]; !present {
+		t.Error("the mint did not return the token")
+	}
+}
+
+func TestIdentityAPI_MintedTokenNeverReachesTheListOrTheTrailWithHarnessSetup(t *testing.T) {
+	f := newIdentityFixtureWithHarness(t)
+	acct, err := f.store.Accounts().Create(context.Background(), accounts.Account{
+		Name: "ci", Kind: accounts.KindMachine, Role: accounts.RoleViewer, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("create account: %v", err)
+	}
+	ttl := int64(0)
+	rec := f.call(t, f.bootstrap, http.MethodPost, "/api/v1/accounts/"+acct.ID+"/tokens",
+		mintAPITokenRequest{Name: "harness", TTLSeconds: &ttl})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("mint: status %d, body %s", rec.Code, rec.Body.String())
+	}
+	var minted mintAPITokenResponse
+	decodeInto(t, rec, &minted)
+	secret := minted.Token
+
+	rec = f.call(t, f.bootstrap, http.MethodGet, "/api/v1/accounts/"+acct.ID+"/tokens", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list tokens: status %d", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), secret) {
+		t.Fatal("the token list response contains the plaintext credential")
+	}
+	for _, r := range f.auditRecords(t) {
+		if whole := fmt.Sprintf("%+v", r); strings.Contains(whole, secret) {
+			t.Errorf("audit record %+v contains the plaintext credential", r)
+		}
+		marshaled, err := json.Marshal(r)
+		if err != nil {
+			t.Fatalf("marshal audit record: %v", err)
+		}
+		if strings.Contains(string(marshaled), secret) {
+			t.Errorf("audit record %s contains the plaintext credential", marshaled)
 		}
 	}
 }

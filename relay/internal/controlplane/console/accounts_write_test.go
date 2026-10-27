@@ -39,6 +39,7 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/capability"
 	"github.com/Felag-Engineering/relay/relay/internal/consoleauth"
 	"github.com/Felag-Engineering/relay/relay/internal/controlplane"
+	"github.com/Felag-Engineering/relay/relay/internal/harnesssetup"
 	"github.com/Felag-Engineering/relay/relay/internal/registry"
 	"github.com/Felag-Engineering/relay/relay/internal/store"
 )
@@ -772,6 +773,10 @@ func TestAccountsWrite_OnlyTheMintViewHasAFieldASecretCouldOccupy(t *testing.T) 
 				t.Errorf("%s.%s is a []byte — no screen type may have somewhere to put a SecretHash",
 					typ.Name(), f.Name)
 			}
+			if f.Type == reflect.TypeOf(harnessView{}) || f.Type == reflect.TypeOf(&harnessView{}) {
+				t.Errorf("%s.%s is a harnessView — only mintedView may carry the blocks that embed the plaintext",
+					typ.Name(), f.Name)
+			}
 			for _, word := range []string{"Secret", "Hash", "Plaintext"} {
 				if strings.Contains(f.Name, word) {
 					t.Errorf("%s.%s names %q — a token's secret exists once, at mint, and reaches "+
@@ -806,6 +811,9 @@ func TestAccountsWrite_OnlyTheMintViewHasAFieldASecretCouldOccupy(t *testing.T) 
 		t.Errorf("mintedView has %d fields named Token, want exactly 1 — 'the one place a secret "+
 			"can land' must be a fact about the type", tokenFields)
 	}
+	if harness, ok := typ.FieldByName("Harness"); !ok || harness.Type != reflect.TypeOf(&harnessView{}) {
+		t.Error("mintedView.Harness must be a *harnessView, the one carrier of the harness blocks")
+	}
 }
 
 // TestAccountsWrite_MintedViewRedactsItsTokenWhenLogged is the structural half
@@ -824,9 +832,14 @@ func TestAccountsWrite_MintedViewRedactsItsTokenWhenLogged(t *testing.T) {
 		TokenID:     sweepMintedTokenID,
 		TokenName:   "ci-deploy",
 		Token:       sweepMintedPlaintext,
-		Back:        backLink{Href: "/console/accounts", Label: "Back to Accounts"},
+		Harness: &harnessView{
+			CACertificate: "-----BEGIN CERTIFICATE-----",
+			ClaudeCode:    "claude mcp add --header Authorization: Bearer " + sweepMintedPlaintext,
+			Check:         "curl -H Authorization: Bearer " + sweepMintedPlaintext,
+		},
+		Back: backLink{Href: "/console/accounts", Label: "Back to Accounts"},
 	}
-	logger.Info("minted", slog.Any("view", v))
+	logger.Info("minted", slog.Any("view", v), slog.Any("harness", v.Harness))
 
 	out := buf.String()
 	if strings.Contains(out, sweepMintedPlaintext) {
@@ -1625,6 +1638,11 @@ func postFormSkippingCSRF(t *testing.T, h http.Handler, path string, form url.Va
 // claim is not "something was logged", it is "whatever this request logs, it
 // is not the secret" — which is what makes it survive a handler that starts
 // logging.
+//
+// It pins the NO-TARGET path, where the token is the only place the plaintext
+// appears. With a harness target, which production always has, the plaintext
+// also appears inside the harness blocks of the same response; the test
+// below counts those.
 func TestAccountsWrite_TheMintedPlaintextAppearsExactlyOnceAndIsNotCacheable(t *testing.T) {
 	var logged bytes.Buffer
 	restore := slog.Default()
@@ -1655,6 +1673,98 @@ func TestAccountsWrite_TheMintedPlaintextAppearsExactlyOnceAndIsNotCacheable(t *
 		t.Errorf("a successful mint wrote the plaintext to the log. The rendered page is the "+
 			"ONE place it may appear, and a log line is the one copy nobody revokes:\n%s",
 			logged.String())
+	}
+}
+
+// withHarnessTarget wires a harness target into a write fixture's Deps.
+func withHarnessTarget(t *testing.T) func(*Deps) {
+	t.Helper()
+	target, err := harnesssetup.NewTarget("relay.example:7654", "0.0.0.0:9443",
+		[]byte("-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"))
+	if err != nil {
+		t.Fatalf("harnesssetup.NewTarget: %v", err)
+	}
+	return func(d *Deps) { d.HarnessSetup = target }
+}
+
+// TestAccountsWrite_TheMintResponseRendersTheHarnessSetupOnlyThere pins the
+// with-target path production always runs: the plaintext appears as the token
+// and inside each harness block that embeds it, all in the one mint response,
+// and nowhere else.
+func TestAccountsWrite_TheMintResponseRendersTheHarnessSetupOnlyThere(t *testing.T) {
+	var logged bytes.Buffer
+	restore := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logged, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(restore) })
+
+	tests := []struct {
+		name         string
+		accountID    string
+		accountName  string
+		wantGleipnir bool
+		wantBlocks   int // blocks beyond Token that embed the plaintext
+	}{
+		{"machine Account", targetOperatorID, "gleipnir-prod", true, 4},
+		{"human Account", targetAdminID, "mike", false, 3},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			x := newWriteFix(t, withHarnessTarget(t))
+			rec := x.post(t, mintAPITokenAction(tc.accountID), url.Values{
+				"name": {"ci-deploy"}, "ttl": {"90d"}, "password": {"whatever the fake accepts"},
+			})
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body %s", rec.Code, contentOf(rec.Body.String()))
+			}
+			body := rec.Body.String()
+			for _, label := range []string{"relay-ca.pem", "Claude Code", ".mcp.json", "Check"} {
+				if !strings.Contains(body, "<h4>"+label+"</h4>") {
+					t.Errorf("the mint response has no %q block", label)
+				}
+			}
+			if got := strings.Contains(body, "<h4>Gleipnir</h4>"); got != tc.wantGleipnir {
+				t.Errorf("Gleipnir block present = %v, want %v", got, tc.wantGleipnir)
+			}
+			if !strings.Contains(body, "https://relay.example:9443/mcp") {
+				t.Error("the mint response does not carry the MCP URL")
+			}
+			if got := strings.Count(body, sweepMintedPlaintext); got != 1+tc.wantBlocks {
+				t.Errorf("the plaintext appears %d times, want %d: the token and %d harness blocks",
+					got, 1+tc.wantBlocks, tc.wantBlocks)
+			}
+			if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+				t.Errorf("Cache-Control = %q, want %q", got, "no-store")
+			}
+			if strings.Contains(logged.String(), sweepMintedPlaintext) {
+				t.Errorf("the mint wrote the plaintext to the log:\n%s", logged.String())
+			}
+
+			later := x.f.do(t, httptest.NewRequest(http.MethodGet, accountPagePath(tc.accountName), nil), x.session)
+			if later.Code != http.StatusOK {
+				t.Fatalf("the later render = %d, want 200", later.Code)
+			}
+			if strings.Contains(later.Body.String(), sweepMintedPlaintext) {
+				t.Error("the minted plaintext reached a later render of the Accounts screen")
+			}
+		})
+	}
+}
+
+func TestAccountsWrite_AFailedMintRendersNoHarnessSetup(t *testing.T) {
+	x := newWriteFix(t, withHarnessTarget(t))
+	x.admin.mintErr = errors.New("capability: record audit entry: the trail is full")
+
+	rec := x.post(t, mintAPITokenAction(targetOperatorID), url.Values{
+		"name": {"ci-deploy"}, "ttl": {"30d"}, "password": {"whatever the fake accepts"},
+	})
+	body := rec.Body.String()
+	if strings.Contains(body, sweepMintedPlaintext) {
+		t.Error("a failed mint rendered the plaintext")
+	}
+	for _, label := range []string{"relay-ca.pem", "Claude Code", ".mcp.json", "Gleipnir", "Check"} {
+		if strings.Contains(body, "<h4>"+label+"</h4>") {
+			t.Errorf("a failed mint rendered the %q harness block", label)
+		}
 	}
 }
 

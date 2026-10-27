@@ -3,6 +3,7 @@ package api
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -99,14 +100,30 @@ type mintAPITokenRequest struct {
 	TTLSeconds *int64 `json:"ttl_seconds"`
 }
 
-// mintAPITokenResponse carries the plaintext credential in Token — the only
-// response in which it ever appears, and the only place in the codebase that
-// calls Plaintext.Reveal(). It is never persisted, logged, or audited; the
-// audit record below stores the token's non-secret id.
+// mintAPITokenResponse carries the plaintext credential in Token and again
+// inside each HarnessSetup block that embeds it. This one response is the only
+// place it ever appears. It is never persisted, logged, or audited; the audit
+// record below stores the token's non-secret id.
 type mintAPITokenResponse struct {
-	APIToken apiTokenResponse `json:"api_token"`
-	Token    string           `json:"token"`
+	APIToken     apiTokenResponse      `json:"api_token"`
+	Token        string                `json:"token"`
+	HarnessSetup *harnessSetupResponse `json:"harness_setup,omitempty"`
 }
+
+// harnessSetupResponse is the rendered Harness setup. Every field but the MCP
+// URL and the CA certificate embeds the plaintext credential. Gleipnir is set
+// for a machine Account only.
+type harnessSetupResponse struct {
+	MCPURL            string `json:"mcp_url"`
+	CACertificate     string `json:"ca_certificate"`
+	ClaudeCode        string `json:"claude_code"`
+	ClaudeCodeMCPJSON string `json:"claude_code_mcp_json"`
+	Gleipnir          string `json:"gleipnir,omitempty"`
+	Check             string `json:"check"`
+}
+
+// LogValue keeps the credential-bearing blocks out of any log line.
+func (harnessSetupResponse) LogValue() slog.Value { return slog.GroupValue() }
 
 // maxAPITokenNameLen bounds the operator-facing label. Names are echoed into
 // audit reasons and (later) the Console; an unbounded one lets a caller size
@@ -412,10 +429,37 @@ func handleMintAPIToken(d Deps) http.HandlerFunc {
 		// One of the two permitted Reveal() call sites (accounts.Plaintext's
 		// own doc comment enumerates both): the mint response is the one
 		// moment the plaintext is allowed to exist outside the minting call.
+		credential := plaintext.Reveal()
+		w.Header().Set("Cache-Control", "no-store")
 		writeJSON(w, http.StatusCreated, mintAPITokenResponse{
-			APIToken: renderAPIToken(tok),
-			Token:    plaintext.Reveal(),
+			APIToken:     renderAPIToken(tok),
+			Token:        credential,
+			HarnessSetup: renderHarnessSetup(r, d, p, accountID, credential),
 		})
+	}
+}
+
+// renderHarnessSetup renders the Harness setup for a freshly minted credential,
+// or nil when there is none to render. The Account's kind decides whether the
+// Gleipnir block is included; a failed read leaves the kind empty, which drops
+// that block and nothing else. A render error never fails the mint: the token
+// is already minted and is returned either way.
+func renderHarnessSetup(r *http.Request, d Deps, p capability.Principal, accountID, credential string) *harnessSetupResponse {
+	var kind accounts.Kind
+	if acct, err := d.AccountAdmin.Account(r.Context(), p, accountID); err == nil {
+		kind = acct.Kind
+	}
+	rendering, err := d.HarnessSetup.Render(credential, kind)
+	if err != nil {
+		return nil
+	}
+	return &harnessSetupResponse{
+		MCPURL:            rendering.MCPURL(),
+		CACertificate:     rendering.CACertificate(),
+		ClaudeCode:        rendering.ClaudeCode(),
+		ClaudeCodeMCPJSON: rendering.ClaudeCodeMCPJSON(),
+		Gleipnir:          rendering.Gleipnir(),
+		Check:             rendering.Check(),
 	}
 }
 
