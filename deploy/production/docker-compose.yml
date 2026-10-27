@@ -15,10 +15,10 @@
 #
 # NEVER RUN IT ON A HOST THAT ALSO HOLDS A DEVELOPMENT CHECKOUT OF THIS REPO.
 # Every checkout and worktree carries this same file with the same project
-# name, so a routine `docker compose ... up --build` in any of them replaces
-# the running Relay with that checkout's work in progress. (The data volume is
-# external, below, so no `down -v` can delete the CA and store — but that is
-# the only thing it protects.)
+# name, so a routine `docker compose ... up` in any of them recreates the
+# running Relay from that checkout's copy of this file (its image pin, ports and
+# mounts). (The data volume is external, below, so no `down -v` can delete the
+# CA and store — but that is the only thing it protects.)
 #
 # It lives here, not at the repo root, so that a bare `docker compose` at the
 # root errors instead of doing something surprising. The three-Node test fleet
@@ -34,16 +34,16 @@ name: relay
 
 services:
   relay:
-    # Built from this checkout. A signed Relay image is now published per release
-    # (ghcr.io/felag-engineering/relay, #892); this file pins it by digest once the
-    # first signed release exists, replacing the `build:` block (never both).
-    # The context is the repo root, two levels up. Meanwhile, to use a published
-    # image, replace this ONE line with the pinned image, for example
-    #   image: ghcr.io/felag-engineering/relay:<version>@sha256:<digest>
-    # (its `release` stage and the `runtime` stage below share one unprivileged
-    # base, so either runs as UID 10001 and owns /var/lib/relay). Neither carries
-    # a dev fixture — see docker/relay.Dockerfile.
-    build: { context: ../.., dockerfile: docker/relay.Dockerfile, target: runtime }
+    # The published Relay image, signed keylessly at this digest by the release
+    # workflow (docs/operations/release-artifacts.md). Docker pulls by the digest;
+    # the version is for the reader. Verify the digest with cosign v3 or later
+    # before the first `up` and after every change to this line
+    # (docs/operations/relay-install.md, section 7, step 3). A pin change is a
+    # reviewed change made after a human has run that verification, never
+    # resolved at deploy time (ADR-0033, amended 2026-10-15). Never add a `build:` beside it. The
+    # image (the Dockerfile's `release` stage) runs as UID 10001, owns
+    # /var/lib/relay and carries no dev fixture.
+    image: ghcr.io/felag-engineering/relay:0.1.0@sha256:dcc567df8587152a2040c8a701790c105958be9e3b04f47b6a76bd6a1de7afc6
 
     # Stated here as well as in the image, so a swapped-in image cannot run the
     # Relay as root: its start-time check refuses a root process (ADR-0043).

@@ -6,7 +6,7 @@ and one-shot scripts in `docker/` that the builds use.
 
 | Folder | What it runs | Make target | Runbook |
 | --- | --- | --- | --- |
-| `production/` | The Relay alone: one service, one external data volume, no relay-daemons, fixtures or credentials. | none (deployed by hand or by a compose tool) | [relay-install.md, section 7](../docs/operations/relay-install.md#7-running-it-with-docker-compose) |
+| `production/` | The Relay alone: one service, one external data volume, no relay-daemons, fixtures or credentials. It runs the signed, published Relay image, pinned by digest. | none (deployed by hand or by a compose tool) | [relay-install.md, section 7](../docs/operations/relay-install.md#7-running-it-with-docker-compose) |
 | `test/` | DEV-ONLY test fleet, project `relay-test`: the Relay, the `relay-config` and `init` one-shots, `daemon-1..3`. | `make dev-fleet-up` / `-down` / `-logs` / `-creds` | [dev-fleet.md](../docs/dev-fleet.md) |
 | `demo/` | DEV-ONLY demo fleet, project `relay-demo`: the test fleet plus `daemon-4..9`, its own in-band gate, and the opt-in OAuth overlay `oauth.yml`. | `make demo-build` / `-reset` / `-up` / `-down` / `-logs` / `-creds` / `-fault`, and `-reset-oauth` / `-up-oauth` | [demo-fleet.md](../docs/operations/demo-fleet.md) |
 
@@ -33,7 +33,11 @@ Any tool that deploys a compose stack from a git checkout can run these files.
 - **Run directory:** the repository root. Build contexts are relative to the compose file, so
   they resolve the same from anywhere; running from the root keeps the commands below as
   written.
-- **Build:** on. Every image is built from the checkout.
+- **Build:** on for `test/` and `demo/`, whose images are built from the checkout.
+  `production/` builds nothing: it pulls the signed Relay image its compose file pins by digest,
+  so verify that digest with cosign v3 or later
+  ([relay-install.md, section 7](../docs/operations/relay-install.md#7-running-it-with-docker-compose),
+  step 3) before the first deploy and before deploying any commit that changes the pin.
 - **Environment:** `RELAY_PUBLISH_ADDR` and `CONSOLE_ADMIN_PASSWORD`, and optionally
   `FLEET_HOSTNAME` and `RELAY_PUBLISH_PORT`.
   `CONSOLE_ADMIN_PASSWORD` must be 12 or more characters, and is required once
