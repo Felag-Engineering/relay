@@ -870,6 +870,86 @@ mod tests {
         mode_assert::assert_within(&marker, 0o600, 0o177, "marker file");
     }
 
+    /// The daemon requests modes and never forces them: nothing the dedup store creates,
+    /// directories included, is wider than the umask allows. This test and the enrollment
+    /// one in `relay-transport` cover the daemon's two file writers, `identity.rs` and
+    /// `dedup.rs`; `daemon/tests/policy_never_opened_for_write.rs` pins that there are no
+    /// others. The default lane runs under the host's umask; the strict-umask lane
+    /// (`make test-strict-umask`, part of `make verify` and CI) runs this same test at 077,
+    /// which is the tightened-umask proof. The state directory does not exist yet, so the
+    /// store makes it.
+    // Proves DI-11.
+    #[test]
+    fn dedup_store_mode_is_a_ceiling_under_umask() {
+        use std::os::unix::fs::MetadataExt;
+
+        // Read, never set: the umask is process-global.
+        let status = fs::read_to_string("/proc/self/status").expect("read /proc/self/status");
+        let umask = status
+            .lines()
+            .find_map(|l| l.strip_prefix("Umask:"))
+            .map(|v| u32::from_str_radix(v.trim(), 8).expect("the umask is octal"))
+            .expect("the status file has a Umask: line");
+
+        let state_dir = TempDir::new("umask-ceiling");
+        let store = DedupStore::open_with(
+            state_dir.path(),
+            RETENTION.as_millis() as i64,
+            MIN_RETENTION.as_millis() as i64,
+            MAX_ENTRIES,
+        )
+        .expect("open_with");
+        {
+            let mut map = store.inner.lock().unwrap();
+            record_marker(
+                &mut map,
+                &store.dir,
+                "umask-test-task",
+                RETENTION.as_millis() as i64,
+                MIN_RETENTION.as_millis() as i64,
+                MAX_ENTRIES,
+            )
+            .expect("record_marker");
+        }
+
+        fn walk(path: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            out.push(path.to_path_buf());
+            if path.is_dir() {
+                for entry in fs::read_dir(path).expect("read dir") {
+                    walk(&entry.expect("dir entry").path(), out);
+                }
+            }
+        }
+        let mut entries = Vec::new();
+        walk(state_dir.path(), &mut entries);
+        // The state directory, seen-tasks/ and the marker; anything else is held to the same rules.
+        assert!(entries.len() >= 3, "visited only {entries:?}");
+        assert!(entries.contains(&marker_path(&store.dir, "umask-test-task")));
+        for path in &entries {
+            let meta = fs::symlink_metadata(path).expect("stat entry");
+            let mode = meta.mode();
+            assert!(!meta.file_type().is_symlink(), "{path:?} is a symlink");
+            assert_eq!(
+                mode & 0o777 & umask,
+                0,
+                "{path:?} has mode {:04o}, wider than umask {umask:04o} allows",
+                mode & 0o777
+            );
+            if meta.is_dir() {
+                let parent = fs::symlink_metadata(path.parent().expect("parent")).unwrap();
+                assert_eq!(mode & 0o5000, 0, "{path:?} has setuid or sticky bits");
+                // mkdir inherits setgid from the parent; the daemon sets none.
+                assert_eq!(
+                    mode & 0o2000,
+                    parent.mode() & 0o2000,
+                    "{path:?} gained a setgid bit its parent lacks"
+                );
+            } else {
+                assert_eq!(mode & 0o6000, 0, "{path:?} has setuid or setgid bits");
+            }
+        }
+    }
+
     /// Probes whether this process's privileges bypass Unix permission checks.
     ///
     /// Creates a directory the caller could not write into under ordinary DAC (0600 —
