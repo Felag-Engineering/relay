@@ -59,7 +59,8 @@ nobody can maintain is a liability.
 
 ## Project invariants — read them from the repo
 
-You MUST read this repo's `AGENTS.md` and `GLOSSARY.md` and verify the change
+You MUST know this repo's `AGENTS.md` (`AGENTS.md` is already in your context through `CLAUDE.md`; read it only if it is not) and check the diff's terms against
+`GLOSSARY.md` (grep each domain term the diff introduces or renames), and verify the change
 against every architecture invariant and language rule they declare. **A violation
 of a declared invariant is always a blocking issue.** In particular, if the repo
 marks an area as security-sensitive or requiring human review (e.g. a contract/
@@ -89,7 +90,7 @@ suggest editing the spec to match the code.
 ## Your process
 
 1. Read the plan to understand intent.
-2. Read `AGENTS.md`/`GLOSSARY.md` to refresh project constraints.
+2. Grep `GLOSSARY.md` for the domain terms the diff uses.
 3. Run `git diff` to see exactly what changed.
 4. Read modified files in context (not just the diff hunks) where needed.
 5. Walk through each declared invariant — verify, don't assume.
