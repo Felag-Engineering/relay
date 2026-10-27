@@ -43,6 +43,12 @@ Node's identity). `apt purge` then deletes those the package created, using a ma
 directory holding anything the package did not put there is left and named. `.rpm` has no
 purge: removal prints the paths to delete by hand.
 
+## Ansible role
+
+`ansible/relay_daemon/` is the Ansible role that installs the daemon package and joins a Node
+from a join string in your vault, with the string on standard input
+([its README](ansible/relay_daemon/README.md)). It is not yet a release attachment.
+
 ## Install
 
 ```console
