@@ -50,8 +50,8 @@ forget_marker() {
 }
 
 # leftovers: every fixed path that remains. The catalog's Template root is named too: on .rpm
-# the catalog package does not own it, so removing that package leaves it behind, and it may
-# hold an operator's own Templates, so nothing here deletes it.
+# this package owns the catalog's pack directory but not the template root, so removal leaves
+# the root, and it may hold an operator's own Templates, so nothing here deletes it.
 leftovers() {
   if exists "$ETC" && ! plain_dir "$ETC"; then
     echo "  $ETC (not a plain directory; nothing under it was touched)"

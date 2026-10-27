@@ -5,6 +5,8 @@ Priority: optional
 Architecture: @ARCH@
 Maintainer: Felag Engineering
 Installed-Size: @INSTALLED_SIZE@
+Replaces: relay-read
+Conflicts: relay-read
 Homepage: https://github.com/Felag-Engineering/relay
 Description: Relay relay-daemon, the privileged fleet-administration Node daemon.
  Enforces the Node's locally rooted Policy and runs the Operations it allows.

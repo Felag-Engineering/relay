@@ -1,9 +1,9 @@
-Fields: Architecture Description Homepage Installed-Size Maintainer Package Priority Section Version
+Fields: Architecture Conflicts Description Homepage Installed-Size Maintainer Package Priority Replaces Section Version
 Depends: 
 Pre-Depends: 
 Provides: 
-Replaces: 
-Conflicts: 
+Replaces: relay-read
+Conflicts: relay-read
 Breaks: 
 Recommends: 
 Suggests: 

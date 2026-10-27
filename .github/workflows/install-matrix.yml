@@ -90,8 +90,8 @@ jobs:
           mkdir -p pkgs/old pkgs/new
           # The semver prerelease becomes the package version 0.0.0~matrix1, which sorts below
           # every real version on both dpkg and rpm.
-          bash scripts/build-packages.sh 0.0.0-matrix1 "$ARCH" "$daemon_bin" pkgs/old --catalog --relay relay/bin/relay
-          bash scripts/build-packages.sh "$version" "$ARCH" "$daemon_bin" pkgs/new --catalog --relay relay/bin/relay
+          bash scripts/build-packages.sh 0.0.0-matrix1 "$ARCH" "$daemon_bin" pkgs/old --relay relay/bin/relay
+          bash scripts/build-packages.sh "$version" "$ARCH" "$daemon_bin" pkgs/new --relay relay/bin/relay
           printf '%s\n' "$version" > pkgs/VERSION
 
       # Fails the job before any row runs: a row that upgrades from a version that does not

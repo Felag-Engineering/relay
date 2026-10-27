@@ -155,6 +155,7 @@ fn file_read_of_innocuous_paths_is_allowed() {
 
 // -- Confidentiality deny-list (deny-beats-allow) ----------------------
 
+// Proves DI-6.
 #[test]
 fn every_deny_listed_path_is_denied_with_attribution() {
     let policy = default_policy();
@@ -280,6 +281,7 @@ fn lexical_evasions_of_deny_listed_paths_are_denied() {
 
 // -- Mutate class + Raw Exec stay opt-in -------------------------------
 
+// Proves DI-6.
 #[test]
 fn mutate_operations_are_denied_by_default() {
     let policy = default_policy();
@@ -295,6 +297,7 @@ fn mutate_operations_are_denied_by_default() {
     }
 }
 
+// Proves DI-6.
 #[test]
 fn raw_exec_is_denied_by_default() {
     let policy = default_policy();
