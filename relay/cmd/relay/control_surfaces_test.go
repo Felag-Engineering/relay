@@ -156,6 +156,20 @@ func TestConsoleTagsOrNil_ANilWriterIsAnUntypedNil(t *testing.T) {
 	}
 }
 
+// TestConsolePolicyAliasesOrNil_ANilWriterIsAnUntypedNil is the same typed-nil
+// trap for the alias seam: a nil *capability.PolicyAliasAdmin inside a non-nil
+// console.PolicyAliasWriter would pass the Console's `d.AliasWriter == nil`
+// checks, draw the Edit alias control and panic in SetPolicyAlias.
+func TestConsolePolicyAliasesOrNil_ANilWriterIsAnUntypedNil(t *testing.T) {
+	if got := consolePolicyAliasesOrNil(nil); got != nil {
+		t.Errorf("consolePolicyAliasesOrNil(nil) = %#v, want an untyped nil", got)
+	}
+	w := &capability.PolicyAliasAdmin{}
+	if got := consolePolicyAliasesOrNil(w); got != console.PolicyAliasWriter(w) {
+		t.Errorf("consolePolicyAliasesOrNil(w) = %#v, want the writer it was given", got)
+	}
+}
+
 // TestConsoleSurface_UnwiredSeamsCrossTheBoundaryAsNil is Go's typed-nil trap,
 // which this file already names for the audit sink: assigning a nil
 // *events.Bus straight into an interface field produces a NON-nil interface

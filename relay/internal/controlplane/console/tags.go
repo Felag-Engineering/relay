@@ -29,9 +29,10 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/registry"
 )
 
-// TagWriter is the Console's THIRD write seam, after JobCanceller (cancel.go)
-// and AccountAdministrator (accounts_write.go). Like them it lives outside
-// seams.go so that file's "every seam here is read-only" stays true.
+// TagWriter is one of the Console's write seams, with JobCanceller (cancel.go),
+// AccountAdministrator (accounts_write.go) and PolicyAliasWriter
+// (policyaliases.go). Like them it lives outside seams.go so that file's "every
+// seam here is read-only" stays true.
 //
 // *capability.TagWriter satisfies it, as it satisfies the Control API's own
 // interface, with no adapter. The floor, the label rules and the audit record

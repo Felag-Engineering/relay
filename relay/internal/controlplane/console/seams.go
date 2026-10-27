@@ -32,10 +32,11 @@ package console
 // configuration, OAuthConfigured, mirrors a startup value the composition root
 // sets. This package cannot read it from anywhere.
 //
-// There are THREE write seams on Deps — JobCanceller (cancel.go),
-// AccountAdministrator (accounts_write.go) and TagWriter (tags.go) — and none
-// lives in this file, on purpose: each gets its own file so this file's "every
-// seam here is read-only" claim stays true of seams.go without qualification.
+// There are FOUR write seams on Deps — JobCanceller (cancel.go),
+// AccountAdministrator (accounts_write.go), TagWriter (tags.go) and
+// PolicyAliasWriter (policyaliases.go) — and none lives in this file, on
+// purpose: each gets its own file so this file's "every seam here is read-only"
+// claim stays true of seams.go without qualification.
 //
 // The filtered, paginated, per-principal audit/Job query lane is the
 // capability layer's — see QueryReader below. Job detail reads nothing else:
@@ -185,6 +186,12 @@ type QueryReader interface {
 	QueryAudit(ctx context.Context, p capability.Principal, f capability.AuditFilter, page capability.PageRequest) (capability.AuditPage, error)
 	QueryJobs(ctx context.Context, p capability.Principal, f capability.JobFilter, page capability.PageRequest) (capability.JobPage, error)
 	QueryTasks(ctx context.Context, p capability.Principal, f capability.TaskFilter, page capability.PageRequest) (capability.TaskPage, error)
+
+	// PolicyAliases is the capability layer's recorded read of every Policy
+	// alias held, fingerprint to alias. One call is one access record, so a
+	// screen calls it at most once per render, and only when it draws a
+	// well-formed fingerprint (policyaliases.go).
+	PolicyAliases(ctx context.Context, p capability.Principal) (map[string]string, error)
 
 	// RecordEventSubscription is the odd one out: the only method here
 	// that records a read and returns the canonical form of what it recorded

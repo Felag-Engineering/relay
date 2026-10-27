@@ -111,10 +111,13 @@ func TestNode_FingerprintPanelReportsThePeerCounts(t *testing.T) {
 			t.Errorf("Fingerprints panel = %s\nwant the template-set fingerprint's peer count %q", panel, "1 Node reports this")
 		}
 		// The counts sit beside the fingerprints they count.
-		for _, fp := range []string{shortHash(policyFP), shortHash(templateFP)} {
-			if !strings.Contains(panel, ">"+fp+"<") {
-				t.Errorf("Fingerprints panel = %s\nwant the reported fingerprint %q rendered", panel, fp)
-			}
+		// The Policy fingerprint is drawn in full; the template set keeps its
+		// short form.
+		if !strings.Contains(panel, `<code class="fphash">`+policyFP+`</code>`) {
+			t.Errorf("Fingerprints panel = %s\nwant the Policy fingerprint %q drawn in full", panel, policyFP)
+		}
+		if fp := shortHash(templateFP); !strings.Contains(panel, ">"+fp+"<") {
+			t.Errorf("Fingerprints panel = %s\nwant the reported fingerprint %q rendered", panel, fp)
 		}
 	})
 

@@ -688,6 +688,18 @@ primaryHostname; an empty one leaves the ID alone as the label
 (00-foundations, "Self-reported names"). */}}
 {{define "node-name"}}{{if .Hostname}}<span class="selfrep" title="{{selfReportedTitle}}">{{.Hostname}}<span class="vh"> (self-reported)</span></span> {{end}}<code class="nodeid">{{.ID}}</code>{{end}}
 
+{{/* policy-fp draws a Policy fingerprint in full (QRY-33): its alias, or a
+neutral per-page letter where none is set, and then the whole hash, ending on the
+code element so a caller's count can follow it. A value that is not a well-formed
+fingerprint is drawn short, with neither a name nor a letter. No colour, no
+ranking word. */}}
+{{define "policy-fp"}}{{if .Valid}}{{if .Alias}}<bdi class="fpalias">{{.Alias}}</bdi> {{else if .Letter}}<span class="fpletter" title="No alias set; this letter names it on this page only.">{{.Letter}}</span> {{end}}<code class="fphash">{{.Hash}}</code>{{else}}<code title="{{.Hash}}">{{.Short}}</code>{{end}}{{end}}
+
+{{/* alias-edit is the Edit alias form (QRY-35), offered only to a human admin.
+It takes a policyAliasForm. No maxlength (a browser counts UTF-16 units, the
+capability layer counts runes) and no required (it would block Clear). */}}
+{{define "alias-edit"}}<details class="aliasedit"><summary aria-label="Edit alias for {{.Fingerprint}}">Edit alias</summary><form class="ctlform" method="post" action="{{.Action}}"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><input type="hidden" name="fingerprint" value="{{.Fingerprint}}">{{with .NodeID}}<input type="hidden" name="node_id" value="{{.}}">{{end}}{{with .Filter}}<input type="hidden" name="filter" value="{{.}}">{{end}}{{with .Group}}<input type="hidden" name="group" value="{{.}}">{{end}}{{with .Pin}}<input type="hidden" name="pin" value="{{.}}">{{end}}<label>Alias <input name="alias" value="{{.Alias}}" spellcheck="false" autocomplete="off"></label> <button class="btn" type="submit" name="op" value="set">Save</button>{{if .Alias}} <button class="btn" type="submit" name="op" value="clear">Clear</button>{{end}}</form></details>{{end}}
+
 {{define "label-chip"}}<span class="chip lbl" data-ns="{{.Namespace}}"{{if .SecurityLane}} data-lane="security"{{end}}{{if .Attention}} data-sev="attention"{{end}} title="{{.Tooltip}}"><span class="ns">{{.Namespace}}:</span>{{.Key}}{{if .Value}}<span class="eq">=</span>{{.Value}}{{end}}</span>{{end}}
 
 {{/* kind-label is the word human or machine drawn after a trust chip

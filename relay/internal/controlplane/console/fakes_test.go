@@ -179,6 +179,14 @@ type fakeQueries struct {
 	listNodeCalls  int
 	describedNodes []string
 
+	// aliases is what PolicyAliases answers (fingerprint to alias), aliasesErr
+	// makes it fail, and aliasReads counts the calls, so a test can hold a
+	// screen to one alias read per render.
+	aliases      map[string]string
+	aliasesErr   error
+	aliasReads   int
+	aliasReaders []capability.Principal
+
 	// auditNext and jobNext are the cursors the fake reports as "there is
 	// more", overriding the truncation rule below. A page whose Cursor is
 	// already set returns no further one, so a test can follow "older"
@@ -375,6 +383,15 @@ func (f *fakeQueries) RecordEventSubscription(_ context.Context, _ capability.Pr
 		return nil, f.subscriptionErr
 	}
 	return kinds, nil
+}
+
+func (f *fakeQueries) PolicyAliases(_ context.Context, p capability.Principal) (map[string]string, error) {
+	f.aliasReads++
+	f.aliasReaders = append(f.aliasReaders, p)
+	if f.aliasesErr != nil {
+		return nil, f.aliasesErr
+	}
+	return f.aliases, nil
 }
 
 func (f *fakeQueries) QueryJobs(_ context.Context, _ capability.Principal, filter capability.JobFilter, page capability.PageRequest) (capability.JobPage, error) {

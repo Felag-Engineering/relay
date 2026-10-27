@@ -41,6 +41,7 @@ func TestNav_ChildScreenMarksItsParentCurrent(t *testing.T) {
 		"/console/access":                                    "Access",
 		"/console/tags/confirm":                              "Fleet",
 		"/console/tags":                                      "Fleet",
+		"/console/policy-aliases":                            "Fleet",
 		"/console/nodes/node-web-1/tags":                     "Fleet",
 
 		// Nothing current: the empty path (the 404 shell), unknown paths, a

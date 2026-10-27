@@ -211,14 +211,18 @@ the registry's current kind, in the same treatment.
 
 **Policy fingerprint** (Fleet, Node detail, Compare; D23). The full hash, in mono, is always drawn.
 Beside it sits a **Policy alias** — a name a human `admin` gave that fingerprint
-(`docs/specs/query.md`) — or, where none is set, a neutral **per-render letter** (A, B, C…) in order
+(`docs/specs/query.md`), drawn to a human Account only — or, where none is set or the viewer is a
+machine Account (which is drawn no alias name), a neutral **per-render letter** (A, B, C…) in order
 of first appearance on the page, so "the Nodes on B" can be said aloud. A letter is not stored, not
 stable across pages, carries no colour, and never ranks fingerprints ("majority", "outlier",
 "normal"): the fleet's most common Policy is not its desired one (invariant 9, D1). An alias is
 display only — never a Selector term, a filter value or an input to anything; filters and links
 carry the hash — and is never shown without the full fingerprint, so a misleading name cannot hide
-which Policy it is. Where an `admin` sees a fingerprint, an **Edit alias** control sits beside it;
-for every other role it is absent.
+which Policy it is. On the Fleet view's Policy fingerprint facet and Node detail's Fingerprints
+panel, a human `admin` sees an **Edit alias** control beside the fingerprint; the headline, the
+deviation table and Compare carry none, and for every other role, and for a machine Account at any
+role, it is absent. A reported value that is not a well-formed fingerprint is drawn short, as
+before, and carries neither a name nor a control.
 
 **Step-up modal** (every privilege-granting act). A session proves a human
 authorised the *session*; step-up proves a human intended *this action*. It carries a credential

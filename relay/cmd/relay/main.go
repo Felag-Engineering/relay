@@ -668,9 +668,9 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 	accountAdmin := capability.NewAccountAdmin(freezeControl, st.Accounts(), apiTokenSvc)
 
 	// The tag write (ADR-0050): the one writer of tag: labels, over the same
-	// Control and so the same Recorder, RoleGate and trail. The Control API holds
-	// it for tag writes and the Enrollment service for a token's initial tags
-	// (WriteInitialTags); no other surface is handed it.
+	// Control and so the same Recorder, RoleGate and trail. The Control API and
+	// the Console hold it for tag writes, and the Enrollment service for a
+	// token's initial tags (WriteInitialTags); MCP is never handed it.
 	tagWriter := capability.NewTagWriter(freezeControl, reg)
 	enrollSrv := enroll.NewServer(tokenSvc, relayCA, reg,
 		enroll.WithPostEnrollRevocationCheck(tokenSvc, revocationSvc),
@@ -679,6 +679,10 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 		enroll.WithAttemptObserver(eventsink.Enrollment(eventBus)),
 		enroll.WithServerLogger(logger),
 		enroll.WithInitialTagWriter(initialTagWriter{tags: tagWriter}))
+
+	// The Policy alias write: the one alias writer, over the same Control,
+	// Recorder and trail. Only the Console holds it (QRY-36).
+	policyAliasAdmin := capability.NewPolicyAliasAdmin(freezeControl, st.PolicyAliases())
 
 	// The read lane: filtered, paginated queries over the audit trail
 	// and over Jobs/Tasks — one seam, shared by every surface (invariant 10).
@@ -888,6 +892,7 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 			readLane:         readLane,
 			accountAdmin:     accountAdmin,
 			tagWriter:        tagWriter,
+			policyAliasAdmin: policyAliasAdmin,
 			approvals:        approvals,
 			jobs:             st.Jobs(),
 			tasks:            st.Tasks(),

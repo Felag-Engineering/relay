@@ -21,6 +21,7 @@ type capSeams struct {
 	jobQ       capability.JobQuery
 	policyView capability.PolicyViewSource
 	nodeVocab  capability.TemplateVocabularySource
+	aliases    capability.PolicyAliasSource
 
 	accountsStore capability.AccountStore
 	apiTokens     capability.APITokenStore
@@ -56,8 +57,12 @@ func newCapService(s capSeams) *capLayer {
 	if auditQ == nil && jobQ == nil {
 		auditQ, jobQ = emptyAuditQuery{}, emptyJobQuery{}
 	}
+	var laneOpts []capability.ReadLaneOption
+	if s.aliases != nil {
+		laneOpts = append(laneOpts, capability.WithPolicyAliasSource(s.aliases))
+	}
 	layer := &capLayer{
-		ReadLane: capability.NewReadLane(rec, s.reg, auditQ, jobQ, s.policyView, s.nodeVocab, &capability.StaticOperatorSettings{S: capability.OperatorSettings{DispatchConcurrency: capability.DefaultDispatchConcurrency}}, nil),
+		ReadLane: capability.NewReadLane(rec, s.reg, auditQ, jobQ, s.policyView, s.nodeVocab, &capability.StaticOperatorSettings{S: capability.OperatorSettings{DispatchConcurrency: capability.DefaultDispatchConcurrency}}, nil, laneOpts...),
 	}
 	if s.authz != nil {
 		layer.Control = capability.NewControl(rec, s.authz, neverFrozen{})

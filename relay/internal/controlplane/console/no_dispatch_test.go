@@ -44,8 +44,9 @@ import (
 // capability.Principal, since that is how a page attributes what it renders.
 
 // writeSeamName reports whether name is a write seam the Console must never
-// recover by assertion: the package's two, JobCanceller (cancel.go) and
-// AccountAdministrator (accounts_write.go), each in its own file so seams.go's
+// recover by assertion: the package's four, JobCanceller (cancel.go),
+// AccountAdministrator (accounts_write.go), TagWriter (tags.go) and
+// PolicyAliasWriter (policyaliases.go), each in its own file so seams.go's
 // "every seam here is read-only" claim stays unqualified, and ApprovalDecider,
 // which is RETIRED — the Console decides no approval (AP-80) — and stays on
 // the list so that re-declaring one and recovering it still trips. Each is
@@ -56,7 +57,7 @@ import (
 // about what a write seam IS, and a single list is what makes them.
 func writeSeamName(name string) bool {
 	switch name {
-	case "ApprovalDecider", "JobCanceller", "AccountAdministrator":
+	case "ApprovalDecider", "JobCanceller", "AccountAdministrator", "TagWriter", "PolicyAliasWriter":
 		return true
 	default:
 		return false
@@ -184,10 +185,10 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 	// legitimate purpose either, and a guard that has to reason about which
 	// spelling compiles is a guard nobody trusts.
 	//
-	// The SAME lesson applies to the package's write seams — JobCanceller and
-	// AccountAdministrator, and the retired ApprovalDecider: the *ast.Ident arm
-	// below must not match the names only LITERALLY, or
-	// `type probeSeam = ApprovalDecider` followed by
+	// The SAME lesson applies to the package's write seams — JobCanceller,
+	// AccountAdministrator, TagWriter and PolicyAliasWriter, and the retired
+	// ApprovalDecider: the *ast.Ident arm below must not match the names only
+	// LITERALLY, or `type probeSeam = ApprovalDecider` followed by
 	// `any(d.Approvals).(probeSeam)` recovers the seam with the guard
 	// silent. spec.Type can be a bare *ast.Ident for a package-LOCAL type
 	// (there is no selector to inspect, unlike registry.Repository or
@@ -442,7 +443,8 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 		}
 		return true
 	})
-	return append(violations, tagInternalWriteViolations(fileName, file)...)
+	violations = append(violations, tagInternalWriteViolations(fileName, file)...)
+	return append(violations, policyAliasInternalWriteViolations(fileName, file)...)
 }
 
 // tagInternalWriteNames are the tag write's internal seams: the unfloored
@@ -481,6 +483,44 @@ func tagInternalWriteViolations(fileName string, file *ast.File) []string {
 						violations = append(violations, fmt.Sprintf(
 							"%s declares a seam method %s — a tag is written only through the capability layer's TagWriter, whose floor this seam lacks",
 							fileName, name.Name))
+					}
+				}
+			}
+		}
+		return true
+	})
+	return violations
+}
+
+// policyAliasInternalWriteNames are the Policy alias write's internal seams:
+// the unfloored recorder and the audit repository's atomic write. The Console
+// holds the concrete audit repository, which offers the atomic write without
+// its floor, so naming any of them, by selector or as a declared seam method,
+// is refused (invariant 10). The floored entry is capability.PolicyAliasAdmin,
+// reached through PolicyAliasWriter (policyaliases.go).
+var policyAliasInternalWriteNames = map[string]bool{
+	"RecordPolicyAlias":     true,
+	"AppendWithPolicyAlias": true,
+	"PolicyAliasRecorder":   true,
+	"PolicyAliasAppender":   true,
+}
+
+// policyAliasInternalWriteViolations is the Policy alias rule of
+// dispatchViolations, unconditional in every file.
+func policyAliasInternalWriteViolations(fileName string, file *ast.File) []string {
+	const why = "a Policy alias is written only through the capability layer's PolicyAliasAdmin, whose floor this seam lacks"
+	var violations []string
+	ast.Inspect(file, func(n ast.Node) bool {
+		switch v := n.(type) {
+		case *ast.SelectorExpr:
+			if policyAliasInternalWriteNames[v.Sel.Name] {
+				violations = append(violations, fmt.Sprintf("%s references %s — %s", fileName, v.Sel.Name, why))
+			}
+		case *ast.InterfaceType:
+			for _, m := range v.Methods.List {
+				for _, name := range m.Names {
+					if policyAliasInternalWriteNames[name.Name] {
+						violations = append(violations, fmt.Sprintf("%s declares a seam method %s — %s", fileName, name.Name, why))
 					}
 				}
 			}
@@ -547,6 +587,60 @@ func f(x audit.Repository) {
 }
 `,
 			wantSubstr: "references TagWriteAppender",
+		},
+		{
+			name: "asserting the audit repository to the atomic Policy alias write is refused",
+			src: `package console
+import "github.com/Felag-Engineering/relay/relay/internal/audit"
+func f(x audit.Repository) {
+	_ = x.(audit.PolicyAliasAppender)
+}
+`,
+			wantSubstr: "references PolicyAliasAppender",
+		},
+		{
+			name: "recovering AppendWithPolicyAlias through an anonymous interface is refused",
+			src: `package console
+import (
+	"context"
+	"github.com/Felag-Engineering/relay/relay/internal/audit"
+)
+func f(x any, r audit.Record) {
+	if a, ok := x.(interface {
+		AppendWithPolicyAlias(ctx context.Context, r audit.Record) error
+	}); ok {
+		_ = a
+	}
+}
+`,
+			wantSubstr: "declares a seam method AppendWithPolicyAlias",
+		},
+		{
+			name: "calling AppendWithPolicyAlias by selector is refused",
+			src: `package console
+func f(a interface{ M() }, x any) { _ = x.AppendWithPolicyAlias }
+`,
+			wantSubstr: "references AppendWithPolicyAlias",
+		},
+		{
+			name: "referencing the unfloored PolicyAliasRecorder is refused",
+			src: `package console
+import "github.com/Felag-Engineering/relay/relay/internal/capability"
+var _ capability.PolicyAliasRecorder
+`,
+			wantSubstr: "references PolicyAliasRecorder",
+		},
+		{
+			// The false-positive guard: the floored seam stays silent.
+			name: "calling SetPolicyAlias through PolicyAliasWriter produces nothing",
+			src: `package console
+import (
+	"context"
+	` + capImport + `
+)
+func f(a PolicyAliasWriter) { _ = a.SetPolicyAlias(context.Background(), capability.Principal{}, "fp", "n") }
+`,
+			wantSubstr: "",
 		},
 		{
 			name: "naming the write of initial tags as another Account is refused",
@@ -1081,6 +1175,47 @@ type AccountAdministrator interface {
 	RevokeAPIToken(ctx context.Context, p capability.Principal, id string) error
 }
 func f(a AccountAdministrator) { _ = a.RevokeAPIToken(context.Background(), capability.Principal{}, "tok-1") }
+`,
+			wantSubstr: "",
+		},
+		{
+			// The fourth write seam, by its own name, and through an alias.
+			name: "type-asserting to the PolicyAliasWriter seam by name violates anywhere",
+			src: `package console
+func f(a any) { _, _ = a.(PolicyAliasWriter) }
+`,
+			wantSubstr: "PolicyAliasWriter",
+		},
+		{
+			name: "a type alias of PolicyAliasWriter still violates",
+			src: `package console
+type probeAlias = PolicyAliasWriter
+func f(a any) { _, _ = a.(probeAlias) }
+`,
+			wantSubstr: "probeAlias",
+		},
+		{
+			name: "type-asserting to the TagWriter seam by name violates anywhere",
+			src: `package console
+func f(a any) { _, _ = a.(TagWriter) }
+`,
+			wantSubstr: "TagWriter",
+		},
+		{
+			// The false-positive guard: declaring the seam and calling through
+			// it is what policyaliases.go does.
+			name: "declaring the PolicyAliasWriter seam produces nothing",
+			file: "policyaliases.go",
+			src: `package console
+import (
+	"context"
+	` + capImport + `
+)
+type PolicyAliasWriter interface {
+	SetPolicyAlias(ctx context.Context, p capability.Principal, fingerprint, name string) error
+	ClearPolicyAlias(ctx context.Context, p capability.Principal, fingerprint string) error
+}
+func f(a PolicyAliasWriter) { _ = a.ClearPolicyAlias(context.Background(), capability.Principal{}, "fp") }
 `,
 			wantSubstr: "",
 		},

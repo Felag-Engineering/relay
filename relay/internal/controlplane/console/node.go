@@ -96,6 +96,13 @@ type nodeView struct {
 	// disabled.
 	TagEdit *nodeTagEdit
 
+	// PolicyFP is the Node's recorded Policy fingerprint with its alias or
+	// letter, and AliasEdit is the Edit alias form beside it. AliasEdit is nil
+	// for any Account not offered the write (a human admin only), and when the
+	// alias source is unwired: absent, not disabled.
+	PolicyFP  policyFP
+	AliasEdit *policyAliasForm
+
 	CertFingerprint string
 	EnrollingToken  string
 	DaemonVersion   string
@@ -263,8 +270,26 @@ func handleNode(d Deps) http.HandlerFunc {
 		}
 		v := buildNodeView(d, r, detail, pins, resolve)
 		v.TagEdit = newNodeTagEdit(d, accounts.Role(caller.Role), n.NodeID, p.CSRFToken)
+		// Checked before the alias read, so a page already refused makes no
+		// further recorded read.
 		if refusedUnaudited(w, lane, "this Node's registry record") {
 			return
+		}
+		aliases, aliasesAvailable, err := readPolicyAliases(ctx, d, caller, capability.ValidPolicyFingerprint(n.PolicyFingerprint))
+		if err != nil {
+			readFailed(w, err, policyAliasesReadWhat)
+			return
+		}
+		v.PolicyFP = newFPNamer(aliases).name(n.PolicyFingerprint)
+		if aliasesAvailable && v.PolicyFP.Valid && policyAliasesOffered(d, caller) {
+			v.AliasEdit = &policyAliasForm{
+				Action:      policyAliasesAction,
+				CSRFToken:   p.CSRFToken,
+				Fingerprint: n.PolicyFingerprint,
+				Alias:       v.PolicyFP.Alias,
+				NodeID:      n.NodeID,
+				Pin:         r.URL.Query().Get("pin"),
+			}
 		}
 		renderScreen(w, p, nodeTmpl, v)
 	}
@@ -678,8 +703,9 @@ var nodeTmpl = newScreen("node", `
       <h3>Fingerprints <span class="phint">reported by the daemon</span></h3>
       <dl>
         <dt>Policy</dt>
-        <dd>{{if .PolicyFingerprint}}{{with .PolicyFingerprintHref}}<a href="{{.}}">{{end}}<code title="{{.PolicyFingerprint}}">{{short .PolicyFingerprint}}</code>{{if .PolicyFingerprintHref}}</a>{{end}}
+        <dd>{{if .PolicyFingerprint}}{{with .PolicyFingerprintHref}}<a href="{{.}}">{{end}}{{template "policy-fp" .PolicyFP}}{{if .PolicyFingerprintHref}}</a>{{end}}
           <span class="dim">{{.PolicyShared}} {{plural .PolicyShared "Node reports" "Nodes report"}} this</span>
+          {{with .AliasEdit}}{{template "alias-edit" .}}{{end}}
         {{else}}<span class="dim">not reported</span>{{end}}</dd>
         <dt>Template set</dt>
         <dd>{{if .TemplateUnloadable}}{{with .TemplateUnloadableHref}}<a href="{{.}}">{{end}}<span class="chip lbl" data-ns="state"><span class="ns">state:</span>template-unloadable</span>{{if .TemplateUnloadableHref}}</a>{{end}}

@@ -220,6 +220,10 @@ func TestConsoleServesNoSeparatePreflightRoute(t *testing.T) {
 		"POST /console/nodes/{node_id}/tags": true,
 		"GET /console/tags/confirm":          true,
 		"POST /console/tags":                 true,
+		// The Policy alias write: one POST from Fleet's facet or Node detail,
+		// reaching the capability layer's PolicyAliasAdmin. It evaluates no
+		// Policy and dispatches nothing (PF-1 reviewed).
+		"POST /console/policy-aliases": true,
 	}
 
 	if !reflect.DeepEqual(seen, want) {

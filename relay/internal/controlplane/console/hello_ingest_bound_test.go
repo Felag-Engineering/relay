@@ -121,8 +121,8 @@ func TestFleet_NodeRowTitleNeverCarriesAMalformedHelloFingerprint(t *testing.T) 
 			t.Errorf("%s: Policy cell = %.200q, want \"not reported\"", id, cell)
 		}
 	}
-	if cell := policyCell(t, body, good); !strings.Contains(cell, `title="`+hexFP("d")+`"`) {
-		t.Errorf("%s: Policy cell = %.300q, want the honest fingerprint in its title", good, cell)
+	if cell := policyCell(t, body, good); !strings.Contains(cell, `<code class="fphash">`+hexFP("d")+`</code>`) {
+		t.Errorf("%s: Policy cell = %.300q, want the honest fingerprint drawn in full", good, cell)
 	}
 }
 
@@ -142,8 +142,9 @@ func TestFleet_ShortHashCellNeverSplitsAHelloFingerprint(t *testing.T) {
 	if strings.Contains(body, bidiRune) {
 		t.Error("the page carries U+202E from a Hello fingerprint")
 	}
-	if cell := policyCell(t, body, good); !strings.Contains(cell, ">"+shortHash(hexFP("d"))+"</code>") {
-		t.Errorf("%s: Policy cell = %.300q, want the short hash %q", good, cell, shortHash(hexFP("d")))
+	if cell := policyCell(t, body, good); !strings.Contains(cell, `<code class="fphash">`+hexFP("d")+`</code>`) ||
+		strings.Contains(cell, shortHash(hexFP("d"))) {
+		t.Errorf("%s: Policy cell = %.300q, want the whole fingerprint and no short form", good, cell)
 	}
 	for _, id := range []string{huge, bidi} {
 		if cell := policyCell(t, body, id); strings.Contains(cell, "<code") {
