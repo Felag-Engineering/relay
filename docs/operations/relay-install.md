@@ -7,8 +7,10 @@ Companions: [relay-daemon-install.md](relay-daemon-install.md) for the Node side
 [release-artifacts.md](release-artifacts.md) for artifact naming and verification.
 
 Sections 1–6 are the recommended path: a verified binary under the hardened systemd unit.
-[Section 7](#7-running-it-with-docker-compose) is a second path for evaluation and a single
-home-lab host, `deploy/production/docker-compose.yml`, and states what it keeps of that posture.
+[Section 7](#7-running-it-with-docker-compose) is a supported single-host deployment beside
+it, `deploy/production/docker-compose.yml` running the signed published image (ADR-0033, amended
+2026-10-15). It states what it keeps of that posture and is not called production until its
+hardening review has closed (RC-27).
 
 ## 1. Obtain and verify the artifact
 
@@ -218,7 +220,9 @@ blast caps, lower the minimum daemon version, or touch the listeners.
 [`deploy/production/docker-compose.yml`](../../deploy/production/docker-compose.yml) runs the Relay
 and nothing else: one service, one data volume, no relay-daemons, fixtures or credentials. It
 is deployed from a git checkout, by hand or by a tool that deploys compose stacks from git
-(Komodo, for example).
+(Komodo, for example). It runs the signed, published Relay image that the compose file pins by
+version and digest; the checkout supplies the compose file and the example configuration, not
+the image.
 
 Read these first:
 
@@ -227,13 +231,25 @@ Read these first:
   2026-10-15). It is not called production until a human hardening review of this deployment
   has closed (RC-27). It mirrors the unit's posture where Docker can express it, as the table
   below lists; that is a description, not a review.
+- **The image is a release a human last verified, not the checkout.** It behaves as its
+  version's tag says and can predate this checkout's documentation and specs, so a behaviour
+  described here may not be in the image. Moving from an image built from source can be a
+  downgrade. An image built from a checkout reports `relay 0.0.0-unknown` and carries no
+  version label (only the published `release` stage sets `org.opencontainers.image.version`),
+  so for that move compare the checkout against the tag: `git log --oneline v<version>..HEAD`
+  lists what the pinned image lacks. Between published images, check what is running with
+  `docker compose … exec relay relay --version` (the label carries the same version) against
+  the pin before you change it. The compose file builds nothing, so `up -d --build` pulls the
+  pinned image if it is not already present and does not build from the checkout; the
+  `cosign verify` of step 3 is therefore not optional.
 - **It is one host with no high-availability claim.** If the host or the volume is lost, the
   Relay is down: Nodes keep running but nothing can be dispatched to them, and a lost CA means
   re-enrolling the fleet ([ca-disaster-recovery.md](ca-disaster-recovery.md)).
 - **Never run it on a host that also holds a development checkout of this repository**, a
   clone or any of its git worktrees. Every checkout carries this file with the same project
-  name, `relay`, so a routine `docker compose -f deploy/production/docker-compose.yml up --build`
-  in *any* of them replaces the running deployment with that checkout's work in progress. The
+  name, `relay`, so a routine `docker compose -f deploy/production/docker-compose.yml up`
+  in *any* of them recreates the running deployment from that checkout's copy of the file: its
+  image pin, ports and mounts. The
   external data volume (step 1) survives `down -v`, but nothing stops the replacement. The
   deployment host holds one checkout, at the pinned commit you deploy.
 
@@ -247,17 +263,17 @@ repository root.
 
 | Property of `relay/packaging/` | In this stack |
 | --- | --- |
-| Runs as an unprivileged Unix user | **Kept.** The image's `runtime` stage (`docker/relay.Dockerfile`, its last and default stage) runs as `10001:10001` (`relay`), never root; the compose file states it too. |
+| Runs as an unprivileged Unix user | **Kept.** The published image (`docker/relay.Dockerfile`, its `release` stage) runs as `10001:10001` (`relay`), never root, and the release workflow refuses to publish one that does not ([release-artifacts.md](release-artifacts.md)); the compose file states it too. |
 | Empty capability set, `NoNewPrivileges` | **Kept.** `cap_drop: [ALL]` and `no-new-privileges`. |
 | Read-only filesystem apart from its state | **Kept.** `read_only: true`; the state volume and a private `/tmp` tmpfs are the only writable paths. |
 | State directory `0700`, owned by the Relay's own Unix user | **Kept.** `/var/lib/relay` is created `0700` and owned by `relay` in the image, and an empty volume takes both on first mount. The CA key inside it is `0600`. |
 | `TasksMax=512` | **Kept.** `pids_limit: 512`. No memory limit is set, here or in the unit. |
 | Secrets are file paths, never values | **Kept.** `relay.toml` and every secret file it names are host files bind-mounted read-only; nothing about the floor is in the container's environment, so `docker inspect` shows mount paths, not settings or secrets. |
-| Configuration set by the operator on the host, unreachable from any API (invariant 11) | **Not kept under a git-driven deploy.** No Relay API reaches it, but the deploy path does. Whoever can push to the branch a deploy tool tracks, or use that tool's interface, controls the published ports, the mounts and user, the image that gets built, and `RELAY_CONFIG_FILE`, so they can point the Relay at a configuration that sets a hostile `oauth.issuer` on the next deploy. `.env` files are git-ignored, which stops an accident, not a push. Deploy a **pinned commit**, with **auto-deploy webhooks off**, and treat write access to that branch and to the deploy tool (Komodo included) as **root on the Relay host**. |
+| Configuration set by the operator on the host, unreachable from any API (invariant 11) | **Not kept under a git-driven deploy.** No Relay API reaches it, but the deploy path does. Whoever can push to the branch a deploy tool tracks, or use that tool's interface, controls the published ports, the mounts and user, the image pin, and so the image that runs, and `RELAY_CONFIG_FILE`, so they can point the Relay at a configuration that sets a hostile `oauth.issuer` on the next deploy. `.env` files are git-ignored, which stops an accident, not a push. Deploy a **pinned commit**, with **auto-deploy webhooks off**, and treat write access to that branch and to the deploy tool (Komodo included) as **root on the Relay host**. |
 | Root-owned unit file | **Not kept.** The compose file lives in the checkout; see the row above. |
 | A configuration file the Relay could not write and no other account could read | **Kept.** Checked at start as the container sees it (ADR-0043); the host file is `root:10001` `0640` on ext4, XFS, btrfs or tmpfs. |
 | The unit's finer sandboxing (`SystemCallFilter=@system-service`, `ProtectKernel*`, `MemoryDenyWriteExecute`, `RestrictAddressFamilies`, `ProtectProc`) | **Not claimed.** Docker's default seccomp profile and namespaces cover some of the same ground; they are not equivalent. |
-| A digest-verified release binary (section 1) | **Not kept yet.** A signed Relay image is published per release (`ghcr.io/felag-engineering/relay`), but the stack builds the image from the checkout's own source, so what runs is whatever that checkout contains. The compose file switches to the published image, pinned by digest, once the first signed release exists. |
+| A digest-verified release binary (section 1) | **Kept.** The stack runs `ghcr.io/felag-engineering/relay` pinned by version and digest, signed keylessly by the release workflow at that digest; its `/usr/local/bin/relay` is the release binary `SHA256SUMS` lists (the release workflow refuses to publish otherwise; [release-artifacts.md](release-artifacts.md)). Docker checks the digest on pull but never the signature: `cosign verify` in step 3 is what proves provenance. |
 | `Restart=on-failure`, enabled at boot | **`restart: unless-stopped`.** Docker's `on-failure` would not bring the Relay back after a host or Docker restart; `unless-stopped` does, and also restarts after a clean exit. Neither restarts an *unhealthy* container: watch the health status. |
 
 ### What it exposes
@@ -293,8 +309,13 @@ layer-2 segment (not verified here).
 ### First run
 
 You need Docker Engine 28+ with Compose **v2.24 or newer**, one checkout of this repository on
-the Relay host at the commit you deploy (the image is built from it), and a DNS name for the
-host that every relay-daemon can resolve. Run every command from the checkout root.
+the Relay host at the commit you deploy (it supplies the compose file and the example
+configuration; the image is pulled), a host that can reach `ghcr.io` (the package is public, so
+an anonymous pull works), and a DNS name for the host that every relay-daemon can resolve. On
+the machine that verifies the image you also need **cosign v3 or later**
+(<https://docs.sigstore.dev/>): the image's signature is a cosign v3 bundle stored as an OCI
+referrer, and cosign v2 reports "no signatures found" for it. Run every command from the
+checkout root.
 
 **1. Create the data volume.** It is declared `external`, so Compose never creates it and no
 `docker compose down -v` can delete the CA key and store on it:
@@ -345,12 +366,31 @@ The file is **required**: if it is missing, `docker compose` refuses to start th
 than run the Relay on defaults. To keep it elsewhere, set `RELAY_CONFIG_FILE` to an
 **absolute** path (a relative one resolves against `deploy/production/`).
 
-**3. Bring it up:**
+**3. Verify the image, then bring it up.** A failed verification is fatal: stop there, and do
+not pull or start the image.
 
 ```console
-$ docker compose -f deploy/production/docker-compose.yml up -d --build
+$ grep -E '^[[:space:]]+image:' deploy/production/docker-compose.yml
+    image: ghcr.io/felag-engineering/relay:<version>@sha256:<digest>
+$ cosign verify ghcr.io/felag-engineering/relay@sha256:<digest> \
+    --certificate-identity "https://github.com/Felag-Engineering/relay/.github/workflows/release.yml@refs/tags/v<version>" \
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com
+$ docker compose -f deploy/production/docker-compose.yml pull
+$ docker compose -f deploy/production/docker-compose.yml up -d
 $ docker compose -f deploy/production/docker-compose.yml ps   # wait for relay to be (healthy)
 ```
+
+Take `<version>` and `<digest>` (the 64 hex characters after `sha256:`) from the `image:` line
+the first command prints, and verify by digest, never by tag: a tag check verifies whatever the
+tag points at now, not what the compose file pulls. To extract the digest without retyping it:
+`sed -n 's/^[[:space:]]*image:.*@sha256:\([0-9a-f]\{64\}\)$/\1/p' deploy/production/docker-compose.yml`.
+A passing verification proves the image is a genuine release, not that it is the one you
+intend: confirm `<version>` is the release you mean to deploy and is not older than the one
+already running before you run `up`. A running image built from a checkout reports
+`relay 0.0.0-unknown`; for that move run `git log --oneline v<version>..HEAD` to see what the
+pinned image lacks.
+What the certificate identity means is in
+[release-artifacts.md](release-artifacts.md#verify-then-install).
 
 The Relay creates its CA on first start and logs its fingerprint
 (`docker compose -f deploy/production/docker-compose.yml logs relay`).
@@ -440,8 +480,13 @@ Every command here takes `-f deploy/production/docker-compose.yml`, shortened to
   container reading the old one, and the reload logs `configuration reloaded changed=[]`.
 - **Back up the volume** `relay-data`: it holds the CA key and the store. Compose will not
   delete it; `docker volume rm relay-data` will, and every Node must then re-enroll.
-- **Upgrades** are a checkout of the next pinned commit and `docker compose … up -d --build`.
-  The Relay never pushes binaries to Nodes (ADR-0014).
+- **Upgrades** are a checkout of the next pinned commit, whose compose file names the next
+  release's image by version and digest; confirm that version is the one you intend and not
+  older than the one running (`docker compose … exec relay relay --version`; a checkout-built
+  image reports `0.0.0-unknown`, so compare the checkout against the tag with
+  `git log --oneline v<version>..HEAD`), verify that digest
+  as in step 3, then `docker compose … pull` and `docker compose … up -d`. The Relay never pushes binaries to
+  Nodes (ADR-0014).
 - **Project name.** The file sets `name: relay`; a deploy tool's own `-p` overrides it. The
   name does **not** prevent a collision: every checkout resolves to the same project, which is
   why the deployment host holds no other checkout. The stack publishes the same host ports as
