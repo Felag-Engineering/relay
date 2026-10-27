@@ -140,6 +140,10 @@ never reads. Gauges are pulled from sources at scrape time, not maintained as st
 | Gauges render from their sources, and the build stamp is omitted when unset | `TestHandler_GaugesFromSources`, `TestHandler_BuildInfo`, `TestHandler_BuildInfoOmittedWhenUnset` | metrics |
 | The exposition is Prometheus text | `TestHandler_ContentType` | metrics |
 | `/metrics` requires a credential | `TestMetricsSurface_RequiresCredential` | e2e |
+| The health endpoint answers serving or not serving, without a credential, and nothing more | `TestStatus_ServingAnswersOneBit`, `TestStatus_ZeroValueIsNotServing`, `TestServer_HealthAnswersWithoutACredential`, `TestServer_HealthIsNotServingBeforeServeAndAfterShutdown`, `TestE2E_HealthAnswersServingWithoutACredential` | health, controlplane, e2e |
+| The health route reaches no Relay package | `TestNoDispatch_HealthImportsOnlyTheStandardLibrary` | health |
+| Certificate expiry, failed authentications and approvals waiting are on `/metrics` | `TestHandler_CertificateRemaining`, `TestIncAuthRefusal_EverySurface`, `TestIncConsoleAuthFailure_EveryKind`, `TestHandler_ApprovalsWaiting`, `TestMiddleware_CountsEachRefusalBySurface`, `TestE2E_MetricsCarryTheDayOneSeries` | metrics, controlplane, e2e |
+| The series set is fixed, with closed-enum labels | `TestHandler_SeriesAreAFixedSet` | metrics |
 
 Claims above with **no row**, and so nothing checking them:
 

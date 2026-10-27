@@ -295,6 +295,58 @@ func TestExpirePendingRetiresOnlyLapsedRequests(t *testing.T) {
 	}
 }
 
+func TestApprovals_CountWaitingCountsOnlyAnswerablePending(t *testing.T) {
+	ctx := context.Background()
+	repo := approvalStore(t)
+	now := storeNow.Add(30 * time.Minute)
+
+	count := func(at time.Time) int {
+		t.Helper()
+		n, err := repo.CountWaiting(ctx, at)
+		if err != nil {
+			t.Fatalf("CountWaiting: %v", err)
+		}
+		return n
+	}
+	if n := count(now); n != 0 {
+		t.Fatalf("empty store: CountWaiting = %d, want 0", n)
+	}
+
+	for _, r := range []approval.Request{
+		pendingRequest("future", "hash-future", 1, 8*time.Hour),
+		pendingRequest("lapsed", "hash-lapsed", 1, time.Minute),
+		pendingRequest("approved", "hash-approved", 1, 8*time.Hour),
+		pendingRequest("denied", "hash-denied", 1, 8*time.Hour),
+		pendingRequest("expired", "hash-expired", 1, time.Minute),
+	} {
+		if err := repo.Create(ctx, r); err != nil {
+			t.Fatalf("Create %s: %v", r.ID, err)
+		}
+	}
+	approveRequest(t, repo, "approved", "hash-approved", storeNow.Add(time.Minute))
+	deny := approval.Decision{AccountID: "acct-ana", Account: "ana", Approve: false, Reason: "no", Channel: approval.ChannelOutOfBand, PlanHash: "hash-denied", At: storeNow.Add(time.Minute)}
+	if _, err := repo.RecordDecision(ctx, "denied", deny, deny.At); err != nil {
+		t.Fatalf("deny: %v", err)
+	}
+	// "lapsed" and "expired" are both pending and past their deadline at now;
+	// neither is answerable, whether or not the sweeper has retired it yet.
+	if n := count(now); n != 1 {
+		t.Errorf("CountWaiting before the sweep = %d, want 1 (only the unexpired pending Request)", n)
+	}
+	if _, err := repo.ExpirePending(ctx, now); err != nil {
+		t.Fatalf("ExpirePending: %v", err)
+	}
+	if n := count(now); n != 1 {
+		t.Errorf("CountWaiting after the sweep = %d, want 1", n)
+	}
+
+	// A Request is waiting only while now is strictly before its deadline, as
+	// PastDeadline has it.
+	if n := count(storeNow.Add(8 * time.Hour)); n != 0 {
+		t.Errorf("CountWaiting at the deadline = %d, want 0", n)
+	}
+}
+
 // TestExpiredRequestIsNotDecidable closes the loop: once retired, a Request
 // cannot be approved retroactively.
 func TestExpiredRequestIsNotDecidable(t *testing.T) {

@@ -128,7 +128,8 @@ CA:
   against the pinned CA; the Relay requires a client certificate for every RPC except the
   certless `Enrollment.Enroll` (ADR-0005, ADR-0006).
 - **Control plane** (`control_plane.listen_address`, when enabled): HTTPS serving MCP at `/mcp`,
-  the Control API at `/api/v1`, and Prometheus metrics at `/metrics`. Every call is
+  the Control API at `/api/v1`, and Prometheus metrics at `/metrics`. Every call except
+  `GET /healthz`, which answers only serving or not serving, is
   authenticated by a per-Account API Token, or for humans an OAuth session when `oauth.issuer`
   is set. There is no shared credential in Relay configuration (ADR-0023). API and MCP clients
   need `ca-cert.pem` as their trust anchor (e.g. `curl --cacert`).
@@ -269,7 +270,7 @@ deploy tool's stack environment), **never in `relay.toml`**.
 | Port | Default binding | Variable | What is reachable there |
 | --- | --- | --- | --- |
 | `7654`, the Node plane | `0.0.0.0` (every IPv4 interface) | `RELAY_NODE_PUBLISH_ADDR` | gRPC over mTLS, which relay-daemons on other hosts dial. Every RPC requires a client certificate issued by the Relay's CA except Enrollment, which requires an Enrollment Token and is rate-limited per source address and globally. |
-| `9443`, the control plane | `127.0.0.1` (host loopback) | `RELAY_PUBLISH_ADDR` | MCP at `/mcp`, the Control API at `/api/v1`, `/metrics`, and when enabled the Admin Console at `/console/`. An execution surface for whoever holds an API Token or a Console password. |
+| `9443`, the control plane | `127.0.0.1` (host loopback) | `RELAY_PUBLISH_ADDR` | MCP at `/mcp`, the Control API at `/api/v1`, `/metrics`, `/healthz` (unauthenticated, one bit), and when enabled the Admin Console at `/console/`. An execution surface for whoever holds an API Token or a Console password. |
 
 **Set a Console password before you publish `9443` beyond loopback** (step 5). Nothing
 enforces that order. Once `9443` is reachable, anyone on that network can attempt a sign-in:

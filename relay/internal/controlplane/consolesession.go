@@ -64,8 +64,9 @@ type consoleLane struct {
 	// else.
 	//
 	// A predicate rather than a config-file list, deliberately. This punches
-	// the only hole in the control plane's auth wrapper besides RFC 9728
-	// metadata, and a hole an operator could widen from a file is a hole an
+	// the only hole in the control plane's auth wrapper; RFC 9728 metadata, the
+	// health bit and the fixed root redirect answer before it, outside the
+	// wrapper. A hole an operator could widen from a file is a hole an
 	// operator will widen. The predicate is supplied in code by the package
 	// that owns those routes, and that package asserts its exact extent in a
 	// test.

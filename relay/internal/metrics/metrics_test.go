@@ -4,8 +4,10 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Felag-Engineering/relay/relay/internal/capability"
 	"github.com/Felag-Engineering/relay/relay/internal/jobs"
@@ -74,6 +76,8 @@ func TestHandler_NilSamplerOmitsGaugeLine(t *testing.T) {
 		"relay_nodes_enrolled",
 		"relay_nodes_revoked",
 		"relay_freeze_engaged",
+		"relay_approvals_waiting",
+		"relay_certificate_remaining_seconds",
 	} {
 		if strings.Contains(body, name) {
 			t.Errorf("body contains %q with all samplers nil; want it omitted. body = %s", name, body)
@@ -380,10 +384,20 @@ func TestHandler_FullExposition(t *testing.T) {
 		Frozen:         func() (bool, error) { return true, nil },
 		Build:          BuildInfo{Version: "1.2.3", Commit: "abc", BuildDate: "2026-01-02"},
 		LabelsDeclined: func() (int64, int64) { return 4, 5 },
+
+		ApprovalsWaiting: func() (int, error) { return 2, nil },
+		CertificateRemaining: func(c Certificate) (time.Duration, bool) {
+			if c == CertificateServer {
+				return 90*time.Minute + 500*time.Millisecond, true
+			}
+			return 3650 * 24 * time.Hour, true
+		},
 	})
 	m.IncDispatch(jobs.OutcomeSuccess)
 	m.IncRefusal(capability.RefusalBlastCap)
 	m.IncEnrollment()
+	m.IncAuthRefusal(AuthSurfaceMCP, true)
+	m.IncConsoleAuthFailure(ConsoleStepUpFailed)
 	m.IncServerCertRotation(ListenerControlPlane)
 	m.IncProtocolViolation(jobs.ViolationRelayOnlyOutcome)
 	m.IncProtocolViolationUnrecorded()
@@ -409,6 +423,13 @@ relay_nodes_revoked 2
 # HELP relay_freeze_engaged Whether the Relay-wide Freeze (ADR-0013) is currently engaged (1) or not (0).
 # TYPE relay_freeze_engaged gauge
 relay_freeze_engaged 1
+# HELP relay_approvals_waiting Approval Requests waiting for an answer: pending and not past their deadline.
+# TYPE relay_approvals_waiting gauge
+relay_approvals_waiting 2
+# HELP relay_certificate_remaining_seconds Seconds until a certificate the Relay holds expires, by certificate; negative once expired.
+# TYPE relay_certificate_remaining_seconds gauge
+relay_certificate_remaining_seconds{certificate="relay_ca"} 315360000
+relay_certificate_remaining_seconds{certificate="server"} 5400
 # HELP relay_dispatches_total Total Task dispatch outcomes, by outcome.
 # TYPE relay_dispatches_total counter
 relay_dispatches_total{outcome="success"} 1
@@ -436,6 +457,20 @@ relay_enrollments_total 1
 # TYPE relay_server_cert_rotations_total counter
 relay_server_cert_rotations_total{listener="node_plane"} 0
 relay_server_cert_rotations_total{listener="control_plane"} 1
+# HELP relay_auth_failures_total Total refused authentications on the control-plane listener, by surface and reason.
+# TYPE relay_auth_failures_total counter
+relay_auth_failures_total{surface="control_api",reason="no_credential"} 0
+relay_auth_failures_total{surface="control_api",reason="rejected"} 0
+relay_auth_failures_total{surface="mcp",reason="no_credential"} 0
+relay_auth_failures_total{surface="mcp",reason="rejected"} 1
+relay_auth_failures_total{surface="console",reason="no_credential"} 0
+relay_auth_failures_total{surface="console",reason="rejected"} 0
+relay_auth_failures_total{surface="console",reason="sign_in_failed"} 0
+relay_auth_failures_total{surface="console",reason="sign_in_throttled"} 0
+relay_auth_failures_total{surface="console",reason="step_up_failed"} 1
+relay_auth_failures_total{surface="console",reason="step_up_throttled"} 0
+relay_auth_failures_total{surface="other",reason="no_credential"} 0
+relay_auth_failures_total{surface="other",reason="rejected"} 0
 # HELP relay_protocol_violations_total Total relay-daemon reports refused at the wire boundary as protocol violations, by rule.
 # TYPE relay_protocol_violations_total counter
 relay_protocol_violations_total{rule="relay_only_outcome"} 1
@@ -449,3 +484,209 @@ relay_protocol_violations_unrecorded_total 1
 relay_labels_declined_total{namespace="node"} 4
 relay_labels_declined_total{namespace="relay"} 5
 `
+
+func TestHandler_ApprovalsWaiting(t *testing.T) {
+	m := New(GaugeSources{ApprovalsWaiting: func() (int, error) { return 2, nil }})
+	_, body := scrape(t, m)
+	for _, want := range []string{"# TYPE relay_approvals_waiting gauge", "relay_approvals_waiting 2"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body missing %q; body = %s", want, body)
+		}
+	}
+}
+
+func TestHandler_ApprovalsWaitingErrorOmitsGauge(t *testing.T) {
+	m := New(GaugeSources{ApprovalsWaiting: func() (int, error) { return 0, errors.New("store unavailable") }})
+	_, body := scrape(t, m)
+	if strings.Contains(body, "relay_approvals_waiting") {
+		t.Errorf("body contains relay_approvals_waiting despite a source error; body = %s", body)
+	}
+}
+
+func TestHandler_CertificateRemaining(t *testing.T) {
+	remaining := map[Certificate]time.Duration{
+		CertificateRelayCA: 3650 * 24 * time.Hour,
+		CertificateServer:  90*time.Minute + 500*time.Millisecond,
+	}
+	m := New(GaugeSources{CertificateRemaining: func(c Certificate) (time.Duration, bool) { return remaining[c], true }})
+	_, body := scrape(t, m)
+	for _, want := range []string{
+		"# TYPE relay_certificate_remaining_seconds gauge",
+		`relay_certificate_remaining_seconds{certificate="relay_ca"} 315360000`,
+		`relay_certificate_remaining_seconds{certificate="server"} 5400`, // truncated, not rounded
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body missing %q; body = %s", want, body)
+		}
+	}
+
+	remaining[CertificateServer] = -30 * time.Second
+	_, body = scrape(t, m)
+	if want := `relay_certificate_remaining_seconds{certificate="server"} -30`; !strings.Contains(body, want) {
+		t.Errorf("an expired certificate must render negative; missing %q in %s", want, body)
+	}
+}
+
+func TestHandler_CertificateRemainingOmitsUnreadable(t *testing.T) {
+	onlyCA := New(GaugeSources{CertificateRemaining: func(c Certificate) (time.Duration, bool) {
+		return time.Hour, c == CertificateRelayCA
+	}})
+	_, body := scrape(t, onlyCA)
+	if !strings.Contains(body, `certificate="relay_ca"`) {
+		t.Errorf("body missing the relay_ca series; body = %s", body)
+	}
+	if strings.Contains(body, `certificate="server"`) {
+		t.Errorf("body carries a server series the source could not read; body = %s", body)
+	}
+
+	neither := New(GaugeSources{CertificateRemaining: func(Certificate) (time.Duration, bool) { return 0, false }})
+	_, body = scrape(t, neither)
+	if strings.Contains(body, "relay_certificate_remaining_seconds") {
+		t.Errorf("body carries the family with no readable certificate; body = %s", body)
+	}
+}
+
+func TestIncAuthRefusal_EverySurface(t *testing.T) {
+	m := New(GaugeSources{})
+	surfaces := map[string]AuthSurface{
+		"control_api": AuthSurfaceControlAPI,
+		"mcp":         AuthSurfaceMCP,
+		"console":     AuthSurfaceConsole,
+		"other":       AuthSurfaceOther,
+	}
+	for _, s := range surfaces {
+		m.IncAuthRefusal(s, false)
+		m.IncAuthRefusal(s, true)
+		m.IncAuthRefusal(s, true)
+	}
+	m.IncAuthRefusal(AuthSurface(99), false) // out of range lands on other
+	_, body := scrape(t, m)
+
+	for name := range surfaces {
+		wantNo, wantRej := "1", "2"
+		if name == "other" {
+			wantNo = "2"
+		}
+		for reason, want := range map[string]string{"no_credential": wantNo, "rejected": wantRej} {
+			line := `relay_auth_failures_total{surface="` + name + `",reason="` + reason + `"} ` + want + "\n"
+			if !strings.Contains(body, line) {
+				t.Errorf("body missing %q; body = %s", line, body)
+			}
+		}
+	}
+}
+
+func TestIncConsoleAuthFailure_EveryKind(t *testing.T) {
+	fresh := New(GaugeSources{})
+	_, body := scrape(t, fresh)
+	if n := strings.Count(body, "relay_auth_failures_total{"); n != 12 {
+		t.Errorf("a fresh Metrics renders %d auth series, want 12", n)
+	}
+	for _, line := range strings.Split(body, "\n") {
+		if strings.HasPrefix(line, "relay_auth_failures_total{") && !strings.HasSuffix(line, " 0") {
+			t.Errorf("a fresh Metrics renders %q, want every auth series at 0", line)
+		}
+	}
+
+	m := New(GaugeSources{})
+	kinds := map[string]ConsoleAuthFailure{
+		"sign_in_failed":    ConsoleSignInFailed,
+		"sign_in_throttled": ConsoleSignInThrottled,
+		"step_up_failed":    ConsoleStepUpFailed,
+		"step_up_throttled": ConsoleStepUpThrottled,
+	}
+	for _, k := range kinds {
+		m.IncConsoleAuthFailure(k)
+	}
+	m.IncConsoleAuthFailure(ConsoleAuthFailure(99)) // out of range lands on sign_in_failed
+	_, body = scrape(t, m)
+	for name := range kinds {
+		want := "1"
+		if name == "sign_in_failed" {
+			want = "2"
+		}
+		line := `relay_auth_failures_total{surface="console",reason="` + name + `"} ` + want + "\n"
+		if !strings.Contains(body, line) {
+			t.Errorf("body missing %q; body = %s", line, body)
+		}
+	}
+}
+
+var (
+	seriesLabelPair = regexp.MustCompile(`([a-z_]+)="([^"]*)"`)
+	closedLabelName = map[string]bool{
+		"outcome": true, "reason": true, "listener": true, "rule": true, "namespace": true,
+		"surface": true, "certificate": true, "version": true, "commit": true, "build_date": true,
+	}
+	closedLabelValue = regexp.MustCompile(`^[a-z_]+$`)
+)
+
+// seriesIdentities returns each sample line's identity: the text before the
+// last space, which is the metric name and its labels without the value.
+func seriesIdentities(body string) map[string]bool {
+	ids := map[string]bool{}
+	for _, line := range strings.Split(body, "\n") {
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		ids[line[:strings.LastIndex(line, " ")]] = true
+	}
+	return ids
+}
+
+// TestHandler_SeriesAreAFixedSet pins the cardinality rule: the series set does
+// not depend on what has happened, and every label is a closed enum, so no Node
+// ID, Account, Selector, argument or free text can appear as a label.
+func TestHandler_SeriesAreAFixedSet(t *testing.T) {
+	build := func(approvals int, remaining time.Duration) *Metrics {
+		return New(GaugeSources{
+			Connected:            func() int { return approvals },
+			Nodes:                func() (int, int, error) { return approvals, approvals, nil },
+			Frozen:               func() (bool, error) { return approvals > 0, nil },
+			Build:                BuildInfo{Version: "1.2.3", Commit: "abc", BuildDate: "2026-01-02"},
+			LabelsDeclined:       func() (int64, int64) { return int64(approvals), int64(approvals) },
+			ApprovalsWaiting:     func() (int, error) { return approvals, nil },
+			CertificateRemaining: func(Certificate) (time.Duration, bool) { return remaining, true },
+		})
+	}
+	quiet := build(1, time.Hour)
+	busy := build(100000, 3650*24*time.Hour)
+	for i := 0; i < 500; i++ {
+		busy.IncDispatch(jobs.Outcome(i % 20))
+		busy.IncRefusal(capability.RefusalKind(i % 20))
+		busy.IncEnrollment()
+		busy.IncServerCertRotation(ServerCertListener(i % 5))
+		busy.IncProtocolViolation(jobs.ViolationRule(i % 9))
+		busy.IncProtocolViolationUnrecorded()
+		busy.IncAuthRefusal(AuthSurface(i%7), i%2 == 0)
+		busy.IncConsoleAuthFailure(ConsoleAuthFailure(i % 9))
+	}
+
+	_, quietBody := scrape(t, quiet)
+	_, busyBody := scrape(t, busy)
+
+	quietIDs, busyIDs := seriesIdentities(quietBody), seriesIdentities(busyBody)
+	if len(quietIDs) != len(busyIDs) {
+		t.Fatalf("series count depends on activity: %d vs %d", len(quietIDs), len(busyIDs))
+	}
+	for id := range quietIDs {
+		if !busyIDs[id] {
+			t.Errorf("series %q exists only in the quiet scrape", id)
+		}
+	}
+
+	for id := range busyIDs {
+		for _, pair := range seriesLabelPair.FindAllStringSubmatch(id, -1) {
+			name, value := pair[1], pair[2]
+			if !closedLabelName[name] {
+				t.Errorf("series %q carries label %q outside the closed set", id, name)
+			}
+			if strings.HasPrefix(id, "relay_build_info") {
+				continue
+			}
+			if !closedLabelValue.MatchString(value) {
+				t.Errorf("series %q carries label value %q that is not a closed-enum token", id, value)
+			}
+		}
+	}
+}

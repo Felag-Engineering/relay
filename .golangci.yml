@@ -410,6 +410,20 @@ linters:
             - pkg: github.com/Felag-Engineering/relay/
               desc: "package events never imports a Relay package, where every result-shaped type lives (ADR-0025)"
 
+        # The health route answers without a credential, so it must not be able to name
+        # a capability, the store or a Node: it imports the standard library only.
+        health-imports:
+          list-mode: strict
+          files:
+            - "**/internal/controlplane/health/*.go"
+            - "!$test"
+          allow:
+            - net/http$
+            - sync/atomic$
+          deny:
+            - pkg: github.com/Felag-Engineering/relay/
+              desc: "the health endpoint answers without a credential and reaches no Relay package (invariant 10)"
+
         # revocation never learns what a Principal or an audit record is. RevokeNode is
         # also the Relay's own cleanup after a failed enrollment, with no caller to
         # attribute; the cascade's per-Node record is authored by a caller-supplied
