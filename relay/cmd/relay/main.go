@@ -28,6 +28,7 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/enroll"
 	"github.com/Felag-Engineering/relay/relay/internal/events"
 	"github.com/Felag-Engineering/relay/relay/internal/eventsink"
+	"github.com/Felag-Engineering/relay/relay/internal/harnesssetup"
 	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 	"github.com/Felag-Engineering/relay/relay/internal/logctx"
 	"github.com/Felag-Engineering/relay/relay/internal/metrics"
@@ -855,6 +856,13 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 			authn,
 		)
 
+		// Every input is already validated by relayconfig, so an error here is a
+		// composition bug, not an operator mistake.
+		harnessTarget, err := harnesssetup.NewTarget(advertisedAddress, cfg.ControlAddr, relayCA.Bundle())
+		if err != nil {
+			return nil, nil, fmt.Errorf("harness setup: %w", err)
+		}
+
 		// sd bundles every collaborator a control surface's Mount may need,
 		// assembled exactly once (invariant 10: execution above is a single
 		// instance, delivered to every surface below — no surface constructs
@@ -867,6 +875,7 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 			execution: execution,
 			// The predicate that gates WithOAuth above.
 			oauthConfigured: cfg.OAuthIssuer != "",
+			harnessSetup:    harnessTarget,
 			// The leaf capability services (invariant 10): each surface is
 			// handed the narrow one it uses, not the Execution — see
 			// surfaceDeps. A field forgotten here is a nil pointer behind a

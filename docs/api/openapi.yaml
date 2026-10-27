@@ -1035,8 +1035,10 @@ paths:
       summary: Mint an API Token for an Account (admin)
       description: |
         The plaintext credential (`glp_<id>.<secret>`) is returned **once,
-        here** — only its SHA-256 is stored. It is never persisted in the clear,
-        logged, or audited; the audit record keeps the token's non-secret id.
+        here** (in `token` and inside each `harness_setup` block that embeds
+        it), and in no other response — only its SHA-256 is stored. It is never
+        persisted in the clear, logged, or audited; the audit record keeps the
+        token's non-secret id.
       requestBody:
         required: true
         content:
@@ -1969,6 +1971,36 @@ components:
         token:
           type: string
           description: The plaintext credential — returned once, here, and never again.
+        harness_setup:
+          $ref: '#/components/schemas/HarnessSetup'
+
+    HarnessSetup:
+      type: object
+      description: |
+        What a Harness needs to reach this Relay's MCP endpoint, rendered at mint
+        beside the plaintext. Present when the Relay can render it, which it can
+        whenever its control plane is serving; absent otherwise. A failure to render
+        never fails the mint.
+      required: [mcp_url, ca_certificate, claude_code, claude_code_mcp_json, check]
+      properties:
+        mcp_url:
+          type: string
+          description: The Relay's MCP endpoint; its host is a name on the server certificate.
+        ca_certificate:
+          type: string
+          description: The Relay CA certificate (PEM). Public; save it as `relay-ca.pem`.
+        claude_code:
+          type: string
+          description: The `claude mcp add` line and the line that trusts the CA for one `claude` process (with a comment saying why). Embeds the plaintext credential.
+        claude_code_mcp_json:
+          type: string
+          description: The equivalent `.mcp.json` file. Embeds the plaintext credential.
+        gleipnir:
+          type: string
+          description: The values to register Relay in Gleipnir. Present for a machine Account only. Embeds the plaintext credential.
+        check:
+          type: string
+          description: One command that proves the connection works; its output contains `serverInfo`. Embeds the plaintext credential.
 
     APITokenList:
       type: object

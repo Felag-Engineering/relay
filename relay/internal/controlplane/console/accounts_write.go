@@ -77,7 +77,9 @@ package console
 // # The mint response, and the one field a secret may occupy
 //
 // mintedView.Token is that field, and the moment accounts.Plaintext.Reveal()
-// runs, every redaction that type provides is GONE — Token is a plain string.
+// runs, every redaction that type provides is GONE — Token is a plain string,
+// and so is each block of the harnessView mintedView carries, which embeds it
+// too. mintedView and harnessView are the only view types a secret can occupy.
 // That is why mintedView carries its own LogValue, why mint is the ONE write
 // route here that does not post-redirect-get, and why both the success and the
 // audit-failure branch set Cache-Control: no-store explicitly. See mintedView
@@ -781,8 +783,9 @@ func ttlFor(value string) (time.Duration, bool) {
 	return 0, false
 }
 
-// mintedView is the ONE view type in this package with a field a secret can
-// occupy, and Token is that field. It exists for exactly one render.
+// mintedView is the view type in this package with a field a secret can
+// occupy, and Token is that field; the harnessView it carries is the other view
+// type a secret can occupy. It exists for exactly one render.
 //
 // LogValue redacts Token. accounts.Plaintext redacts under String, GoString,
 // LogValue and MarshalJSON — but Token is a PLAIN STRING, because Reveal() has
@@ -798,8 +801,23 @@ type mintedView struct {
 	TokenName   string
 	Expires     time.Time
 	Token       string // the plaintext, revealed once (accounts.Plaintext.Reveal)
+	Harness     *harnessView
 	Back        backLink
 }
+
+// harnessView is the rendered Harness setup. Every field but CACertificate embeds
+// the plaintext, so like Token these are plain strings with no redaction of their
+// own; LogValue puts one back. Gleipnir is empty for a human Account's token.
+type harnessView struct {
+	CACertificate     string
+	ClaudeCode        string
+	ClaudeCodeMCPJSON string
+	Gleipnir          string
+	Check             string
+}
+
+// LogValue implements slog.LogValuer, omitting every block.
+func (harnessView) LogValue() slog.Value { return slog.GroupValue() }
 
 // LogValue implements slog.LogValuer, omitting Token entirely.
 func (v mintedView) LogValue() slog.Value {
@@ -894,10 +912,21 @@ func handleMintAPIToken(d Deps) http.HandlerFunc {
 		// refusal of it writes its own refuseControl row in the trail. Both
 		// are acceptable — the alternative is echoing a caller-supplied name
 		// back onto the page that reveals a credential.
+		//
+		// The same read gives the Account's kind, which decides whether the
+		// Gleipnir block is rendered; a failed read leaves it empty and drops
+		// only that block.
 		accountName := ""
+		var kind accounts.Kind
 		if target, readErr := d.Accounts.Account(r.Context(), caller, id); readErr == nil {
 			accountName = target.Name
+			kind = target.Kind
 		}
+
+		// The single Reveal() call in this package, and the third in the whole
+		// Relay — enumerated on Plaintext.Reveal's own doc comment and checked
+		// by TestPlaintext_RevealCallSitesAreEnumerated.
+		credential := plaintext.Reveal()
 
 		w.Header().Set("Cache-Control", "no-store")
 		renderScreen(w, pg, accountsMintedTmpl, mintedView{
@@ -905,12 +934,28 @@ func handleMintAPIToken(d Deps) http.HandlerFunc {
 			TokenID:     tok.ID,
 			TokenName:   tok.Name,
 			Expires:     tok.ExpiresAt,
-			// The single Reveal() call in this package, and the third in the
-			// whole Relay — enumerated on Plaintext.Reveal's own doc comment
-			// and checked by TestPlaintext_RevealCallSitesAreEnumerated.
-			Token: plaintext.Reveal(),
-			Back:  accountBack(accountName, false),
+			Token:       credential,
+			Harness:     harnessFor(d, credential, kind),
+			Back:        accountBack(accountName, false),
 		})
+	}
+}
+
+// harnessFor renders the Harness setup for a freshly minted credential, or nil
+// when there is none to render (no target is wired, or the credential is not
+// shaped like an API Token). A render error never fails the mint: the token is
+// already minted and is shown either way.
+func harnessFor(d Deps, credential string, kind accounts.Kind) *harnessView {
+	rendering, err := d.HarnessSetup.Render(credential, kind)
+	if err != nil {
+		return nil
+	}
+	return &harnessView{
+		CACertificate:     rendering.CACertificate(),
+		ClaudeCode:        rendering.ClaudeCode(),
+		ClaudeCodeMCPJSON: rendering.ClaudeCodeMCPJSON(),
+		Gleipnir:          rendering.Gleipnir(),
+		Check:             rendering.Check(),
 	}
 }
 
@@ -985,7 +1030,8 @@ func revokeReturnHref(ctx context.Context, d Deps, caller capability.Principal, 
 }
 
 // accountsMintedTmpl is the reveal-once response: the plaintext, escaped by
-// html/template, rendered exactly once, beside the sentence that says this is
+// html/template, rendered as the token and again inside each harness block that
+// embeds it, all in this one response, beside the sentence that says this is
 // the only time it will ever appear.
 var accountsMintedTmpl = newScreen("accounts-minted", `
 <section class="panel minted">
@@ -993,6 +1039,18 @@ var accountsMintedTmpl = newScreen("accounts-minted", `
   <p><code>{{.Token}}</code></p>
   <p class="note">Shown once.</p>
   <p class="note">Token id <code>{{.TokenID}}</code>{{if .Expires.IsZero}}, which does not expire{{else}}, expiring {{stamp .Expires}}{{end}}.</p>
+  {{with .Harness}}
+  <h4>relay-ca.pem</h4>
+  <pre><code>{{.CACertificate}}</code></pre>
+  <h4>Claude Code</h4>
+  <pre><code>{{.ClaudeCode}}</code></pre>
+  <h4>.mcp.json</h4>
+  <pre><code>{{.ClaudeCodeMCPJSON}}</code></pre>
+  {{with .Gleipnir}}<h4>Gleipnir</h4>
+  <pre><code>{{.}}</code></pre>
+  {{end}}<h4>Check</h4>
+  <pre><code>{{.Check}}</code></pre>
+  {{end}}
   <p><a href="{{.Back.Href}}">{{.Back.Label}}</a></p>
 </section>
 `)

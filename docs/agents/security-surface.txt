@@ -35,6 +35,7 @@ relay/internal/controlplane/mcp/**
 relay/internal/controlplane/api/**
 relay/internal/ca/**
 relay/internal/enroll/**
+relay/internal/harnesssetup/**
 relay/internal/revocation/**
 relay/internal/transport/**
 relay/internal/dispatch/**

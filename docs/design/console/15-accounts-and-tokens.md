@@ -214,8 +214,11 @@ Minted per Account, listed with name, creation, last use and expiry. **There is 
 Token carries no authority of its own — authorization reads the Account's role at verification
 time, which is what makes "a token inherits its Account's role changes" true by construction
 (`accounts.APIToken`). **The plaintext is shown once at mint and never again** — the same
-reveal-once discipline as spec 09, for the same reason. The only words beside the revealed value
-are **"Shown once."** (D34).
+reveal-once discipline as spec 09, for the same reason. The only prose beside the revealed value is
+**"Shown once."** (D34). Beneath it the same response renders the harness setup as labelled data:
+the CA certificate, then one block each for Claude Code, `.mcp.json`, Gleipnir (a
+machine Account's token only) and a connection check. Every block but the CA certificate carries
+the plaintext, in this response and no other.
 
 The mint, and a temporary password's issue (at a human Account's create or by re-issue), are the
 writes on this screen that do **not** post-redirect-get: a plaintext must never enter a URL, a `Location` header or a browser history entry, so it renders in the response

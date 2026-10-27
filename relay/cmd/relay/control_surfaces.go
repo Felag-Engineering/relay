@@ -38,6 +38,7 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/enroll"
 	"github.com/Felag-Engineering/relay/relay/internal/events"
 	"github.com/Felag-Engineering/relay/relay/internal/eventsink"
+	"github.com/Felag-Engineering/relay/relay/internal/harnesssetup"
 	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 	"github.com/Felag-Engineering/relay/relay/internal/metrics"
 	"github.com/Felag-Engineering/relay/relay/internal/revocation"
@@ -66,7 +67,10 @@ type surfaceDeps struct {
 	// oauthConfigured is whether this Relay accepts OAuth bearer tokens; the
 	// console mirrors it as presentation only.
 	oauthConfigured bool
-	ops             mcp.OperationLister
+	// harnessSetup is the MCP URL and CA certificate every API Token mint
+	// renders (api.Deps.HarnessSetup, console.Deps.HarnessSetup); public data.
+	harnessSetup harnesssetup.Target
+	ops          mcp.OperationLister
 	// execution is Execution: mcp Executor and TaskResolver; api Exec; console
 	// Cancel.
 	execution *capability.Execution
@@ -232,6 +236,7 @@ func (apiSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		// audit row as every other administrative act, rather than this
 		// surface re-deriving any of them (invariant 10).
 		AccountAdmin: d.accountAdmin,
+		HarnessSetup: d.harnessSetup,
 		// Tag writes: the capability layer's TagWriter, whose floor is a human
 		// Account at operator or above. No other surface is handed it.
 		Tags: d.tagWriter,
@@ -303,6 +308,7 @@ func (consoleSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		Auth:            d.consoleAuth,
 		Logger:          d.logger,
 		OAuthConfigured: d.oauthConfigured,
+		HarnessSetup:    d.harnessSetup,
 		// Every registry and Policy-view read is Deps.Queries (QRY-28) —
 		// there is no separate Fleet/Policy seam. There is
 		// also no separate Liveness seam: registry.Node.Connected is
