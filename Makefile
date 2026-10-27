@@ -55,6 +55,7 @@ tool_bin = GOWORK=off go -C "$(CURDIR)/tools/$(1)" tool -n $(1)
         fmt fmt-relay fmt-daemon vuln-relay vuln-daemon build-daemon-release print-release-daemon-bin \
         build-relay-devharness devharness-absent-check test-crossbinary lint-devharness \
         test-security-surface test-codex-review test-ci-changed-paths \
+        test-install-matrix-platforms install-matrix-platforms-check \
         test-check-docs test-smoke-test test-maintainer-check \
         gen-opschema dev-fleet-up dev-fleet-down dev-fleet-logs dev-fleet-creds \
         demo-build demo-reset demo-reset-oauth demo-fault demo-logs demo-up demo-up-oauth demo-down demo-creds \
@@ -70,12 +71,12 @@ tool_bin = GOWORK=off go -C "$(CURDIR)/tools/$(1)" tool -n $(1)
 # the gap has bitten: CI additionally runs the race detector, the proto-drift
 # and proto-breaking gates, the operation-schema drift check, the devharness
 # absence check, the security-surface gate self-test, the codex-review gate
-# self-test, the changed-paths classifier
-# self-test, the docs-check, smoke-test, maintainer-check and dev-fleet Makefile
-# guard self-tests, the strict-umask test lane, both cross-binary suites, the
-# shell/workflow linters (lint-ci), the catalog-ledger gate, the secrets scan and the daemon's
-# cargo-deny policy. Work can pass the inner loop and fail CI on a class of problem the
-# author never looked at.
+# self-test, the changed-paths classifier self-test, the install-matrix platform-list
+# check and its self-test, the docs-check, smoke-test, maintainer-check and dev-fleet
+# Makefile guard self-tests, the strict-umask test lane, both cross-binary suites, the
+# shell/workflow linters (lint-ci), the catalog-ledger gate, the secrets scan and the
+# daemon's cargo-deny policy. Work can
+# pass the inner loop and fail CI on a class of problem the author never looked at.
 #
 # `make verify` closes that gap: one target, mirroring .github/workflows/ci.yml
 # gate for gate, so "it passes locally" means the same thing it means in CI.
@@ -95,7 +96,7 @@ tool_bin = GOWORK=off go -C "$(CURDIR)/tools/$(1)" tool -n $(1)
 verify: fmt lint-relay lint-daemon lint-comments lint-guard-escapes check-daemon-bans lint-devharness devharness-absent-check \
         test-relay-race test-daemon test-strict-umask opschema-check openapi-check \
         apiclient-check verify-proto docs-check test-security-surface \
-        test-codex-review test-ci-changed-paths \
+        test-codex-review test-ci-changed-paths test-install-matrix-platforms install-matrix-platforms-check \
         test-check-docs test-smoke-test test-packages test-maintainer-check test-release-image-guard \
         test-compose-floor-check compose-floor-check test-license-change-date test-catalog-ledger catalog-ledger-check \
         test-dev-fleet-make test-integration test-crossbinary \
@@ -369,10 +370,21 @@ test-codex-review:
 
 # Proves scripts/ci-changed-paths.sh runs the code jobs for every docs/ path a Go or Rust test
 # reads, skips them only for documentation nothing reads, trips the proto gates on every input
-# they depend on, and fails open off a pull request or without a parent commit. Hermetic: bash
-# and git against throwaway fixture repos under a mktemp WORKDIR.
+# they depend on, trips packaging on every input of the packages and the install matrix and
+# never on a docs-only or tooling-only change, and fails open off a pull request or without a
+# parent commit. Hermetic: bash and git against throwaway fixture repos under a mktemp WORKDIR.
 test-ci-changed-paths:
 	bash scripts/ci-changed-paths-test.sh
+
+# Proves scripts/install-matrix-platforms.sh holds the install matrix's platform list equal to
+# DI-33's in both claim shapes and across a re-wrap, and refuses a dropped, added or excluded
+# row. Hermetic: bash, awk and fixtures under a mktemp WORKDIR.
+test-install-matrix-platforms:
+	bash scripts/install-matrix-platforms-test.sh
+
+# DI-33 against the real spec and workflow.
+install-matrix-platforms-check:
+	bash scripts/install-matrix-platforms.sh
 
 # Proves scripts/check-docs.sh's cited-test check covers Go Test/Benchmark/Fuzz names and, in
 # proof rows, Rust test fns and cargo-fuzz targets — failing on a name that does not exist, a

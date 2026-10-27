@@ -1,0 +1,257 @@
+# The install matrix: the packages are proven on every supported platform, not assumed to
+# work there (docs/specs/daemon-installation.md DI-33; docs/specs/relay-configuration.md RC-23).
+#
+# What it proves. DI-33 lists the supported platforms and a platform is supported only where
+# CI installs the package, upgrades it over the operator's edited configuration and finds the
+# edit intact, and removes it. Each row below does exactly that, in a systemd-as-PID-1
+# container, on x86_64 and aarch64 runners, and scripts/install-matrix-row.sh labels every
+# assertion with the spec claim it is evidence for (DI-25, DI-26, DI-27, DI-29, DI-31, DI-42,
+# RC-15, RC-24, RC-25, RC-26). One row installs where systemd is not running. The vm-trace
+# jobs run the enroll, connect, execute syscall trace against the packaged unit on the runner
+# VM (DI-3's check of the packaged unit); a human signs off its first green report.
+#
+# How it is called. ci.yml calls this workflow for a change in the `packaging=` path class
+# (scripts/ci-changed-paths.sh: daemon, Relay and proto source, the packaging and the matrix
+# itself) and on every push to main. Concurrency comes from the caller,
+# whose workflow-level group cancels in-progress runs, so this file declares none. It uses no
+# build cache, like release.yml, so the release can call it unchanged.
+#
+# The packages are built here from the checked-out commit, twice: as 0.0.0~matrix1 and as the
+# real version, so every row upgrades from the first to the second without a published
+# release. The platform list is checked against DI-33 by scripts/install-matrix-platforms.sh.
+name: Install matrix
+
+on:
+  workflow_call:
+    inputs:
+      rust-toolchain:
+        description: The Rust toolchain that builds the daemon; the release passes its pinned one.
+        type: string
+        default: stable
+
+permissions: {}
+
+jobs:
+  build:
+    name: Build packages (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x86_64, runner: ubuntu-24.04, triple: x86_64-unknown-linux-musl }
+          - { arch: aarch64, runner: ubuntu-24.04-arm, triple: aarch64-unknown-linux-musl }
+    steps:
+      # build-version.sh reads tags and history, so the checkout is full.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: relay/go.mod
+          cache: false
+
+      - name: Set up Rust (musl target)
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: ${{ inputs.rust-toolchain }}
+          targets: ${{ matrix.triple }}
+
+      # apt-get update is required on the arm image. rpm is for the version guard below.
+      - name: Install musl linker and rpm
+        run: sudo apt-get update && sudo apt-get install -y musl-tools rpm
+
+      # Every manifest's mtime comes from SOURCE_DATE_EPOCH, as in the release.
+      - name: Pin SOURCE_DATE_EPOCH to the commit
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct HEAD)" >> "$GITHUB_ENV"
+
+      - name: Build relay (stamped, static)
+        run: make build-relay
+
+      - name: Build relay-daemon (stamped, static musl)
+        env:
+          TRIPLE: ${{ matrix.triple }}
+        run: make build-daemon-release RELEASE_DAEMON_TARGET="$TRIPLE"
+
+      - name: Build the old and the new package sets
+        env:
+          ARCH: ${{ matrix.arch }}
+          TRIPLE: ${{ matrix.triple }}
+        run: |
+          set -euo pipefail
+          daemon_bin="$(make -s print-release-daemon-bin RELEASE_DAEMON_TARGET="$TRIPLE")"
+          version="$(bash scripts/build-version.sh | awk '{print $1}')"
+          mkdir -p pkgs/old pkgs/new
+          # The semver prerelease becomes the package version 0.0.0~matrix1, which sorts below
+          # every real version on both dpkg and rpm.
+          bash scripts/build-packages.sh 0.0.0-matrix1 "$ARCH" "$daemon_bin" pkgs/old --catalog --relay relay/bin/relay
+          bash scripts/build-packages.sh "$version" "$ARCH" "$daemon_bin" pkgs/new --catalog --relay relay/bin/relay
+          printf '%s\n' "$version" > pkgs/VERSION
+
+      # Fails the job before any row runs: a row that upgrades from a version that does not
+      # sort below the new one proves nothing.
+      - name: Guard - the old set sorts below the new set on both families
+        run: |
+          set -euo pipefail
+          for name in relay-daemon relay; do
+            old_deb="$(ls pkgs/old/"${name}"_*.deb)"
+            new_deb="$(ls pkgs/new/"${name}"_*.deb)"
+            old_v="$(dpkg-deb -f "$old_deb" Version)"
+            new_v="$(dpkg-deb -f "$new_deb" Version)"
+            echo "deb $name: old $old_v, new $new_v"
+            case "$old_v" in
+              0.0.0~matrix1*) ;;
+              *) echo "::error::$name's old .deb is '$old_v', not 0.0.0~matrix1"; exit 1 ;;
+            esac
+            dpkg --compare-versions "$old_v" lt "$new_v" \
+              || { echo "::error::$name: $old_v does not sort below $new_v (deb)"; exit 1; }
+
+            old_rpm="$(ls pkgs/old/"${name}"-[0-9]*.rpm)"
+            new_rpm="$(ls pkgs/new/"${name}"-[0-9]*.rpm)"
+            old_tags="$(rpm -qp --qf '%{VERSION} %{RELEASE}' "$old_rpm")"
+            new_tags="$(rpm -qp --qf '%{VERSION} %{RELEASE}' "$new_rpm")"
+            echo "rpm $name: old '$old_tags', new '$new_tags'"
+            case "$old_tags" in
+              "0.0.0~matrix1 "*) ;;
+              *) echo "::error::$name's old .rpm is '$old_tags', not VERSION 0.0.0~matrix1"; exit 1 ;;
+            esac
+            OLD_EVR="$(rpm -qp --qf '%{EPOCHNUM}:%{VERSION}-%{RELEASE}' "$old_rpm")"
+            NEW_EVR="$(rpm -qp --qf '%{EPOCHNUM}:%{VERSION}-%{RELEASE}' "$new_rpm")"
+            export OLD_EVR NEW_EVR
+            # The values reach the macro through the environment, never its text.
+            order="$(rpm --eval '%{lua: print(rpm.vercmp(os.getenv("OLD_EVR"), os.getenv("NEW_EVR")))}')"
+            echo "rpm $name: $OLD_EVR vs $NEW_EVR -> vercmp $order"
+            [ "$order" = -1 ] || { echo "::error::$name: the old rpm does not sort below the new one"; exit 1; }
+          done
+          find pkgs -type f | sort
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: install-matrix-packages-${{ matrix.arch }}
+          path: pkgs/
+          retention-days: 3
+          if-no-files-found: error
+
+  install:
+    name: Install ${{ matrix.platform.id }} (${{ matrix.arch }})
+    needs: build
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        # BEGIN DI-33 platforms: scripts/install-matrix-platforms.sh holds this list equal to DI-33's.
+        platform:
+          - { id: ubuntu-24.04, distribution: "Ubuntu", release: "24.04", family: deb, privileged: true, fips: false }
+          - { id: ubuntu-26.04, distribution: "Ubuntu", release: "26.04", family: deb, privileged: true, fips: false }
+          - { id: debian-13, distribution: "Debian", release: "13", family: deb, privileged: true, fips: false }
+          - { id: rocky-10, distribution: "Rocky Linux", release: "10", family: rpm, privileged: true, fips: true }
+          - { id: amazonlinux-2023, distribution: "Amazon Linux", release: "2023", family: rpm, privileged: false, fips: false }
+        arch: [x86_64, aarch64]
+        # END DI-33 platforms
+        # A row's `privileged` starts false and is flipped to true only where CI shows that
+        # platform's systemd refusing to boot or run the units without it, with a comment
+        # here naming the refusal.
+        # ubuntu-24.04, ubuntu-26.04, debian-13 and rocky-10 (systemd 255, 259, 257 and 257):
+        # without it, every start of relay.service and relay-daemon.service fails with
+        # "Failed to keep CAP_SYS_ADMIN: Operation not permitted" and status 217/USER, which
+        # Docker's default capability set cannot satisfy and a real host's PID 1 can.
+        # amazonlinux-2023 (systemd 252) runs the units unprivileged.
+        include:
+          - { arch: x86_64, runner: ubuntu-24.04 }
+          - { arch: aarch64, runner: ubuntu-24.04-arm }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: install-matrix-packages-${{ matrix.arch }}
+          path: pkgs
+
+      - name: Run the row
+        env:
+          ID: ${{ matrix.platform.id }}
+          FAMILY: ${{ matrix.platform.family }}
+          PRIVILEGED: ${{ matrix.platform.privileged }}
+          FIPS: ${{ matrix.platform.fips }}
+        run: bash scripts/install-matrix-host.sh "$ID" "$FAMILY" "$PRIVILEGED" "$FIPS" "$PWD/pkgs"
+
+  # The package enables nothing where systemd is not running (DI-25). Debian's presets enable
+  # everything, so an install that ran `preset` anyway would leave a link here; on a distribution
+  # whose preset disables, the check would pass vacuously. One row, as DI-33's proof asks.
+  no-systemd:
+    name: Install without systemd (debian-13 x86_64)
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: install-matrix-packages-x86_64
+          path: pkgs
+
+      - name: Run the row
+        run: bash scripts/install-matrix-host.sh --no-systemd debian-13 deb "$PWD/pkgs"
+
+  vm-trace:
+    name: Syscall trace, packaged unit (${{ matrix.arch }})
+    needs: build
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x86_64, runner: ubuntu-24.04 }
+          - { arch: aarch64, runner: ubuntu-24.04-arm }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: install-matrix-packages-${{ matrix.arch }}
+          path: pkgs
+
+      - name: Trace the packaged unit
+        run: sudo bash scripts/install-matrix-vm-trace.sh "$PWD/pkgs" "$RUNNER_TEMP/vm-trace"
+
+      - name: Show the report
+        if: ${{ !cancelled() }}
+        run: |
+          if [ -f "$RUNNER_TEMP/vm-trace/report.md" ]; then
+            cat "$RUNNER_TEMP/vm-trace/report.md" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # Only derived files leave the VM: the raw strace log stays on it, because it is a
+      # process trace of a root daemon that holds the Node's key.
+      - name: Upload the report for sign-off
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: vm-trace-${{ matrix.arch }}
+          path: |
+            ${{ runner.temp }}/vm-trace/report.md
+            ${{ runner.temp }}/vm-trace/syscalls.txt
+            ${{ runner.temp }}/vm-trace/out-of-filter.txt
+          retention-days: 30
+          if-no-files-found: warn

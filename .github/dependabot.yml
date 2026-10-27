@@ -156,3 +156,27 @@ updates:
         patterns: ["*"]
     commit-message:
       prefix: "deps(image)"
+
+  # The install matrix's five base images (docker/install-matrix/, one per DI-33 platform) are
+  # pinned by multi-arch index digest, with the tag beside each digest; this refreshes the
+  # digests. A tag never moves: each tag names the platform its row tests, and changing a
+  # platform is a DI-33 change, never a dependency bump. So major and minor tag bumps are
+  # ignored (Ubuntu 24.04 to 26.04, or to the non-LTS 24.10).
+  - package-ecosystem: docker
+    directory: /docker/install-matrix
+    schedule:
+      interval: monthly
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 1
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+    groups:
+      install-matrix-images:
+        patterns: ["*"]
+      install-matrix-images-security:
+        applies-to: security-updates
+        patterns: ["*"]
+    commit-message:
+      prefix: "deps(ci)"
