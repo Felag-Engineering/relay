@@ -12,7 +12,7 @@ a Node last reported; it does not make a Policy decision, change a Node, or infe
 state.
 
 It also holds one write, which only names what it reads: a **Policy alias**, a human-readable
-name a human `admin` gives a Policy fingerprint (*Designed, not built*). An alias changes how a
+name a human `admin` gives a Policy fingerprint. An alias changes how a
 fingerprint is displayed and nothing else.
 
 Read means the call cannot change Node state, not that its contents are harmless to disclose.
@@ -27,7 +27,7 @@ access is attributable and auditable.
 | **Control API** | `GET /api/v1/nodes/{node_id}` returns one Node's registry data and certificate provenance. No fleet enumeration, Policy-view or vocabulary route (QRY-1). |
 | **Admin Console** | The Fleet view and Node detail read the registry through the capability read lane. Node detail renders the Policy view — read from the display-only cache directly — with its receipt time, and the template-set fingerprint; it does not render the Template vocabulary (QRY-14). The Compare screen reads through the lane and is recorded like every other read (QRY-28). |
 
-Policy aliases are *Designed, not built* (QRY-29 … QRY-39): the Console reads and writes them;
+Policy aliases are built (QRY-29 … QRY-38; QRY-39 is After MVP): the Console reads and writes them;
 the Control API and MCP carry none (QRY-36, *Future work*).
 
 No surface exposes a general registry search, a way to refresh a daemon snapshot, or any way
@@ -106,6 +106,8 @@ to query, author or alter Policy over the wire; a live hypothetical is `policy-p
   fails closed; the adapters hold no reader of their own, MCP resolves no Selector itself, and
   the Compare screen has no exemption.
 
+- **QRY-29** A human Account with the `admin` role can set, rename or clear the **Policy alias** of
+  a well-formed Policy fingerprint through the capability layer.
 - **QRY-30** Every alias change is recorded on the audit trail with the actor, the fingerprint,
   and the old and new value, and is not made if the record cannot be written.
 - **QRY-31** A Policy alias is a display name the Relay holds for a fingerprint. It is not Policy,
@@ -254,7 +256,6 @@ Claims with **no row**, and so nothing checking them:
 | Claim | Statement | Milestone |
 |---|---|---|
 | QRY-25 | `list_operations` takes a Selector and reports each Operation reachable across the matched Nodes — description, typed slots and allowed values, risk class, and which Nodes report it; a single Node ID is the one-Node case. Retires the Node-ID-only half of QRY-12 and the vocabulary row in *Performance*. | After MVP |
-| QRY-29 | A human Account with the `admin` role can set, rename or clear the **Policy alias** of a well-formed Policy fingerprint through the capability layer. | MVP |
 | QRY-39 | No query surface can set Labels, modify Policy, load Templates, refresh a daemon snapshot, issue a Policy verdict or dispatch an Operation: each adapter's structural guard forbids every write seam but the alias write (QRY-29), and every dispatch seam. Replaces QRY-24 when promoted. | After MVP |
 
 ## Out of scope
