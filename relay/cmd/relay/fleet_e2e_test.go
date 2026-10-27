@@ -228,19 +228,18 @@ func waitForInFlightTasks(t *testing.T, harness *harnessClient, jobID string, n 
 	}
 }
 
-// nodeByRelayLabel returns the node_id among nodeIDs whose relay_labels[key]
-// == value (bare key, no "relay:" prefix — registry.Node.RelayLabels strips
-// it, ADR-0006).
-func nodeByRelayLabel(t *testing.T, harness *harnessClient, nodeIDs []string, key, value string) string {
+// nodeByTag returns the node_id among nodeIDs whose tag_labels[key] == value
+// (bare key, no "tag:" prefix — registry.Node.TagLabels strips it, ADR-0050).
+func nodeByTag(t *testing.T, harness *harnessClient, nodeIDs []string, key, value string) string {
 	t.Helper()
 	for _, id := range nodeIDs {
 		resp := harness.call(t, map[string]any{"op": "get_node", "node_id": id})
-		labels, _ := resp["relay_labels"].(map[string]any)
+		labels, _ := resp["tag_labels"].(map[string]any)
 		if s, ok := labels[key].(string); ok && s == value {
 			return id
 		}
 	}
-	t.Fatalf("no connected node among %v has relay label %s=%s", nodeIDs, key, value)
+	t.Fatalf("no connected node among %v has tag %s=%s", nodeIDs, key, value)
 	return ""
 }
 
@@ -322,8 +321,8 @@ func TestFleetE2E_OverCapRejectedBothClasses(t *testing.T) {
 
 	fr := startFleetRelay(t, relayBin, "[reach]\nread_blast_cap = 1\nmutate_blast_cap = 1\n")
 
-	joinA := createFleetJoinString(t, fr.harness, "relay:env=test", "relay:nodeid=a")
-	joinB := createFleetJoinString(t, fr.harness, "relay:env=test", "relay:nodeid=b")
+	joinA := createFleetJoinString(t, fr.harness, "tag:env=test", "tag:nodeid=a")
+	joinB := createFleetJoinString(t, fr.harness, "tag:env=test", "tag:nodeid=b")
 	policyPath := relaytest.WriteTempFile(t, "policy-*.toml", relaytest.FixturePolicy)
 	startDaemonSubprocess(t, daemonBin, joinA, t.TempDir(), policyPath, "fleet-overcap-a")
 	startDaemonSubprocess(t, daemonBin, joinB, t.TempDir(), policyPath, "fleet-overcap-b")
@@ -331,7 +330,7 @@ func TestFleetE2E_OverCapRejectedBothClasses(t *testing.T) {
 
 	readResp := fr.harness.callRaw(t, map[string]any{
 		"op":        "run_job",
-		"selector":  "relay:env=test",
+		"selector":  "tag:env=test",
 		"operation": "file.read",
 		"args":      map[string]string{"path": "/etc/hostname"},
 	})
@@ -339,14 +338,14 @@ func TestFleetE2E_OverCapRejectedBothClasses(t *testing.T) {
 
 	rawResp := fr.harness.callRaw(t, map[string]any{
 		"op":       "run_job",
-		"selector": "relay:env=test",
+		"selector": "tag:env=test",
 		"raw_exec": []string{"/usr/bin/systemctl", "status", "nginx"},
 	})
 	assertCapRefusal(t, rawResp, "mutate")
 
 	mutateResp := fr.harness.callRaw(t, map[string]any{
 		"op":        "run_job",
-		"selector":  "relay:env=test",
+		"selector":  "tag:env=test",
 		"operation": "service.restart",
 		"args":      map[string]string{"unit": "nginx"},
 	})
@@ -366,15 +365,15 @@ func TestFleetE2E_JobSpanningOfflineNode(t *testing.T) {
 
 	fr := startFleetRelay(t, relayBin, "")
 
-	joinA := createFleetJoinString(t, fr.harness, "relay:env=test", "relay:nodeid=a")
-	joinB := createFleetJoinString(t, fr.harness, "relay:env=test", "relay:nodeid=b")
+	joinA := createFleetJoinString(t, fr.harness, "tag:env=test", "tag:nodeid=a")
+	joinB := createFleetJoinString(t, fr.harness, "tag:env=test", "tag:nodeid=b")
 	policyPath := relaytest.WriteTempFile(t, "policy-*.toml", relaytest.FixturePolicy)
 	startDaemonSubprocess(t, daemonBin, joinA, t.TempDir(), policyPath, "fleet-offline-a")
 	daemonB := startDaemonSubprocess(t, daemonBin, joinB, t.TempDir(), policyPath, "fleet-offline-b")
 
 	nodeIDs := waitForConnected(t, fr.harness, 2)
-	nodeA := nodeByRelayLabel(t, fr.harness, nodeIDs, "nodeid", "a")
-	nodeB := nodeByRelayLabel(t, fr.harness, nodeIDs, "nodeid", "b")
+	nodeA := nodeByTag(t, fr.harness, nodeIDs, "nodeid", "a")
+	nodeB := nodeByTag(t, fr.harness, nodeIDs, "nodeid", "b")
 
 	daemonB.Kill()
 	waitForNodeConnected(t, fr.harness, nodeB, false)
@@ -383,7 +382,7 @@ func TestFleetE2E_JobSpanningOfflineNode(t *testing.T) {
 	contentPath := relaytest.WriteTempFile(t, "content-*.txt", wantContent)
 	resp := fr.harness.call(t, map[string]any{
 		"op":        "run_job",
-		"selector":  "relay:env=test",
+		"selector":  "tag:env=test",
 		"operation": "file.read",
 		"args":      map[string]string{"path": contentPath},
 	})
@@ -436,8 +435,8 @@ func TestFleetE2E_FreezeStopsDispatch_And_CancelKillsInflightAndUndispatched(t *
 
 	fr := startFleetRelay(t, relayBin, "")
 
-	joinA := createFleetJoinString(t, fr.harness, "relay:env=test", "relay:nodeid=a")
-	joinB := createFleetJoinString(t, fr.harness, "relay:env=test", "relay:nodeid=b")
+	joinA := createFleetJoinString(t, fr.harness, "tag:env=test", "tag:nodeid=a")
+	joinB := createFleetJoinString(t, fr.harness, "tag:env=test", "tag:nodeid=b")
 	policyPath := relaytest.WriteTempFile(t, "policy-*.toml", relaytest.FixturePolicy)
 	startDaemonSubprocess(t, daemonBin, joinA, t.TempDir(), policyPath, "fleet-freeze-a")
 	startDaemonSubprocess(t, daemonBin, joinB, t.TempDir(), policyPath, "fleet-freeze-b")
@@ -453,7 +452,7 @@ func TestFleetE2E_FreezeStopsDispatch_And_CancelKillsInflightAndUndispatched(t *
 
 	frozenResp := fr.harness.callRaw(t, map[string]any{
 		"op":        "run_job",
-		"selector":  "relay:env=test",
+		"selector":  "tag:env=test",
 		"operation": "file.read",
 		"args":      map[string]string{"path": "/etc/hostname"},
 	})
@@ -480,7 +479,7 @@ func TestFleetE2E_FreezeStopsDispatch_And_CancelKillsInflightAndUndispatched(t *
 
 	unfrozenResp := fr.harness.call(t, map[string]any{
 		"op":        "run_job",
-		"selector":  "relay:env=test",
+		"selector":  "tag:env=test",
 		"operation": "file.read",
 		"args":      map[string]string{"path": "/etc/hostname"},
 	})
@@ -509,7 +508,7 @@ func TestFleetE2E_FreezeStopsDispatch_And_CancelKillsInflightAndUndispatched(t *
 		// — the main goroutine reads the result off runDone instead.
 		resp, err := harness2.send(map[string]any{
 			"op":       "run_job",
-			"selector": "relay:env=test",
+			"selector": "tag:env=test",
 			"raw_exec": []string{"/bin/sleep", "30"},
 		})
 		runDone <- runOutcome{resp: resp, err: err}
@@ -571,7 +570,7 @@ func TestFleetE2E_AuditAndRestartSurvival(t *testing.T) {
 
 	fr := startFleetRelay(t, relayBin, "")
 
-	join := createFleetJoinString(t, fr.harness, "relay:env=test")
+	join := createFleetJoinString(t, fr.harness, "tag:env=test")
 	policyPath := relaytest.WriteTempFile(t, "policy-*.toml", relaytest.FixturePolicy)
 	startDaemonSubprocess(t, daemonBin, join, t.TempDir(), policyPath, "fleet-restart-node")
 	waitForConnected(t, fr.harness, 1)
@@ -580,7 +579,7 @@ func TestFleetE2E_AuditAndRestartSurvival(t *testing.T) {
 	contentPath := relaytest.WriteTempFile(t, "content-*.txt", wantContent)
 	resp := fr.harness.call(t, map[string]any{
 		"op":        "run_job",
-		"selector":  "relay:env=test",
+		"selector":  "tag:env=test",
 		"operation": "file.read",
 		"args":      map[string]string{"path": contentPath},
 	})
@@ -650,7 +649,7 @@ func TestFleetE2E_CrashMidJobNeverDoubleRuns(t *testing.T) {
 
 	fr := startFleetRelay(t, relayBin, "")
 
-	join := createFleetJoinString(t, fr.harness, "relay:env=test")
+	join := createFleetJoinString(t, fr.harness, "tag:env=test")
 	policyPath := relaytest.WriteTempFile(t, "policy-*.toml", relaytest.FixturePolicy)
 	stateDir := t.TempDir()
 	daemon := startDaemonSubprocess(t, daemonBin, join, stateDir, policyPath, "fleet-crash-node")
@@ -664,7 +663,7 @@ func TestFleetE2E_CrashMidJobNeverDoubleRuns(t *testing.T) {
 		// *testing.T, so it is safe to ignore from a background goroutine.
 		_, _ = harness2.send(map[string]any{
 			"op":       "run_job",
-			"selector": "relay:env=test",
+			"selector": "tag:env=test",
 			"raw_exec": []string{"/bin/sleep", "30"},
 		})
 	}()
@@ -730,8 +729,8 @@ func TestFleetE2E_CrashMidJobNeverDoubleRuns(t *testing.T) {
 	auditRecs := toMapSlice(auditResp["audit"])
 	assertIntentPlusOutcomes(t, "after the crash", auditRecs, 0)
 	for _, rec := range auditRecs {
-		if rec["kind"] == "dispatch_intent" && rec["selector"] != "relay:env=test" {
-			t.Errorf("dispatch_intent selector = %v, want relay:env=test", rec["selector"])
+		if rec["kind"] == "dispatch_intent" && rec["selector"] != "tag:env=test" {
+			t.Errorf("dispatch_intent selector = %v, want tag:env=test", rec["selector"])
 		}
 	}
 }

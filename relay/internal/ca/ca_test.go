@@ -441,6 +441,26 @@ func TestBundle_IsCAPEM(t *testing.T) {
 	}
 }
 
+// TestNotAfter_IsTheCACertificateExpiry: the gauge reports the expiry of the
+// certificate the Bundle actually delivers.
+func TestNotAfter_IsTheCACertificateExpiry(t *testing.T) {
+	c, err := openPlain(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	block, _ := pem.Decode(c.Bundle())
+	if block == nil {
+		t.Fatal("Bundle did not contain a PEM block")
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		t.Fatalf("parse bundled certificate: %v", err)
+	}
+	if got := c.NotAfter(); !got.Equal(cert.NotAfter) {
+		t.Errorf("NotAfter() = %v, want the bundled certificate's %v", got, cert.NotAfter)
+	}
+}
+
 // TestFingerprint_IsTheCACertificateDigest: this is the number an operator
 // compares a Node's configured trust root against, and the one ADR-0031 will
 // have a daemon pin — so it must be the digest of the certificate the Bundle

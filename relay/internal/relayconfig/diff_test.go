@@ -60,6 +60,8 @@ func TestDiff_RestartRequiredIsRC21sListPlusConsoleWindows(t *testing.T) {
 		"node_plane.listen_address", "node_plane.advertised_address",
 		"control_plane.enabled", "control_plane.listen_address", "console.enabled",
 		"ca.dir", "store.path", "tls.hostname",
+		// RC-47 makes tls.extra_names bind-time, extending RC-21's list by reference.
+		"tls.extra_names",
 		"oauth.issuer", "oauth.audience", "oauth.account_claim", "oauth.required_scope", "oauth.public_url",
 		"console.session_max_age", "console.session_idle", "console.step_up_window",
 	}
@@ -113,6 +115,32 @@ func TestDiff_ChangedValuesAreNamedAndClassified(t *testing.T) {
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("Diff = %+v, want %+v", got, want)
+	}
+}
+
+// A tls.extra_names change of any kind, a reorder included, is restart-required.
+// Proves RC-47.
+func TestDiff_ExtraNamesChangeIsRestartRequired(t *testing.T) {
+	list := func(names string) Config {
+		return loadForDiff(t, diffBase+"extra_names = ["+names+"]\n")
+	}
+	base := list(`"a.example.net", "b.example.net"`)
+	for name, next := range map[string]Config{
+		"removed":   loadForDiff(t, diffBase),
+		"changed":   list(`"a.example.net", "c.example.net"`),
+		"reordered": list(`"b.example.net", "a.example.net"`),
+	} {
+		cs := Diff(base, next)
+		want := []Change{{Key: "tls.extra_names", RestartRequired: true}}
+		if !slices.Equal(cs, want) {
+			t.Errorf("%s: Diff = %+v, want %+v", name, cs, want)
+		}
+	}
+	if cs := Diff(loadForDiff(t, diffBase), base); !slices.Equal(cs, []Change{{Key: "tls.extra_names", RestartRequired: true}}) {
+		t.Errorf("added: Diff = %+v", cs)
+	}
+	if cs := Diff(base, list(`"a.example.net", "b.example.net"`)); len(cs) != 0 {
+		t.Errorf("an unchanged list differs: %+v", cs)
 	}
 }
 

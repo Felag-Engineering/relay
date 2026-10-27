@@ -24,8 +24,8 @@
 #     remediation.
 #   - Daemons get only the join string from the mint response (written to
 #     `bootstrap-shared`): never CA material, which they pin from the join
-#     string's fingerprint, and an Enrollment Token the Relay accepts only if
-#     it is `relay:`-scoped — it can enroll Nodes and nothing else.
+#     string's fingerprint, and an Enrollment Token that names initial tags — it
+#     can enroll Nodes and nothing else.
 #   - The Console password reaches `relay init` on its stdin, from the shell's
 #     printf builtin, never argv. The value arrives from the environment, which is
 #     itself a process-listing exposure: acceptable on this fleet and nowhere else.
@@ -171,16 +171,16 @@ if [ -n "${OAUTH_ACCOUNT_NAME}" ]; then
     ensure_account "${OAUTH_ACCOUNT_NAME}" operator >/dev/null
 fi
 
-# i. A reusable, relay:-scoped Enrollment Token (asks explicitly for unlimited use, so every
+# i. A reusable Enrollment Token naming initial tags (asks explicitly for unlimited use, so every
 # daemon and every restart of a not-yet-enrolled daemon can use it), minted
 # through the real Control API. Daemons get ONLY its join string, which carries
 # the Relay address and the CA fingerprint they pin; the 0600 file is read by
 # docker/daemon-entrypoint.sh. A CA copy left by an older run is removed.
-log "minting a relay:-scoped Enrollment Token..."
+log "minting an Enrollment Token with initial tags..."
 rm -f /bootstrap/enrollment-token /bootstrap/ca-cert.pem
 ( umask 077
   api POST /api/v1/enrollment-tokens \
-      '{"scope":["relay:env=dev","relay:fleet=dev"],"ttl_seconds":86400,"unlimited":true}' \
+      '{"initial_tags":["tag:env=dev","tag:fleet=dev"],"ttl_seconds":86400,"unlimited":true}' \
       | sed -n 's/.*"join_string":"\([^"]*\)".*/\1/p' > /bootstrap/join-string )
 test -s /bootstrap/join-string || die "the mint response carried no join string"
 

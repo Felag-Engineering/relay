@@ -391,6 +391,44 @@ func TestServerCertificate_FingerprintNeverRotates(t *testing.T) {
 	}
 }
 
+// TestServerCertificate_NotAfterNeverRotates: the expiry gauge is read by a
+// metrics scrape, so like Fingerprint it must never be able to re-issue the
+// certificate.
+func TestServerCertificate_NotAfterNeverRotates(t *testing.T) {
+	clk := newTestClock()
+	_, s, rec := testServerCert(t, clk)
+
+	leaf, _ := mustGet(t, s)
+	if got := s.NotAfter(); !got.Equal(leaf.NotAfter) {
+		t.Errorf("NotAfter() = %v, want the served leaf's %v", got, leaf.NotAfter)
+	}
+
+	// Past the renewal threshold, but with no handshake.
+	clk.Advance(ServerLeafValidity - time.Duration(float64(ServerLeafValidity)*renewMinFraction) + time.Hour)
+
+	if got := s.NotAfter(); !got.Equal(leaf.NotAfter) {
+		t.Error("NotAfter() rotated the certificate — a metrics scrape must never be able to " +
+			"re-issue the Relay's server certificate")
+	}
+	if got := rec.count(); got != 0 {
+		t.Fatalf("observed rotations = %d, want 0 — reading the expiry issued a certificate", got)
+	}
+
+	rotated, _ := mustGet(t, s)
+	if got := s.NotAfter(); !got.Equal(rotated.NotAfter) {
+		t.Errorf("NotAfter() = %v after rotation, want the new leaf's %v", got, rotated.NotAfter)
+	}
+}
+
+// TestServerCertificate_NotAfterBeforeFirstIssue: the zero value reports the
+// zero time, which the composition root reads as "no series".
+func TestServerCertificate_NotAfterBeforeFirstIssue(t *testing.T) {
+	var s ServerCertificate
+	if got := s.NotAfter(); !got.IsZero() {
+		t.Errorf("NotAfter() with no certificate = %v, want the zero time", got)
+	}
+}
+
 // TestServerCertificate_FingerprintBeforeFirstIssue: the zero value reports
 // nothing rather than a digest of nothing. NewServerCertificate mints eagerly,
 // so this is only reachable through the zero value, and "" is what the Console

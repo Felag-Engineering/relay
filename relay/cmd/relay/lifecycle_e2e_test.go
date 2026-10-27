@@ -4,7 +4,7 @@
 // The test acts as a synthetic relay-daemon and covers the three v0.0.2
 // acceptance criteria end-to-end:
 //
-//  1. Enrollment Token → Enroll → correct relay:/node: Labels in registry.
+//  1. Enrollment Token → Enroll → correct relay:/node:/tag: Labels in registry.
 //  2. Renew over mTLS → fresh cert, same node_id, new serial.
 //  3. RevokeNode → immediate Tunnel teardown + handshake rejection on reconnect.
 //
@@ -67,12 +67,12 @@ func startRealServer(t *testing.T) (*bufconn.Listener, *appDeps) {
 // TestLifecycle_SeedEnrollMTLSRenewRevoke drives the complete Node lifecycle via
 // the real Relay composition root. Steps:
 //
-//	(a) Seed a scoped Enrollment Token via the test-only deps.tokens.Create path.
+//	(a) Seed an Enrollment Token naming initial tags via the test-only deps.tokens.Create path.
 //	(b) Enroll over server-auth TLS (certless, no client cert): assert CN == node_id,
-//	    CaBundle matches the CA bundle, AssignedLabels contain the relay: scope Labels.
+//	    CaBundle matches the CA bundle, AssignedLabels are relay:node-id alone.
 //	(c) Reconnect over mTLS with the issued cert; open Tunnel, send Hello (with
 //	    node:role=web and a relay: Label that must be dropped), recv Ping, then assert
-//	    registry shows correct NodeLabels / RelayLabels / non-zero LastSeen.
+//	    registry shows correct NodeLabels / RelayLabels / TagLabels / non-zero LastSeen.
 //	(d) Send Heartbeat; poll until LastSeen advances (≤5 s).
 //	(e) Renew over the same mTLS conn: assert fresh cert, same node_id, new serial.
 //	(f) RevokeNode: assert still-open Tunnel stream tears down with
@@ -86,10 +86,10 @@ func TestLifecycle_SeedEnrollMTLSRenewRevoke(t *testing.T) {
 
 	// -------------------------------------------------------------------------
 	// (a) Seed Enrollment Token — test-only path (no production seam or admin RPC).
-	//     Two relay: Labels to verify both are stamped at Enroll.
+	//     Two initial tags to verify both are written at Enroll, as ordinary tags.
 	// -------------------------------------------------------------------------
-	tokenScope := []string{"relay:env=prod", "relay:role=web"}
-	_, plaintext, err := deps.tokens.Create(ctx, tokenScope, time.Hour)
+	initialTags := []string{"tag:env=prod", "tag:role=web"}
+	_, plaintext, err := deps.tokens.Create(ctx, initialTags, time.Hour, testHumanMinter)
 	if err != nil {
 		t.Fatalf("seed Enrollment Token: %v", err)
 	}
@@ -139,11 +139,10 @@ func TestLifecycle_SeedEnrollMTLSRenewRevoke(t *testing.T) {
 		t.Error("CaBundle in EnrollResponse does not match deps.ca.Bundle()")
 	}
 
-	// AssignedLabels must carry both relay: Labels from the token scope, and only
-	// those — the Relay stamps identity Labels solely from the Enrollment Token's
-	// scope, never from the relay-daemon's request (ADR-0006).
-	// Key format includes the "relay:" prefix per the proto convention (handler.go:284).
-	wantAssigned := map[string]string{"relay:env": "prod", "relay:role": "web"}
+	// AssignedLabels carry relay:node-id alone: the initial tags are tags, not
+	// assigned, and no relay: label comes from the relay-daemon's request
+	// (ADR-0006). Key format includes the "relay:" prefix per the proto convention.
+	wantAssigned := map[string]string{"relay:node-id": nodeID}
 	gotAssigned := make(map[string]string, len(enrollResp.GetAssignedLabels()))
 	for _, l := range enrollResp.GetAssignedLabels() {
 		gotAssigned[l.GetKey()] = l.GetValue()
@@ -209,16 +208,14 @@ func TestLifecycle_SeedEnrollMTLSRenewRevoke(t *testing.T) {
 	if len(n.NodeLabels) != 1 {
 		t.Errorf("NodeLabels should have exactly 1 entry, got %v", n.NodeLabels)
 	}
-	// RelayLabels: stamped from the Enrollment Token scope; preserved across Hello
-	// Upsert because the update path in memory.go leaves relay-space untouched.
-	if n.RelayLabels["env"] != "prod" {
-		t.Errorf("RelayLabels[env]: got %q, want prod", n.RelayLabels["env"])
+	// RelayLabels: relay:node-id alone, preserved across Hello Upsert because the
+	// update path in memory.go leaves relay-space untouched.
+	if len(n.RelayLabels) != 1 || n.RelayLabels["node-id"] != nodeID {
+		t.Errorf("RelayLabels should be exactly node-id=%s, got %v", nodeID, n.RelayLabels)
 	}
-	if n.RelayLabels["role"] != "web" {
-		t.Errorf("RelayLabels[role]: got %q, want web", n.RelayLabels["role"])
-	}
-	if len(n.RelayLabels) != 2 {
-		t.Errorf("RelayLabels should have exactly 2 entries, got %v", n.RelayLabels)
+	// TagLabels: the token's initial tags, written at Enroll and likewise untouched by Hello.
+	if n.TagLabels["env"] != "prod" || n.TagLabels["role"] != "web" || len(n.TagLabels) != 2 {
+		t.Errorf("TagLabels should be exactly env=prod role=web, got %v", n.TagLabels)
 	}
 	if n.LastSeen.IsZero() {
 		t.Error("LastSeen is zero after Hello")

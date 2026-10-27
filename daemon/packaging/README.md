@@ -8,9 +8,9 @@ exception for Nodes that run `pkg.install` or filesystem-mutating Raw Exec.
 
 ## Packages
 
-`nfpm/` holds the manifests for two packages, each built as `.deb` and `.rpm` by
+`nfpm/` holds the manifest for the one package, built as `.deb` and `.rpm` by
 `scripts/build-packages.sh` with the nfpm pinned under `tools/nfpm`; `scripts/` holds the
-daemon package's maintainer scripts. The release builds both packages twice and refuses unless
+daemon package's maintainer scripts. The release builds both twice and refuses unless
 the builds are byte-identical and each package's `/usr/bin/relay-daemon` is the release binary.
 It reads every package with `dpkg-deb` and `rpm` and checks its whole content against
 `expected/` and `scripts/`.
@@ -29,17 +29,25 @@ are, install by hand as below.
   directory did not exist before the install; places `/etc/relay-daemon/relay-daemon.env`
   (root `0600`) only if none exists; and, where systemd is running,
   runs `systemctl preset`. It never starts or restarts the daemon, and never rewrites the
-  Policy or the environment file. An upgrade runs `systemctl daemon-reload` only.
-- **`relay-read`** is the shipped read catalog, optional, depending on `relay-daemon`. Its
-  Templates are package-owned plain files under `/etc/relay-daemon/templates.d/relay-read/`:
-  replaced on upgrade and removed with the package.
+  Policy or the environment file. An upgrade runs `systemctl daemon-reload` only. It also
+  carries the shipped read catalog: package-owned plain files under
+  `/etc/relay-daemon/templates.d/relay-read/`, replaced on upgrade and removed with the
+  package. On a Node holding a pre-release `relay-read` package, `relay-daemon` replaces
+  and removes it on upgrade (Replaces and Conflicts on .deb; Obsoletes and Conflicts on
+  .rpm).
 
-Removing `relay-daemon` stops and disables the unit and removes the binary and the unit. It
+Removing `relay-daemon` stops and disables the unit and removes the binary, the unit and the shipped catalog. It
 keeps the Policy, the Policy directory, the environment file and the state directory (the
 Node's identity). `apt purge` then deletes those the package created, using a marker under
 `/var/lib/relay-daemon-package/` that records what existed before the first install; a
 directory holding anything the package did not put there is left and named. `.rpm` has no
 purge: removal prints the paths to delete by hand.
+
+## Ansible role
+
+`ansible/relay_daemon/` is the Ansible role that installs the daemon package and joins a Node
+from a join string in your vault, with the string on standard input
+([its README](ansible/relay_daemon/README.md)). It is not yet a release attachment.
 
 ## Install
 
@@ -48,6 +56,7 @@ $ sudo install -m 0755 /path/to/relay-daemon /usr/bin/relay-daemon
 $ sudo install -m 0644 relay-daemon.service /etc/systemd/system/relay-daemon.service
 $ sudo mkdir -p /etc/relay-daemon
 $ sudo install -m 0644 -o root -g root /path/to/policy.toml /etc/relay-daemon/policy.toml
+$ sudo install -D -m 0644 templates.d/relay-read/catalog.toml /etc/relay-daemon/templates.d/relay-read/catalog.toml
 $ sudo install -m 0600 -o root -g root relay-daemon.env.example /etc/relay-daemon/relay-daemon.env
 $ sudo "$EDITOR" /etc/relay-daemon/relay-daemon.env   # fill in RELAY_* values, see below
 ```

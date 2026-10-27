@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"path/filepath"
 	"reflect"
@@ -12,6 +13,10 @@ import (
 	"testing"
 	"time"
 )
+
+// discardLogger is the logger a test hands applyMigration when it asserts
+// nothing about what the migration logs.
+func discardLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
 // The regression this exists for: a semicolon inside a migration comment used
 // to split the file mid-sentence, handing the remaining prose to SQLite as a
@@ -262,7 +267,7 @@ func TestAppliedVersions_ReadsEveryRowNotJustTheMax(t *testing.T) {
 		if m.version > 2 {
 			continue
 		}
-		if err := applyMigration(ctx, db, m); err != nil {
+		if err := applyMigration(ctx, db, m, discardLogger()); err != nil {
 			t.Fatalf("apply %s: %v", m.name, err)
 		}
 	}
@@ -307,7 +312,7 @@ func seedMigrations(t *testing.T, db *sql.DB, skip ...int) (migrations []migrati
 		if _, ok := skipped[m.version]; ok {
 			continue
 		}
-		if err := applyMigration(context.Background(), db, m); err != nil {
+		if err := applyMigration(context.Background(), db, m, discardLogger()); err != nil {
 			t.Fatalf("seed %s: %v", m.name, err)
 		}
 		seeded++

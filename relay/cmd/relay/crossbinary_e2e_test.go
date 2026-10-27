@@ -31,6 +31,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -295,7 +296,7 @@ func TestCrossBinary_RelayDaemonLoopback(t *testing.T) {
 
 	tokenResp := harness.call(t, map[string]any{
 		"op":          "create_token",
-		"labels":      []string{"relay:env=test"},
+		"labels":      []string{"tag:env=test"},
 		"ttl_seconds": 3600,
 	})
 	joinString, _ := tokenResp["join_string"].(string)
@@ -369,13 +370,29 @@ func TestCrossBinary_RelayDaemonLoopback(t *testing.T) {
 	if templateFingerprint == fingerprint {
 		t.Error("get_node: template_set_fingerprint equals policy_fingerprint; the two must be domain-separated")
 	}
-	if _, ok := getNodeResp["node_labels"]; !ok {
-		t.Error("get_node: node_labels missing from response")
+	nodeLabels, ok := getNodeResp["node_labels"].(map[string]any)
+	if !ok {
+		t.Fatalf("get_node: node_labels = %v, want a map", getNodeResp["node_labels"])
+	}
+	// The daemon declares node:os and node:arch by default; they arrive over
+	// the real Enroll and Hello like any declared label. node:hostname is
+	// declared too, but a hostname the Relay would refuse is left out, so its
+	// presence is not asserted.
+	if runtime.GOOS == "linux" && nodeLabels["os"] != "linux" {
+		t.Errorf("get_node: node_labels[os] = %v, want %q (a default the daemon declares)",
+			nodeLabels["os"], "linux")
+	}
+	if arch, _ := nodeLabels["arch"].(string); arch == "" {
+		t.Errorf("get_node: node_labels[arch] = %v, want a non-empty default", nodeLabels["arch"])
+	}
+	tagLabels, _ := getNodeResp["tag_labels"].(map[string]any)
+	if tagLabels["env"] != "test" {
+		t.Errorf("get_node: tag_labels[env] = %v, want %q (written from create_token's initial tags)",
+			tagLabels["env"], "test")
 	}
 	relayLabels, _ := getNodeResp["relay_labels"].(map[string]any)
-	if relayLabels["env"] != "test" {
-		t.Errorf("get_node: relay_labels[env] = %v, want %q (stamped from create_token's scope)",
-			relayLabels["env"], "test")
+	if relayLabels["node-id"] != getNodeResp["node_id"] || len(relayLabels) != 1 {
+		t.Errorf("get_node: relay_labels = %v, want exactly node-id = the Node's ID", relayLabels)
 	}
 
 	// -------------------------------------------------------------------
@@ -397,6 +414,29 @@ func TestCrossBinary_RelayDaemonLoopback(t *testing.T) {
 	}
 	if stdout, _ := readResp["stdout"].(string); stdout != wantContent {
 		t.Errorf("file.read stdout: got %q, want %q", stdout, wantContent)
+	}
+
+	// -------------------------------------------------------------------
+	// The default node:os label resolves as a Selector: a Job aimed at
+	// node:os=linux reaches this Node.
+	// -------------------------------------------------------------------
+	if runtime.GOOS == "linux" {
+		osJob := harness.call(t, map[string]any{
+			"op":        "run_job",
+			"selector":  "node:os=linux",
+			"operation": "file.read",
+			"args":      map[string]string{"path": contentPath},
+		})
+		results, _ := osJob["results"].([]any)
+		reached := false
+		for _, r := range results {
+			if res, _ := r.(map[string]any); res["node_id"] == nodeID && res["outcome"] == "OUTCOME_SUCCESS" {
+				reached = true
+			}
+		}
+		if !reached {
+			t.Errorf("run_job over node:os=linux did not reach node %s with OUTCOME_SUCCESS: %v", nodeID, osJob)
+		}
 	}
 
 	// -------------------------------------------------------------------

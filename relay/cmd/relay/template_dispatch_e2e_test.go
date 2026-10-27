@@ -37,8 +37,8 @@ func TestTemplateDispatchE2E_RunOperationByName(t *testing.T) {
 	withRule := relaytest.WriteTempFile(t, "policy-*.toml", relaytest.FixturePolicy+relaytest.FixtureTemplatePolicyRule)
 	plain := relaytest.WriteTempFile(t, "policy-*.toml", relaytest.FixturePolicy)
 
-	joinHas := mintJoinString(t, deps, "relay:env=test", "relay:node=has")
-	joinLacks := mintJoinString(t, deps, "relay:env=test", "relay:node=lacks")
+	joinHas := mintJoinString(t, deps, "tag:env=test", "tag:node=has")
+	joinLacks := mintJoinString(t, deps, "tag:env=test", "tag:node=lacks")
 
 	bin := relaytest.DaemonConfig{Bin: os.Getenv("RELAY_DAEMON_BIN")}
 	has := bin
@@ -66,7 +66,7 @@ func TestTemplateDispatchE2E_RunOperationByName(t *testing.T) {
 	t.Run("apply", func(t *testing.T) {
 		res := relaytest.CallTool(t, session, "run_operation", map[string]any{
 			"operation":    "e2e.template",
-			"selector":     "relay:env=test",
+			"selector":     "tag:env=test",
 			"wait_seconds": 300,
 		})
 		if res.IsError {
@@ -87,7 +87,7 @@ func TestTemplateDispatchE2E_RunOperationByName(t *testing.T) {
 	t.Run("preflight_agrees", func(t *testing.T) {
 		res := relaytest.CallTool(t, session, "run_operation", map[string]any{
 			"operation": "e2e.template",
-			"selector":  "relay:env=test",
+			"selector":  "tag:env=test",
 			"plan":      true,
 		})
 		if res.IsError {
@@ -110,7 +110,7 @@ func TestTemplateDispatchE2E_RunOperationByName(t *testing.T) {
 	t.Run("unknown_name_refused", func(t *testing.T) {
 		res := relaytest.CallTool(t, session, "run_operation", map[string]any{
 			"operation": "e2e.nowhere",
-			"selector":  "relay:env=test",
+			"selector":  "tag:env=test",
 		})
 		if !res.IsError {
 			t.Fatal("run_operation(e2e.nowhere): IsError=false, want an unknown-operation refusal")

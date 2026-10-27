@@ -56,7 +56,7 @@ func TestFleetE2E_RelayRestartDaemonReconnects_DedupHolds(t *testing.T) {
 	policyBody := "[raw_exec]\nallow = ['" + allow + "']\ndeny = []\n"
 	policyPath := relaytest.WriteTempFile(t, "policy-*.toml", policyBody)
 
-	join := createFleetJoinString(t, fr.harness, "relay:env=test")
+	join := createFleetJoinString(t, fr.harness, "tag:env=test")
 	stateDir := t.TempDir()
 	startDaemonSubprocess(t, daemonBin, join, stateDir, policyPath, "fleet-reconnect-node")
 	nodeIDs := waitForConnected(t, fr.harness, 1)
@@ -69,7 +69,7 @@ func TestFleetE2E_RelayRestartDaemonReconnects_DedupHolds(t *testing.T) {
 	go func() {
 		_, _ = h2.send(map[string]any{
 			"op":       "run_job",
-			"selector": "relay:env=test",
+			"selector": "tag:env=test",
 			"raw_exec": []string{script, marker, "30"},
 		})
 	}()

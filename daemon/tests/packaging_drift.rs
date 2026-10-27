@@ -342,6 +342,234 @@ fn install_creates_the_policy_directory_empty_and_never_writes_into_it() {
     );
 }
 
+/// The shipped read catalog is part of the relay-daemon package: one manifest builds the
+/// .deb and the .rpm, the catalog is a plain package-owned file (never `config`), and it is
+/// the only regular file the package owns under `/etc`, so the live Policy and the environment
+/// file stay unowned. The content guard compares these baselines with what `dpkg-deb` and
+/// `rpm` read from every release package; `scripts/package-guard-test.sh` and the install
+/// matrix are the executable counterparts, which the spec-proof scan does not see.
+// Proves DI-29.
+#[test]
+fn the_daemon_package_carries_the_catalog_as_plain_package_files() {
+    let packaging = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("packaging");
+    let read = |path: PathBuf| {
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
+    };
+    let names = |dir: &str| -> Vec<String> {
+        let mut out: Vec<String> = std::fs::read_dir(packaging.join(dir))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        out.sort();
+        out
+    };
+
+    // No separate catalog package: one manifest, and every baseline is the daemon's.
+    assert_eq!(names("nfpm"), ["relay-daemon.yaml"]);
+    for name in names("expected") {
+        assert!(
+            name == "README.md" || name.starts_with("relay-daemon."),
+            "expected/{name} is a baseline for a package other than relay-daemon"
+        );
+    }
+
+    let catalog_deb = "-rw-r--r-- root/root ./etc/relay-daemon/templates.d/relay-read/catalog.toml";
+    let catalog_rpm =
+        "-rw-r--r-- root:root caps=(none) /etc/relay-daemon/templates.d/relay-read/catalog.toml";
+    for (file, line, under_etc) in [
+        ("expected/relay-daemon.deb.files", catalog_deb, "./etc/"),
+        ("expected/relay-daemon.rpm.files", catalog_rpm, "/etc/"),
+    ] {
+        let listing = read(packaging.join(file));
+        assert!(
+            listing.lines().any(|l| l == line),
+            "{file} must list the catalog as {line:?}"
+        );
+        let etc_files: Vec<&str> = listing
+            .lines()
+            .filter(|l| {
+                l.starts_with('-')
+                    && l.rsplit(' ')
+                        .next()
+                        .is_some_and(|p| p.starts_with(under_etc))
+            })
+            .collect();
+        assert_eq!(
+            etc_files,
+            [line],
+            "{file}: the catalog must be the only regular file under /etc"
+        );
+    }
+
+    // The manifest sources the catalog from the repository and declares nothing as configuration.
+    let manifest = read(packaging.join("nfpm/relay-daemon.yaml"));
+    let lines: Vec<&str> = manifest.lines().map(str::trim).collect();
+    let src = lines
+        .iter()
+        .position(|l| *l == "- src: \"@SRC@/daemon/packaging/templates.d/relay-read/catalog.toml\"")
+        .expect("the manifest must source the catalog from the repository");
+    assert_eq!(
+        lines[src + 1],
+        "dst: /etc/relay-daemon/templates.d/relay-read/catalog.toml"
+    );
+    let config = regex::Regex::new(r#"type:\s*"?config"#).unwrap();
+    assert!(
+        !lines.iter().any(|l| config.is_match(l)),
+        "no manifest entry may be `config` or `config|noreplace`: the Templates are package-owned plain files"
+    );
+}
+
+/// The daemon package replaces and conflicts with the retired `relay-read` package (rpm:
+/// obsoletes and conflicts), so an upgrade from a build that shipped it takes over its one
+/// file and removes it, leaving one copy of each Template. The guard holds every release
+/// package to these baselines.
+#[test]
+fn the_daemon_package_replaces_and_conflicts_with_the_retired_catalog_package() {
+    let expected = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("packaging/expected");
+    let lines_of = |file: &str| -> Vec<String> {
+        let path = expected.join(file);
+        std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
+            .lines()
+            .map(str::to_owned)
+            .collect()
+    };
+
+    let deb = lines_of("relay-daemon.deb.relations");
+    for want in ["Replaces: relay-read", "Conflicts: relay-read"] {
+        assert!(deb.iter().any(|l| l == want), "deb relations lack {want:?}");
+    }
+    let rpm = lines_of("relay-daemon.rpm.relations");
+    for want in ["obsoletes: relay-read", "conflicts: relay-read"] {
+        assert!(rpm.iter().any(|l| l == want), "rpm relations lack {want:?}");
+    }
+    assert!(
+        !rpm.iter().any(|l| l == "provides: relay-read"),
+        "the daemon package must not provide the retired name"
+    );
+}
+
+/// Removing the daemon package takes its payload and keeps configuration and state. The
+/// package manager removes what the file lists name (the binary, the unit and the catalog),
+/// and the lists name neither the Policy, the Policy directory, the environment file nor
+/// anything under `/var`. Purge deletes only what the marker says the package created,
+/// through literal paths: every `rm`, `rmdir` and `unlink` in `postrm.sh` is pinned here,
+/// each behind its `created` test. `.rpm` removal prints the paths to delete by hand and
+/// deletes no state. A structural check, because the executable counterparts are shell
+/// tests that the spec-proof scan does not see.
+// Proves DI-31.
+#[test]
+fn removing_the_daemon_package_takes_its_payload_and_keeps_configuration_and_state() {
+    let packaging = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("packaging");
+    let read = |rel: &str| {
+        let path = packaging.join(rel);
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
+    };
+
+    for file in [
+        "expected/relay-daemon.deb.files",
+        "expected/relay-daemon.rpm.files",
+    ] {
+        let listing = read(file);
+        for owned in [
+            "/usr/bin/relay-daemon",
+            "/usr/lib/systemd/system/relay-daemon.service",
+            "/etc/relay-daemon/templates.d/relay-read/catalog.toml",
+        ] {
+            assert!(
+                listing.lines().any(|l| l.ends_with(owned)),
+                "{file} must list {owned}, so removal takes it"
+            );
+        }
+        // The shipped examples under /usr/share are payload; the live files are not.
+        for kept in ["policy.toml", "policy.d", "relay-daemon.env", "/var/"] {
+            let hits: Vec<&str> = listing
+                .lines()
+                .filter(|l| {
+                    let path = l.rsplit(' ').next().unwrap_or("");
+                    path.contains(kept) && !path.contains("/usr/share/")
+                })
+                .collect();
+            assert!(
+                hits.is_empty(),
+                "{file} lists {hits:?}, which removal would take: configuration and state are kept"
+            );
+        }
+    }
+
+    let postrm = read("scripts/postrm.sh");
+    for literal in [
+        "ETC=/etc/relay-daemon",
+        "STATE=/var/lib/relay-daemon",
+        "MARKER_DIR=/var/lib/relay-daemon-package",
+    ] {
+        assert!(
+            postrm.lines().any(|l| l == literal),
+            "postrm.sh must assign {literal}: every deletion goes through a literal path"
+        );
+    }
+
+    let lines: Vec<&str> = postrm
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .collect();
+    let deleting = regex::Regex::new(r"\b(rm|rmdir|unlink)\b").unwrap();
+    let found: Vec<&str> = lines
+        .iter()
+        .copied()
+        .filter(|l| deleting.is_match(l))
+        .collect();
+    assert_eq!(
+        found,
+        [
+            "rm -f \"$MARKER\"",
+            "rmdir \"$MARKER_DIR\" 2>/dev/null || true",
+            "if created policy; then rm -f \"$ETC/policy.toml\"; fi",
+            "if created env; then rm -f \"$ETC/relay-daemon.env\"; fi",
+            "rmdir \"$ETC/policy.d\" 2>/dev/null \\",
+            "rmdir \"$ETC\" 2>/dev/null \\",
+            "rm -rf \"$STATE\"",
+        ],
+        "postrm.sh deletes something this test does not pin"
+    );
+    // The three multi-line deletions each sit directly behind the marker's say-so.
+    for (deletion, guard) in [
+        (
+            "rmdir \"$ETC/policy.d\" 2>/dev/null \\",
+            "if created policy-dir && plain_dir \"$ETC/policy.d\"; then",
+        ),
+        ("rmdir \"$ETC\" 2>/dev/null \\", "if created etc; then"),
+        (
+            "rm -rf \"$STATE\"",
+            "if created state && plain_dir \"$STATE\"; then",
+        ),
+    ] {
+        let at = lines.iter().position(|l| *l == deletion).unwrap();
+        assert_eq!(lines[at - 1], guard, "{deletion} must follow {guard}");
+    }
+
+    // The .rpm removal arm prints the leftovers and deletes nothing.
+    let arm: Vec<&str> = postrm
+        .lines()
+        .skip_while(|l| *l != "  0)")
+        .take_while(|l| !l.contains(";;"))
+        .collect();
+    assert!(
+        !arm.is_empty(),
+        "postrm.sh must keep its `0)` (.rpm removal) arm"
+    );
+    assert!(
+        !arm.iter()
+            .any(|l| deleting.is_match(l) || l.contains("purge")),
+        "the .rpm removal arm deletes no state and must not purge: {arm:?}"
+    );
+    assert!(
+        arm.iter().any(|l| l.trim() == "leftovers"),
+        "the .rpm removal arm must print the paths left to delete by hand"
+    );
+}
+
 /// The shipped unit keeps `/etc`, and so the Policy directory in it, read-only
 /// (the unit's sandbox claim covers the rest): exactly one `ProtectSystem=strict`, and no directive
 /// that re-opens a path in or above `/etc/relay-daemon` for writing.

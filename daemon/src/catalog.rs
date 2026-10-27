@@ -144,6 +144,7 @@ fn catalog_scripts_are_fixed() {
 
 /// The acceptance line: a Node with the shipped catalog and the shipped default
 /// Policy answers all seven with zero local authoring.
+// Proves DI-6.
 #[test]
 fn the_default_policy_allows_every_shipped_template() {
     let policy = default_policy();
@@ -157,8 +158,42 @@ fn the_default_policy_allows_every_shipped_template() {
     assert!(allows(&policy, "file.checksum", &["/etc/os-release"]));
 }
 
+/// Every allow rule in the shipped default names a read Native or a read-class
+/// catalog Template, so no mutate Operation is allowed and Raw Exec is off. This
+/// enumerates rule names only; it makes no Policy decision.
+// Proves DI-6.
+#[test]
+fn the_default_policy_allows_only_read_operations() {
+    let policy = default_policy();
+    let templates: std::collections::BTreeMap<String, RiskClass> = catalog()
+        .iter()
+        .map(|def| {
+            let op = compile(def).expect("shipped template compiles");
+            (def.name.clone(), op.risk())
+        })
+        .collect();
+
+    let allowed = policy.allowed_operations();
+    assert!(!allowed.is_empty(), "the shipped default allows nothing");
+    for name in &allowed {
+        let class = crate::operations::risk_class(name)
+            .or_else(|| templates.get(name).copied())
+            .unwrap_or_else(|| panic!("allowed Operation {name:?} is neither Native nor catalog"));
+        assert_eq!(
+            class,
+            RiskClass::Read,
+            "the shipped default allows {name:?}, which is not read-class"
+        );
+    }
+    assert!(
+        !policy.raw_exec_enabled(),
+        "the shipped default must carry no [raw_exec] allow patterns"
+    );
+}
+
 /// The other half of the acceptance line: none of the catalog can be
 /// parameterized into reading a deny-listed path under the shipped Policy.
+// Proves DI-6.
 #[test]
 fn the_default_policy_denies_the_catalog_over_confidential_paths() {
     let policy = default_policy();

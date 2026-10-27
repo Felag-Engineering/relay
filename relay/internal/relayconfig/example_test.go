@@ -3,6 +3,7 @@ package relayconfig
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -96,7 +97,7 @@ func TestExampleRelayTOML_MatchesConfig(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if shipped != got {
+		if !reflect.DeepEqual(shipped, got) {
 			t.Fatalf("a commented default differs from the built-in:\nbuilt-in %+v\nexample  %+v", shipped, got)
 		}
 

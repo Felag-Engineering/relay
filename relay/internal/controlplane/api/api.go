@@ -32,6 +32,7 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/capability"
 	"github.com/Felag-Engineering/relay/relay/internal/controlplane"
 	"github.com/Felag-Engineering/relay/relay/internal/enroll"
+	"github.com/Felag-Engineering/relay/relay/internal/harnesssetup"
 	"github.com/Felag-Engineering/relay/relay/internal/revocation"
 )
 
@@ -201,6 +202,11 @@ type Deps struct {
 	// Nil skips recording, so tests and any unwired surface work; the
 	// composition root always supplies it.
 	Reads ReadAuditor
+	// HarnessSetup renders the MCP URL, the CA certificate and the Harness
+	// blocks an API Token mint returns beside its plaintext. It carries public
+	// data only (never the CA key), and the caller's own credential is added at
+	// mint. The zero value renders no harness_setup.
+	HarnessSetup harnesssetup.Target
 	// Now returns the current time, used to timestamp lifecycle audit
 	// Records. Defaults to time.Now().UTC() when nil.
 	Now func() time.Time

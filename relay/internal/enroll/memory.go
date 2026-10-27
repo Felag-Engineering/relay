@@ -56,11 +56,12 @@ func (r *MemoryRepository) Save(_ context.Context, t *Token) error {
 	return nil
 }
 
-// cloneToken returns a deep copy of t, duplicating the SecretHash and Scope slices
+// cloneToken returns a deep copy of t, duplicating the SecretHash, LegacyScope and InitialTags slices
 // so mutations by callers do not affect stored state.
 func cloneToken(t *Token) *Token {
 	c := *t
 	c.SecretHash = append([]byte(nil), t.SecretHash...)
-	c.Scope = append([]string(nil), t.Scope...)
+	c.LegacyScope = append([]string(nil), t.LegacyScope...)
+	c.InitialTags = append([]string(nil), t.InitialTags...)
 	return &c
 }

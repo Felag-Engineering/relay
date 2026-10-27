@@ -153,6 +153,55 @@ pub fn parse_node_labels(raw: &str) -> Vec<(String, String)> {
         .collect()
 }
 
+/// Longest `node:` label key the Relay accepts, in bytes.
+const MAX_LABEL_KEY_LEN: usize = 63;
+/// Longest `node:` label value the Relay accepts, in bytes.
+const MAX_LABEL_VALUE_LEN: usize = 255;
+
+/// Whether the Relay would accept this bare `node:` label at ingress: a
+/// non-empty key of at most 63 bytes, a value of at most 255, and only ASCII
+/// letters, digits, `.`, `_` and `-` in either. Mirrors the Relay's own rule
+/// (`registry.WellFormedNodeLabel`). The daemon applies it only to its default
+/// labels, so a default can never get an enrollment refused; declared labels are
+/// left for the Relay to judge.
+fn well_formed_node_label(key: &str, value: &str) -> bool {
+    let allowed = |b: &u8| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-');
+    !key.is_empty()
+        && key.len() <= MAX_LABEL_KEY_LEN
+        && value.len() <= MAX_LABEL_VALUE_LEN
+        && key.as_bytes().iter().all(allowed)
+        && value.as_bytes().iter().all(allowed)
+}
+
+/// `declared` (`RELAY_NODE_LABELS`) with the daemon's default labels added:
+/// `node:hostname`, `node:os` and `node:arch`, from `facts`. A declared key
+/// replaces the default of the same name. A default that is not a well-formed
+/// `node:` label is left out and its key returned, never its value. Declared
+/// labels come back untouched.
+pub fn with_default_node_labels(
+    declared: Vec<(String, String)>,
+    facts: &Facts,
+) -> (Vec<(String, String)>, Vec<&'static str>) {
+    let defaults = [
+        ("hostname", &facts.hostname),
+        ("os", &facts.os),
+        ("arch", &facts.arch),
+    ];
+    let mut labels = declared;
+    let mut left_out = Vec::new();
+    for (key, value) in defaults {
+        if labels.iter().any(|(declared_key, _)| declared_key == key) {
+            continue;
+        }
+        if well_formed_node_label(key, value) {
+            labels.push((key.to_string(), value.clone()));
+        } else {
+            left_out.push(key);
+        }
+    }
+    (labels, left_out)
+}
+
 /// Calls the Relay's `Enrollment.Enroll` RPC. No client certificate is used — this
 /// is the certless bootstrap path (ADR-0006 §2). The CA is pinned first, from the
 /// join string's fingerprint, and the token is sent only on a connection whose
@@ -363,6 +412,105 @@ mod tests {
         // "=bad" has empty key → skipped; empty comma entries → skipped.
         let labels = parse_node_labels(",=bad,,env=staging,");
         assert_eq!(labels, vec![("env".to_string(), "staging".to_string())]);
+    }
+
+    // -----------------------------------------------------------------------
+    // with_default_node_labels / well_formed_node_label
+    // -----------------------------------------------------------------------
+
+    fn facts(hostname: &str, os: &str, arch: &str) -> Facts {
+        Facts {
+            hostname: hostname.to_string(),
+            os: os.to_string(),
+            arch: arch.to_string(),
+            ..Default::default()
+        }
+    }
+
+    fn pair(key: &str, value: &str) -> (String, String) {
+        (key.to_string(), value.to_string())
+    }
+
+    #[test]
+    fn default_labels_are_hostname_os_and_arch_from_the_facts() {
+        let (labels, left_out) =
+            with_default_node_labels(vec![], &facts("web-01", "linux", "x86_64"));
+        assert_eq!(
+            labels,
+            vec![
+                pair("hostname", "web-01"),
+                pair("os", "linux"),
+                pair("arch", "x86_64"),
+            ]
+        );
+        assert!(left_out.is_empty());
+    }
+
+    #[test]
+    fn default_labels_follow_the_declared_labels() {
+        let (labels, _) = with_default_node_labels(
+            vec![pair("role", "web")],
+            &facts("web-01", "linux", "x86_64"),
+        );
+        assert_eq!(labels.len(), 4);
+        assert_eq!(labels[0], pair("role", "web"));
+        assert_eq!(labels[1], pair("hostname", "web-01"));
+    }
+
+    #[test]
+    fn a_declared_label_replaces_the_default_of_the_same_key() {
+        let declared = parse_node_labels("node:os=ubuntu,hostname=web-01");
+        let (labels, left_out) = with_default_node_labels(declared, &facts("box", "linux", "arm"));
+        assert_eq!(
+            labels,
+            vec![
+                pair("os", "ubuntu"),
+                pair("hostname", "web-01"),
+                pair("arch", "arm"),
+            ]
+        );
+        assert!(left_out.is_empty());
+    }
+
+    #[test]
+    fn an_ill_formed_default_is_left_out_and_named_by_its_key() {
+        for bad in ["bad host".to_string(), "h".repeat(256)] {
+            let (labels, left_out) =
+                with_default_node_labels(vec![], &facts(&bad, "linux", "x86_64"));
+            assert_eq!(labels, vec![pair("os", "linux"), pair("arch", "x86_64")]);
+            assert_eq!(left_out, vec!["hostname"]);
+        }
+    }
+
+    #[test]
+    fn a_declared_label_is_never_judged_by_the_default_rule() {
+        let declared = vec![pair("role", "web, relay:x=y")];
+        let (labels, left_out) =
+            with_default_node_labels(declared.clone(), &facts("web-01", "linux", "x86_64"));
+        assert_eq!(&labels[..1], declared.as_slice());
+        assert!(left_out.is_empty());
+    }
+
+    // Mirrors the Relay's TestWellFormedNodeLabel table.
+    #[test]
+    fn well_formed_node_label_mirrors_the_relay_rule() {
+        let cases: [(String, String, bool); 8] = [
+            ("role".into(), "web".into(), true),
+            ("k".repeat(63), "v".repeat(255), true),
+            ("k".repeat(64), "web".into(), false),
+            ("role".into(), "v".repeat(256), false),
+            ("role".into(), "web, relay:quarantine=on".into(), false),
+            (String::new(), "web".into(), false),
+            ("role".into(), String::new(), true),
+            ("role".into(), "caf\u{e9}".into(), false),
+        ];
+        for (key, value, want) in cases {
+            assert_eq!(
+                well_formed_node_label(&key, &value),
+                want,
+                "key {key:?} value {value:?}"
+            );
+        }
     }
 
     // -----------------------------------------------------------------------

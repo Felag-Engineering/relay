@@ -210,6 +210,12 @@ func (c *CA) Fingerprint() string {
 	return fingerprint(c.cert.Raw)
 }
 
+// NotAfter returns when the CA certificate expires. It is public-certificate
+// data, no key material; the certificate-expiry gauge reads it.
+func (c *CA) NotAfter() time.Time {
+	return c.cert.NotAfter
+}
+
 // SignCSR verifies csrPEM (a "CERTIFICATE REQUEST" PEM block whose key must be
 // ECDSA P-256), then issues a Node identity certificate chained to this CA.
 //

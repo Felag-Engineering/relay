@@ -103,8 +103,8 @@ place() {
 umask 077
 
 # `created etc` is recorded exactly when preinst did not see /etc/relay-daemon, whoever made it
-# between then and now. It may be this script, or the catalog package unpacked earlier in the
-# same transaction. Purge removes the directory only if it is empty.
+# between then and now. It may be this script, or this package's own payload, which carries the
+# shipped catalog under it. Purge removes the directory only if it is empty.
 if ! exists "$ETC"; then
   mkdir -m 0755 "$ETC"
 fi

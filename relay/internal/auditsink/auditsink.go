@@ -619,22 +619,6 @@ func (s *Sink) RecordPolicyAlias(ctx context.Context, e capability.PolicyAliasEv
 	}
 }
 
-// tagWriteReason renders a tag_write record's Reason. A set value is quoted and
-// an absent one is the literal (none), so an empty value and an absent one never
-// read alike.
-//
-//	tag:<key> old="<value>" new="<value>"
-//	tag:<key> old=(none) new="<value>"
-func tagWriteReason(c registry.TagChange) string {
-	render := func(v registry.TagValue) string {
-		if !v.Set {
-			return "(none)"
-		}
-		return strconv.Quote(v.Value)
-	}
-	return fmt.Sprintf("tag:%s old=%s new=%s", c.Key, render(c.Before), render(c.After))
-}
-
 // RecordTagWrite implements capability.TagWriteRecorder: the tag changes and
 // their tag_write records, one per change, commit in one transaction, so a
 // change whose record cannot be written does not happen.
@@ -658,6 +642,10 @@ func (s *Sink) RecordTagWrite(ctx context.Context, e capability.TagWriteEvent) e
 		if err != nil {
 			return fmt.Errorf("auditsink: record tag write: generate audit record id: %w", err)
 		}
+		reason := audit.TagWriteReason(c)
+		if e.Provenance != "" {
+			reason += " " + e.Provenance
+		}
 		recs[i] = audit.Record{
 			ID:          id,
 			Timestamp:   now,
@@ -665,7 +653,7 @@ func (s *Sink) RecordTagWrite(ctx context.Context, e capability.TagWriteEvent) e
 			NodeID:      c.NodeID,
 			Principal:   e.Principal.Attribution(),
 			Attribution: attribution(e.Principal, e.Asserted),
-			Reason:      tagWriteReason(c),
+			Reason:      reason,
 		}
 	}
 	err := app.AppendWithTagWrite(ctx, recs, e.Changes)
@@ -789,17 +777,7 @@ func (s *Sink) logDecision(kind string, e capability.AuditEntry, matched int, co
 // is deterministic across runs. It is self-contained to this package (not a
 // reuse of internal/metrics's unexported jobs.OutcomeName): OutcomeVersionRefused
 // gets its own bucket here rather than folding into "unspecified".
-var outcomeOrder = []jobs.Outcome{
-	jobs.OutcomeSuccess,
-	jobs.OutcomeFailure,
-	jobs.OutcomeTimeout,
-	jobs.OutcomeDeniedByPolicy,
-	jobs.OutcomeCancelled,
-	jobs.OutcomeUnreachable,
-	jobs.OutcomeVersionRefused,
-	jobs.OutcomeUnsupported,
-	jobs.OutcomeUnspecified,
-}
+var outcomeOrder = append(jobs.ResolvedOutcomes(), jobs.OutcomeUnspecified)
 
 // outcomeCounts renders the aggregate per-Outcome tally across results as a
 // compact string, e.g. "success=2,denied_by_policy=1", in outcomeOrder,

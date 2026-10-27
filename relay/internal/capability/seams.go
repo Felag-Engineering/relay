@@ -31,8 +31,8 @@ type ControlAction string
 
 const (
 	// ControlMintEnrollmentToken is POST /api/v1/enrollment-tokens. A token's
-	// scope becomes the enrolling Node's relay: labels — the namespace
-	// reserved for the security-sensitive lane (invariant 7, ADR-0020) — so
+	// initial tags become the enrolling Node's first tags (ADR-0050), and the
+	// token is the credential that lets a Node into the fleet at all, so
 	// minting is a claim the control plane vouches for, not a convenience.
 	ControlMintEnrollmentToken ControlAction = "mint_enrollment_token"
 
@@ -145,6 +145,10 @@ type TagWriteEvent struct {
 	Principal Principal
 	Changes   []registry.TagChange
 	Asserted  Assertions
+	// Provenance, when set, is appended to each record's Reason: it says the
+	// write was caused by something other than the Principal acting live, such
+	// as an Enrollment Token's initial tags.
+	Provenance string
 }
 
 // TagNodeReader is the read the tag write needs: one Node's current tags.

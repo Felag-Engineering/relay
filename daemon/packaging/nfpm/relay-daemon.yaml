@@ -1,4 +1,4 @@
-# nfpm manifest for the relay-daemon .deb and .rpm (DI-24, DI-25, DI-26, DI-27, DI-31).
+# nfpm manifest for the relay-daemon .deb and .rpm (DI-24, DI-25, DI-26, DI-27, DI-29, DI-31).
 #
 # A template, rendered by scripts/build-packages.sh: the @NAME@ placeholders are substituted
 # before nfpm reads it, and nothing else is. The package wraps the release's guarded binary
@@ -10,7 +10,9 @@
 #
 # Nothing here is configuration the package manager preserves: the live Policy and the
 # environment file are placed by the maintainer scripts on a first install only, and are
-# never package-owned files (ADR-0033 as amended 2026-10-15).
+# never package-owned files (ADR-0033 as amended 2026-10-15). The shipped read catalog's
+# Templates are the opposite: package-owned plain files, replaced on upgrade and removed with
+# the package, never `config` or `config|noreplace` (DI-29, ADR-0053).
 
 name: relay-daemon
 arch: "@ARCH@"
@@ -28,6 +30,14 @@ description: |-
   Relay relay-daemon, the privileged fleet-administration Node daemon.
   Enforces the Node's locally rooted Policy and runs the Operations it allows.
   The package installs the daemon and its hardened unit and never starts it.
+# relay-read is the retired catalog package (built, never attached to a release). On a Node
+# that has it, this package takes over its one file and removes it, so an upgrade leaves one
+# copy of each Template and no orphan. nfpm writes `replaces` as deb Replaces and rpm Obsoletes,
+# and `conflicts` as Conflicts on both. The name never returns, so the relations are unversioned.
+replaces:
+  - relay-read
+conflicts:
+  - relay-read
 mtime: "@MTIME@"
 umask: 0o022
 
@@ -55,6 +65,12 @@ contents:
     file_info: {mode: 0o644, owner: root, group: root}
   - src: "@SRC@/LICENSE"
     dst: /usr/share/doc/relay-daemon/LICENSE
+    file_info: {mode: 0o644, owner: root, group: root}
+  - dst: /etc/relay-daemon/templates.d/relay-read
+    type: dir
+    file_info: {mode: 0o755, owner: root, group: root}
+  - src: "@SRC@/daemon/packaging/templates.d/relay-read/catalog.toml"
+    dst: /etc/relay-daemon/templates.d/relay-read/catalog.toml
     file_info: {mode: 0o644, owner: root, group: root}
 
 scripts:

@@ -16,48 +16,13 @@ var _ audit.TagWriteAppender = (*sqliteAudit)(nil)
 // in one transaction: on a nil error every change and every record landed, on a
 // non-nil error none did. rs[i] records changes[i].
 //
-// This is the only function that writes tag_labels. The changes are written
-// before the records, so a record that cannot be written rolls every change
-// back. Each change's Before is re-checked against the RAW stored row inside
-// the transaction (registry.ErrTagChanged), which is also how a row declined on
-// read-back is kept from ever being rewritten or deleted through the filtered
-// view. A Node that gains a tag is counted afterwards against
-// registry.MaxTagsPerNode (registry.ErrTooManyTags). Every malformed call is
-// refused before BeginTx.
+// The changes are written before the records (writeTagChanges), so a record that
+// cannot be written rolls every change back. A malformed call is refused before
+// BeginTx.
 func (a *sqliteAudit) AppendWithTagWrite(ctx context.Context, rs []audit.Record, changes []registry.TagChange) error {
-	if len(changes) == 0 {
-		return errors.New("store: refusing a tag write with no changes")
-	}
-	if len(rs) != len(changes) {
-		return errors.New("store: a tag write needs exactly one audit record per change")
-	}
-	type nodeKey struct{ nodeID, key string }
-	seen := make(map[nodeKey]struct{}, len(changes))
-	for i, c := range changes {
-		switch {
-		case rs[i].ID == "":
-			return errors.New("store: refusing to record a tag write with no audit record id")
-		case rs[i].Kind != audit.KindTagWrite:
-			return errors.New("store: a tag write is recorded only as a tag_write record")
-		case rs[i].NodeID != c.NodeID:
-			return errors.New("store: a tag write record must name the Node its change names")
-		}
-		if err := c.Validate(); err != nil {
-			return fmt.Errorf("store: refusing a malformed tag change: %w", err)
-		}
-		k := nodeKey{c.NodeID, c.Key}
-		if _, dup := seen[k]; dup {
-			return errors.New("store: refusing a tag write that changes one tag twice")
-		}
-		seen[k] = struct{}{}
-	}
-	prepared := make([]preparedAudit, len(rs))
-	for i, r := range rs {
-		p, err := prepareAudit(r)
-		if err != nil {
-			return err
-		}
-		prepared[i] = p
+	prepared, err := prepareTagWrite(rs, changes)
+	if err != nil {
+		return err
 	}
 
 	tx, err := a.db.BeginTx(ctx, nil)
@@ -66,6 +31,67 @@ func (a *sqliteAudit) AppendWithTagWrite(ctx context.Context, rs []audit.Record,
 	}
 	defer tx.Rollback() //nolint:errcheck
 
+	if err := writeTagChanges(ctx, tx, changes, prepared); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit tag write and records: %w", err)
+	}
+	return nil
+}
+
+// prepareTagWrite is every refusal that needs no transaction: a malformed call,
+// a record that does not match its change, a change that changes nothing. It
+// returns rs ready to chain, rs[i] recording changes[i].
+func prepareTagWrite(rs []audit.Record, changes []registry.TagChange) ([]preparedAudit, error) {
+	if len(changes) == 0 {
+		return nil, errors.New("store: refusing a tag write with no changes")
+	}
+	if len(rs) != len(changes) {
+		return nil, errors.New("store: a tag write needs exactly one audit record per change")
+	}
+	type nodeKey struct{ nodeID, key string }
+	seen := make(map[nodeKey]struct{}, len(changes))
+	for i, c := range changes {
+		switch {
+		case rs[i].ID == "":
+			return nil, errors.New("store: refusing to record a tag write with no audit record id")
+		case rs[i].Kind != audit.KindTagWrite:
+			return nil, errors.New("store: a tag write is recorded only as a tag_write record")
+		case rs[i].NodeID != c.NodeID:
+			return nil, errors.New("store: a tag write record must name the Node its change names")
+		}
+		if err := c.Validate(); err != nil {
+			return nil, fmt.Errorf("store: refusing a malformed tag change: %w", err)
+		}
+		k := nodeKey{c.NodeID, c.Key}
+		if _, dup := seen[k]; dup {
+			return nil, errors.New("store: refusing a tag write that changes one tag twice")
+		}
+		seen[k] = struct{}{}
+	}
+	prepared := make([]preparedAudit, len(rs))
+	for i, r := range rs {
+		p, err := prepareAudit(r)
+		if err != nil {
+			return nil, err
+		}
+		prepared[i] = p
+	}
+	return prepared, nil
+}
+
+// writeTagChanges applies changes to tag_labels and chains prepared onto the trail
+// inside tx: the one function that mutates tag_labels. Its callers are
+// AppendWithTagWrite and the migration that copies a legacy scope to tags, so
+// every tag, however it arrives, is checked and recorded the same way.
+//
+// Each change's Before is re-checked against the RAW stored row
+// (registry.ErrTagChanged), which is also how a row declined on read-back is
+// kept from ever being rewritten or deleted through the filtered view. A Node
+// that gains a tag is counted afterwards against registry.MaxTagsPerNode
+// (registry.ErrTooManyTags).
+func writeTagChanges(ctx context.Context, tx *sql.Tx, changes []registry.TagChange, prepared []preparedAudit) error {
 	grew := map[string]struct{}{}
 	for _, c := range changes {
 		exists, err := nodeExists(ctx, tx, c.NodeID)
@@ -114,11 +140,5 @@ func (a *sqliteAudit) AppendWithTagWrite(ctx context.Context, rs []audit.Record,
 		}
 	}
 
-	if err := insertChained(ctx, tx, prepared); err != nil {
-		return err
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit tag write and records: %w", err)
-	}
-	return nil
+	return insertChained(ctx, tx, prepared)
 }

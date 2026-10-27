@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"strings"
@@ -43,6 +44,20 @@ type Registrar interface {
 	// path can reach, not of a boolean somebody has to get right.
 	RecordEnrollment(nodeID string, cert registry.Certificate, at time.Time) error
 	RecordRenewal(nodeID string, cert registry.Certificate, at time.Time) error
+}
+
+// InitialTagWriter writes an Enrollment Token's initial tags on a Node, as the
+// act of the Account that minted the token. The composition root adapts the
+// capability layer's TagWriter to it, so a token's tags are written by the tag
+// write and are ordinary tags afterwards (EN-41, ADR-0050).
+//
+// CheckInitialTags is the part of that decision that does not need the Node: it
+// runs before the use is counted, so a refusal that is certain leaves no Node
+// and burns no use. WriteInitialTags records the tags, naming the token by its
+// public ID in each audit record.
+type InitialTagWriter interface {
+	CheckInitialTags(ctx context.Context, minter MintedBy, tags []string) error
+	WriteInitialTags(ctx context.Context, minter MintedBy, tokenID, nodeID string, tags []string) error
 }
 
 // TokenRevocationChecker reports whether an Enrollment Token is revoked.
@@ -87,8 +102,8 @@ const (
 	AttemptAtCapacity           AttemptReason = "at_capacity"
 	AttemptRevokedMidEnrollment AttemptReason = "revoked_mid_enrollment"
 	AttemptInternal             AttemptReason = "internal"
-	// AttemptInvalidScope: the token's STORED scope is not well-formed — a fault in
-	// a token this Relay minted before the gate existed, never in the daemon's
+	// AttemptInvalidScope: the token's STORED legacy scope or initial tags do not
+	// hold — a fault in a token this Relay minted, never in the daemon's
 	// request. Deliberately not AttemptMalformed, which means "the caller sent
 	// something malformed" and would send an operator to debug the wrong side.
 	AttemptInvalidScope AttemptReason = "invalid_scope"
@@ -138,6 +153,20 @@ func WithAttemptObserver(o AttemptObserver) ServerOption {
 // ServerOption configures a Server at construction.
 type ServerOption func(*Server)
 
+// denylistMintedNode revokes the identity of a Node whose enrollment fails
+// after the Upsert. RevokeNode is idempotent and the Node has no live Tunnel yet,
+// so Disconnect is a harmless no-op; the denylist entry blocks the daemon's later
+// Tunnel dial (ADR-0006).
+//
+// WithPostEnrollRevocationCheck sets revocationChecker and nodeDenylister
+// together and panics if either is nil, so the nil guard is defensive only
+// against direct struct construction (e.g. in tests).
+func (s *Server) denylistMintedNode(nodeID string) {
+	if s.nodeDenylister != nil {
+		s.nodeDenylister.RevokeNode(nodeID)
+	}
+}
+
 // WithPostEnrollRevocationCheck enables the post-Upsert recheck that closes the
 // in-flight-enroll vs token-cascade-revocation race. When set, after a
 // Node is recorded the handler re-reads the enrolling token's revocation state and,
@@ -173,6 +202,18 @@ func WithRateLimiter(l RateLimiter) ServerOption {
 	}
 }
 
+// WithInitialTagWriter attaches the writer of a token's initial tags. Without
+// it, a token that names initial tags fails enrollment closed rather than
+// dropping them. Panics if w is nil (matching WithRateLimiter).
+func WithInitialTagWriter(w InitialTagWriter) ServerOption {
+	if w == nil {
+		panic("enroll: WithInitialTagWriter: writer must not be nil")
+	}
+	return func(s *Server) {
+		s.tags = w
+	}
+}
+
 // WithEnrollmentObserver attaches an EnrollmentObserver whose IncEnrollment is
 // called once per successful Enroll — only the success path, since every
 // failure path returns earlier. Pass a nil observer (the default) to skip
@@ -195,6 +236,7 @@ type Server struct {
 	nodeDenylister    NodeDenylister
 	limiter           RateLimiter
 	observer          EnrollmentObserver
+	tags              InitialTagWriter
 	attempts          AttemptObserver
 	now               func() time.Time
 	log               *slog.Logger // nil means slog.Default() (logger)
@@ -208,6 +250,26 @@ func WithServerLogger(l *slog.Logger) ServerOption {
 }
 
 func (s *Server) logger() *slog.Logger { return logctx.Or(s.log) }
+
+// errNoTagWriter is a token naming initial tags reaching a Server with no
+// writer wired: an internal failure, not a refusal of the token.
+var errNoTagWriter = errors.New("enroll: no initial tag writer is configured")
+
+// checkInitialTags is the Validate hook that decides a token's initial tags
+// ahead of the use count. A refusal reads as a stored token whose tags do not
+// hold.
+func (s *Server) checkInitialTags(ctx context.Context, g Grant) error {
+	if len(g.InitialTags) == 0 {
+		return nil
+	}
+	if s.tags == nil {
+		return errNoTagWriter
+	}
+	if err := s.tags.CheckInitialTags(ctx, g.MintedBy, g.InitialTags); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalidInitialTags, err)
+	}
+	return nil
+}
 
 // WithServerClock overrides the clock used to stamp certificate provenance.
 // Tests use it so an assertion about enrolled_at is not a race with the
@@ -339,8 +401,9 @@ func (s *Server) attempt(ctx context.Context, e AttemptEvent) {
 }
 
 // Enroll validates the Enrollment Token, signs the CSR with a Relay-assigned node_id,
-// records the Node in the registry, and returns the issued certificate, CA bundle, and
-// relay-space labels stamped from the token scope.
+// records the Node in the registry, stamps relay:node-id (the only relay: label
+// enrollment writes), writes the token's initial tags as the minting Account's act,
+// and returns the issued certificate, CA bundle, and the relay: label assigned.
 //
 // Sign and registry writes happen ONLY after the token validates; any rejection leaves
 // no certificate and no registry entry (fail-closed).
@@ -372,7 +435,7 @@ func (s *Server) Enroll(ctx context.Context, req *relayv1.EnrollRequest) (*relay
 	//    two-namespace invariant), and it can never enroll a label that
 	//    would render as more than one Selector term. The relay-space
 	//    sibling of this refuse-vs-drop argument lives at Service.Validate:
-	//    the scope is refused before Validate returns, for the same
+	//    the stored token is refused before Validate returns, for the same
 	//    fail-closed reason — this is one-shot and supervised, so a
 	//    rejection here tears down nothing that was already up.
 	//
@@ -413,7 +476,11 @@ func (s *Server) Enroll(ctx context.Context, req *relayv1.EnrollRequest) (*relay
 
 	// e. Validate the token. Collapse all sentinel rejection errors into a single
 	//    PermissionDenied so the caller cannot use error distinctions as a state oracle.
-	scope, err := s.tokens.Validate(ctx, req.GetEnrollmentToken())
+	//    The decision on the token's initial tags is part of validation, ahead of
+	//    the use count: a refusal that is certain must leave no Node and burn no
+	//    use. With no writer wired the enrollment fails closed rather than
+	//    dropping tags silently.
+	grant, err := s.tokens.validate(ctx, req.GetEnrollmentToken(), s.checkInitialTags)
 	if err != nil {
 		// ErrInvalidToken deliberately fuses malformed/unknown-id/wrong-secret
 		// at the RPC boundary (token.go), so AttemptUnknown is the honest name
@@ -429,21 +496,20 @@ func (s *Server) Enroll(ctx context.Context, req *relayv1.EnrollRequest) (*relay
 			reason = AttemptExhausted
 		case errors.Is(err, ErrInvalidToken):
 			reason = AttemptUnknown
-		case errors.Is(err, ErrInvalidScope):
+		case errors.Is(err, ErrInvalidScope), errors.Is(err, ErrInvalidInitialTags):
 			reason = AttemptInvalidScope
 		}
 		s.attempt(ctx, AttemptEvent{Reason: reason, TokenID: tokenID, Source: source})
 		if errors.Is(err, ErrInvalidToken) || errors.Is(err, ErrExpired) ||
 			errors.Is(err, ErrRevoked) || errors.Is(err, ErrExhausted) ||
-			errors.Is(err, ErrInvalidScope) {
-			if errors.Is(err, ErrInvalidScope) {
+			errors.Is(err, ErrInvalidScope) || errors.Is(err, ErrInvalidInitialTags) {
+			if errors.Is(err, ErrInvalidScope) || errors.Is(err, ErrInvalidInitialTags) {
 				// The offending entry surfaces here and nowhere else: it never
 				// goes on the wire, and the collapse below returns the same
 				// PermissionDenied every other token rejection returns, so it
 				// cannot become an oracle that distinguishes this rejection
-				// from any other. (Scope is already loggable: Token.LogValue
-				// emits it.)
-				s.logger().WarnContext(ctx, "enrollment denied: stored token scope is not well-formed",
+				// from any other. (Token.LogValue emits the same fields.)
+				s.logger().WarnContext(ctx, "enrollment denied: stored token scope or initial tags do not hold",
 					"token_id", tokenID, "err", err)
 			}
 			return nil, status.Error(codes.PermissionDenied, "enrollment token rejected")
@@ -524,18 +590,31 @@ func (s *Server) Enroll(ctx context.Context, req *relayv1.EnrollRequest) (*relay
 			"node_id", nodeID, "err", err)
 	}
 
-	// k. Parse the token scope into bare relay-space keys and stamp them on the Node.
-	//    The scope is well-formed BY CONSTRUCTION here — Service.Validate
-	//    already refused otherwise, before any certificate was signed or any row
-	//    written — so nothing this stamps can render as more than one Selector term.
-	relayBare := make(map[string]string, len(scope))
-	for _, entry := range scope {
-		key, value := splitScopeEntry(entry)
-		relayBare[key] = value
-	}
+	// k. Stamp relay:node-id, the only relay: label enrollment writes. Every
+	//    other relay: key is written only by the Relay action that defines it
+	//    (invariant 7), so the token carries none.
+	relayBare := map[string]string{registry.NodeIDKey: nodeID}
 	if err := s.registry.SetRelayLabels(nodeID, relayBare); err != nil {
+		s.denylistMintedNode(nodeID)
 		s.attempt(ctx, AttemptEvent{Reason: AttemptInternal, TokenID: tokenID, NodeID: nodeID, Source: source})
 		return nil, status.Error(codes.Internal, "enrollment failed")
+	}
+
+	// k2. Write the token's initial tags through the capability layer's tag
+	//     write, as the minting Account's act, one tag_write record each. The
+	//     authorization and the parse were decided before the use was counted,
+	//     so only a store error can fail here, the same posture as a
+	//     SetRelayLabels failure above. The Node is already recorded and its
+	//     identity signed, so a failure also denylists the node_id: the daemon
+	//     was told the enrollment failed and must not be able to dial a Tunnel.
+	if len(grant.InitialTags) > 0 {
+		if err := s.tags.WriteInitialTags(ctx, grant.MintedBy, tokenID, nodeID, grant.InitialTags); err != nil {
+			s.logger().WarnContext(ctx, "writing initial tags failed",
+				"node_id", nodeID, "token_id", tokenID, "err", err)
+			s.denylistMintedNode(nodeID)
+			s.attempt(ctx, AttemptEvent{Reason: AttemptInternal, TokenID: tokenID, NodeID: nodeID, Source: source})
+			return nil, status.Error(codes.Internal, "enrollment failed")
+		}
 	}
 
 	// Post-Upsert recheck: the Validate→Upsert sequence is not atomic,
@@ -548,18 +627,8 @@ func (s *Server) Enroll(ctx context.Context, req *relayv1.EnrollRequest) (*relay
 		revoked, err := s.revocationChecker.IsRevoked(ctx, tokenID)
 		if err != nil || revoked {
 			// Fail closed: on an indeterminate check OR a confirmed revocation,
-			// revoke the just-minted identity. RevokeNode is idempotent and the
-			// Node has no live Tunnel yet, so Disconnect is a harmless no-op; the
-			// denylist entry blocks the daemon's later Tunnel dial (ADR-0006).
-			//
-			// Invariant: WithPostEnrollRevocationCheck sets revocationChecker and
-			// nodeDenylister together and panics if either is nil, so nodeDenylister
-			// is non-nil whenever revocationChecker is. The guard is defensive only
-			// against direct struct construction (e.g. in tests) and keeps the denial
-			// path from silently skipping the denylist.
-			if s.nodeDenylister != nil {
-				s.nodeDenylister.RevokeNode(nodeID)
-			}
+			// revoke the just-minted identity.
+			s.denylistMintedNode(nodeID)
 			// Log the raw check error (nil on the confirmed-revocation path) so the
 			// denial reason is unambiguous once a persistent store makes err != nil
 			// reachable. err is a repository error, never credential material.
@@ -570,14 +639,9 @@ func (s *Server) Enroll(ctx context.Context, req *relayv1.EnrollRequest) (*relay
 		}
 	}
 
-	// l. Build assigned_labels, keeping the "relay:" namespace prefix in Key per proto convention.
-	//    Setting Value unconditionally is wire-identical to the old conditional
-	//    assignment: proto3 already renders an unset string field as "".
-	assigned := make([]*relayv1.Label, 0, len(scope))
-	for _, entry := range scope {
-		key, value := splitScopeEntry(entry)
-		assigned = append(assigned, &relayv1.Label{Key: scopePrefix + key, Value: value})
-	}
+	// l. Build assigned_labels, keeping the "relay:" namespace prefix in Key per proto
+	//    convention. It carries relay:node-id alone; initial tags are tags, not assigned.
+	assigned := []*relayv1.Label{{Key: scopePrefix + registry.NodeIDKey, Value: nodeID}}
 
 	// m. Log one audit line. tokenID is the public half of the credential — safe to log.
 	//    Never log the secret half or the full plaintext credential.
@@ -587,6 +651,7 @@ func (s *Server) Enroll(ctx context.Context, req *relayv1.EnrollRequest) (*relay
 		"hostname", facts.Hostname,
 		"node_label_count", len(nodeLabels),
 		"relay_label_count", len(relayBare),
+		"initial_tag_count", len(grant.InitialTags),
 	)
 
 	// n. Record the successful Enrollment for observability. Only the success

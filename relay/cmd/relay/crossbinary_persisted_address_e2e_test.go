@@ -36,7 +36,7 @@ func enrollWithJoinStringOnly(t *testing.T, hostname string) *joinedNode {
 	relayBin, daemonBin := skipUnlessFleetBins(t)
 
 	fr := startFleetRelay(t, relayBin, "")
-	raw := createFleetJoinString(t, fr.harness, "relay:env=test")
+	raw := createFleetJoinString(t, fr.harness, "tag:env=test")
 	join, err := enroll.DecodeJoinString(raw)
 	if err != nil {
 		t.Fatalf("mint response's join_string does not decode: %v", err)

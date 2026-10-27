@@ -123,7 +123,7 @@ func migrate(ctx context.Context, db *sql.DB, logger *slog.Logger) error {
 	// nothing from here until it finishes.
 	for _, m := range pending {
 		start := time.Now()
-		if err := applyMigration(ctx, db, m); err != nil {
+		if err := applyMigration(ctx, db, m, logger); err != nil {
 			return fmt.Errorf("apply migration %s: %w", m.name, err)
 		}
 		logMigrationApplied(logger, m.name, time.Since(start))
@@ -236,14 +236,15 @@ func pendingMigrations(migrations []migration, applied map[int]struct{}) (pendin
 // cannot do (SHA-256) or splitStatements cannot split (a trigger body). A step
 // runs inside the migration's transaction, after the SQL statements and before
 // the version is recorded, so it commits or rolls back with them.
-var migrationGoSteps = map[int]func(context.Context, *sql.Tx) error{
+var migrationGoSteps = map[int]func(context.Context, *sql.Tx, *slog.Logger) error{
 	28: chainAuditTrail,
+	33: copyScopeToTags,
 }
 
 // applyMigration runs one migration's SQL and its Go step, if any, and records
 // its version, in a single transaction. 0001_init.sql itself creates
 // schema_migrations.
-func applyMigration(ctx context.Context, db *sql.DB, m migration) error {
+func applyMigration(ctx context.Context, db *sql.DB, m migration, logger *slog.Logger) error {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
@@ -257,7 +258,7 @@ func applyMigration(ctx context.Context, db *sql.DB, m migration) error {
 	}
 
 	if step, ok := migrationGoSteps[m.version]; ok {
-		if err := step(ctx, tx); err != nil {
+		if err := step(ctx, tx, logger); err != nil {
 			return fmt.Errorf("go step: %w", err)
 		}
 	}

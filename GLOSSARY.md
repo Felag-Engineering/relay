@@ -143,7 +143,8 @@ _Avoid_: filter, query, target spec
 **Label**:
 A key/value tag on a Node used by Selectors to target it. Lives in one of four
 non-overlapping namespaces, each immutable from the other sides: **node-space** (`node:…`,
-rooted on the Node and set out-of-band via config management; the Relay records but never
+rooted on the Node: the daemon declares `node:hostname`, `node:os` and `node:arch` by default and
+config management sets the rest out-of-band, overriding a default by key; the Relay records but never
 modifies or removes them; authoritative for routine targeting, trusted only as much as the
 Node), **relay-space** (`relay:…`, set by the Relay — stamped at enrollment, or written as the
 side effect of a defined Relay action, today only enrollment's `relay:node-id`, never by an

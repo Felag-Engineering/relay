@@ -49,7 +49,7 @@ func startAccountFleet(t *testing.T, daemonBin string) *accountFleet {
 
 	relaytest.StartDaemon(t, relaytest.DaemonConfig{
 		Bin:        daemonBin,
-		JoinString: mintJoinString(t, f.Deps, "relay:env=test"),
+		JoinString: mintJoinString(t, f.Deps, "tag:env=test"),
 		StateDir:   t.TempDir(),
 		PolicyPath: relaytest.WriteTempFile(t, "policy-*.toml", relaytest.FixturePolicy),
 		Hostname:   "mcp-account-auth-e2e-node",
@@ -111,13 +111,13 @@ func TestMCPAccountAuth_RoleLadder_E2E(t *testing.T) {
 	// /bin/sleep 0 is allowed by FixturePolicy's raw_exec allow list, so a
 	// refusal here can only be the Relay's role gate — never the Node's.
 	rawExecArgs := map[string]any{
-		"selector":     "relay:env=test",
+		"selector":     "tag:env=test",
 		"argv":         []string{"/bin/sleep", "0"},
 		"wait_seconds": 300,
 	}
 	operationArgs := map[string]any{
 		"operation":    "system.facts",
-		"selector":     "relay:env=test",
+		"selector":     "tag:env=test",
 		"wait_seconds": 300,
 	}
 
@@ -240,8 +240,8 @@ func TestMCPAccountAuth_RevocationAndDisablement_E2E(t *testing.T) {
 		tool string
 		args map[string]any
 	}{
-		{"run_operation", map[string]any{"operation": "system.facts", "selector": "relay:env=test"}},
-		{"raw_exec", map[string]any{"selector": "relay:env=test", "argv": []string{"/bin/sleep", "0"}}},
+		{"run_operation", map[string]any{"operation": "system.facts", "selector": "tag:env=test"}},
+		{"raw_exec", map[string]any{"selector": "tag:env=test", "argv": []string{"/bin/sleep", "0"}}},
 	} {
 		if res := relaytest.CallTool(t, session, tc.tool, tc.args); !res.IsError {
 			t.Errorf("%s as viewer SUCCEEDED — a viewer may never dispatch", tc.tool)
@@ -344,7 +344,7 @@ func TestMCPAccountAuth_AttributionLanes_E2E(t *testing.T) {
 	session := relaytest.Connect(t, f.relay.ControlBase, client)
 	res := relaytest.CallTool(t, session, "run_operation", map[string]any{
 		"operation":    "system.facts",
-		"selector":     "relay:env=test",
+		"selector":     "tag:env=test",
 		"wait_seconds": 300,
 	})
 	if res.IsError {

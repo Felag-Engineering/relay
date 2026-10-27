@@ -17,7 +17,7 @@ import (
 
 // role_gates_test.go is #397's acceptance at the Control API surface: three
 // route families authenticated the caller and then never checked their role,
-// so a viewer could mint a token stamping `relay:` labels, revoke Nodes, and
+// so a viewer could mint a token naming initial tags, revoke Nodes, and
 // engage or release the fleet Freeze.
 //
 // Every refusal here comes from the production authz.RoleGate — the same
@@ -40,9 +40,9 @@ func newRecordingMinter(t *testing.T) *recordingMinter {
 	return &recordingMinter{inner: newTestMinter(t, enroll.NewService(enroll.NewMemoryRepository()))}
 }
 
-func (m *recordingMinter) Mint(ctx context.Context, scope []string, ttl time.Duration, limit enroll.UseLimit, opts ...enroll.Option) (enroll.Minted, error) {
+func (m *recordingMinter) Mint(ctx context.Context, initialTags []string, ttl time.Duration, limit enroll.UseLimit, opts ...enroll.Option) (enroll.Minted, error) {
 	m.calls++
-	return m.inner.Mint(ctx, scope, ttl, limit, opts...)
+	return m.inner.Mint(ctx, initialTags, ttl, limit, opts...)
 }
 
 // newRoleFixture mounts the full route table behind a real Authenticator that
@@ -92,13 +92,12 @@ func wantRefusal(t *testing.T, rec *httptest.ResponseRecorder, auditor *fakeAudi
 // Enrollment Token mint — admin (ADR-0032 §5)
 // -----------------------------------------------------------------------
 
-// TestMintToken_RequiresAdmin is the sharp edge of #397: a token's scope
-// becomes the enrolling Node's `relay:` labels, the namespace reserved for
-// the security-sensitive lane. A viewer minting one manufactures Nodes that
-// quarantine and secret distribution will treat as authoritative.
+// TestMintToken_RequiresAdmin is the sharp edge of #397: a token's initial tags
+// become each enrolling Node's first tags, which a Selector then targets. Only
+// an admin mints one.
 // Proves EN-1, EN-23.
 func TestMintToken_RequiresAdmin(t *testing.T) {
-	body := mintTokenRequest{Scope: []string{"relay:env=prod"}, TTLSeconds: 3600, MaxUses: 1}
+	body := mintTokenRequest{TTLSeconds: 3600, MaxUses: 1}
 
 	for _, role := range []accounts.Role{accounts.RoleViewer, accounts.RoleOperator} {
 		t.Run(string(role)+" is refused", func(t *testing.T) {
@@ -334,7 +333,7 @@ func TestAdministrativeRoutes_RefuseWithoutAGate(t *testing.T) {
 		deps         Deps
 	}{
 		{http.MethodPost, "/api/v1/enrollment-tokens",
-			mintTokenRequest{Scope: []string{"relay:env=prod"}, TTLSeconds: 3600, MaxUses: 1},
+			mintTokenRequest{InitialTags: []string{"tag:env=prod"}, TTLSeconds: 3600, MaxUses: 1},
 			Deps{Tokens: newTestMinter(t, enroll.NewService(enroll.NewMemoryRepository())), Audit: &fakeAuditor{}}},
 		{http.MethodDelete, "/api/v1/enrollment-tokens/tok-1", nil,
 			Deps{TokenRevoker: &fakeTokenRevoker{}, Audit: &fakeAuditor{}}},

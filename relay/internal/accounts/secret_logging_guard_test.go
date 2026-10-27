@@ -98,12 +98,18 @@ var explicitSecretTypes = map[typeKey]string{
 	{"internal/controlplane/console", "mintedView"}: "the one view whose plain " +
 		"string field holds a revealed plaintext (console/accounts_write.go); " +
 		"discovery cannot find it by shape",
+	{"internal/harnesssetup", "Rendering"}: "the rendered harness blocks embed " +
+		"the API Token plaintext behind accessors no shape discovery matches",
+	{"internal/controlplane/console", "harnessView"}: "the minted page's harness " +
+		"blocks, plain string fields carrying the revealed plaintext",
+	{"internal/controlplane/api", "harnessSetupResponse"}: "the mint response's " +
+		"harness blocks, plain string fields carrying the revealed plaintext",
 }
 
-// knownSecretTypes is TestSecretTypesDeclareRedaction's presence FLOOR: the 8
+// knownSecretTypes is TestSecretTypesDeclareRedaction's presence FLOOR: the 11
 // secret types known today. It does not narrow what the test checks — every
 // discovered (and explicit) type must satisfy its redaction requirements
-// regardless of whether it is listed here. Each of these 8 must additionally
+// regardless of whether it is listed here. Each of these 11 must additionally
 // be FOUND, so a rename that would otherwise silently drop a type from
 // discovery (Password.Reveal renamed to Unwrap, say) fails this test loudly
 // instead of shrinking what it checks.
@@ -116,6 +122,9 @@ var knownSecretTypes = []typeKey{
 	{"internal/consoleauth", "CSRFToken"},
 	{"internal/enroll", "Token"},
 	{"internal/controlplane/console", "mintedView"},
+	{"internal/harnesssetup", "Rendering"},
+	{"internal/controlplane/console", "harnessView"},
+	{"internal/controlplane/api", "harnessSetupResponse"},
 }
 
 // methodInfo records whether a named method is declared on a type, and

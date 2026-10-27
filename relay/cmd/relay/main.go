@@ -28,6 +28,7 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/enroll"
 	"github.com/Felag-Engineering/relay/relay/internal/events"
 	"github.com/Felag-Engineering/relay/relay/internal/eventsink"
+	"github.com/Felag-Engineering/relay/relay/internal/harnesssetup"
 	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 	"github.com/Felag-Engineering/relay/relay/internal/logctx"
 	"github.com/Felag-Engineering/relay/relay/internal/metrics"
@@ -53,6 +54,10 @@ type Config struct {
 	CADir     string
 	StorePath string
 	Hostname  string
+	// ExtraNames are the further names the server certificate carries
+	// (tls.extra_names, RC-47). They are read from the configuration file at
+	// start and no API reaches them (invariant 11).
+	ExtraNames []string
 	// AdvertisedAddress is the node-plane address a join string tells Nodes to
 	// dial (RC-36). Unset, it is the certificate hostname plus the gRPC listen
 	// port. It is read from the configuration file at startup
@@ -318,6 +323,10 @@ func serverCertObserver(m *metrics.Metrics, listeners ...metrics.ServerCertListe
 // refusing to start, because a detector must never be a gate.
 const declinedScanBudget = 30 * time.Second
 
+// approvalsWaitingTimeout bounds the approvals-waiting count a scrape runs, so
+// a scrape never holds the single store connection longer than this.
+const approvalsWaitingTimeout = 2 * time.Second
+
 // newServer is the one production entry point: it builds the composition
 // root with an empty serverHooks, so no test-only seam is ever populated on
 // the path main takes. See newServerWithHooks and serverHooks
@@ -450,6 +459,9 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 	// below), independent of Config.ControlEnabled; only the /metrics HTTP
 	// surface itself is gated on ControlEnabled (no control listener
 	// otherwise), mirroring every other control-plane surface.
+	// serverCert is assigned below, before any listener serves; the
+	// scrape-time certificate closure reads it.
+	var serverCert *ca.ServerCertificate
 	appMetrics := metrics.New(metrics.GaugeSources{
 		Connected: conns.Count,
 		Nodes:     reg.Count,
@@ -466,6 +478,32 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 		// off the Store rather than duplicated here — see
 		// Store.LabelsDeclined and metrics.GaugeSources.LabelsDeclined.
 		LabelsDeclined: st.LabelsDeclined,
+		// One indexed count per scrape, bounded by approvalsWaitingTimeout. A
+		// Request past its deadline cannot be answered; the sweeper retires it
+		// within approval.DefaultSweepInterval, so it is not counted as waiting.
+		ApprovalsWaiting: func() (int, error) {
+			ctx, cancel := context.WithTimeout(context.Background(), approvalsWaitingTimeout)
+			defer cancel()
+			return st.Approvals().CountWaiting(ctx, time.Now())
+		},
+		CertificateRemaining: func(c metrics.Certificate) (time.Duration, bool) {
+			var notAfter time.Time
+			switch c {
+			case metrics.CertificateRelayCA:
+				notAfter = relayCA.NotAfter()
+			case metrics.CertificateServer:
+				// The leaf is re-issued at the next handshake, so on an idle
+				// Relay this can fall toward zero: alert on the relay_ca series.
+				if serverCert == nil {
+					return 0, false
+				}
+				notAfter = serverCert.NotAfter()
+			}
+			if notAfter.IsZero() {
+				return 0, false
+			}
+			return time.Until(notAfter), true
+		},
 	})
 
 	// The Relay's one TLS server certificate, presented on both listeners
@@ -476,11 +514,24 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 	// tls.Config would share ClientAuth, so never share one.
 	//
 	// Failing to list the host's addresses is a warning, not a refusal: they
-	// are a convenience on top of tls.hostname, the name a join string carries,
-	// and a detector must not become an outage.
-	names, err := serverCertificateNames(cfg.Hostname, net.InterfaceAddrs)
+	// are a convenience on top of the configured names (tls.hostname, the
+	// advertised host, tls.extra_names), and a detector must not become an
+	// outage.
+	//
+	// The certificate names the advertised host and tls.extra_names so that no
+	// join string carries a host it does not name (RC-46): the minter below
+	// receives the same advertisedAddress.
+	advertisedAddress, err := enroll.AdvertisedAddress(cfg.AdvertisedAddress, cfg.Hostname, cfg.Addr)
 	if err != nil {
-		slog.Warn("server certificate names only tls.hostname and loopback: this host's addresses could not be listed; a systemd unit whose RestrictAddressFamilies omits AF_NETLINK prevents it",
+		return nil, nil, fmt.Errorf("advertised node-plane address: %w", err)
+	}
+	advertisedHost, _, err := net.SplitHostPort(advertisedAddress)
+	if err != nil {
+		return nil, nil, fmt.Errorf("advertised node-plane address: %w", err)
+	}
+	names, err := serverCertificateNames(cfg.Hostname, advertisedHost, cfg.ExtraNames, net.InterfaceAddrs)
+	if err != nil {
+		slog.Warn("server certificate names only tls.hostname, the advertised host, tls.extra_names and loopback: this host's addresses could not be listed; a systemd unit whose RestrictAddressFamilies omits AF_NETLINK prevents it",
 			"err", err)
 	}
 	if names.Omitted > 0 {
@@ -491,7 +542,7 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 	if cfg.ControlEnabled {
 		presentedOn = append(presentedOn, metrics.ListenerControlPlane)
 	}
-	serverCert, err := relayCA.NewServerCertificate(names.DNSNames, names.IPAddresses,
+	serverCert, err = relayCA.NewServerCertificate(names.DNSNames, names.IPAddresses,
 		ca.WithRotationObserver(serverCertObserver(appMetrics, presentedOn...)))
 	if err != nil {
 		return nil, nil, fmt.Errorf("issue server certificate: %w", err)
@@ -535,21 +586,11 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 	}
 
 	tokenSvc := enroll.NewService(st.Tokens())
-	advertisedAddress, err := enroll.AdvertisedAddress(cfg.AdvertisedAddress, cfg.Hostname, cfg.Addr)
-	if err != nil {
-		return nil, nil, fmt.Errorf("advertised node-plane address: %w", err)
-	}
 	enrollmentMinter, err := enroll.NewMinter(tokenSvc, relayCA, advertisedAddress)
 	if err != nil {
 		return nil, nil, fmt.Errorf("enrollment minter: %w", err)
 	}
 	revocationSvc := revocation.NewService(denylist, conns, reg, tokenSvc, revocation.WithLogger(logger))
-	enrollSrv := enroll.NewServer(tokenSvc, relayCA, reg,
-		enroll.WithPostEnrollRevocationCheck(tokenSvc, revocationSvc),
-		enroll.WithRateLimiter(limiter),
-		enroll.WithEnrollmentObserver(appMetrics),
-		enroll.WithAttemptObserver(eventsink.Enrollment(eventBus)),
-		enroll.WithServerLogger(logger))
 
 	// policyCache is the display-only effective-Policy cache (invariant 12 /
 	// ADR-0002): the tunnel handler records what a daemon reports in
@@ -627,9 +668,17 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 	accountAdmin := capability.NewAccountAdmin(freezeControl, st.Accounts(), apiTokenSvc)
 
 	// The tag write (ADR-0050): the one writer of tag: labels, over the same
-	// Control and so the same Recorder, RoleGate and trail. The Control API is
-	// its only holder; no other surface is handed it.
+	// Control and so the same Recorder, RoleGate and trail. The Control API holds
+	// it for tag writes and the Enrollment service for a token's initial tags
+	// (WriteInitialTags); no other surface is handed it.
 	tagWriter := capability.NewTagWriter(freezeControl, reg)
+	enrollSrv := enroll.NewServer(tokenSvc, relayCA, reg,
+		enroll.WithPostEnrollRevocationCheck(tokenSvc, revocationSvc),
+		enroll.WithRateLimiter(limiter),
+		enroll.WithEnrollmentObserver(appMetrics),
+		enroll.WithAttemptObserver(eventsink.Enrollment(eventBus)),
+		enroll.WithServerLogger(logger),
+		enroll.WithInitialTagWriter(initialTagWriter{tags: tagWriter}))
 
 	// The read lane: filtered, paginated queries over the audit trail
 	// and over Jobs/Tasks — one seam, shared by every surface (invariant 10).
@@ -759,10 +808,11 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 			// auditSink, not a nil Auditor: consoleauth FAILS a sign-in it
 			// cannot record, and handing it nothing to record with would turn
 			// that fail-closed property into a silent no-op, as a nil sink
-			// would for every read record.
+			// would for every read record. The counter wraps it and always
+			// delegates.
 			consoleAuthSvc = consoleauth.NewService(
 				st.Accounts(), st.Passwords(), consoleSessions,
-				consoleauth.NewThrottle(), auditSink,
+				consoleauth.NewThrottle(), loginAuditCounter{next: auditSink, metrics: appMetrics},
 				consoleauth.WithStepUpWindow(cfg.ConsoleStepUpWindow),
 				consoleauth.WithLogger(logger),
 			)
@@ -792,6 +842,7 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 			)
 		}
 
+		authOpts = append(authOpts, controlplane.WithAuthFailureCounter(appMetrics))
 		authn := controlplane.NewAuthenticator(apiTokenSvc, authOpts...)
 		controlCfg := controlplane.Config{Addr: cfg.ControlAddr, GetCertificate: serverCert.GetCertificate}
 		if cfg.ConsoleEnabled {
@@ -808,6 +859,13 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 			authn,
 		)
 
+		// Every input is already validated by relayconfig, so an error here is a
+		// composition bug, not an operator mistake.
+		harnessTarget, err := harnesssetup.NewTarget(advertisedAddress, cfg.ControlAddr, relayCA.Bundle())
+		if err != nil {
+			return nil, nil, fmt.Errorf("harness setup: %w", err)
+		}
+
 		// sd bundles every collaborator a control surface's Mount may need,
 		// assembled exactly once (invariant 10: execution above is a single
 		// instance, delivered to every surface below — no surface constructs
@@ -820,6 +878,7 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 			execution: execution,
 			// The predicate that gates WithOAuth above.
 			oauthConfigured: cfg.OAuthIssuer != "",
+			harnessSetup:    harnessTarget,
 			// The leaf capability services (invariant 10): each surface is
 			// handed the narrow one it uses, not the Execution — see
 			// surfaceDeps. A field forgotten here is a nil pointer behind a

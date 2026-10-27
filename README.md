@@ -50,7 +50,7 @@ dev-fleet-mcp: copy-paste launch commands: .dev-fleet/start-claude.txt
 Call the MCP `run_operation` tool. This reads `/etc/os-release` on every dev Node:
 
 ```console
-$ scripts/dev-fleet-mcp.sh call run_operation '{"selector":"relay:env=dev","operation":"file.read","args":{"path":"/etc/os-release"},"wait_seconds":30}'
+$ scripts/dev-fleet-mcp.sh call run_operation '{"selector":"tag:env=dev","operation":"file.read","args":{"path":"/etc/os-release"},"wait_seconds":30}'
 …
     "structuredContent": {
       "job_id": "job-bc14009ea5e0173ea03ad28a675e8943",
@@ -72,7 +72,7 @@ $ scripts/dev-fleet-mcp.sh call run_operation '{"selector":"relay:env=dev","oper
 Now ask for `/etc/shadow`. The fixture Policy on each Node denies it, so nothing executes:
 
 ```console
-$ scripts/dev-fleet-mcp.sh call run_operation '{"selector":"relay:env=dev","operation":"file.read","args":{"path":"/etc/shadow"},"wait_seconds":30}'
+$ scripts/dev-fleet-mcp.sh call run_operation '{"selector":"tag:env=dev","operation":"file.read","args":{"path":"/etc/shadow"},"wait_seconds":30}'
 …
     "structuredContent": {
       "job_id": "job-c700bdb3f855924418508ce6e486645e",

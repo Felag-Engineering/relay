@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"path/filepath"
@@ -26,6 +27,7 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/capability"
 	"github.com/Felag-Engineering/relay/relay/internal/controlplane"
 	"github.com/Felag-Engineering/relay/relay/internal/controlplane/mcp"
+	"github.com/Felag-Engineering/relay/relay/internal/harnesssetup"
 	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 	"github.com/Felag-Engineering/relay/relay/internal/nodevocab"
 	"github.com/Felag-Engineering/relay/relay/internal/opvocab"
@@ -1497,6 +1499,37 @@ func TestMCP_RequiresCredential(t *testing.T) {
 	defer respOK.Body.Close()
 	if respOK.StatusCode != http.StatusOK {
 		t.Errorf("valid credential: status = %d, want %d", respOK.StatusCode, http.StatusOK)
+	}
+}
+
+// The one-command check a minted API Token's Harness setup renders must be
+// answered by the real handler with the server's identity, or it proves nothing.
+func TestMCP_HarnessSetupCheckIsAnsweredWithServerInfo(t *testing.T) {
+	ts := newTestServer(t)
+
+	req, err := http.NewRequest(http.MethodPost, ts.base+harnesssetup.MCPPath, strings.NewReader(harnesssetup.CheckBody))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	for _, h := range harnesssetup.CheckHeaders {
+		name, value, _ := strings.Cut(h, ": ")
+		req.Header.Set(name, value)
+	}
+	req.Header.Set("Authorization", "Bearer "+testToken)
+	resp, err := ts.plain.Do(req)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body %s", resp.StatusCode, http.StatusOK, body)
+	}
+	if !strings.Contains(string(body), "serverInfo") {
+		t.Errorf("body = %s, want it to contain serverInfo", body)
 	}
 }
 

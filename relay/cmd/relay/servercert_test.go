@@ -22,6 +22,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/Felag-Engineering/relay/relay/internal/ca"
+	"github.com/Felag-Engineering/relay/relay/internal/enroll"
 	"github.com/Felag-Engineering/relay/relay/internal/metrics"
 	relayv1 "github.com/Felag-Engineering/relay/relay/internal/relay/v1"
 	"github.com/Felag-Engineering/relay/relay/internal/relaytest"
@@ -72,6 +73,7 @@ func detectedIPv4s(t *testing.T) []net.IP {
 	return out
 }
 
+// Proves RC-46.
 func TestServerCertificateNames(t *testing.T) {
 	loopback := []string{"127.0.0.1", "::1"}
 
@@ -85,6 +87,8 @@ func TestServerCertificateNames(t *testing.T) {
 	tests := []struct {
 		name       string
 		hostname   string
+		advertised string
+		extras     []string
 		interfaces []string
 		wantDNS    []string
 		wantIPs    []string
@@ -108,6 +112,49 @@ func TestServerCertificateNames(t *testing.T) {
 			wantIPs:  append([]string{"2001:db8::5"}, loopback...),
 		},
 		{
+			name:       "an advertised DNS host other than tls.hostname is a DNS name",
+			hostname:   "relay.example.internal",
+			advertised: "nat.example.test",
+			wantDNS:    []string{"relay.example.internal", "nat.example.test"},
+			wantIPs:    loopback,
+		},
+		{
+			name:       "an advertised IPv4 host is an IP address",
+			hostname:   "relay.example.internal",
+			advertised: "203.0.113.7",
+			wantDNS:    []string{"relay.example.internal"},
+			wantIPs:    append([]string{"203.0.113.7"}, loopback...),
+		},
+		{
+			name:       "an advertised IPv6 host is an IP address",
+			hostname:   "relay.example.internal",
+			advertised: "2001:db8::7",
+			wantDNS:    []string{"relay.example.internal"},
+			wantIPs:    append([]string{"2001:db8::7"}, loopback...),
+		},
+		{
+			name:       "an advertised host equal to tls.hostname is named once",
+			hostname:   "relay.example.internal",
+			advertised: "relay.example.internal",
+			wantDNS:    []string{"relay.example.internal"},
+			wantIPs:    loopback,
+		},
+		{
+			name:       "an advertised host equal to tls.hostname in another case is named once",
+			hostname:   "relay.example.internal",
+			advertised: "Relay.Example.Internal",
+			wantDNS:    []string{"relay.example.internal"},
+			wantIPs:    loopback,
+		},
+		{
+			name:       "every extra name is named, DNS and IP, duplicates once",
+			hostname:   "relay.example.internal",
+			extras:     []string{"lb.example.test", "LB.example.test", "198.51.100.9", "2001:db8::9", "127.0.0.1"},
+			interfaces: []string{"198.51.100.9/24"},
+			wantDNS:    []string{"relay.example.internal", "lb.example.test"},
+			wantIPs:    []string{"198.51.100.9", "2001:db8::9", "127.0.0.1", "::1"},
+		},
+		{
 			name:     "only usable unicast addresses are detected, IPv4 first",
 			hostname: "relay.example.internal",
 			interfaces: []string{
@@ -127,7 +174,7 @@ func TestServerCertificateNames(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := serverCertificateNames(tt.hostname, fakeInterfaces(t, tt.interfaces...))
+			got, err := serverCertificateNames(tt.hostname, tt.advertised, tt.extras, fakeInterfaces(t, tt.interfaces...))
 			if err != nil {
 				t.Fatalf("serverCertificateNames: %v", err)
 			}
@@ -147,7 +194,7 @@ func TestServerCertificateNames(t *testing.T) {
 	}
 
 	t.Run("the cap keeps the hostname, loopback and 64 detected IPv4 addresses", func(t *testing.T) {
-		got, err := serverCertificateNames("relay.example.internal", fakeInterfaces(t, capInput...))
+		got, err := serverCertificateNames("relay.example.internal", "", nil, fakeInterfaces(t, capInput...))
 		if err != nil {
 			t.Fatalf("serverCertificateNames: %v", err)
 		}
@@ -165,18 +212,133 @@ func TestServerCertificateNames(t *testing.T) {
 		}
 	})
 
-	t.Run("a failed listing still names the hostname and loopback", func(t *testing.T) {
+	t.Run("configured names do not count against the detected cap", func(t *testing.T) {
+		extras := []string{"203.0.113.1", "203.0.113.2", "203.0.113.3"}
+		got, err := serverCertificateNames("relay.example.internal", "", extras, fakeInterfaces(t, capInput...))
+		if err != nil {
+			t.Fatalf("serverCertificateNames: %v", err)
+		}
+		const loopbackNames = 2
+		if want := loopbackNames + len(extras) + maxDetectedAddresses; len(got.IPAddresses) != want {
+			t.Errorf("%d IP addresses, want %d", len(got.IPAddresses), want)
+		}
+		if want := 73 - maxDetectedAddresses; got.Omitted != want {
+			t.Errorf("Omitted = %d, want %d", got.Omitted, want)
+		}
+	})
+
+	t.Run("a failed listing still names the hostname, advertised host, extra names and loopback", func(t *testing.T) {
 		boom := errors.New("netlink refused")
-		got, err := serverCertificateNames("relay.example.internal", func() ([]net.Addr, error) { return nil, boom })
+		got, err := serverCertificateNames("relay.example.internal", "nat.example.test", []string{"lb.example.test", "198.51.100.9"},
+			func() ([]net.Addr, error) { return nil, boom })
 		if !errors.Is(err, boom) {
 			t.Fatalf("err = %v, want it to wrap %v", err, boom)
 		}
-		if !slices.Equal(got.DNSNames, []string{"relay.example.internal"}) {
-			t.Errorf("DNSNames = %v", got.DNSNames)
+		if want := []string{"relay.example.internal", "nat.example.test", "lb.example.test"}; !slices.Equal(got.DNSNames, want) {
+			t.Errorf("DNSNames = %v, want %v", got.DNSNames, want)
 		}
-		if gotIPs := ipStrings(got.IPAddresses); !slices.Equal(gotIPs, loopback) {
-			t.Errorf("IPAddresses = %v, want %v", gotIPs, loopback)
+		if gotIPs, want := ipStrings(got.IPAddresses), append([]string{"198.51.100.9"}, loopback...); !slices.Equal(gotIPs, want) {
+			t.Errorf("IPAddresses = %v, want %v", gotIPs, want)
 		}
+	})
+}
+
+// certNamingJoinHost mints an Enrollment Token through the composition root's
+// Minter and returns the host its join string tells a relay-daemon to dial.
+func certNamingJoinHost(t *testing.T, deps *appDeps) string {
+	t.Helper()
+	minted, err := deps.minter.Mint(context.Background(), []string{"tag:env=test"}, time.Hour, enroll.UseLimit{MaxUses: 1})
+	if err != nil {
+		t.Fatalf("mint Enrollment Token: %v", err)
+	}
+	join, err := enroll.DecodeJoinString(minted.JoinString())
+	if err != nil {
+		t.Fatalf("decode join string: %v", err)
+	}
+	host, _, err := net.SplitHostPort(join.RelayAddress())
+	if err != nil {
+		t.Fatalf("join string address %q: %v", join.RelayAddress(), err)
+	}
+	return host
+}
+
+// Proves RC-46.
+func TestServerCertificate_NamesEveryHostAJoinStringCarries(t *testing.T) {
+	baseExtras := []string{"lb.example.test", "198.51.100.9", "2001:db8::9"}
+
+	check := func(t *testing.T, f *relayFixture, wantJoinHost string, extras []string) {
+		t.Helper()
+		held, err := f.Deps.serverCert.GetCertificate(nil)
+		if err != nil {
+			t.Fatalf("GetCertificate: %v", err)
+		}
+		leaf, err := x509.ParseCertificate(held.Certificate[0])
+		if err != nil {
+			t.Fatalf("parse leaf: %v", err)
+		}
+		joinHost := certNamingJoinHost(t, f.Deps)
+		if joinHost != wantJoinHost {
+			t.Errorf("join string host = %q, want %q", joinHost, wantJoinHost)
+		}
+		for _, name := range append([]string{joinHost}, extras...) {
+			if err := leaf.VerifyHostname(name); err != nil {
+				t.Errorf("certificate does not name %q: %v", name, err)
+			}
+		}
+		if err := leaf.VerifyHostname("not-configured.example.test"); err == nil {
+			t.Error("certificate names a host nobody configured")
+		}
+	}
+
+	for _, tc := range []struct{ name, advertised, host string }{
+		{"an advertised DNS name", "nat.example.test:17654", "nat.example.test"},
+		{"an advertised IPv4 address", "203.0.113.7:17654", "203.0.113.7"},
+		{"an advertised IPv6 address", "[2001:db8::7]:17654", "2001:db8::7"},
+		{"no advertised address", "", "localhost"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			extras := slices.Clone(baseExtras)
+			if tc.advertised != "" {
+				extras = append(extras, tc.host)
+			}
+			f := startRelay(t, WithConfig(func(c *Config) {
+				c.AdvertisedAddress = tc.advertised
+				c.ExtraNames = extras
+			}))
+			check(t, f, tc.host, extras)
+		})
+	}
+
+	t.Run("the composition root names the advertised host on its own", func(t *testing.T) {
+		f := startRelay(t, WithConfig(func(c *Config) {
+			c.AdvertisedAddress = "nat-only.example.test:17654"
+			c.ExtraNames = baseExtras
+		}))
+		check(t, f, "nat-only.example.test", baseExtras)
+	})
+
+	t.Run("from a relay.toml with [tls] extra_names", func(t *testing.T) {
+		sc, err := parseConfig([]byte(`
+[node_plane]
+listen_address = "127.0.0.1:7654"
+advertised_address = "nat.example.test:17654"
+[ca]
+dir = "/var/lib/relay/ca"
+[store]
+path = "/var/lib/relay/relay.db"
+[tls]
+hostname = "relay.example.test"
+extra_names = ["nat.example.test", "198.51.100.9"]
+`), readSecretPlain)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f := startRelay(t, WithConfig(func(c *Config) {
+			c.Hostname = sc.Config.Hostname
+			c.AdvertisedAddress = sc.Config.AdvertisedAddress
+			c.ExtraNames = sc.Config.ExtraNames
+		}))
+		check(t, f, "nat.example.test", append([]string{"relay.example.test"}, sc.Config.ExtraNames...))
 	})
 }
 
@@ -272,9 +434,23 @@ func TestServerCertificate_OneLeafOnBothListenersOnlyTheNodePlaneAsksForAClientC
 	}
 }
 
+// hostnameAndAdvertisedHost sets tls.hostname and moves the fixture's
+// advertised host to it, keeping the port: the certificate names the advertised
+// host (RC-46), so leaving the fixture's own host would add a name.
+func hostnameAndAdvertisedHost(hostname string) func(*Config) {
+	return func(c *Config) {
+		c.Hostname = hostname
+		_, port, err := net.SplitHostPort(c.AdvertisedAddress)
+		if err != nil {
+			panic(err)
+		}
+		c.AdvertisedAddress = net.JoinHostPort(hostname, port)
+	}
+}
+
 func TestServerCertificate_VerifiesByIPAddressWithNoName(t *testing.T) {
 	t.Run("a DNS tls.hostname that does not resolve", func(t *testing.T) {
-		f := startRelay(t, WithTCPNodePlane(), WithConfig(func(c *Config) { c.Hostname = "relay.invalid" }))
+		f := startRelay(t, WithTCPNodePlane(), WithConfig(hostnameAndAdvertisedHost("relay.invalid")))
 		roots := relaytest.CertPool(t, f.Deps.ca.Bundle())
 
 		// No ServerName: Go verifies against the IP it dialled.
@@ -300,7 +476,7 @@ func TestServerCertificate_VerifiesByIPAddressWithNoName(t *testing.T) {
 	})
 
 	t.Run("an IP tls.hostname", func(t *testing.T) {
-		f := startRelay(t, WithTCPNodePlane(), WithConfig(func(c *Config) { c.Hostname = "127.0.0.1" }))
+		f := startRelay(t, WithTCPNodePlane(), WithConfig(hostnameAndAdvertisedHost("127.0.0.1")))
 		roots := relaytest.CertPool(t, f.Deps.ca.Bundle())
 
 		conn, err := tls.Dial("tcp", f.NodeAddr, &tls.Config{RootCAs: roots, NextProtos: []string{"h2"}, MinVersion: tls.VersionTLS13})

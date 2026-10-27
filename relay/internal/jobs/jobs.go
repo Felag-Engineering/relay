@@ -64,6 +64,22 @@ const (
 	OutcomeUnsupported
 )
 
+// ResolvedOutcomes returns the eight Outcomes a resolved Task can report, in
+// the order every surface renders them: OutcomeUnspecified is not among them.
+// Each call returns a new slice, so a caller may reorder or extend it.
+func ResolvedOutcomes() []Outcome {
+	return []Outcome{
+		OutcomeSuccess,
+		OutcomeFailure,
+		OutcomeTimeout,
+		OutcomeDeniedByPolicy,
+		OutcomeCancelled,
+		OutcomeUnreachable,
+		OutcomeVersionRefused,
+		OutcomeUnsupported,
+	}
+}
+
 // OutcomeName renders o as its lowercase wire name. It is the one rendering
 // every surface, sink and metric uses, so the same Task reads the same through
 // every door. All eight outcomes keep their own name: three are different kinds

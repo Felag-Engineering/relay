@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/url"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -18,6 +19,7 @@ import (
 
 const (
 	keyHostname       = "tls.hostname"
+	keyExtraNames     = "tls.extra_names"
 	keyWebhookURL     = "approval.webhook_url"
 	keyWebhookURLFile = "approval.webhook_url_file"
 	keyWebhookSecret  = "approval.webhook_secret"
@@ -32,6 +34,8 @@ const (
 	keyMutateBlastCap = "reach.mutate_blast_cap"
 
 	reasonEmpty = "must not be empty; omit the key instead"
+
+	reasonNotDialable = "must be an address a relay-daemon can dial, not multicast, broadcast or link-local"
 )
 
 var logLevels = map[string]slog.Level{"debug": slog.LevelDebug, "info": slog.LevelInfo, "warn": slog.LevelWarn, "error": slog.LevelError}
@@ -71,6 +75,7 @@ func (v *validator) build(d document) Config {
 	c.CA.Dir = v.requiredPath("ca.dir", d.CA.Dir)
 	c.Store.Path = v.requiredPath("store.path", d.Store.Path)
 	c.TLS.Hostname = v.hostname(d.TLS.Hostname)
+	c.TLS.ExtraNames = v.extraNames(d.TLS.ExtraNames)
 
 	v.buildOAuth(&c, d.OAuth)
 	v.buildApproval(&c, d.Approval)
@@ -81,7 +86,7 @@ func (v *validator) build(d document) Config {
 	if c.Console.Enabled && !c.ControlPlane.Enabled {
 		v.fail("console.enabled", "requires control_plane.enabled = true; the Console has no listener of its own")
 	}
-	v.checkAdvertised(c, d.NodePlane.AdvertisedAddress)
+	v.checkAdvertised(c, d.NodePlane.AdvertisedAddress, d.TLS.ExtraNames)
 	return c
 }
 
@@ -159,11 +164,105 @@ func (v *validator) hostname(p *string) string {
 	if !ok {
 		return ""
 	}
-	if net.ParseIP(s) == nil && !validDNSName(s) {
-		v.fail(keyHostname, "must be a DNS name or an IP address")
+	if reason := certNameProblem(s); reason != "" {
+		v.fail(keyHostname, reason)
 		return ""
 	}
 	return s
+}
+
+// extraNames validates tls.extra_names (RC-47). An entry is named by its
+// position, never its text: no Reason carries a file value.
+func (v *validator) extraNames(p *[]string) []string {
+	if p == nil {
+		return nil
+	}
+	names := *p
+	if len(names) == 0 {
+		v.fail(keyExtraNames, reasonEmpty)
+		return nil
+	}
+	if len(names) > maxExtraNames {
+		v.fail(keyExtraNames, "must have at most "+strconv.Itoa(maxExtraNames)+" entries")
+		return nil
+	}
+	ok := true
+	for i, s := range names {
+		if reason := certNameProblem(s); reason != "" {
+			v.fail(keyExtraNames, "entry "+strconv.Itoa(i+1)+" "+reason)
+			ok = false
+		}
+	}
+	if !ok {
+		return nil
+	}
+	return slices.Clone(names)
+}
+
+// certNameProblem returns "" when s can be a name on the server certificate
+// that a relay-daemon dials, and otherwise a reason that never includes s.
+func certNameProblem(s string) string {
+	if s == "" {
+		return "must not be empty"
+	}
+	if strings.Contains(s, "*") {
+		return "must not be a wildcard"
+	}
+	if ip := net.ParseIP(s); ip != nil {
+		switch {
+		case ip.IsUnspecified():
+			return "must not be a wildcard address"
+		case strings.Contains(s, ":") && ip.To4() != nil:
+			return "must be written as an IPv4 address, not an IPv4-mapped IPv6 one"
+		case ip.IsMulticast(), ip.IsLinkLocalUnicast(), ip.Equal(net.IPv4bcast), isThisNetwork(ip):
+			return reasonNotDialable
+		}
+		return ""
+	}
+	if !validDNSName(s) {
+		return "must be a DNS name or an IP address"
+	}
+	if numericLastLabel(s) {
+		return "must be a DNS name or an IP address; a name must not end in a numeric label"
+	}
+	return ""
+}
+
+// numericLastLabel reports whether the last label of an already valid DNS name
+// is all digits or a 0x hex number. A top-level label is never numeric, and a
+// string that reads as a non-standard IPv4 address is not taken for a name.
+func numericLastLabel(s string) bool {
+	label := s[strings.LastIndexByte(s, '.')+1:]
+	if label == "" {
+		return false
+	}
+	if len(label) > 2 && (label[:2] == "0x" || label[:2] == "0X") {
+		return strings.Trim(label[2:], "0123456789abcdefABCDEF") == ""
+	}
+	return strings.Trim(label, "0123456789") == ""
+}
+
+// isThisNetwork reports whether ip is in 0.0.0.0/8, the "this network" block.
+func isThisNetwork(ip net.IP) bool {
+	ip4 := ip.To4()
+	return ip4 != nil && ip4[0] == 0
+}
+
+// sameCertName reports whether a and b are the same certificate name: equal
+// addresses, or DNS names equal ignoring case. An address never equals a name.
+// Comparing a 4-byte and a 16-byte form as equal is safe only because
+// certNameProblem refuses IPv4-mapped IPv6 literals, and every caller passes
+// only names that passed it (tls.hostname, tls.extra_names, the advertised
+// host), so each is written in the form the certificate carries.
+func sameCertName(a, b string) bool {
+	ipA, ipB := net.ParseIP(a), net.ParseIP(b)
+	if ipA != nil && ipB != nil {
+		return ipA.Equal(ipB)
+	}
+	if ipA != nil || ipB != nil {
+		return false
+	}
+	return strings.EqualFold(a, b)
 }
 
 func validDNSName(s string) bool {
@@ -420,15 +519,30 @@ func (v *validator) buildEnrollment(c *Config, d enrollmentDoc) {
 	}
 }
 
-// checkAdvertised refuses an advertised address whose host is not the
-// certificate hostname: a daemon dialling it would fail TLS verification
-// (RC-36). Only key names appear in the Reason, never either host.
-func (v *validator) checkAdvertised(c Config, p *string) {
+// checkAdvertised refuses an advertised address whose host the server
+// certificate cannot be made to name: the host is what a join string tells a
+// relay-daemon to dial (RC-36, RC-46), so it must be a name a certificate can
+// carry and one the administrator configured as such, tls.hostname or an entry
+// of tls.extra_names. Only key names appear in the Reason, never a host.
+func (v *validator) checkAdvertised(c Config, p *string, extra *[]string) {
 	if p == nil || c.NodePlane.AdvertisedAddress == "" || c.TLS.Hostname == "" {
 		return
 	}
 	host, _, err := net.SplitHostPort(c.NodePlane.AdvertisedAddress)
-	if err != nil || !strings.EqualFold(host, c.TLS.Hostname) {
-		v.fail("node_plane.advertised_address", "host must be the certificate hostname (tls.hostname)")
+	if err != nil {
+		return
 	}
+	if reason := certNameProblem(host); reason != "" {
+		v.fail("node_plane.advertised_address", "host "+reason)
+		return
+	}
+	// A failed tls.extra_names is already reported; a membership refusal
+	// would be a misleading second error.
+	if extra != nil && c.TLS.ExtraNames == nil {
+		return
+	}
+	if sameCertName(host, c.TLS.Hostname) || slices.ContainsFunc(c.TLS.ExtraNames, func(e string) bool { return sameCertName(host, e) }) {
+		return
+	}
+	v.fail("node_plane.advertised_address", "host must be tls.hostname or an entry of tls.extra_names")
 }

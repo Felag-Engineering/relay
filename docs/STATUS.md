@@ -47,7 +47,7 @@ A cell is also `partial` when a "Designed, not built" item on that surface is un
 | Node connection | [node-connection.md](specs/node-connection.md) | n/a | n/a | n/a | Node plane only. Connection state reads appear in the Query row. |
 | Relay configuration | [relay-configuration.md](specs/relay-configuration.md) | n/a | n/a | deferred | No settings tool, route or screen is registered. For the MVP the configuration file is the one source of settings; settings in the Console wait in roadmap: relay/settings-in-the-console. The security floor is the root-owned `relay.toml` (ADR-0043), reloaded all-or-nothing on SIGHUP; the Relay refuses to start if a retired `RELAY_*` setting is in its environment. The Control API will have no write route. |
 | Daemon installation | [daemon-installation.md](specs/daemon-installation.md) | n/a | n/a | n/a | Release artifacts and the customer's config management (invariant 14). Offline `relay-daemon` subcommands: `--version`, `policy check`, `dump-operation-schema`. |
-| Observability | [observability.md](specs/observability.md) | n/a | n/a | n/a | A Prometheus `/metrics` endpoint is mounted on the control-plane listener. An unauthenticated health endpoint and three more metrics are MVP work; a separate listener waits in roadmap: relay/opentelemetry. |
+| Observability | [observability.md](specs/observability.md) | n/a | n/a | n/a | A Prometheus `/metrics` endpoint is mounted on the control-plane listener. `GET /healthz` answers serving or not serving without a credential, and `/metrics` carries certificate expiry, failed authentications and approvals waiting; a separate listener waits in roadmap: relay/opentelemetry. |
 There is no row for `console.md`: the specs index lists it as not yet written.
 
 Removed on 2026-10-23, cut from the MVP, with their specs: the System Model (ADR-0051;
@@ -71,7 +71,7 @@ once its code lands.
 
 | Invariant | Clause | Issue |
 |---|---|---|
-| 7 | `relay:`'s writer, and initial tags | [#1158](https://github.com/Felag-Engineering/relay/issues/1158) |
+| 7 | Legacy `relay:` scope labels on upgraded Relays | [#1201](https://github.com/Felag-Engineering/relay/issues/1201) |
 
 What each gap means is in
 [AGENTS.md — Known gaps between these invariants and the code](../AGENTS.md#known-gaps-between-these-invariants-and-the-code);
