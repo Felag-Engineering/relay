@@ -74,7 +74,7 @@ So an implementer knows which parts are settled. Where one has become an ADR, or
 | Decision | Where it bites |
 |---|---|
 | A fourth Label namespace, **`state:`** — Relay-derived, nobody sets it, targetable, never a security-lane target | 01, 02, 00 |
-| **Facts are detail-view only** — not in a facet, never targetable; the hostname alone names a Node wherever one is shown, marked self-reported, with the verified ID secondary beside it (D20, widened by D22) | 01, 02, 00 |
+| **Facts are detail-view only** — not in a facet, never targetable; hostname, OS and architecture filter and target only as the `node:hostname`, `node:os` and `node:arch` labels the daemon declares. The hostname alone names a Node wherever one is shown, marked self-reported, with the verified ID secondary beside it (D20, widened by D22) | 01, 02, 00 |
 | The fleet view answers **four questions** and nothing else; no collected metrics, ever | 01 |
 | **No scheduled or repeated reads.** Every read is a deliberate, audited act | 03, 04, 01 |
 | Upgrade handling is **progress only** — the Console never offers to push a daemon upgrade | 01 |

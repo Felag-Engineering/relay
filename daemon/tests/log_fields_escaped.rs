@@ -110,6 +110,14 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "count",
     ),
     (
+        "src/config.rs",
+        "key",
+        "key",
+        "a default node: label is not well-formed and is left out",
+        1,
+        "a default label key from a fixed set; never its value",
+    ),
+    (
         "src/main.rs",
         "cap",
         "MAX_INFLIGHT_TASKS",

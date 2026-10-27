@@ -712,10 +712,15 @@ where
         .ok_or(JoinError::Empty)?;
     drop(raw);
 
-    let cfg = config::join_enroll_config(join, effective_dir.clone(), &|name| {
+    let (cfg, left_out) = config::join_enroll_config(join, effective_dir.clone(), &|name| {
         settings.0.get(name).cloned()
     })
     .map_err(JoinError::Config)?;
+    for key in left_out {
+        eprintln!(
+            "relay-daemon join: the default label node:{key} is not a well-formed node: label and is left out"
+        );
+    }
 
     let interrupted = arm_interrupt().map_err(JoinError::Signals)?;
     let prepared = identity::prepare_state_dir(&effective_dir).map_err(|e| JoinError::Prepare {
@@ -1184,10 +1189,11 @@ mod tests {
 
         assert_eq!(seen.calls(), 1);
         assert_eq!(*seen.tokens.lock().unwrap(), vec![TOKEN.to_string()]);
-        assert_eq!(
-            *seen.self_labels.lock().unwrap(),
-            vec![("node:role".to_string(), "web".to_string())]
-        );
+        // The declared label first, then the daemon's default labels.
+        let sent = seen.self_labels.lock().unwrap().clone();
+        assert_eq!(sent[0], ("node:role".to_string(), "web".to_string()));
+        assert!(sent.contains(&("node:os".to_string(), std::env::consts::OS.to_string())));
+        assert!(sent.contains(&("node:arch".to_string(), std::env::consts::ARCH.to_string())));
 
         // The environment file is untouched, and nothing on disk holds the string.
         let after = fs::metadata(&f.paths.env_file).unwrap();
