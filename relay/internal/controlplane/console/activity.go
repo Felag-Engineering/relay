@@ -650,11 +650,7 @@ func windowDuration(v string) (time.Duration, bool) {
 // outcomeFromLabel is the inverse of jobs.OutcomeName over the eight outcomes a
 // Task can report. nil means "not an outcome", never "any outcome".
 func outcomeFromLabel(label string) *jobs.Outcome {
-	for _, o := range []jobs.Outcome{
-		jobs.OutcomeSuccess, jobs.OutcomeFailure, jobs.OutcomeTimeout,
-		jobs.OutcomeDeniedByPolicy, jobs.OutcomeCancelled, jobs.OutcomeUnreachable,
-		jobs.OutcomeVersionRefused, jobs.OutcomeUnsupported,
-	} {
+	for _, o := range jobs.ResolvedOutcomes() {
 		if jobs.OutcomeName(o) == label {
 			outcome := o
 			return &outcome
@@ -1319,11 +1315,7 @@ func windowChoices(current string) []choice {
 // also what outcomeFromLabel inverts — one vocabulary, read in both
 // directions, so the select cannot offer a value the parser rejects.
 func outcomeChoices(current string) []choice {
-	all := []jobs.Outcome{
-		jobs.OutcomeSuccess, jobs.OutcomeFailure, jobs.OutcomeTimeout,
-		jobs.OutcomeDeniedByPolicy, jobs.OutcomeCancelled, jobs.OutcomeUnreachable,
-		jobs.OutcomeVersionRefused, jobs.OutcomeUnsupported,
-	}
+	all := jobs.ResolvedOutcomes()
 	out := make([]choice, 0, len(all))
 	for _, o := range all {
 		label := jobs.OutcomeName(o)

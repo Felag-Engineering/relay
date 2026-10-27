@@ -771,17 +771,7 @@ func (s *Sink) logDecision(kind string, e capability.AuditEntry, matched int, co
 // is deterministic across runs. It is self-contained to this package (not a
 // reuse of internal/metrics's unexported jobs.OutcomeName): OutcomeVersionRefused
 // gets its own bucket here rather than folding into "unspecified".
-var outcomeOrder = []jobs.Outcome{
-	jobs.OutcomeSuccess,
-	jobs.OutcomeFailure,
-	jobs.OutcomeTimeout,
-	jobs.OutcomeDeniedByPolicy,
-	jobs.OutcomeCancelled,
-	jobs.OutcomeUnreachable,
-	jobs.OutcomeVersionRefused,
-	jobs.OutcomeUnsupported,
-	jobs.OutcomeUnspecified,
-}
+var outcomeOrder = append(jobs.ResolvedOutcomes(), jobs.OutcomeUnspecified)
 
 // outcomeCounts renders the aggregate per-Outcome tally across results as a
 // compact string, e.g. "success=2,denied_by_policy=1", in outcomeOrder,

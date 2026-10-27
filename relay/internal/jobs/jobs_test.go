@@ -193,3 +193,28 @@ func TestHalt_ReasonNeverSaysResolvedOfAnUnresolvedTask(t *testing.T) {
 		t.Errorf("resolved Reason() = %q, want 'resolved failure' only", resolved)
 	}
 }
+
+func TestResolvedOutcomes(t *testing.T) {
+	got := ResolvedOutcomes()
+	if len(got) != 8 {
+		t.Fatalf("ResolvedOutcomes() has %d entries, want 8", len(got))
+	}
+	seen := map[string]bool{}
+	for _, o := range got {
+		name := OutcomeName(o)
+		if o == OutcomeUnspecified || name == "unspecified" {
+			t.Errorf("ResolvedOutcomes() holds %v, which is not a resolved outcome", o)
+		}
+		if seen[name] {
+			t.Errorf("ResolvedOutcomes() repeats %q", name)
+		}
+		seen[name] = true
+	}
+	if got[0] != OutcomeSuccess || got[len(got)-1] != OutcomeUnsupported {
+		t.Errorf("ResolvedOutcomes() order = %v, want success first and unsupported last", got)
+	}
+	got[0] = OutcomeFailure
+	if ResolvedOutcomes()[0] != OutcomeSuccess {
+		t.Error("ResolvedOutcomes() shares its backing array between calls")
+	}
+}
