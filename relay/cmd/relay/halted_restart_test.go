@@ -93,7 +93,7 @@ func TestDispatchWiring_ARestartSendsNoTaskOfAHaltedJobAndCancelsEverySibling(t 
 
 	reads := newSignalInFlight(tasks)
 	router, reconciler, _ := newDispatchStack(reads, nil, nil)
-	if err := settleHaltedJobs(reconciler, st.HaltedJobs(), nil); err != nil {
+	if err := settleHaltedJobs(reconciler, st.HaltedJobs(), nil, nil); err != nil {
 		t.Fatalf("settleHaltedJobs: %v", err)
 	}
 
@@ -150,9 +150,9 @@ func TestDispatchWiring_ARestartSendsNoTaskOfAHaltedJobAndCancelsEverySibling(t 
 	if err != nil {
 		t.Fatalf("Get(dispatched): %v", err)
 	}
-	if dispatched.State != jobs.DispatchStateResolved || dispatched.Outcome != jobs.OutcomeCancelled ||
-		dispatched.DispatchedAt.IsZero() || string(dispatched.Stderr) != seed.halt.RestartReason() {
-		t.Errorf("marked-dispatched task = %v/%v dispatched %v stderr %q, want Resolved/cancelled, dispatch time kept, the restart's reason",
+	if dispatched.State != jobs.DispatchStateResolved || dispatched.Outcome != jobs.OutcomeFailure ||
+		dispatched.ExitCode != -1 || dispatched.DispatchedAt.IsZero() || string(dispatched.Stderr) != seed.halt.RestartReason() {
+		t.Errorf("marked-dispatched task = %v/%v dispatched %v stderr %q, want Resolved/failure, exit -1, dispatch time kept, the restart's reason",
 			dispatched.State, dispatched.Outcome, dispatched.DispatchedAt, dispatched.Stderr)
 	}
 	inFlight, err := tasks.InFlight(ctx)
@@ -169,7 +169,7 @@ func TestDispatchWiring_ARestartSendsNoTaskOfAHaltedJobAndCancelsEverySibling(t 
 // settleHaltedJobs fails when the sweep cannot list the halted Jobs' Tasks.
 func TestSettleHaltedJobs_ReturnsTheSweepsError(t *testing.T) {
 	_, reconciler, _ := newDispatchStack(nil, nil, nil)
-	if err := settleHaltedJobs(reconciler, failingHaltedJobs{}, nil); err == nil {
+	if err := settleHaltedJobs(reconciler, failingHaltedJobs{}, nil, nil); err == nil {
 		t.Fatal("settleHaltedJobs returned nil for a failed listing, want an error")
 	}
 }
@@ -256,8 +256,15 @@ func TestNewServer_ControlEnabled_SettlesAHaltedJobBeforeServing(t *testing.T) {
 		if task.State != jobs.DispatchStateResolved {
 			t.Errorf("task %s of the halted Job is %v after start-up, want Resolved", task.ID, task.State)
 		}
-		if task.ID != seed.halt.TaskID && task.Outcome != jobs.OutcomeCancelled {
-			t.Errorf("task %s of the halted Job has outcome %v after start-up, want cancelled", task.ID, task.Outcome)
+		want := jobs.OutcomeCancelled // never sent
+		switch task.ID {
+		case seed.halt.TaskID:
+			continue
+		case seed.dispatchedTaskID:
+			want = jobs.OutcomeFailure // may have run
+		}
+		if task.Outcome != want {
+			t.Errorf("task %s of the halted Job has outcome %v after start-up, want %v", task.ID, task.Outcome, want)
 		}
 	}
 }

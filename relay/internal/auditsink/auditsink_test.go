@@ -707,6 +707,27 @@ func TestSink_RecordProtocolViolationWritesTheRowAndNoOutput(t *testing.T) {
 	}
 }
 
+func TestSink_RecordHaltedSettlementWritesAnOutcomeRowWithNoPrincipal(t *testing.T) {
+	_, repo, _ := openSinkStore(t)
+	sink := New(repo, WithNewID(sequentialIDs("audit-")), WithClock(fixedClock(time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC))))
+
+	task := jobs.Task{ID: "task-1", JobID: "job-1", NodeID: "node-2", Action: jobs.Action{Kind: jobs.ActionOperation, OperationName: "service.restart"}}
+	res := jobs.Result{Outcome: jobs.OutcomeFailure, ExitCode: -1, Stderr: []byte("it may have run")}
+	if err := sink.RecordHaltedSettlement(context.Background(), task, res); err != nil {
+		t.Fatalf("RecordHaltedSettlement: %v", err)
+	}
+	records, err := repo.ByNode(context.Background(), "node-2")
+	if err != nil || len(records) != 1 {
+		t.Fatalf("ByNode(node-2) = %d records, %v; want 1", len(records), err)
+	}
+	rec := records[0]
+	if rec.Kind != audit.KindDispatch || rec.Outcome != jobs.OutcomeFailure || rec.JobID != "job-1" ||
+		rec.Principal != "" || string(rec.Stderr) != "it may have run" ||
+		rec.Reason != "settled_after_restart=halted_job task_id=task-1" {
+		t.Errorf("record = %+v, want a principal-less dispatch/failure row for job-1 naming the task", rec)
+	}
+}
+
 // TestProtocolViolationReason_Fields pins the exact
 // "rule=... reported_outcome=... task_id=..." rendering (a stable,
 // greppable contract), and the "unnamed" fallback for an empty

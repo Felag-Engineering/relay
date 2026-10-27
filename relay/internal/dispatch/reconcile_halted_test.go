@@ -46,6 +46,18 @@ func (f *fakeHaltedJobs) UnsettledTasksOfHaltedJobs(context.Context) ([]jobs.Tas
 	return f.list, f.listErr
 }
 
+type recordedSettlement struct {
+	task jobs.Task
+	res  jobs.Result
+}
+
+type fakeSettlementRecorder struct{ got []recordedSettlement }
+
+func (f *fakeSettlementRecorder) RecordHaltedSettlement(_ context.Context, task jobs.Task, res jobs.Result) error {
+	f.got = append(f.got, recordedSettlement{task, res})
+	return nil
+}
+
 func testHalt(resolved bool) jobs.Halt {
 	return jobs.Halt{
 		TaskID: "t-failed", NodeID: "node-1", Outcome: jobs.OutcomeFailure,
@@ -78,7 +90,8 @@ func TestReconciler_SettleHaltedJobs_SendsNothingAndResolvesEveryUnsentTask(t *t
 		})
 	}
 
-	n, err := reconciler.SettleHaltedJobs(ctx, halted)
+	recorder := &fakeSettlementRecorder{}
+	n, err := reconciler.SettleHaltedJobs(ctx, halted, recorder)
 	if err != nil || n != 2 {
 		t.Fatalf("SettleHaltedJobs = %d, %v; want 2, nil", n, err)
 	}
@@ -92,10 +105,21 @@ func TestReconciler_SettleHaltedJobs_SendsNothingAndResolvesEveryUnsentTask(t *t
 		t.Errorf("Pending task = %v/%v %q, want Resolved/cancelled with the halt's reason", gotPending.State, gotPending.Outcome, gotPending.Stderr)
 	}
 	gotDispatched, _ := repo.Get(ctx, dispatched.ID)
-	if gotDispatched.State != jobs.DispatchStateResolved || gotDispatched.Outcome != jobs.OutcomeCancelled ||
+	if gotDispatched.State != jobs.DispatchStateResolved || gotDispatched.Outcome != jobs.OutcomeFailure ||
 		gotDispatched.ExitCode != -1 || string(gotDispatched.Stderr) != halt.RestartReason() {
-		t.Errorf("Dispatched task = %v/%v exit %d %q, want Resolved/cancelled, exit -1, the restart's reason",
+		t.Errorf("Dispatched task = %v/%v exit %d %q, want Resolved/failure, exit -1, the restart's reason",
 			gotDispatched.State, gotDispatched.Outcome, gotDispatched.ExitCode, gotDispatched.Stderr)
+	}
+	// The audit records each outcome as stored: the never-sent sibling
+	// cancelled, the maybe-sent one failure.
+	if len(recorder.got) != 2 {
+		t.Fatalf("recorded %d settlements, want 2", len(recorder.got))
+	}
+	for _, r := range recorder.got {
+		want, _ := repo.Get(ctx, r.task.ID)
+		if r.res.Outcome != want.Outcome || r.res.ExitCode != want.ExitCode || string(r.res.Stderr) != string(want.Stderr) {
+			t.Errorf("recorded %s as %+v, stored %v/%d %q", r.task.ID, r.res, want.Outcome, want.ExitCode, want.Stderr)
+		}
 	}
 	if untouched, _ := repo.Get(ctx, other.ID); untouched.State != jobs.DispatchStatePending {
 		t.Errorf("a Task outside the list was touched: %+v", untouched)
@@ -125,12 +149,12 @@ func TestReconciler_SettleHaltedJobs_DoesNotResendTheHaltingTaskItself(t *testin
 	halted := newFakeHaltedJobs([]jobs.Task{halting}, jobs.Job{ID: "job-h", Halt: halt})
 	reconciler := NewReconciler(repo, NewRouter(nil, nil))
 
-	if n, err := reconciler.SettleHaltedJobs(ctx, halted); err != nil || n != 1 {
+	if n, err := reconciler.SettleHaltedJobs(ctx, halted, nil); err != nil || n != 1 {
 		t.Fatalf("SettleHaltedJobs = %d, %v; want 1, nil", n, err)
 	}
 	got, _ := repo.Get(ctx, halting.ID)
-	if got.State != jobs.DispatchStateResolved || got.Outcome != jobs.OutcomeCancelled {
-		t.Fatalf("halting task = %v/%v, want Resolved/cancelled", got.State, got.Outcome)
+	if got.State != jobs.DispatchStateResolved || got.Outcome != jobs.OutcomeFailure {
+		t.Fatalf("halting task = %v/%v, want Resolved/failure", got.State, got.Outcome)
 	}
 	if string(got.Stderr) != halt.RestartReason() {
 		t.Errorf("halting task stderr = %q, want Halt.RestartReason", got.Stderr)
@@ -154,7 +178,7 @@ func TestReconciler_SettleHaltedJobs_ToleratesATaskResolvedFirst(t *testing.T) {
 	halted := newFakeHaltedJobs([]jobs.Task{stale, stalePending}, jobs.Job{ID: "job-h", Halt: testHalt(true)})
 	reconciler := NewReconciler(repo, NewRouter(nil, nil))
 
-	n, err := reconciler.SettleHaltedJobs(ctx, halted)
+	n, err := reconciler.SettleHaltedJobs(ctx, halted, nil)
 	if err != nil || n != 0 {
 		t.Fatalf("SettleHaltedJobs = %d, %v; want 0, nil", n, err)
 	}
@@ -176,7 +200,7 @@ func TestReconciler_SettleHaltedJobs_ReportsAnUnreadableJobAndSettlesTheRest(t *
 	halted.jobErr["job-bad"] = boom
 	reconciler := NewReconciler(repo, NewRouter(nil, nil))
 
-	n, err := reconciler.SettleHaltedJobs(ctx, halted)
+	n, err := reconciler.SettleHaltedJobs(ctx, halted, nil)
 	if !errors.Is(err, boom) {
 		t.Fatalf("err = %v, want it to wrap the read failure", err)
 	}
@@ -203,7 +227,7 @@ func TestReconciler_SettleHaltedJobs_ReportsAListedJobWithNoHalt(t *testing.T) {
 	halted := newFakeHaltedJobs([]jobs.Task{task}, jobs.Job{ID: "job-odd"})
 	reconciler := NewReconciler(repo, NewRouter(nil, nil))
 
-	n, err := reconciler.SettleHaltedJobs(ctx, halted)
+	n, err := reconciler.SettleHaltedJobs(ctx, halted, nil)
 	if err == nil || !strings.Contains(err.Error(), "job-odd") || n != 0 {
 		t.Errorf("SettleHaltedJobs = %d, %v; want 0 and an error naming the Job", n, err)
 	}
@@ -218,7 +242,7 @@ func TestReconciler_SettleHaltedJobs_ReportsAFailedListing(t *testing.T) {
 	halted.listErr = boom
 	reconciler := NewReconciler(newFakeTaskRepository(), NewRouter(nil, nil))
 
-	n, err := reconciler.SettleHaltedJobs(context.Background(), halted)
+	n, err := reconciler.SettleHaltedJobs(context.Background(), halted, nil)
 	if !errors.Is(err, boom) || n != 0 {
 		t.Errorf("SettleHaltedJobs = %d, %v; want 0 and the listing error", n, err)
 	}

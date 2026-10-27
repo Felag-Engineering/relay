@@ -216,11 +216,11 @@ func TestHalt_RestartReasonNamesTheHaltAndClaimsNoLess(t *testing.T) {
 	}
 }
 
-func TestHalt_RestartResultIsCancelledWithNoExitStatus(t *testing.T) {
+func TestHalt_RestartResultIsAFailureWithNoExitStatus(t *testing.T) {
 	h := Halt{TaskID: "task-1", NodeID: "node-7", Outcome: OutcomeFailure, Resolved: true}
 	got := h.RestartResult()
-	if got.Outcome != OutcomeCancelled || got.ExitCode != -1 || string(got.Stderr) != h.RestartReason() ||
+	if got.Outcome != OutcomeFailure || got.ExitCode != -1 || string(got.Stderr) != h.RestartReason() ||
 		len(got.Stdout) != 0 || got.Truncated {
-		t.Errorf("RestartResult() = %+v, want cancelled, exit -1, RestartReason as stderr and nothing else", got)
+		t.Errorf("RestartResult() = %+v, want failure, exit -1, RestartReason as stderr and nothing else", got)
 	}
 }

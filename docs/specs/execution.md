@@ -131,6 +131,12 @@ outcome recorded against that Node, not a Relay-side abandonment. There is no Jo
 further Task is sent. Every unsent Task resolves `cancelled` with the halt as its reason, and the
 Job's result says it halted, on which Node, and why. Tasks already in flight when the halt happens
 finish and report their real outcomes.
+A halt is kept across a Relay restart (owner decision, 2026-10-27). At start, before any Node
+connects, the Relay sends no Task of a halted Job. A sibling still `Pending`, never sent, resolves
+`cancelled` with the halt as its reason. A sibling `Dispatched` may have reached its Node before the
+crash, so it resolves `failure` with exit code -1 and stderr saying it may have run, the shape of a
+Node-offline result, and an AI-agent never mistakes "maybe ran" for "did not run". The audit records
+each outcome as it is stored.
 
 - `denied_by_policy`, `unsupported` and `unreachable` **do not halt** a Job. They describe that
   Node, not the change being made.
@@ -206,8 +212,8 @@ Pending ──────────▶ Dispatched ─────────
  not yet sent)      a result)               terminal)
 ```
 
-Only `Dispatched` with no result is *in flight*, and that set is exactly what a Relay restart
-reconciles. Three transitions go from `Pending` straight to `Resolved` and are never in flight: a
+Only `Dispatched` with no result is *in flight*, and that set is what a Relay restart
+reconciles, except the Tasks of a halted Job, which are resolved and not re-sent. Three transitions go from `Pending` straight to `Resolved` and are never in flight: a
 Task refused by the minimum-version gate (ADR-0014), a Task cancelled before dispatch, and a Task
 left unsent when a `mutate` Job halts.
 
@@ -380,7 +386,7 @@ also need `make test-integration`; changes to the daemon-facing contract need th
 | A Template Job halts on its most restrictive reported class | `TestRun_TemplateJobHaltsOnTheDispatchClass` | capability |
 | The halt is recorded on the Job and in the audit trail | `TestExecution_HaltIsRecordedOnTheJobAndAudited` | capability |
 | A halted Job's unsent Tasks are never sent after a restart | `TestDispatchWiring_AHaltedJobsUnsentTasksAreNeverSentAfterARestart` | composition |
-| After a restart, no Task of a halted Job is sent, and every unsent sibling, Dispatched or Pending, resolves `cancelled` with the halt as its reason | `TestDispatchWiring_ARestartSendsNoTaskOfAHaltedJobAndCancelsEverySibling`, `TestReconciler_SettleHaltedJobs_SendsNothingAndResolvesEveryUnsentTask` | composition, capability |
+| After a restart, no Task of a halted Job is sent; a Pending sibling resolves `cancelled` with the halt as its reason and a Dispatched one `failure`, exit -1, saying it may have run, each audited | `TestDispatchWiring_ARestartSendsNoTaskOfAHaltedJobAndCancelsEverySibling`, `TestReconciler_SettleHaltedJobs_SendsNothingAndResolvesEveryUnsentTask`, `TestSink_RecordHaltedSettlementWritesAnOutcomeRowWithNoPrincipal` | composition, capability, audit |
 | A halted Job names the halting Node, the same on both surfaces | `TestMCP_HaltedMutateJob_ReportsTheHaltOnRunAndGetJob`, `TestControlAPI_HaltRendersIdenticallyOnBothSurfaces` | MCP, Control API |
 | No surface can dispatch outside this layer | `TestNoDispatchConstruction`, `TestDispatchSymbolsUnexported` | compile-time |
 | The layer imports nothing but registry and jobs | `.golangci.yml` depguard rule `capability-imports` | lint |

@@ -150,7 +150,7 @@ func installDevHarness(cfg Config, deps *appDeps) (stop func(), err error) {
 	// what makes the crash-mid-Job test's restart reconciliation happen.
 	// ReconcileNode is not called directly from here. The start-up sweep runs
 	// first, as in newServer, so a failure leaves deps untouched.
-	if err := settleHaltedJobs(reconciler, deps.store.HaltedJobs(), deps.logger); err != nil {
+	if err := settleHaltedJobs(reconciler, deps.store.HaltedJobs(), harnessAudit, deps.logger); err != nil {
 		return nil, fmt.Errorf("devharness: %w", err)
 	}
 	deps.tunnel.sink = sink

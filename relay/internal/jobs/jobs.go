@@ -413,10 +413,11 @@ func (h Halt) RestartReason() string {
 		"before re-targeting it."
 }
 
-// RestartResult is the Result of a Task resolved with RestartReason. Like
-// NodeOfflineResult it carries -1, the no-exit-status sentinel.
+// RestartResult is the Result of a Task resolved with RestartReason: like
+// NodeOfflineResult a failure carrying -1, the no-exit-status sentinel, never
+// cancelled, because the Task may have run.
 func (h Halt) RestartResult() Result {
-	return Result{Outcome: OutcomeCancelled, ExitCode: -1, Stderr: []byte(h.RestartReason())}
+	return Result{Outcome: OutcomeFailure, ExitCode: -1, Stderr: []byte(h.RestartReason())}
 }
 
 // Stage is a batch of Tasks within a Job. v1 permits exactly one Stage per

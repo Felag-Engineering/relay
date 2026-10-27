@@ -28,6 +28,7 @@ import (
 // disabled-vs-enabled assertion this file's callers must keep true.
 
 var _ dispatch.ViolationRecorder = (*auditsink.Sink)(nil)
+var _ dispatch.SettlementRecorder = (*auditsink.Sink)(nil)
 
 var _ transport.RevokedDialObserver = (*auditsink.RevokedDialRecorder)(nil)
 
@@ -104,10 +105,10 @@ const haltedJobsSettleBudget = 30 * time.Second
 // settleHaltedJobs runs the Reconciler's start-up sweep of halted Jobs. It must
 // run before the Tunnel serves: a connecting Node's reconcile re-sends whatever
 // is still Dispatched.
-func settleHaltedJobs(reconciler *dispatch.Reconciler, halted jobs.HaltedJobRepository, logger *slog.Logger) error {
+func settleHaltedJobs(reconciler *dispatch.Reconciler, halted jobs.HaltedJobRepository, rec dispatch.SettlementRecorder, logger *slog.Logger) error {
 	ctx, cancel := context.WithTimeout(context.Background(), haltedJobsSettleBudget)
 	defer cancel()
-	n, err := reconciler.SettleHaltedJobs(ctx, halted)
+	n, err := reconciler.SettleHaltedJobs(ctx, halted, rec)
 	if n > 0 {
 		logctx.Or(logger).Info("settled the unresolved Tasks of halted Jobs", "tasks", n)
 	}

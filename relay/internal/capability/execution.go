@@ -61,7 +61,7 @@
 //     not complete, stays in flight: the Reconciler re-sends it on a live
 //     reconnect for its result and the relay-daemon dedups by task_id (invariant
 //     4), so the halt adds no execution. After a Relay restart,
-//     SettleHaltedJobs resolves it cancelled with Halt.RestartReason before any
+//     SettleHaltedJobs resolves it failure with Halt.RestartReason before any
 //     Node connects, sending nothing.
 package capability
 

@@ -167,10 +167,14 @@ func (r *Reconciler) ResolveOffline(ctx context.Context, nodeID string, skip map
 // ReconcileNode re-sends every Dispatched Task and must never send one of a
 // halted Job (invariant 4, ADR-0004; execution.md, Halting a failing mutation).
 //
-// A Pending Task resolves as a live halt leaves it: Halt.Reason, no dispatch
-// time. A Dispatched one may already have been sent, so it resolves with
-// Halt.RestartResult, keeping its dispatch time, rather than claim it never
-// was. The halting Task itself, if still Dispatched, is treated the same.
+// A Pending Task was never sent and resolves as a live halt leaves it:
+// cancelled with Halt.Reason, no dispatch time. A Dispatched one may already
+// have reached its Node, so it resolves failure with exit code -1 and
+// Halt.RestartReason, keeping its dispatch time, as NodeOfflineResult does for
+// a Task whose outcome is unknown; an AI-agent reading it never mistakes
+// "maybe ran" for "did not run". The halting Task itself, if still Dispatched,
+// is treated the same. Each outcome is passed to rec, when non-nil, once it is
+// stored; a failure to record is joined into the returned error.
 //
 // It must not run while a Job engine is live: a live halted Job's in-flight
 // Tasks finish and report their real outcomes, and only after a restart is no
@@ -180,7 +184,7 @@ func (r *Reconciler) ResolveOffline(ctx context.Context, nodeID string, skip map
 // ResolveOffline: they mean the Task was resolved first. A Job that cannot be
 // read, or that the listing named but carries no halt, leaves its Tasks as they
 // are and is reported; every other error is joined and returned.
-func (r *Reconciler) SettleHaltedJobs(ctx context.Context, halted jobs.HaltedJobRepository) (int, error) {
+func (r *Reconciler) SettleHaltedJobs(ctx context.Context, halted jobs.HaltedJobRepository, rec SettlementRecorder) (int, error) {
 	survivors, err := halted.UnsettledTasksOfHaltedJobs(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("dispatch: settle halted jobs: list unsettled tasks: %w", err)
@@ -212,47 +216,62 @@ func (r *Reconciler) SettleHaltedJobs(ctx context.Context, halted jobs.HaltedJob
 			errs = append(errs, fmt.Errorf("dispatch: settle halted job %q: listed as halted but carries no halt", task.JobID))
 			continue
 		}
-		ok, err := r.settleHaltedTask(ctx, task, h)
+		res, ok, err := r.settleHaltedTask(ctx, task, h)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("dispatch: settle halted task %q: %w", task.ID, err))
 			continue
 		}
-		if ok {
-			settled++
+		if !ok {
+			continue
+		}
+		settled++
+		if rec != nil {
+			if err := rec.RecordHaltedSettlement(ctx, task, res); err != nil {
+				errs = append(errs, fmt.Errorf("dispatch: record settled halted task %q: %w", task.ID, err))
+			}
 		}
 	}
 	return settled, errors.Join(errs...)
 }
 
-// settleHaltedTask resolves one Task of the halted Job h without sending it. It
-// reports false, with no error, for a Task that is not Pending or Dispatched or
-// that was resolved first.
-func (r *Reconciler) settleHaltedTask(ctx context.Context, task jobs.Task, h jobs.Halt) (bool, error) {
+// SettlementRecorder records the outcome SettleHaltedJobs stored for a Task of
+// a halted Job. Structural, like ViolationRecorder: *auditsink.Sink satisfies
+// it and this package imports neither internal/audit nor internal/capability.
+type SettlementRecorder interface {
+	RecordHaltedSettlement(ctx context.Context, task jobs.Task, res jobs.Result) error
+}
+
+// settleHaltedTask resolves one Task of the halted Job h without sending it and
+// returns the Result it stored. It reports false, with no error, for a Task
+// that is not Pending or Dispatched or that was resolved first.
+func (r *Reconciler) settleHaltedTask(ctx context.Context, task jobs.Task, h jobs.Halt) (jobs.Result, bool, error) {
 	var err error
+	var res jobs.Result
 	switch task.State {
 	case jobs.DispatchStatePending:
 		reason := h.Reason()
+		res = jobs.Result{Outcome: jobs.OutcomeCancelled, Stderr: []byte(reason)}
 		var next jobs.Task
 		next, err = task.Transition(jobs.TaskEvent{Kind: jobs.TaskEventHalt, Reason: reason}, r.now())
 		if err == nil {
 			err = r.tasks.MarkHalted(ctx, task.ID, reason, next.ResolvedAt)
 		}
 	case jobs.DispatchStateDispatched:
-		res := h.RestartResult()
+		res = h.RestartResult()
 		_, err = task.Transition(jobs.TaskEvent{Kind: jobs.TaskEventResolve, Result: res}, r.now())
 		if err == nil {
 			err = r.tasks.Resolve(ctx, task.ID, res)
 		}
 	default:
-		return false, nil
+		return jobs.Result{}, false, nil
 	}
 	if err != nil {
 		if errors.Is(err, jobs.ErrInvalidTaskState) || errors.Is(err, jobs.ErrTaskNotFound) {
-			return false, nil
+			return jobs.Result{}, false, nil
 		}
-		return false, err
+		return jobs.Result{}, false, err
 	}
-	return true, nil
+	return res, true, nil
 }
 
 // reconcileTask resends one in-flight Task for a Result and Resolves it.

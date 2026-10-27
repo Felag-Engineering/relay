@@ -684,7 +684,7 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 		// runs here, before srv.Serve, so no Node connects and is reconciled
 		// before a halted Job's unsent Tasks are settled; a failure refuses
 		// start-up rather than leave them for a reconnect to send.
-		if err := settleHaltedJobs(reconciler, st.HaltedJobs(), logger); err != nil {
+		if err := settleHaltedJobs(reconciler, st.HaltedJobs(), auditSink, logger); err != nil {
 			return nil, nil, err
 		}
 		ts.sink = sink
