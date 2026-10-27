@@ -1,5 +1,7 @@
 package relayconfig
 
+import "slices"
+
 // Change is one setting whose value differs between two configurations. It
 // carries the setting's key and never a value, so a list of Changes is safe to
 // log and to audit (RC-18).
@@ -33,7 +35,8 @@ const (
 	// windows are beyond RC-21's enumeration and await the owner's
 	// ratification: the Console's authentication is constructed with them once,
 	// and a reload that silently did not apply them would leave the file and
-	// the running Relay disagreeing.
+	// the running Relay disagreeing. tls.extra_names is bind-time by RC-47: the
+	// certificate's names are fixed at start.
 	restartRequired
 	// appliedByReload is a setting whose consumer reads the live snapshot.
 	appliedByReload
@@ -79,6 +82,7 @@ var settings = []setting{
 	{key: "ca.dir", class: restartRequired, differs: differ(func(c Config) string { return c.CA.Dir })},
 	{key: "store.path", class: restartRequired, differs: differ(func(c Config) string { return c.Store.Path })},
 	{key: "tls.hostname", class: restartRequired, differs: differ(func(c Config) string { return c.TLS.Hostname })},
+	{key: "tls.extra_names", class: restartRequired, differs: func(a, b Config) bool { return !slices.Equal(a.TLS.ExtraNames, b.TLS.ExtraNames) }},
 	{key: "oauth.issuer", class: restartRequired, differs: differ(func(c Config) string { return c.OAuth.Issuer })},
 	{key: "oauth.audience", class: restartRequired, differs: differ(func(c Config) string { return c.OAuth.Audience })},
 	{key: "oauth.account_claim", class: restartRequired, differs: differ(func(c Config) string { return c.OAuth.AccountClaim })},

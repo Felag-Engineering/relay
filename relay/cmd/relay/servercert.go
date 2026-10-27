@@ -4,12 +4,14 @@ package main
 import (
 	"fmt"
 	"net"
+	"strings"
 )
 
 // maxDetectedAddresses bounds how many of the host's addresses the certificate
 // names: a host with many service addresses (an IPVS dummy interface, say) must
-// not grow the leaf without bound. The hostname and loopback are never counted
-// against it.
+// not grow the leaf without bound. The configured names and loopback are never
+// counted against it, and tls.extra_names carries its own cap of 32, enforced
+// when the configuration loads (RC-47).
 const maxDetectedAddresses = 64
 
 // serverCertNames is the SAN set for the Relay's server certificate.
@@ -21,7 +23,8 @@ type serverCertNames struct {
 }
 
 // serverCertificateNames returns the names the server certificate carries:
-// tls.hostname (an IP SAN when it is an IP address, a DNS SAN otherwise), the
+// tls.hostname, the advertised address's host and every tls.extra_names entry
+// (each an IP SAN when it is an IP address, a DNS SAN otherwise; RC-46), the
 // loopback addresses, and up to maxDetectedAddresses of the host's usable
 // unicast addresses, IPv4 first because a relay-daemon can dial an IPv4
 // literal today and cannot dial an IPv6 one without a server name override, so
@@ -33,10 +36,11 @@ type serverCertNames struct {
 // self-assigned and unstable, not something a Node should be told to dial.
 //
 // The addresses are read once, when this is called; a host that gains one
-// afterwards needs a restart for the certificate to name it. When
-// interfaceAddrs fails the result still holds the hostname and loopback names,
-// returned beside the error so the caller decides whether that is fatal.
-func serverCertificateNames(hostname string, interfaceAddrs func() ([]net.Addr, error)) (serverCertNames, error) {
+// afterwards needs a restart for the certificate to name it. Every configured
+// name is added before the addresses are read, so when interfaceAddrs fails
+// the result still holds them and loopback, returned beside the error so the
+// caller decides whether that is fatal.
+func serverCertificateNames(hostname, advertisedHost string, extraNames []string, interfaceAddrs func() ([]net.Addr, error)) (serverCertNames, error) {
 	var names serverCertNames
 	seen := map[string]bool{}
 	add := func(ip net.IP) {
@@ -50,10 +54,26 @@ func serverCertificateNames(hostname string, interfaceAddrs func() ([]net.Addr, 
 		names.IPAddresses = append(names.IPAddresses, ip)
 	}
 
-	if ip := net.ParseIP(hostname); ip != nil {
-		add(ip)
-	} else {
-		names.DNSNames = []string{hostname}
+	addName := func(s string) {
+		if s == "" {
+			return
+		}
+		if ip := net.ParseIP(s); ip != nil {
+			add(ip)
+			return
+		}
+		for _, d := range names.DNSNames {
+			if strings.EqualFold(d, s) {
+				return
+			}
+		}
+		names.DNSNames = append(names.DNSNames, s)
+	}
+
+	addName(hostname)
+	addName(advertisedHost)
+	for _, e := range extraNames {
+		addName(e)
 	}
 	add(net.IPv4(127, 0, 0, 1))
 	add(net.IPv6loopback)

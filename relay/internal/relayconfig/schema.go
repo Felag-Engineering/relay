@@ -52,7 +52,8 @@ type storeDoc struct {
 }
 
 type tlsDoc struct {
-	Hostname *string `toml:"hostname"`
+	Hostname   *string   `toml:"hostname"`
+	ExtraNames *[]string `toml:"extra_names"`
 }
 
 type oauthDoc struct {

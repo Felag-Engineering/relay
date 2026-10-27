@@ -132,6 +132,7 @@ func fromFile(rc relayconfig.Config) Config {
 		CADir:                  rc.CA.Dir,
 		StorePath:              rc.Store.Path,
 		Hostname:               rc.TLS.Hostname,
+		ExtraNames:             rc.TLS.ExtraNames,
 		OAuthIssuer:            rc.OAuth.Issuer,
 		OAuthAudience:          rc.OAuth.Audience,
 		OAuthAccountClaim:      rc.OAuth.AccountClaim,

@@ -53,6 +53,10 @@ type Config struct {
 	CADir     string
 	StorePath string
 	Hostname  string
+	// ExtraNames are the further names the server certificate carries
+	// (tls.extra_names, RC-47). They are read from the configuration file at
+	// start and no API reaches them (invariant 11).
+	ExtraNames []string
 	// AdvertisedAddress is the node-plane address a join string tells Nodes to
 	// dial (RC-36). Unset, it is the certificate hostname plus the gRPC listen
 	// port. It is read from the configuration file at startup
@@ -476,11 +480,24 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 	// tls.Config would share ClientAuth, so never share one.
 	//
 	// Failing to list the host's addresses is a warning, not a refusal: they
-	// are a convenience on top of tls.hostname, the name a join string carries,
-	// and a detector must not become an outage.
-	names, err := serverCertificateNames(cfg.Hostname, net.InterfaceAddrs)
+	// are a convenience on top of the configured names (tls.hostname, the
+	// advertised host, tls.extra_names), and a detector must not become an
+	// outage.
+	//
+	// The certificate names the advertised host and tls.extra_names so that no
+	// join string carries a host it does not name (RC-46): the minter below
+	// receives the same advertisedAddress.
+	advertisedAddress, err := enroll.AdvertisedAddress(cfg.AdvertisedAddress, cfg.Hostname, cfg.Addr)
 	if err != nil {
-		slog.Warn("server certificate names only tls.hostname and loopback: this host's addresses could not be listed; a systemd unit whose RestrictAddressFamilies omits AF_NETLINK prevents it",
+		return nil, nil, fmt.Errorf("advertised node-plane address: %w", err)
+	}
+	advertisedHost, _, err := net.SplitHostPort(advertisedAddress)
+	if err != nil {
+		return nil, nil, fmt.Errorf("advertised node-plane address: %w", err)
+	}
+	names, err := serverCertificateNames(cfg.Hostname, advertisedHost, cfg.ExtraNames, net.InterfaceAddrs)
+	if err != nil {
+		slog.Warn("server certificate names only tls.hostname, the advertised host, tls.extra_names and loopback: this host's addresses could not be listed; a systemd unit whose RestrictAddressFamilies omits AF_NETLINK prevents it",
 			"err", err)
 	}
 	if names.Omitted > 0 {
@@ -535,10 +552,6 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 	}
 
 	tokenSvc := enroll.NewService(st.Tokens())
-	advertisedAddress, err := enroll.AdvertisedAddress(cfg.AdvertisedAddress, cfg.Hostname, cfg.Addr)
-	if err != nil {
-		return nil, nil, fmt.Errorf("advertised node-plane address: %w", err)
-	}
 	enrollmentMinter, err := enroll.NewMinter(tokenSvc, relayCA, advertisedAddress)
 	if err != nil {
 		return nil, nil, fmt.Errorf("enrollment minter: %w", err)
