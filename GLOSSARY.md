@@ -369,8 +369,8 @@ and a Job is minted only if a decision releases one (ADR-0027 decision 1 as amen
 the Gate rule's requirement is satisfied or its TTL expires. Relay authors what the approver
 sees, so the requesting AI-agent can neither truncate nor spin it. The decision arrives
 **out-of-band**, on the Control API's authenticated decision endpoint, where the approver is
-verified (the Admin Console has no approval surface, ADR-0044); or **in-band**, through the
-requesting client's MCP session (`approve_request`, or an MRTR answer), where the approver is
+verified (the Admin Console has no approval surface, ADR-0044); or **in-band**, as an MRTR answer on the
+requesting client's retried call, where the approver is
 asserted and only as honest as the client (ADR-0027, ADR-0029). An Approval **narrows**: it
 permits one already-Policy-legal dispatch to run, and can never widen what a Node's Policy allows.
 _Avoid_: authorization, permission, sign-off, confirmation (unqualified — name the rung)
@@ -493,8 +493,8 @@ MCP's stateless pattern (SEP-2322, protocol 2026-07-28) for a server that needs 
 mid-call: the server answers `tools/call` with an input-required result and ends the
 request; the client obtains the input and retries the call carrying it. Relay's use is
 **MRTR elicitation** — a Relay-authored approval question on a gated call, answered in-band
-with an asserted approver, through the same decision path as `approve_request` (ADR-0029
-decision 6). Replaces server-initiated `elicitation/create`, which 2026-07-28 removed.
+with an asserted approver, through the capability layer's single in-band entry point
+(ADR-0029 decision 6, ADR-0047 decision 4). Replaces server-initiated `elicitation/create`, which 2026-07-28 removed.
 _Avoid_: elicitation (unqualified — say which form), held elicitation
 
 **Relay-side authorization**:

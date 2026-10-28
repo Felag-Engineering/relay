@@ -17,7 +17,7 @@ never lowers a Node's own Policy or the fleet's blast-radius cap.
 
 | Surface | How it is reached |
 |---|---|
-| **MCP** | **MRTR elicitation.** A gated `tools/call` answers with an input-required result carrying a Relay-written question; the client puts it to a person and retries the call carrying the answer (*Answering*). **`approve_request`**, the tool by which an AI-agent records a decision itself (AP-15), goes with AP-83. No park is rendered as an MCP task handle (AP-85). |
+| **MCP** | **MRTR elicitation.** A gated `tools/call` answers with an input-required result carrying a Relay-written question; the client puts it to a person and retries the call carrying the answer (*Answering*). No MCP tool records a decision (AP-83), and no park is rendered as an MCP task handle (AP-85). |
 | **Control API** | `GET /api/v1/approvals`, `GET /api/v1/approvals/{id}`, `POST /api/v1/approvals/{id}/decision`: the rescue, for a client that cannot be asked or a question a restart stranded (AP-80). Specified here, and not featured in getting-started material. |
 | **Admin Console** | None (AP-80): no queue, no request screen, no decision. It renders what an approval left on other records. |
 
