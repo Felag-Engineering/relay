@@ -13,7 +13,9 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 	"github.com/Felag-Engineering/relay/relay/internal/nodevocab"
 	"github.com/Felag-Engineering/relay/relay/internal/policyview"
+	"github.com/Felag-Engineering/relay/relay/internal/protoconv"
 	"github.com/Felag-Engineering/relay/relay/internal/registry"
+	relayv1 "github.com/Felag-Engineering/relay/relay/internal/relay/v1"
 )
 
 // staticVocab is a TemplateVocabularySource over a fixed map: a Node absent
@@ -39,6 +41,34 @@ func (c *countingVocab) Get(nodeID string) (nodevocab.Snapshot, bool) {
 	c.gets = append(c.gets, nodeID)
 	c.mu.Unlock()
 	return c.staticVocab.Get(nodeID)
+}
+
+// reportedTemplateSet is the template-set fingerprint a test Node's latest
+// Hello carries and its cached snapshot matches: 64 lowercase hex, the form
+// the daemon reports and the bound accepts.
+const reportedTemplateSet = "abababababababababababababababababababababababababababababababab"
+
+// contradictingPolicyFP and contradictingVocabFP are well-formed fingerprints
+// so the bound passes them: the contradiction a test sets up with a cached
+// snapshot lives in the snapshot's contents, not its fingerprint string.
+const (
+	contradictingPolicyFP = "c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0"
+	contradictingVocabFP  = "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1"
+)
+
+// reported is a current Template vocabulary report: a snapshot whose
+// fingerprint equals reportedTemplateSet.
+func reported(ts ...nodevocab.Template) nodevocab.Snapshot {
+	return nodevocab.Snapshot{Fingerprint: reportedTemplateSet, Templates: ts}
+}
+
+// reportedNodes returns Nodes whose latest Hello carried reportedTemplateSet.
+func reportedNodes(ids ...string) []registry.Node {
+	nodes := make([]registry.Node, len(ids))
+	for i, id := range ids {
+		nodes[i] = registry.Node{NodeID: id, TemplateSetFingerprint: reportedTemplateSet}
+	}
+	return nodes
 }
 
 func templateWithClass(name string, class jobs.RiskClass, slots ...string) nodevocab.Template {
@@ -132,7 +162,7 @@ func templateAction(name string, args map[string]string) jobs.Action {
 
 func TestResolveAction_NativeAndRawExecTakeTheirFixedClass(t *testing.T) {
 	s := buildRaw(t, seams{nodeVocab: staticVocab{}})
-	nodes := []registry.Node{{NodeID: "node-0"}, {NodeID: "node-1"}}
+	nodes := reportedNodes("node-0", "node-1")
 	tests := []struct {
 		act  jobs.Action
 		want jobs.RiskClass
@@ -153,33 +183,33 @@ func TestResolveAction_NativeAndRawExecTakeTheirFixedClass(t *testing.T) {
 }
 
 func TestResolveAction_ClassIsMostRestrictiveOverReportingNodes(t *testing.T) {
-	nodes := []registry.Node{{NodeID: "a"}, {NodeID: "b"}, {NodeID: "c"}}
+	nodes := reportedNodes("a", "b", "c")
 	tests := []struct {
 		name  string
 		vocab staticVocab
 		want  jobs.RiskClass
 	}{
 		{"every reporting Node says read", staticVocab{
-			"a": {Templates: []nodevocab.Template{readTemplate("svc.status")}},
-			"b": {Templates: []nodevocab.Template{readTemplate("svc.status")}},
-			"c": {Templates: []nodevocab.Template{readTemplate("svc.status")}},
+			"a": reported(readTemplate("svc.status")),
+			"b": reported(readTemplate("svc.status")),
+			"c": reported(readTemplate("svc.status")),
 		}, jobs.RiskClassRead},
 		{"one Node says mutate", staticVocab{
-			"a": {Templates: []nodevocab.Template{readTemplate("svc.status")}},
-			"b": {Templates: []nodevocab.Template{mutateTemplate("svc.status")}},
-			"c": {Templates: []nodevocab.Template{readTemplate("svc.status")}},
+			"a": reported(readTemplate("svc.status")),
+			"b": reported(mutateTemplate("svc.status")),
+			"c": reported(readTemplate("svc.status")),
 		}, jobs.RiskClassMutate},
 		{"one Node reports an unspecified class", staticVocab{
-			"a": {Templates: []nodevocab.Template{readTemplate("svc.status")}},
-			"b": {Templates: []nodevocab.Template{templateWithClass("svc.status", jobs.RiskClassUnspecified)}},
+			"a": reported(readTemplate("svc.status")),
+			"b": reported(templateWithClass("svc.status", jobs.RiskClassUnspecified)),
 		}, jobs.RiskClassMutate},
 		{"one Node reports a class outside the enum", staticVocab{
-			"a": {Templates: []nodevocab.Template{readTemplate("svc.status")}},
-			"b": {Templates: []nodevocab.Template{templateWithClass("svc.status", jobs.RiskClass(99))}},
+			"a": reported(readTemplate("svc.status")),
+			"b": reported(templateWithClass("svc.status", jobs.RiskClass(99))),
 		}, jobs.RiskClassMutate},
 		{"the only mutate report is from a Node that does not report the Template", staticVocab{
-			"a": {Templates: []nodevocab.Template{readTemplate("svc.status")}},
-			"b": {Templates: []nodevocab.Template{mutateTemplate("other.thing")}},
+			"a": reported(readTemplate("svc.status")),
+			"b": reported(mutateTemplate("other.thing")),
 		}, jobs.RiskClassRead},
 	}
 	for _, tt := range tests {
@@ -198,12 +228,12 @@ func TestResolveAction_ClassIsMostRestrictiveOverReportingNodes(t *testing.T) {
 
 func TestResolveAction_ExcludesNodesThatDoNotReportOrHaveNoReport(t *testing.T) {
 	s := buildRaw(t, seams{nodeVocab: staticVocab{
-		"has":   {Templates: []nodevocab.Template{readTemplate("svc.status")}},
-		"lacks": {Templates: []nodevocab.Template{readTemplate("other")}},
-		"empty": {},
+		"has":   reported(readTemplate("svc.status")),
+		"lacks": reported(readTemplate("other")),
+		"empty": reported(),
 		// "silent" is deliberately absent: no report at all.
 	}})
-	nodes := []registry.Node{{NodeID: "has"}, {NodeID: "lacks"}, {NodeID: "empty"}, {NodeID: "silent"}}
+	nodes := reportedNodes("has", "lacks", "empty", "silent")
 
 	ra := s.resolveAction(templateAction("svc.status", nil), nodes)
 	if ra.refusal != nil {
@@ -227,8 +257,8 @@ func TestResolveAction_ExcludesNodesThatDoNotReportOrHaveNoReport(t *testing.T) 
 }
 
 func TestResolveAction_NoReportingNodeIsAnUnknownOperation(t *testing.T) {
-	s := buildRaw(t, seams{nodeVocab: staticVocab{"a": {}}})
-	ra := s.resolveAction(templateAction("nope.notreal", nil), []registry.Node{{NodeID: "a"}, {NodeID: "b"}})
+	s := buildRaw(t, seams{nodeVocab: staticVocab{"a": reported()}})
+	ra := s.resolveAction(templateAction("nope.notreal", nil), reportedNodes("a", "b"))
 	var unk *UnknownOperationError
 	if !errors.As(ra.refusal, &unk) || ra.refusalKind != RefusalUnknownOperation {
 		t.Fatalf("refusal = %v (kind %v), want UnknownOperationError/RefusalUnknownOperation", ra.refusal, ra.refusalKind)
@@ -243,7 +273,7 @@ func TestResolveAction_NoReportingNodeIsAnUnknownOperation(t *testing.T) {
 
 func TestResolveAction_NoVocabularySourceDispatchesNothingBlind(t *testing.T) {
 	s := buildRaw(t, seams{})
-	ra := s.resolveAction(templateAction("svc.status", nil), []registry.Node{{NodeID: "a"}})
+	ra := s.resolveAction(templateAction("svc.status", nil), reportedNodes("a"))
 	var unk *UnknownOperationError
 	if !errors.As(ra.refusal, &unk) || len(ra.nodes) != 0 {
 		t.Fatalf("with no vocabulary source wired: refusal=%v nodes=%v, want an unknown operation and nothing dispatched", ra.refusal, ra.nodes)
@@ -254,11 +284,11 @@ func TestResolveAction_NoVocabularySourceDispatchesNothingBlind(t *testing.T) {
 // choose a Template's class, because the capability layer refuses one that
 // arrives already set rather than trusting it.
 func TestResolveAction_RefusesATemplateActionThatArrivesWithAClass(t *testing.T) {
-	s := buildRaw(t, seams{nodeVocab: staticVocab{"a": {Templates: []nodevocab.Template{mutateTemplate("svc.restart")}}}})
+	s := buildRaw(t, seams{nodeVocab: staticVocab{"a": reported(mutateTemplate("svc.restart"))}})
 	for _, preset := range []jobs.RiskClass{jobs.RiskClassRead, jobs.RiskClassMutate} {
 		act := templateAction("svc.restart", nil)
 		act.RiskClass = preset
-		ra := s.resolveAction(act, []registry.Node{{NodeID: "a"}})
+		ra := s.resolveAction(act, reportedNodes("a"))
 		var pe *TemplateClassPresetError
 		if !errors.As(ra.refusal, &pe) || ra.refusalKind != RefusalInternal {
 			t.Errorf("preset %s: refusal = %v, want TemplateClassPresetError/RefusalInternal", jobs.RiskClassName(preset), ra.refusal)
@@ -268,10 +298,10 @@ func TestResolveAction_RefusesATemplateActionThatArrivesWithAClass(t *testing.T)
 
 func TestResolveAction_ArgumentNamesAreCheckedAgainstTheSlots(t *testing.T) {
 	s := buildRaw(t, seams{nodeVocab: staticVocab{
-		"a": {Templates: []nodevocab.Template{readTemplate("log.tail", "unit")}},
-		"b": {Templates: []nodevocab.Template{readTemplate("log.tail", "unit")}},
+		"a": reported(readTemplate("log.tail", "unit")),
+		"b": reported(readTemplate("log.tail", "unit")),
 	}})
-	nodes := []registry.Node{{NodeID: "a"}, {NodeID: "b"}}
+	nodes := reportedNodes("a", "b")
 	tests := []struct {
 		name    string
 		args    map[string]string
@@ -300,10 +330,10 @@ func TestResolveAction_ArgumentNamesAreCheckedAgainstTheSlots(t *testing.T) {
 
 func TestResolveAction_NodesThatDisagreeAboutSlotsRefuseTheCall(t *testing.T) {
 	s := buildRaw(t, seams{nodeVocab: staticVocab{
-		"a": {Templates: []nodevocab.Template{readTemplate("log.tail", "unit")}},
-		"b": {Templates: []nodevocab.Template{readTemplate("log.tail", "unit", "lines")}},
+		"a": reported(readTemplate("log.tail", "unit")),
+		"b": reported(readTemplate("log.tail", "unit", "lines")),
 	}})
-	ra := s.resolveAction(templateAction("log.tail", map[string]string{"unit": "nginx"}), []registry.Node{{NodeID: "a"}, {NodeID: "b"}})
+	ra := s.resolveAction(templateAction("log.tail", map[string]string{"unit": "nginx"}), reportedNodes("a", "b"))
 	var mal *MalformedCallError
 	if !errors.As(ra.refusal, &mal) {
 		t.Fatalf("refusal = %v, want MalformedCallError for a slot disagreement", ra.refusal)
@@ -314,10 +344,10 @@ func TestResolveAction_NodesThatDisagreeAboutSlotsRefuseTheCall(t *testing.T) {
 
 	// Declaration order is not a disagreement: slots are compared as names.
 	s.nodeVocab = staticVocab{
-		"a": {Templates: []nodevocab.Template{readTemplate("cp", "src", "dst")}},
-		"b": {Templates: []nodevocab.Template{readTemplate("cp", "dst", "src")}},
+		"a": reported(readTemplate("cp", "src", "dst")),
+		"b": reported(readTemplate("cp", "dst", "src")),
 	}
-	if ra := s.resolveAction(templateAction("cp", map[string]string{"src": "x", "dst": "y"}), []registry.Node{{NodeID: "a"}, {NodeID: "b"}}); ra.refusal != nil {
+	if ra := s.resolveAction(templateAction("cp", map[string]string{"src": "x", "dst": "y"}), reportedNodes("a", "b")); ra.refusal != nil {
 		t.Errorf("same slot names in a different order were refused: %v", ra.refusal)
 	}
 }
@@ -330,9 +360,9 @@ func TestRun_TemplateExcludesNonReportingNodesAndNeverSendsThem(t *testing.T) {
 	conduit := connectedConduit(&log, "node-0", "node-1", "node-2")
 	capc := &spyCapChecker{}
 	vocab := staticVocab{
-		"node-0": {Templates: []nodevocab.Template{readTemplate("svc.status", "unit")}},
-		"node-1": {Templates: []nodevocab.Template{readTemplate("svc.status", "unit")}},
-		"node-2": {Templates: []nodevocab.Template{readTemplate("other")}},
+		"node-0": reported(readTemplate("svc.status", "unit")),
+		"node-1": reported(readTemplate("svc.status", "unit")),
+		"node-2": reported(readTemplate("other")),
 	}
 	svc, f := newTemplateTestService(t, reg, conduit, vocab, capc)
 
@@ -400,8 +430,8 @@ func TestRun_TemplateOneMutateReportTakesTheMutateCap(t *testing.T) {
 	conduit := connectedConduit(&log, "node-0", "node-1")
 	capc := &spyCapChecker{}
 	vocab := staticVocab{
-		"node-0": {Templates: []nodevocab.Template{readTemplate("svc.thing")}},
-		"node-1": {Templates: []nodevocab.Template{mutateTemplate("svc.thing")}},
+		"node-0": reported(readTemplate("svc.thing")),
+		"node-1": reported(mutateTemplate("svc.thing")),
 	}
 	svc, _ := newTemplateTestService(t, reg, conduit, vocab, capc)
 
@@ -463,7 +493,7 @@ func TestRun_ZeroMatchStillReportsNoNodesMatchedForATemplate(t *testing.T) {
 func TestRun_MalformedTemplateCallIsRefusedBeforeDispatch(t *testing.T) {
 	reg := seedNodes(t, 1)
 	var log []string
-	vocab := staticVocab{"node-0": {Templates: []nodevocab.Template{readTemplate("log.tail", "unit")}}}
+	vocab := staticVocab{"node-0": reported(readTemplate("log.tail", "unit"))}
 	svc, f := newTemplateTestService(t, reg, connectedConduit(&log, "node-0"), vocab, &spyCapChecker{})
 
 	_, err := svc.Run(context.Background(), Principal{Account: "alice"}, webSelector(), templateAction("log.tail", map[string]string{"unitt": "nginx"}))
@@ -495,12 +525,12 @@ func TestPreflightTemplateExclusionNeverDecidesAVerdict(t *testing.T) {
 	conduit.verdicts["node-2"] = jobs.Verdict{Unsupported: true, DecidingRule: "daemon says not in vocabulary"}
 
 	vocab := &countingVocab{staticVocab: staticVocab{
-		"node-0": {Templates: []nodevocab.Template{readTemplate("svc.status")}},
-		"node-1": {Templates: []nodevocab.Template{readTemplate("svc.status")}},
-		"node-2": {Templates: []nodevocab.Template{readTemplate("svc.status")}}, // stale: the daemon disagrees
-		"node-3": {Templates: []nodevocab.Template{readTemplate("other")}},
+		"node-0": reported(readTemplate("svc.status")),
+		"node-1": reported(readTemplate("svc.status")),
+		"node-2": reported(readTemplate("svc.status")), // stale: the daemon disagrees
+		"node-3": reported(readTemplate("other")),
 	}}
-	pv := &recordingPolicyView{snap: policyview.Snapshot{PolicyFingerprint: "cache-says-nothing-is-allowed"}}
+	pv := &recordingPolicyView{snap: policyview.Snapshot{PolicyFingerprint: contradictingPolicyFP}}
 
 	jobsRepo, tasksRepo := testEngineStore(t)
 	svc := build(t, seams{reg: reg,
@@ -573,8 +603,8 @@ func TestRun_TemplateTasksRecordTheirOwnNodesClass(t *testing.T) {
 	var log []string
 	capc := &spyCapChecker{}
 	vocab := staticVocab{
-		"node-0": {Templates: []nodevocab.Template{readTemplate("proc.list")}},
-		"node-1": {Templates: []nodevocab.Template{mutateTemplate("proc.list")}},
+		"node-0": reported(readTemplate("proc.list")),
+		"node-1": reported(mutateTemplate("proc.list")),
 	}
 	svc, f := newTemplateTestService(t, reg, connectedConduit(&log, "node-0", "node-1"), vocab, capc)
 
@@ -611,14 +641,14 @@ func TestRun_TemplateJobHaltsOnTheDispatchClass(t *testing.T) {
 		wantHalt bool
 	}{
 		{"one Node reports mutate", staticVocab{
-			"node-0": {Templates: []nodevocab.Template{readTemplate("proc.list")}},
-			"node-1": {Templates: []nodevocab.Template{mutateTemplate("proc.list")}},
-			"node-2": {Templates: []nodevocab.Template{mutateTemplate("proc.list")}},
+			"node-0": reported(readTemplate("proc.list")),
+			"node-1": reported(mutateTemplate("proc.list")),
+			"node-2": reported(mutateTemplate("proc.list")),
 		}, true},
 		{"every Node reports read", staticVocab{
-			"node-0": {Templates: []nodevocab.Template{readTemplate("proc.list")}},
-			"node-1": {Templates: []nodevocab.Template{readTemplate("proc.list")}},
-			"node-2": {Templates: []nodevocab.Template{readTemplate("proc.list")}},
+			"node-0": reported(readTemplate("proc.list")),
+			"node-1": reported(readTemplate("proc.list")),
+			"node-2": reported(readTemplate("proc.list")),
 		}, false},
 	}
 	for _, tt := range tests {
@@ -670,13 +700,17 @@ func TestRun_TemplateJobHaltsOnTheDispatchClass(t *testing.T) {
 // report, so a Template whose class changed across the restart cannot be
 // dispatched under the old one.
 func TestResolveAction_StaleReportCountsAsNotReported(t *testing.T) {
+	// Two distinct well-formed fingerprints: the bound passes both, so the
+	// mismatch is what excludes the stale Node.
+	fpNew := strings.Repeat("ab", 32)
+	fpOld := strings.Repeat("cd", 32)
 	s := buildRaw(t, seams{nodeVocab: staticVocab{
-		"fresh": {Fingerprint: "fp-new", Templates: []nodevocab.Template{readTemplate("svc.status")}},
-		"stale": {Fingerprint: "fp-old", Templates: []nodevocab.Template{readTemplate("svc.status")}},
+		"fresh": {Fingerprint: fpNew, Templates: []nodevocab.Template{readTemplate("svc.status")}},
+		"stale": {Fingerprint: fpOld, Templates: []nodevocab.Template{readTemplate("svc.status")}},
 	}})
 	nodes := []registry.Node{
-		{NodeID: "fresh", TemplateSetFingerprint: "fp-new"},
-		{NodeID: "stale", TemplateSetFingerprint: "fp-new"},
+		{NodeID: "fresh", TemplateSetFingerprint: fpNew},
+		{NodeID: "stale", TemplateSetFingerprint: fpNew},
 	}
 	ra := s.resolveAction(templateAction("svc.status", nil), nodes)
 	if len(ra.nodes) != 1 || ra.nodes[0].NodeID != "fresh" {
@@ -685,6 +719,89 @@ func TestResolveAction_StaleReportCountsAsNotReported(t *testing.T) {
 	if len(ra.excluded) != 1 || ra.excluded[0].reason != TemplateNotReportedReason {
 		t.Errorf("excluded = %+v, want the stale Node excluded as not reported", ra.excluded)
 	}
+}
+
+// resolvedExclusion resolves svc.status over one Node and a staticVocab holding
+// snap for it, and returns the resolved action.
+func resolvedExclusion(t *testing.T, n registry.Node, snap nodevocab.Snapshot) resolvedAction {
+	t.Helper()
+	s := buildRaw(t, seams{nodeVocab: staticVocab{n.NodeID: snap}})
+	return s.resolveAction(templateAction("svc.status", nil), []registry.Node{n})
+}
+
+// requireExcluded fails unless ra dispatched nothing and excluded the one
+// Node for reason, with notReported as the count the refusal carries.
+func requireExcluded(t *testing.T, ra resolvedAction, reason string, notReported int) {
+	t.Helper()
+	if len(ra.nodes) != 0 {
+		t.Fatalf("dispatched = %v, want no Node reached", ra.nodes)
+	}
+	if len(ra.excluded) != 1 || ra.excluded[0].reason != reason {
+		t.Errorf("excluded = %+v, want one Node excluded with %q", ra.excluded, reason)
+	}
+	var unk *UnknownOperationError
+	if !errors.As(ra.refusal, &unk) || ra.refusalKind != RefusalUnknownOperation {
+		t.Fatalf("refusal = %v (kind %v), want UnknownOperationError/RefusalUnknownOperation", ra.refusal, ra.refusalKind)
+	}
+	if unk.NotReported != notReported {
+		t.Errorf("NotReported = %d, want %d", unk.NotReported, notReported)
+	}
+}
+
+// A template-set fingerprint the Hello ingress refuses is recorded as "" (the
+// Node claims no Templates). A cached snapshot with an empty fingerprint that
+// carries Templates must not compare equal to it: two empty strings are not a
+// current report. The Hello goes through the real ingress conversion and a
+// real registry, so the test fails if either stops producing "".
+func TestResolveAction_MalformedHelloTemplateFingerprintNeverMatchesAnEmptySnapshot(t *testing.T) {
+	hello := &relayv1.Hello{TemplateSetFingerprint: "sha256:" + strings.Repeat("ab", 32)}
+	rep, refused := protoconv.HelloReportFromProto(hello)
+	if rep.TemplateSetFingerprint != "" || len(refused) != 1 || refused[0] != registry.FieldTemplateSetFingerprint {
+		t.Fatalf("HelloReportFromProto = %q refused %v, want the fingerprint recorded as empty", rep.TemplateSetFingerprint, refused)
+	}
+	reg := registry.NewInMemory()
+	if _, err := reg.Upsert(registry.Report{NodeID: "n", TemplateSetFingerprint: rep.TemplateSetFingerprint}); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	n, ok := reg.Get("n")
+	if !ok {
+		t.Fatal("Get(n): not found")
+	}
+
+	snap := nodevocab.Snapshot{Fingerprint: "", Templates: []nodevocab.Template{readTemplate("svc.status")}}
+	requireExcluded(t, resolvedExclusion(t, n, snap), TemplateNotInVocabularyReason, 0)
+}
+
+// The Hello side: a Node whose latest Hello carried no template-set
+// fingerprint holds no Templates, whatever the cached snapshot claims.
+func TestResolveAction_EmptyHelloTemplateFingerprintNeverMatchesAnEmptySnapshot(t *testing.T) {
+	n := registry.Node{NodeID: "n", TemplateSetFingerprint: ""}
+	snap := nodevocab.Snapshot{Fingerprint: "", Templates: []nodevocab.Template{readTemplate("svc.status")}}
+	requireExcluded(t, resolvedExclusion(t, n, snap), TemplateNotInVocabularyReason, 0)
+}
+
+// The "unloadable" marker means the daemon's set failed to load, so the Node
+// has no Templates even when a cached snapshot carries the same marker.
+func TestResolveAction_UnloadableHelloNeverMatchesASnapshotCarryingTemplates(t *testing.T) {
+	n := registry.Node{NodeID: "n", TemplateSetFingerprint: registry.TemplateUnloadable}
+	snap := nodevocab.Snapshot{Fingerprint: registry.TemplateUnloadable, Templates: []nodevocab.Template{readTemplate("svc.status")}}
+	requireExcluded(t, resolvedExclusion(t, n, snap), TemplateNotInVocabularyReason, 0)
+}
+
+// The snapshot side: an empty snapshot fingerprint never matches a Hello that
+// carried a real one.
+func TestResolveAction_EmptySnapshotFingerprintNeverMatchesAWellFormedHello(t *testing.T) {
+	n := registry.Node{NodeID: "n", TemplateSetFingerprint: reportedTemplateSet}
+	snap := nodevocab.Snapshot{Fingerprint: "", Templates: []nodevocab.Template{readTemplate("svc.status")}}
+	requireExcluded(t, resolvedExclusion(t, n, snap), TemplateNotReportedReason, 1)
+}
+
+// A malformed snapshot fingerprint is bounded to "" where it is read, so it
+// cannot match an empty Hello fingerprint either.
+func TestResolveAction_MalformedSnapshotFingerprintNeverMatchesAnEmptyHello(t *testing.T) {
+	n := registry.Node{NodeID: "n", TemplateSetFingerprint: ""}
+	snap := nodevocab.Snapshot{Fingerprint: "sha256:x", Templates: []nodevocab.Template{readTemplate("svc.status")}}
+	requireExcluded(t, resolvedExclusion(t, n, snap), TemplateNotInVocabularyReason, 0)
 }
 
 // orderCheckingConduit fails the test if any excluded Task is still Pending
@@ -720,7 +837,7 @@ func TestRun_ExcludedTasksAreResolvedBeforeAnyDispatch(t *testing.T) {
 		audit:    &spyAuditSink{},
 		freeze:   &fakeFreezeStore{},
 		jobsRepo: jobsRepo, tasksRepo: tasksRepo, conduit: conduit,
-		nodeVocab: staticVocab{"node-0": {Templates: []nodevocab.Template{readTemplate("svc.status")}}},
+		nodeVocab: staticVocab{"node-0": reported(readTemplate("svc.status"))},
 	})
 	if _, err := svc.Run(context.Background(), Principal{Account: "alice"}, webSelector(), templateAction("svc.status", nil)); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -735,7 +852,7 @@ func templateApprovalFixture(t *testing.T, nodes []string, vocab TemplateVocabul
 	t.Helper()
 	reg := registry.NewInMemory()
 	for _, id := range nodes {
-		if _, err := reg.Upsert(registry.Report{NodeID: id}); err != nil {
+		if _, err := reg.Upsert(registry.Report{NodeID: id, TemplateSetFingerprint: reportedTemplateSet}); err != nil {
 			t.Fatalf("seed registry: %v", err)
 		}
 	}
@@ -766,8 +883,8 @@ func TestRun_TemplateApprovalGateMatchesTheResolvedClass(t *testing.T) {
 		t.Fatalf("NewGate: %v", err)
 	}
 	vocab := staticVocab{
-		"node-a": {Templates: []nodevocab.Template{readTemplate("svc.thing")}},
-		"node-b": {Templates: []nodevocab.Template{readTemplate("svc.thing")}},
+		"node-a": reported(readTemplate("svc.thing")),
+		"node-b": reported(readTemplate("svc.thing")),
 	}
 	s, disp := templateApprovalFixture(t, []string{"node-a", "node-b"}, vocab, gate, newMemApprovals())
 	if _, err := s.Run(context.Background(), machineRequester, Selector{}, templateAction("svc.thing", nil)); err != nil {
@@ -777,7 +894,7 @@ func TestRun_TemplateApprovalGateMatchesTheResolvedClass(t *testing.T) {
 		t.Fatal("all-read Template dispatch did not reach the dispatcher")
 	}
 
-	vocab["node-b"] = nodevocab.Snapshot{Templates: []nodevocab.Template{mutateTemplate("svc.thing")}}
+	vocab["node-b"] = reported(mutateTemplate("svc.thing"))
 	disp.called = false
 	_, err = s.Run(context.Background(), machineRequester, Selector{}, templateAction("svc.thing", nil))
 	var parked *ParkedError
@@ -796,8 +913,8 @@ func TestRun_TemplateApprovalGateMatchesTheResolvedClass(t *testing.T) {
 func TestRun_TemplateApprovalReparksWhenTheReportingSetChanges(t *testing.T) {
 	store := newMemApprovals()
 	vocab := staticVocab{
-		"node-a": {Templates: []nodevocab.Template{mutateTemplate("svc.restart")}},
-		"node-b": {Templates: []nodevocab.Template{mutateTemplate("svc.restart")}},
+		"node-a": reported(mutateTemplate("svc.restart")),
+		"node-b": reported(mutateTemplate("svc.restart")),
 	}
 	s, disp := templateApprovalFixture(t, []string{"node-a", "node-b", "node-c"}, vocab, gateEverything(t, 1), store)
 
@@ -809,7 +926,7 @@ func TestRun_TemplateApprovalReparksWhenTheReportingSetChanges(t *testing.T) {
 	store.approve(t, first.RequestID, "acct-ana", "ana", apNow)
 
 	// node-c starts reporting the Template: the remaining set changed.
-	vocab["node-c"] = nodevocab.Snapshot{Templates: []nodevocab.Template{mutateTemplate("svc.restart")}}
+	vocab["node-c"] = reported(mutateTemplate("svc.restart"))
 	_, err = s.Run(context.Background(), machineRequester, Selector{}, templateAction("svc.restart", nil))
 	var second *ParkedError
 	if !errors.As(err, &second) || second.PlanHash == first.PlanHash {
@@ -836,8 +953,8 @@ func TestRun_TemplateApprovalReparksWhenTheReportingSetChanges(t *testing.T) {
 func TestRun_TemplateApprovalReparksWhenAReportedClassChanges(t *testing.T) {
 	store := newMemApprovals()
 	vocab := staticVocab{
-		"node-a": {Templates: []nodevocab.Template{readTemplate("svc.thing")}},
-		"node-b": {Templates: []nodevocab.Template{readTemplate("svc.thing")}},
+		"node-a": reported(readTemplate("svc.thing")),
+		"node-b": reported(readTemplate("svc.thing")),
 	}
 	s, disp := templateApprovalFixture(t, []string{"node-a", "node-b"}, vocab, gateEverything(t, 1), store)
 
@@ -848,7 +965,7 @@ func TestRun_TemplateApprovalReparksWhenAReportedClassChanges(t *testing.T) {
 	}
 	store.approve(t, first.RequestID, "acct-ana", "ana", apNow)
 
-	vocab["node-b"] = nodevocab.Snapshot{Templates: []nodevocab.Template{mutateTemplate("svc.thing")}}
+	vocab["node-b"] = reported(mutateTemplate("svc.thing"))
 	_, err = s.Run(context.Background(), machineRequester, Selector{}, templateAction("svc.thing", nil))
 	var second *ParkedError
 	if !errors.As(err, &second) || second.PlanHash == first.PlanHash {
@@ -864,7 +981,7 @@ func TestRun_TemplateApprovalReparksWhenAReportedClassChanges(t *testing.T) {
 func TestRun_MalformedTemplateFromUnauthorizedCallerIsUnauthorized(t *testing.T) {
 	reg := seedNodes(t, 1)
 	var log []string
-	vocab := staticVocab{"node-0": {Templates: []nodevocab.Template{readTemplate("log.tail", "unit")}}}
+	vocab := staticVocab{"node-0": reported(readTemplate("log.tail", "unit"))}
 	svc, f := newTemplateTestService(t, reg, connectedConduit(&log, "node-0"), vocab, &spyCapChecker{})
 	authzErr := errors.New("denied for test")
 	f.authz.err = authzErr
@@ -882,8 +999,8 @@ func TestPlan_TemplateCapCountsTheRemainingNodes(t *testing.T) {
 	var log []string
 	capc := &spyCapChecker{}
 	vocab := staticVocab{
-		"node-0": {Templates: []nodevocab.Template{readTemplate("svc.status")}},
-		"node-1": {Templates: []nodevocab.Template{readTemplate("svc.status")}},
+		"node-0": reported(readTemplate("svc.status")),
+		"node-1": reported(readTemplate("svc.status")),
 		"node-2": {},
 	}
 	svc, _ := newTemplateTestService(t, reg, connectedConduit(&log, "node-0", "node-1", "node-2"), vocab, capc)
@@ -921,12 +1038,12 @@ func TestPlan_TemplateZeroMatchReportsNoNodesMatched(t *testing.T) {
 func TestRun_ExclusionTakesPrecedenceOverTheVersionGate(t *testing.T) {
 	reg := registry.NewInMemory(registry.WithMinDaemonVersion("1.2.0"))
 	for id, version := range map[string]string{"node-new": "1.2.0", "node-old": "1.0.0"} {
-		if _, err := reg.Upsert(registry.Report{NodeID: id, DaemonVersion: version}.WithNodeLabels(map[string]string{"role": "web"})); err != nil {
+		if _, err := reg.Upsert(registry.Report{NodeID: id, DaemonVersion: version, TemplateSetFingerprint: reportedTemplateSet}.WithNodeLabels(map[string]string{"role": "web"})); err != nil {
 			t.Fatalf("Upsert(%s): %v", id, err)
 		}
 	}
 	var log []string
-	vocab := staticVocab{"node-new": {Templates: []nodevocab.Template{readTemplate("svc.status")}}}
+	vocab := staticVocab{"node-new": reported(readTemplate("svc.status"))}
 	svc, _ := newTemplateTestService(t, reg, connectedConduit(&log, "node-new", "node-old"), vocab, &spyCapChecker{})
 
 	results, err := svc.Run(context.Background(), Principal{Account: "alice"}, webSelector(), templateAction("svc.status", nil))
@@ -954,7 +1071,7 @@ func TestRun_TemplateJobEventsCountExcludedNodes(t *testing.T) {
 		freeze:   &fakeFreezeStore{},
 		jobsRepo: jobsRepo, tasksRepo: tasksRepo, conduit: connectedConduit(&log, "node-0", "node-1", "node-2"),
 		jobEvents: events,
-		nodeVocab: staticVocab{"node-0": {Templates: []nodevocab.Template{readTemplate("svc.status")}}},
+		nodeVocab: staticVocab{"node-0": reported(readTemplate("svc.status"))},
 	})
 	if _, err := svc.Run(context.Background(), Principal{Account: "alice"}, webSelector(), templateAction("svc.status", nil)); err != nil {
 		t.Fatalf("Run: %v", err)

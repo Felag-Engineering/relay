@@ -291,6 +291,14 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[relayv1.DaemonMessag
 				"refused_count", len(refused),
 				"first_refused_key", fmt.Sprintf("%q", boundedLogValue(refused[0])))
 		}
+		// A set over the per-Node cap is recorded as not reported, never
+		// truncated: keeping the previous set would serve a self-report the
+		// Node no longer makes. One line per connect, counts only.
+		if !registry.WithinNodeLabelCap(len(labels)) {
+			slog.Warn("refused node labels over the per-Node limit; recorded as not reported",
+				"node_id", nodeID, "count", len(labels), "limit", registry.MaxNodeLabels)
+			labels = map[string]string{}
+		}
 		// Field names from a closed set, never a value, once per connect: the
 		// refused value is exactly what this check decided not to trust.
 		if len(refusedFields) > 0 {

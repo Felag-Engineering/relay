@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/Felag-Engineering/relay/relay/internal/jobs"
-	"github.com/Felag-Engineering/relay/relay/internal/nodevocab"
 	"github.com/Felag-Engineering/relay/relay/internal/registry"
 )
 
@@ -57,8 +56,8 @@ func TestPlanReportsUnsupportedDistinctFromDeny(t *testing.T) {
 	// resolution (ADR-0042) and both are queried; node-0's daemon then answers
 	// unsupported itself — a report gone stale since the Node sent it.
 	vocab := staticVocab{
-		"node-0": {Templates: []nodevocab.Template{readTemplate("disk.usage")}},
-		"node-1": {Templates: []nodevocab.Template{readTemplate("disk.usage")}},
+		"node-0": reported(readTemplate("disk.usage")),
+		"node-1": reported(readTemplate("disk.usage")),
 	}
 	svc, _ := newTemplateTestService(t, reg, conduit, vocab, &spyCapChecker{})
 

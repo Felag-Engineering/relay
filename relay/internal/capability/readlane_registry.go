@@ -355,15 +355,36 @@ func (l *ReadLane) DescribeNode(ctx context.Context, p Principal, nodeID string)
 	}
 	if l.policyView != nil {
 		if snap, ok := l.policyView.Get(nodeID); ok {
-			d.Policy, d.PolicyReported = snap, true
+			d.Policy, d.PolicyReported = boundedPolicySnapshot(snap), true
 		}
 	}
 	if l.nodeVocab != nil {
 		if snap, ok := l.nodeVocab.Get(nodeID); ok {
-			d.Templates, d.TemplatesReported = snap, true
+			d.Templates, d.TemplatesReported = boundedTemplateSnapshot(snap), true
 		}
 	}
 	return d, nil
+}
+
+// boundedPolicySnapshot and boundedTemplateSnapshot apply the Hello
+// fingerprint bound to a cached snapshot. A snapshot's fingerprint is
+// Node-reported and passes the same bound as the Hello fingerprint before any
+// surface draws it or any dispatch compares it; a value that fails is served
+// as "" and never rewritten (ADR-0017). Every other field is returned as
+// cached. They take a value and read no cache, so they are not a route into
+// either cache (PF-7).
+func boundedPolicySnapshot(snap policyview.Snapshot) policyview.Snapshot {
+	if !registry.WellFormedReportedPolicyFingerprint(snap.PolicyFingerprint) {
+		snap.PolicyFingerprint = ""
+	}
+	return snap
+}
+
+func boundedTemplateSnapshot(snap nodevocab.Snapshot) nodevocab.Snapshot {
+	if !registry.WellFormedReportedTemplateSetFingerprint(snap.Fingerprint) {
+		snap.Fingerprint = ""
+	}
+	return snap
 }
 
 // OperationVocabulary is ListOperations' Node-scoped half: the Template
@@ -418,7 +439,7 @@ func (l *ReadLane) ListOperations(ctx context.Context, p Principal, nodeID strin
 	var vocab OperationVocabulary
 	if l.nodeVocab != nil {
 		if snap, ok := l.nodeVocab.Get(nodeID); ok {
-			vocab.Templates, vocab.Reported = snap, true
+			vocab.Templates, vocab.Reported = boundedTemplateSnapshot(snap), true
 		}
 	}
 	return vocab, nil

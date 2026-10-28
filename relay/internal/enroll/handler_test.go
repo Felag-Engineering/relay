@@ -716,6 +716,123 @@ func TestEnroll_SelfLabelAtTheLengthBoundsIsAccepted(t *testing.T) {
 	}
 }
 
+// nodeSelfLabels returns n distinct well-formed self_labels.
+func nodeSelfLabels(n int) []*relayv1.Label {
+	labels := make([]*relayv1.Label, n)
+	for i := range labels {
+		labels[i] = &relayv1.Label{Key: "node:label-" + strconv.Itoa(i), Value: "v" + strconv.Itoa(i)}
+	}
+	return labels
+}
+
+// TestEnroll_OverTheNodeLabelCapIsRefused pins the per-Node node: label count:
+// more than registry.MaxNodeLabels refuses the whole request with
+// InvalidArgument, leaves no registry row and consumes no token use, and is
+// recorded as one malformed attempt. The message carries counts, never a key
+// or value.
+func TestEnroll_OverTheNodeLabelCapIsRefused(t *testing.T) {
+	obs := &capturingAttemptObserver{}
+	svc := NewService(NewMemoryRepository())
+	srv, reg := newObservedEnrollServer(t, svc, obs)
+	_, plaintext := mintToken(t, svc, nil)
+
+	_, err := srv.Enroll(context.Background(), &relayv1.EnrollRequest{
+		EnrollmentToken: plaintext,
+		Csr:             genCSR(t, "cn"),
+		SelfLabels:      nodeSelfLabels(registry.MaxNodeLabels + 1),
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("want InvalidArgument, got %v", err)
+	}
+	msg := status.Convert(err).Message()
+	if !strings.Contains(msg, strconv.Itoa(registry.MaxNodeLabels)) || strings.Contains(msg, "label-") {
+		t.Errorf("refusal message %.200q must state the limit and name no label", msg)
+	}
+	if len(reg.List()) != 0 {
+		t.Errorf("registry must be empty after rejection, got %d entries", len(reg.List()))
+	}
+	if events := obs.snapshot(); len(events) != 1 || events[0].Reason != AttemptMalformed {
+		t.Fatalf("events = %+v, want exactly one AttemptMalformed", events)
+	}
+
+	// The refusal came before the token was spent: the same credential still
+	// enrolls once the Node declares a set within the cap.
+	if _, err := srv.Enroll(context.Background(), &relayv1.EnrollRequest{
+		EnrollmentToken: plaintext,
+		Csr:             genCSR(t, "cn"),
+		SelfLabels:      nodeSelfLabels(1),
+	}); err != nil {
+		t.Errorf("Enroll with the same token after the refusal: %v", err)
+	}
+}
+
+func TestEnroll_AtTheNodeLabelCapIsAccepted(t *testing.T) {
+	svc := NewService(NewMemoryRepository())
+	srv, reg, _ := newEnrollServer(t, svc)
+	_, plaintext := mintToken(t, svc, nil)
+
+	resp, err := srv.Enroll(context.Background(), &relayv1.EnrollRequest{
+		EnrollmentToken: plaintext,
+		Csr:             genCSR(t, "cn"),
+		SelfLabels:      nodeSelfLabels(registry.MaxNodeLabels),
+	})
+	if err != nil {
+		t.Fatalf("Enroll with %d labels: %v", registry.MaxNodeLabels, err)
+	}
+	n, ok := reg.Get(resp.NodeId)
+	if !ok {
+		t.Fatalf("Get %s: not found", resp.NodeId)
+	}
+	if len(n.NodeLabels) != registry.MaxNodeLabels {
+		t.Errorf("NodeLabels has %d entries, want all %d", len(n.NodeLabels), registry.MaxNodeLabels)
+	}
+}
+
+// TestEnroll_OverTheIPAddressCapRecordsNoAddresses pins that an address list
+// over registry.MaxReportedIPAddresses is refused as a field, as every other
+// Facts bound is: the request proceeds, no address is recorded, and the log
+// names the field and carries no address.
+func TestEnroll_OverTheIPAddressCapRecordsNoAddresses(t *testing.T) {
+	svc := NewService(NewMemoryRepository())
+	realCA, err := catest.Generate()
+	if err != nil {
+		t.Fatalf("catest.Generate: %v", err)
+	}
+	logs := &strings.Builder{}
+	reg := registry.NewInMemory()
+	srv := NewServer(svc, realCA, reg, WithServerLogger(slog.New(slog.NewJSONHandler(logs, nil))))
+	_, plaintext := mintToken(t, svc, nil)
+
+	addrs := make([]string, registry.MaxReportedIPAddresses+1)
+	for i := range addrs {
+		addrs[i] = "10.9." + strconv.Itoa(i/256) + "." + strconv.Itoa(i%256)
+	}
+	resp, err := srv.Enroll(context.Background(), &relayv1.EnrollRequest{
+		EnrollmentToken: plaintext,
+		Csr:             genCSR(t, "cn"),
+		Facts:           &relayv1.Facts{Hostname: "web-01", IpAddresses: addrs},
+	})
+	if err != nil {
+		t.Fatalf("Enroll: %v", err)
+	}
+	n, ok := reg.Get(resp.NodeId)
+	if !ok {
+		t.Fatalf("Get %s: not found", resp.NodeId)
+	}
+	if n.Facts.IPAddresses != nil {
+		t.Errorf("IPAddresses has %d entries, want none", len(n.Facts.IPAddresses))
+	}
+	if n.Facts.Hostname != "web-01" {
+		t.Errorf("Hostname = %q, want the other Facts kept", n.Facts.Hostname)
+	}
+	if strings.Contains(logs.String(), "10.9.") {
+		t.Errorf("a log line carries a reported address; logs:\n%.1000s", logs.String())
+	}
+	if !strings.Contains(logs.String(), protoconv.FieldIPAddresses) {
+		t.Errorf("no log line names %s; logs:\n%.1000s", protoconv.FieldIPAddresses, logs.String())
+	}
+}
+
 // fakeDenylister implements NodeDenylister and records every RevokeNode call for
 // assertion in tests. It does not interact with any real denylist.
 type fakeDenylister struct{ revoked []string }

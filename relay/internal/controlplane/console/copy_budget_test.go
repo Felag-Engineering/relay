@@ -798,7 +798,7 @@ func noteSweepPages(t *testing.T) []sweepPage {
 	add("node missing", "/console/nodes/nope", sweep, accounts.RoleAdmin, http.StatusNotFound)
 	add("node offline", "/console/nodes/node-db-1", sweep, accounts.RoleAdmin, http.StatusOK)
 	add("node unreported", "/console/nodes/node-web-1", withPolicy(withFleet(renderableDeps(), registry.Node{NodeID: "node-web-1", Connected: true}),
-		map[string]policyview.Snapshot{"node-web-1": reportedSnapshot(policyview.Snapshot{PolicyFingerprint: "sha256:snapfp"}, testNow)}), accounts.RoleAdmin, http.StatusOK)
+		map[string]policyview.Snapshot{"node-web-1": reportedSnapshot(policyview.Snapshot{PolicyFingerprint: snapshotFP}, testNow)}), accounts.RoleAdmin, http.StatusOK)
 	revoked := withFleet(renderableDeps(), registry.Node{NodeID: "node-gone", RevokedAt: testNow.Add(-time.Hour)})
 	add("node revoked, unrecorded", "/console/nodes/node-gone", revoked, accounts.RoleAdmin, http.StatusOK)
 	revoked.Audit = fakeAudit{records: []audit.Record{{Kind: audit.KindNodeRevoke, NodeID: "node-gone", Principal: "alice:admin", Timestamp: testNow.Add(-time.Hour)}}}

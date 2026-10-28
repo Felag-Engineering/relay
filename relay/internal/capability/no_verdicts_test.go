@@ -127,10 +127,10 @@ func TestPreflightNeverConsultsCachedPolicyOrVocabulary(t *testing.T) {
 	pv := &recordingPolicyView{snap: policyview.Snapshot{
 		AllowedOperations: nil,
 		RawExecEnabled:    false,
-		PolicyFingerprint: "cache-says-nothing-is-allowed",
+		PolicyFingerprint: contradictingPolicyFP,
 	}}
 	nv := &recordingTemplateVocab{snap: nodevocab.Snapshot{
-		Fingerprint: "cache-says-empty-vocabulary",
+		Fingerprint: contradictingVocabFP,
 		Templates:   nil,
 	}}
 

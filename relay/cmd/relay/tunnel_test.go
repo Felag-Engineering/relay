@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"reflect"
+	"regexp"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -1430,7 +1432,13 @@ func TestTunnelOpen_ANewerRegistrationEndsTheStreamItDisplaced(t *testing.T) {
 // self-reported field must never do.
 func openWithHello(t *testing.T, nodeID string, hello *relayv1.Hello) *registry.InMemory {
 	t.Helper()
-	reg := registry.NewInMemory()
+	return openWithHelloOn(t, registry.NewInMemory(), nodeID, hello)
+}
+
+// openWithHelloOn is openWithHello against reg, which may already hold the
+// Node: the shape of a reconnect.
+func openWithHelloOn(t *testing.T, reg *registry.InMemory, nodeID string, hello *relayv1.Hello) *registry.InMemory {
+	t.Helper()
 	srv := grpc.NewServer(grpc.StreamInterceptor(injectNodeIDInterceptor(nodeID)))
 	relayv1.RegisterTunnelServer(srv, &tunnelServer{reg: reg})
 	conn := newBufconnConn(t, srv)
@@ -1625,5 +1633,158 @@ func TestTunnelOpen_MalformedHelloFieldsAreLoggedByNameNeverByValue(t *testing.T
 	}
 	if !differs {
 		t.Errorf("no \"hello.node_id differs\" record for cert node %q; logs:\n%.2000s", nodeID, logs.String())
+	}
+}
+
+// nodeLabelsOf returns n distinct well-formed node: labels, key "node:label-<i>"
+// and value "v<i>".
+func nodeLabelsOf(n int) []*relayv1.Label {
+	labels := make([]*relayv1.Label, n)
+	for i := range labels {
+		labels[i] = &relayv1.Label{Key: fmt.Sprintf("node:label-%d", i), Value: fmt.Sprintf("v%d", i)}
+	}
+	return labels
+}
+
+// ipAddressesOf returns n distinct well-formed addresses in 10.9.0.0/16, a
+// range no other test in this file uses, so a log scan for them is exact.
+func ipAddressesOf(n int) []string {
+	out := make([]string, n)
+	for i := range out {
+		out[i] = fmt.Sprintf("10.9.%d.%d", i/256, i%256)
+	}
+	return out
+}
+
+// TestTunnelOpen_HelloOverTheNodeLabelCapRecordsNoNodeLabels pins the per-Node
+// node: label count: a set over the cap is recorded as not reported, never
+// truncated, and the stream stays up.
+func TestTunnelOpen_HelloOverTheNodeLabelCapRecordsNoNodeLabels(t *testing.T) {
+	const nodeID = "cert-node-label-cap"
+	reg := openWithHello(t, nodeID, &relayv1.Hello{NodeId: nodeID, Labels: nodeLabelsOf(registry.MaxNodeLabels + 1)})
+	n, ok := reg.Get(nodeID)
+	if !ok {
+		t.Fatal("node not registered")
+	}
+	if len(n.NodeLabels) != 0 {
+		t.Errorf("NodeLabels has %d entries, want none (an over-cap set is refused whole)", len(n.NodeLabels))
+	}
+}
+
+// A reconnect that goes over the cap replaces the earlier set with none: the
+// earlier set is a self-report the Node no longer makes.
+func TestTunnelOpen_HelloOverTheNodeLabelCapReplacesAnEarlierSet(t *testing.T) {
+	const nodeID = "cert-node-label-cap-reconnect"
+	reg := openWithHello(t, nodeID, &relayv1.Hello{NodeId: nodeID, Labels: nodeLabelsOf(2)})
+	if n, _ := reg.Get(nodeID); len(n.NodeLabels) != 2 {
+		t.Fatalf("first Hello stored %d labels, want 2", len(n.NodeLabels))
+	}
+	openWithHelloOn(t, reg, nodeID, &relayv1.Hello{NodeId: nodeID, Labels: nodeLabelsOf(registry.MaxNodeLabels + 1)})
+	n, _ := reg.Get(nodeID)
+	if len(n.NodeLabels) != 0 {
+		t.Errorf("NodeLabels has %d entries after an over-cap reconnect, want none", len(n.NodeLabels))
+	}
+}
+
+func TestTunnelOpen_HelloAtTheNodeLabelCapKeepsEveryLabel(t *testing.T) {
+	const nodeID = "cert-node-label-at-cap"
+	reg := openWithHello(t, nodeID, &relayv1.Hello{NodeId: nodeID, Labels: nodeLabelsOf(registry.MaxNodeLabels)})
+	n, _ := reg.Get(nodeID)
+	if len(n.NodeLabels) != registry.MaxNodeLabels {
+		t.Fatalf("NodeLabels has %d entries, want all %d", len(n.NodeLabels), registry.MaxNodeLabels)
+	}
+	for i := 0; i < registry.MaxNodeLabels; i++ {
+		if got := n.NodeLabels[fmt.Sprintf("label-%d", i)]; got != fmt.Sprintf("v%d", i) {
+			t.Errorf("label-%d = %q, want v%d", i, got, i)
+		}
+	}
+}
+
+func TestTunnelOpen_HelloOverTheIPAddressCapRecordsNoAddresses(t *testing.T) {
+	const nodeID = "cert-node-ip-cap"
+	reg := openWithHello(t, nodeID, &relayv1.Hello{
+		NodeId: nodeID,
+		Facts:  &relayv1.Facts{Hostname: "web-01", IpAddresses: ipAddressesOf(registry.MaxReportedIPAddresses + 1)},
+	})
+	n, _ := reg.Get(nodeID)
+	if n.Facts.IPAddresses != nil {
+		t.Errorf("IPAddresses has %d entries, want none (an over-cap list is omitted whole)", len(n.Facts.IPAddresses))
+	}
+	if n.Facts.Hostname != "web-01" {
+		t.Errorf("Hostname = %q, want the other Facts kept", n.Facts.Hostname)
+	}
+}
+
+func TestTunnelOpen_HelloAtTheIPAddressCapKeepsEveryAddress(t *testing.T) {
+	const nodeID = "cert-node-ip-at-cap"
+	reg := openWithHello(t, nodeID, &relayv1.Hello{
+		NodeId: nodeID,
+		Facts:  &relayv1.Facts{IpAddresses: ipAddressesOf(registry.MaxReportedIPAddresses)},
+	})
+	if n, _ := reg.Get(nodeID); len(n.Facts.IPAddresses) != registry.MaxReportedIPAddresses {
+		t.Errorf("at the cap: %d addresses kept, want all %d", len(n.Facts.IPAddresses), registry.MaxReportedIPAddresses)
+	}
+}
+
+// labelKeyInLog matches a key made by nodeLabelsOf, as it would appear in a
+// log line.
+var labelKeyInLog = regexp.MustCompile(`label-[0-9]`)
+
+// An over-cap label set is logged by count and limit, never by key or value.
+// Not parallel: it swaps the default slog logger.
+func TestTunnelOpen_OverCapLabelsAreLoggedByCountNeverByKeyOrValue(t *testing.T) {
+	const nodeID = "cert-node-label-cap-log"
+	logs := &syncBuffer{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	openWithHello(t, nodeID, &relayv1.Hello{NodeId: nodeID, Labels: nodeLabelsOf(registry.MaxNodeLabels + 1)})
+
+	var warnings int
+	for _, line := range strings.Split(strings.TrimRight(logs.String(), "\n"), "\n") {
+		if labelKeyInLog.MatchString(line) || strings.Contains(line, `"v1"`) {
+			t.Errorf("a log line carries a label key or value: %.200s", line)
+		}
+		var entry struct {
+			Msg    string `json:"msg"`
+			NodeID string `json:"node_id"`
+			Count  int    `json:"count"`
+			Limit  int    `json:"limit"`
+		}
+		if err := json.Unmarshal([]byte(line), &entry); err != nil || entry.NodeID != nodeID {
+			continue
+		}
+		if entry.Msg == "refused node labels over the per-Node limit; recorded as not reported" {
+			warnings++
+			if entry.Count != registry.MaxNodeLabels+1 || entry.Limit != registry.MaxNodeLabels {
+				t.Errorf("warning count=%d limit=%d, want %d and %d", entry.Count, entry.Limit, registry.MaxNodeLabels+1, registry.MaxNodeLabels)
+			}
+		}
+	}
+	if warnings != 1 {
+		t.Errorf("got %d over-cap warnings, want exactly 1; logs:\n%.2000s", warnings, logs.String())
+	}
+}
+
+// An over-cap address list is logged by field name, never by address. Not
+// parallel: it swaps the default slog logger.
+func TestTunnelOpen_OverCapIPAddressesAreLoggedByFieldNeverByAddress(t *testing.T) {
+	const nodeID = "cert-node-ip-cap-log"
+	logs := &syncBuffer{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	openWithHello(t, nodeID, &relayv1.Hello{
+		NodeId: nodeID,
+		Facts:  &relayv1.Facts{IpAddresses: ipAddressesOf(registry.MaxReportedIPAddresses + 1)},
+	})
+
+	if strings.Contains(logs.String(), "10.9.") {
+		t.Errorf("a log line carries a reported address; logs:\n%.2000s", logs.String())
+	}
+	if !strings.Contains(logs.String(), registry.FieldIPAddresses) {
+		t.Errorf("no log line names %s; logs:\n%.2000s", registry.FieldIPAddresses, logs.String())
 	}
 }

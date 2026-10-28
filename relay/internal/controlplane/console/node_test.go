@@ -1063,8 +1063,12 @@ func repeat(s string, n int) []string {
 
 // --- #833: an unreported Node's Policy snapshot is rendered with facts only ---
 
+// snapshotFP is a well-formed snapshot fingerprint, so the read lane's bound
+// passes it.
+var snapshotFP = hexFP("5")
+
 // unreportedNodeBody renders node-web-1 with the given recorded fields and a
-// captured snapshot whose own fingerprint is "sha256:snapfp".
+// captured snapshot whose own fingerprint is snapshotFP.
 func unreportedNodeBody(t *testing.T, version, fingerprint string) string {
 	t.Helper()
 	d := withFleet(renderableDeps(), registry.Node{
@@ -1074,7 +1078,7 @@ func unreportedNodeBody(t *testing.T, version, fingerprint string) string {
 	})
 	d = withPolicy(d, map[string]policyview.Snapshot{"node-web-1": reportedSnapshot(policyview.Snapshot{
 		AllowedOperations: []string{"service.restart"},
-		PolicyFingerprint: "sha256:snapfp",
+		PolicyFingerprint: snapshotFP,
 	}, testNow.Add(-90*time.Second))})
 	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/nodes/node-web-1").Body.String()
 	panel := policyPanelOf(body)
@@ -1088,7 +1092,7 @@ func TestNode_UnreportedSnapshotStatesFactsNotAVerdict(t *testing.T) {
 	panel := unreportedNodeBody(t, "0.6.0", "")
 	for _, want := range []string{
 		"Not corroborated by a recorded Hello",
-		shortHash("sha256:snapfp"),
+		shortHash(snapshotFP),
 		"no Hello-recorded Policy fingerprint",
 		"cannot be cross-checked",
 		"not count this Node as current or permitted",

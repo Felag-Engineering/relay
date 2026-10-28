@@ -34,6 +34,8 @@ pub enum EnrollError {
     Rpc(Box<tonic::Status>),
     #[error(transparent)]
     Utf8(#[from] std::string::FromUtf8Error),
+    #[error(transparent)]
+    NodeLabels(#[from] NodeLabelError),
     #[error("node_id mismatch: expected {expected}, got {received}")]
     NodeIdMismatch { expected: String, received: String },
     #[error(transparent)]
@@ -157,13 +159,16 @@ pub fn parse_node_labels(raw: &str) -> Vec<(String, String)> {
 const MAX_LABEL_KEY_LEN: usize = 63;
 /// Longest `node:` label value the Relay accepts, in bytes.
 const MAX_LABEL_VALUE_LEN: usize = 255;
+/// Most distinct `node:` labels one Node may declare, the defaults included.
+const MAX_NODE_LABELS: usize = 64;
 
 /// Whether the Relay would accept this bare `node:` label at ingress: a
 /// non-empty key of at most 63 bytes, a value of at most 255, and only ASCII
 /// letters, digits, `.`, `_` and `-` in either. Mirrors the Relay's own rule
 /// (`registry.WellFormedNodeLabel`). The daemon applies it only to its default
 /// labels, so a default can never get an enrollment refused; declared labels are
-/// left for the Relay to judge.
+/// length- and count-checked at start by [`checked_node_labels`], and their
+/// alphabet is left for the Relay to judge.
 fn well_formed_node_label(key: &str, value: &str) -> bool {
     let allowed = |b: &u8| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-');
     !key.is_empty()
@@ -200,6 +205,68 @@ pub fn with_default_node_labels(
         }
     }
     (labels, left_out)
+}
+
+/// Why a declared `RELAY_NODE_LABELS` set is refused at start. No variant carries
+/// a label value, and a key is carried only after it is bounded.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum NodeLabelError {
+    #[error("RELAY_NODE_LABELS: the key {key:?} is longer than {MAX_LABEL_KEY_LEN} bytes")]
+    KeyTooLong { key: String },
+    #[error("RELAY_NODE_LABELS: the value of {key:?} is longer than {MAX_LABEL_VALUE_LEN} bytes")]
+    ValueTooLong { key: String },
+    #[error(
+        "RELAY_NODE_LABELS: {count} node: labels with the defaults; a Node declares at most {MAX_NODE_LABELS}"
+    )]
+    TooMany { count: usize },
+}
+
+/// `key` as it may be printed: unchanged when it is within the label key limit,
+/// otherwise its longest prefix of at most that many bytes ending on a char
+/// boundary, plus `...`. A declared key is operator input of any length.
+fn bounded_label_key(key: &str) -> String {
+    if key.len() <= MAX_LABEL_KEY_LEN {
+        return key.to_string();
+    }
+    let mut end = MAX_LABEL_KEY_LEN;
+    while !key.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}...", &key[..end])
+}
+
+/// The labels to send, and the keys of any default left out for being ill-formed.
+pub type LabelsWithLeftOut = (Vec<(String, String)>, Vec<&'static str>);
+
+/// [`with_default_node_labels`] after refusing a declared label the Relay would
+/// refuse at enrollment: a key over 63 bytes, a value over 255, or more than 64
+/// distinct keys once the defaults are counted. Only lengths and the count are
+/// judged; the alphabet is the Relay's. Nothing is truncated or dropped, so when
+/// the set fits, no default is left out for want of room.
+pub fn checked_node_labels(
+    declared: Vec<(String, String)>,
+    facts: &Facts,
+) -> std::result::Result<LabelsWithLeftOut, NodeLabelError> {
+    for (key, value) in &declared {
+        if key.len() > MAX_LABEL_KEY_LEN {
+            return Err(NodeLabelError::KeyTooLong {
+                key: bounded_label_key(key),
+            });
+        }
+        if value.len() > MAX_LABEL_VALUE_LEN {
+            return Err(NodeLabelError::ValueTooLong { key: key.clone() });
+        }
+    }
+    let (labels, left_out) = with_default_node_labels(declared, facts);
+    let count = labels
+        .iter()
+        .map(|(key, _)| key.as_str())
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
+    if count > MAX_NODE_LABELS {
+        return Err(NodeLabelError::TooMany { count });
+    }
+    Ok((labels, left_out))
 }
 
 /// Calls the Relay's `Enrollment.Enroll` RPC. No client certificate is used — this
@@ -489,6 +556,103 @@ mod tests {
             with_default_node_labels(declared.clone(), &facts("web-01", "linux", "x86_64"));
         assert_eq!(&labels[..1], declared.as_slice());
         assert!(left_out.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // checked_node_labels
+    // -----------------------------------------------------------------------
+
+    fn web_facts() -> Facts {
+        facts("web-01", "linux", "x86_64")
+    }
+
+    /// `n` distinct declared labels, `label-0` and up.
+    fn declared(n: usize) -> Vec<(String, String)> {
+        (0..n)
+            .map(|i| (format!("label-{i}"), format!("v{i}")))
+            .collect()
+    }
+
+    #[test]
+    fn checked_node_labels_refuses_an_over_long_key_naming_it() {
+        let key = "k".repeat(64);
+        let err = checked_node_labels(vec![pair(&key, "web")], &web_facts())
+            .expect_err("a 64-byte key is over the limit");
+        // The key is printed bounded to the limit, so one byte over shows as the
+        // limit plus a marker.
+        let shown = format!("{}...", "k".repeat(63));
+        assert_eq!(err, NodeLabelError::KeyTooLong { key: shown.clone() });
+        assert!(err.to_string().contains(&shown));
+    }
+
+    #[test]
+    fn checked_node_labels_bounds_a_huge_key_in_the_error() {
+        // A multi-byte char straddles byte 63, so a byte cut would split it.
+        let key = format!("{}\u{e9}{}", "k".repeat(62), "x".repeat(10_000));
+        let err = checked_node_labels(vec![pair(&key, "web")], &web_facts())
+            .expect_err("a 10 000-byte key is over the limit");
+        let NodeLabelError::KeyTooLong { key: shown } = &err else {
+            panic!("want KeyTooLong, got {err:?}");
+        };
+        assert_eq!(shown, &format!("{}...", "k".repeat(62)));
+        assert!(err.to_string().len() < 200, "{err}");
+    }
+
+    #[test]
+    fn checked_node_labels_refuses_an_over_long_value_naming_the_key_never_the_value() {
+        let value = "Z".repeat(256);
+        let err = checked_node_labels(vec![pair("role", &value)], &web_facts())
+            .expect_err("a 256-byte value is over the limit");
+        assert_eq!(
+            err,
+            NodeLabelError::ValueTooLong {
+                key: "role".to_string()
+            }
+        );
+        let message = err.to_string();
+        assert!(message.contains("\"role\""), "{message}");
+        assert!(!message.contains('Z'), "{message}");
+    }
+
+    #[test]
+    fn checked_node_labels_accepts_the_length_bounds() {
+        let declared = vec![pair(&"k".repeat(63), &"v".repeat(255))];
+        let (labels, left_out) =
+            checked_node_labels(declared.clone(), &web_facts()).expect("at the bounds");
+        assert_eq!(&labels[..1], declared.as_slice());
+        assert!(left_out.is_empty());
+    }
+
+    #[test]
+    fn checked_node_labels_counts_the_defaults() {
+        // 61 declared + hostname, os and arch = 64: accepted, every default kept.
+        let (labels, left_out) =
+            checked_node_labels(declared(61), &web_facts()).expect("64 labels fit");
+        assert_eq!(labels.len(), 64);
+        for key in ["hostname", "os", "arch"] {
+            assert!(labels.iter().any(|(k, _)| k == key), "default {key} kept");
+        }
+        assert!(left_out.is_empty());
+
+        // 62 declared + three defaults = 65: refused, nothing dropped to fit.
+        let err = checked_node_labels(declared(62), &web_facts()).expect_err("65 labels");
+        assert_eq!(err, NodeLabelError::TooMany { count: 65 });
+
+        // 64 declared, three of them the default names: an overridden default
+        // does not count twice.
+        let mut overriding = declared(61);
+        overriding.extend([
+            pair("hostname", "web"),
+            pair("os", "linux"),
+            pair("arch", "arm"),
+        ]);
+        let (labels, _) = checked_node_labels(overriding, &web_facts()).expect("64 labels");
+        assert_eq!(labels.len(), 64);
+
+        // A declared key repeated counts once.
+        let mut repeated = declared(61);
+        repeated.push(pair("label-0", "again"));
+        checked_node_labels(repeated, &web_facts()).expect("62 distinct keys with defaults");
     }
 
     // Mirrors the Relay's TestWellFormedNodeLabel table.
