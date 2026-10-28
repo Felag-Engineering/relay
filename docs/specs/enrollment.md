@@ -125,8 +125,9 @@ alone, it says so.
 
 - **EN-43** The per-source and global enrollment rate limits are fixed constants, not settings.
   The per-source limit admits about 60 enrollments a minute from one address, so some 200 Nodes
-  behind one NAT address join in minutes; the global limit stays the guard against a flood. Both
-  still apply before token validation (EN-10).
+  behind one NAT address join in minutes. The global limit, about 300 a minute with a burst well
+  above one address's, stays the guard against a flood, and no single address can exhaust it.
+  Both still apply before token validation (EN-10).
 - **EN-21** The Console shows enrollment attempts, accepted and rejected, and each Node's
   enrollment provenance. It mints nothing and adds no Node. Attempts are an in-memory event
   feed, not durable records.
