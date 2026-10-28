@@ -366,3 +366,38 @@ func TestEnrollment_GlobalStillGuardsAFlood(t *testing.T) {
 		t.Fatalf("a sustained flood admitted %d over %d minutes, want about %d", admitted, minutes, want)
 	}
 }
+
+// Proves EN-43.
+func TestEnrollment_OneAddressCannotExhaustTheGlobalLimit(t *testing.T) {
+	clk := &advanceable{t: base}
+	l := New(Enrollment(), WithClock(clk.clock))
+	const noisy = "203.0.113.7"
+
+	// One address sends at its full per-source rate: the burst, then 60 a minute
+	// for ten minutes.
+	for i := 0; i < EnrollmentPerIPBurst; i++ {
+		if !l.Allow(noisy) {
+			t.Fatalf("burst call %d denied", i+1)
+		}
+	}
+
+	// The global burst is well above one address's: a second address still gets
+	// its own full burst at the same instant.
+	for i := 0; i < EnrollmentPerIPBurst; i++ {
+		if !l.Allow("198.51.100.9") {
+			t.Fatalf("a second address's burst call %d was denied after one address spent its burst", i+1)
+		}
+	}
+
+	for s := 0; s < 10*60; s++ {
+		clk.advance(time.Second)
+		if !l.Allow(noisy) {
+			t.Fatalf("second %d: the noisy address was denied at its own rate", s+1)
+		}
+	}
+
+	// Another address is still admitted: the global bucket was never drained.
+	if !l.Allow("192.0.2.44") {
+		t.Fatal("one address at its per-source rate left no global capacity for another")
+	}
+}

@@ -17,8 +17,8 @@ import (
 const (
 	EnrollmentPerIPRatePerMin  = 60
 	EnrollmentPerIPBurst       = 10
-	EnrollmentGlobalRatePerMin = 50
-	EnrollmentGlobalBurst      = 10
+	EnrollmentGlobalRatePerMin = 300
+	EnrollmentGlobalBurst      = 50
 	// EnrollmentMaxTrackedIPs bounds the per-IP map against spoofed-source floods.
 	EnrollmentMaxTrackedIPs = 100_000
 )

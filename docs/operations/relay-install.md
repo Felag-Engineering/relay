@@ -82,7 +82,7 @@ unknown key, or a value that cannot work, is refused.
 | `log.level` | `info` | `debug`, `info`, `warn`, `error`. Logs are always JSON. |
 
 **Built in, not configured.** These values are constants, with no key: Enrollment is limited
-to 60 a minute per source address (burst 10), 50 a minute overall (burst 10), and 100000
+to 60 a minute per source address (burst 10), 300 a minute overall (burst 50), and 100000
 tracked addresses; `state:cert-expiring` fires at a quarter of a Node certificate's lifetime
 (ADR-0034); a Job sends 16 Tasks at once (cancel is best-effort, ADR-0013: it withholds a
 Task whose send has not begun, but a Task already being sent can still run, and so can one a

@@ -199,7 +199,7 @@ hostname = "relay.example.internal"
 # Enrollment: the Node cap
 # ---------------------------------------------------------------------------
 #
-# The rate limits (about 60 a minute from one address, 50 a minute overall) and
+# The rate limits (about 60 a minute from one address, 300 a minute overall) and
 # the cert-expiring fraction (a quarter of the certificate's lifetime) are
 # built in.
 [enrollment]
