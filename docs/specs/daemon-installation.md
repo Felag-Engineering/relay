@@ -36,6 +36,10 @@ from artifacts they can verify before running them.
   byte-identical, and listed in the release `SHA256SUMS`, which is signed keylessly.
 - **DI-2** No daemon container image is published: a component whose job is to hold the host's
   own authority is not delivered as a container.
+- **DI-24** The release publishes the daemon as `.deb` and `.rpm` packages for each architecture.
+  A package wraps the release's guarded binary byte for byte (packaging compiles, strips and
+  rewrites nothing), is itself reproducible, built twice and compared, and is listed in the
+  release `SHA256SUMS`. Packages carry no signature of their own before v1.0.0.
 - **DI-3** The shipped systemd unit runs the daemon as root, with its capability bounding set
   limited to `CAP_DAC_READ_SEARCH` and the system directories (`/usr`, `/etc`, `/boot`) read-only,
   so even a compromised daemon cannot rewrite its own Policy or Templates, install packages, or
@@ -91,6 +95,12 @@ unit ships until that check is done.
 - **DI-32** The release attaches the standalone unit and example environment file under
   `SHA256SUMS`, byte-equal to the copies inside every daemon package, so a hand-built install,
   documented but not supported, verifies its unit like everything else.
+- **DI-45** Each release attaches an Ansible role, listed in `SHA256SUMS` and installed by
+  download, verify, install like every release artifact, that installs that release's daemon
+  package and passes a join string from the operator's vault to `relay-daemon join` on standard
+  input. It writes the string to no file, no command line and no log on the Node, the module
+  arguments Ansible would otherwise log or stage there included, places no Policy fragment, and
+  changes nothing on an enrolled Node (DI-42; ADR-0048).
 
 ### A fresh Node's configuration
 
@@ -166,12 +176,10 @@ Relay never pushes a binary (invariant 14).
 
 | Claim | Statement | Milestone |
 |---|---|---|
-| DI-24 | The release publishes the daemon as `.deb` and `.rpm` packages for each architecture. A package wraps the release's guarded binary byte for byte (packaging compiles, strips and rewrites nothing), is itself reproducible, built twice and compared, and is listed in the release `SHA256SUMS`. Packages carry no signature of their own before v1.0.0. | v0.6.5 — Install Path: relay init, join string, packages |
 | DI-25 | The daemon package installs the binary at `/usr/bin/relay-daemon` and the hardened unit as a system unit, and never starts the daemon. It enables the unit on a first install only, only where systemd is running, honouring the distribution's presets; an upgrade never changes whether it is enabled. An enabled unit on a Node that holds no persisted identity stays inactive at boot without failing or retrying; it starts at the next boot after an identity is present, or when `relay-daemon join` (DI-42) or config management starts it. Nothing watches for an identity to appear. | v0.6.5 — Install Path: relay init, join string, packages |
 | DI-26 | The daemon package places the shipped default Policy as the live Policy only on a first install, only if no Policy file exists and no Policy directory existed before the install began; never on an upgrade or a reinstall. On `.rpm` platforms, where a reinstall after removal is indistinguishable from a first install, those absence checks are the whole guard. No install, upgrade or remove rewrites or re-creates the live Policy. | v0.6.5 — Install Path: relay init, join string, packages |
 | DI-27 | The daemon package places the environment file on a first install only, if none exists, owned by root and mode `0600`, and never rewrites it. | v0.6.5 — Install Path: relay init, join string, packages |
 | DI-33 | A platform is supported only where CI installs the package, upgrades it over the operator's edited configuration and finds the edit intact, and removes it: Ubuntu 24.04 LTS and 26.04 LTS; Debian 13; RHEL-compatible 10, tested on Rocky Linux 10; Amazon Linux 2023. Each is supported on `x86_64` and `aarch64`. A platform whose package manager refuses an unsigned local package by default is not supported. This list also governs the Relay packages (`relay-configuration.md`). | v0.6.5 — Install Path: relay init, join string, packages |
-| DI-45 | Each release attaches an Ansible role, listed in `SHA256SUMS` and installed by download, verify, install like every release artifact, that installs that release's daemon package and passes a join string from the operator's vault to `relay-daemon join` on standard input. It writes the string to no file, no command line and no log on the Node, the module arguments Ansible would otherwise log or stage there included, places no Policy fragment, and changes nothing on an enrolled Node (DI-42; ADR-0048). | MVP |
 | DI-47 | The release's Ansible role restarts the daemon when a Policy fragment changes: a task that writes a fragment notifies the role's restart handler. The role itself still places no fragment (DI-45). | MVP |
 
 ## Out of scope
@@ -205,6 +213,7 @@ Generated by `make spec-proof` from the tests that name the claim they prove.
 | DI-20 | `a_missing_policy_file_beside_fragments_composes_the_fragments_alone`, `a_missing_policy_file_beside_fragments_loads_the_fragments_alone`, `a_missing_policy_file_with_a_refused_fragment_refuses_start`, `a_missing_policy_file_with_no_fragment_is_deny_all`, `an_unreadable_policy_file_beside_fragments_is_deny_all` | daemon |
 | DI-21 | `TestRevokedNode_DialAuditedThenThrottled`, `TestRevokedNode_RefusedAfterRestart` | Relay |
 | DI-23 | `TestRevokedNode_DialAuditedThenThrottled`, `TestServerCredentials_ReportsRevokedBeforeRefusing` | Node plane, Relay |
+| DI-24 | `release_attaches_every_package_and_its_sbom_under_sha256sums`, `release_packages_are_built_twice_compared_wrap_the_binary_and_carry_no_signature`, `release_publishes_nothing_unless_the_install_matrix_passes_on_its_packages`, `release_signing_waits_on_the_owner_recording_every_decision`, `release_signs_and_tests_only_the_sha256sums_the_comparing_job_wrote` | daemon |
 | DI-28 | `default_policy_denies_only_secret_bearing_own_files`, `default_policy_passes_strict_with_catalog`, `deny_list_mirrors_adr_0022_exactly` | daemon |
 | DI-29 | `the_daemon_package_carries_the_catalog_as_plain_package_files` | daemon |
 | DI-30 | `catalog_names_match_ledger`, `ledger_check_accepts_a_withdrawn_name_absent_from_the_catalog`, `ledger_check_refuses_a_changed_body`, `ledger_check_refuses_a_changed_risk_class`, `ledger_check_refuses_a_withdrawn_name_back_in_the_catalog` | daemon |
@@ -215,6 +224,7 @@ Generated by `make spec-proof` from the tests that name the claim they prove.
 | DI-42 | `TestCrossBinary_JoinStringEnrolls`, `a_join_that_lost_the_race_finds_the_identity_and_changes_nothing`, `a_second_join_is_refused_while_the_first_holds_the_state_dir`, `conclude_never_starts_the_unit_otherwise`, `env_file_and_unit_match_the_packaged_unit`, `join_enrolls_in_process_and_persists_identity`, `join_lets_the_environment_govern_without_an_env_file`, `join_on_an_enrolled_node_changes_nothing_and_exits_zero`, `join_pin_mismatch_sends_no_token_and_leaves_nothing_on_disk`, `join_refuses_a_disagreeing_environment_before_reading`, `join_refuses_argv_join_string`, `join_spawn_argv_is_the_literal_constant`, `join_starts_the_unit_once_and_only_after_the_identity_is_persisted`, `production_and_test_suppressions_are_pinned_apart`, `spawn_family_appears_only_at_the_sanctioned_sites`, `unit_starts_only_for_the_units_state_dir_under_systemd` | Relay, daemon |
 | DI-43 | `TestCrossBinary_JoinStringEnrolls`, `TestCrossBinary_RestartWithoutJoinOrAddrUsesPersistedState`, `ca_bundle_mismatch_refused`, `env_example_has_no_join_line`, `join_enrolls_in_process_and_persists_identity`, `join_pin_mismatch_sends_no_token_and_leaves_nothing_on_disk`, `join_refuses_relay_join_before_reading`, `pin_match_enrolls`, `pin_mismatch_sends_no_token`, `relay_join_is_refused_by_name`, `retired_settings_refused_by_name` | Relay, daemon |
 | DI-44 | `TestCrossBinary_RestartWithoutJoinOrAddrUsesPersistedState`, `identity_without_address_exits_nonzero`, `persisted_address_written_at_enrollment`, `relay_addr_overrides_persisted_address` | Relay, daemon |
+| DI-45 | `release_attaches_the_ansible_role_and_the_matrix_runs_it_with_hash_locked_ansible_core` | daemon |
 | DI-46 | `check_lints_the_policy_file_and_directory_together`, `check_prints_the_fingerprint_the_daemon_loads`, `check_refuses_a_symlinked_or_non_directory_policy_dir`, `check_refuses_entries_the_daemon_refuses_to_start_on`, `the_runbook_documents_the_three_step_change`, `would_allow_answers_over_the_combined_policy` | daemon |
 
 Unproven: DI-32.

@@ -3,10 +3,13 @@
 Pushing a `v*` tag runs `.github/workflows/release.yml`. It builds both binaries for `x86_64`
 and `aarch64`, stamped per [version-stamping.md](version-stamping.md), twice and from
 different paths (see [Reproducing a release](#reproducing-a-release)); verifies the stamp; and
-publishes a signed GitHub Release and a signed Relay image. The daemon reaches the fleet only
-through the customer's config management (ADR-0014: the Relay never pushes binaries), so **the
-artifact set below is the contract config management pins against**. Change the convention
-here and in the workflow together.
+publishes a signed GitHub Release and a signed Relay image. It also builds the `.deb` and
+`.rpm` packages of the relay-daemon and of the Relay for both architectures, and the Ansible
+role, and attaches them to the Release once the [install
+matrix](#the-install-matrix-gates-the-packages) has passed on exactly those bytes. The daemon
+reaches the fleet only through the customer's config management (ADR-0014: the Relay never
+pushes binaries), so **the artifact set below is the contract config management pins
+against**. Change the convention here and in the workflow together.
 
 ## What a release contains
 
@@ -18,9 +21,13 @@ For tag `v<version>` (e.g. `v0.1.0`, `v0.1.0-beta`), the GitHub Release carries:
 | `relay-<version>-linux-amd64`, `relay-<version>-linux-arm64` | The Relay server binary, statically linked (`CGO_ENABLED=0`). It has no libc dependency. |
 | `<artifact>.spdx.json` | An SPDX SBOM for each of the four binaries. The Relay's lists the exact Go modules in the binary. The daemon's is derived from `Cargo.lock` — a superset (every target, dev and build dependencies) — because a stripped Rust binary carries no dependency metadata to read. |
 | `relay-image-<version>-linux-<arch>.spdx.json` | An SPDX SBOM for each platform of the Relay image. |
+| `relay-daemon_<pkgversion>-1_amd64.deb`, `relay-daemon_<pkgversion>-1_arm64.deb`, `relay-daemon-<pkgversion>-1.x86_64.rpm`, `relay-daemon-<pkgversion>-1.aarch64.rpm` | The relay-daemon's packages: the release binary byte for byte, the hardened unit, the shipped Template catalog and the default Policy. `<pkgversion>` is the version with a prerelease's `-` written `~`, so a prerelease sorts below its release, and then with every `~` written `.` in the file name, because GitHub rewrites such characters in an asset's name (`0.2.0-beta` is `0.2.0.beta` in the file name and `0.2.0~beta` inside the package). |
+| `relay_<pkgversion>-1_amd64.deb`, `relay_<pkgversion>-1_arm64.deb`, `relay-<pkgversion>-1.x86_64.rpm`, `relay-<pkgversion>-1.aarch64.rpm` | The Relay's packages, named the same way. |
+| `<package>.spdx.json` | An SPDX SBOM for each of the eight packages, listing the dependencies of the binary the package wraps: the Relay's from its Go build info, the daemon's from `Cargo.lock`. |
+| `relay_daemon-<version>.tar.gz` | The Ansible role that installs the daemon package on a Node (DI-45). Built from the tagged commit (members sorted, owner 0, the commit's time as every mtime) and checked equal to it, it holds `relay_daemon/` and nothing else. |
 | `relay-daemon.service`, `relay-daemon.env.example` | The hardened systemd unit and the example environment file a hand-built install takes, byte-equal to the copies inside the daemon packages (DI-32). |
 | `relay.service`, `relay.toml.example` | The Relay's hardened systemd unit and its example configuration file, which a hand-built install takes, byte-equal to the copies inside the Relay packages. |
-| `SHA256SUMS` | `sha256sum`-format digests of every file above, bare filenames. |
+| `SHA256SUMS` | `sha256sum`-format digests of every file above, bare filenames. Packages carry no signature of their own before v1.0.0 (DI-24, ADR-0033): this file's signature and the provenance attestation over its files cover them. |
 | `SHA256SUMS.sigstore.json` | A keyless [cosign](https://docs.sigstore.dev/) bundle signing `SHA256SUMS`. |
 
 Plus generated release notes. Also published, not attached to the Release: the Relay image
@@ -48,8 +55,9 @@ Tags with a major version of 0 or with any prerelease component (`v0.*`, `v*-bet
 - `<platform>` — `linux-<arch>`, with the architecture spelled as Debian and OCI spell it:
   `linux-amd64` and `linux-arm64`, for both binaries. The image's SBOMs use the same
   spelling. The `.deb` and `.rpm` packages follow their own distribution's naming instead
-  (`relay_<version>-1_amd64.deb`, `relay-<version>-1.x86_64.rpm`). New architectures extend
-  the set without changing the scheme.
+  (`relay_<pkgversion>-1_amd64.deb`, `relay-<pkgversion>-1.x86_64.rpm`, where `<pkgversion>` is
+  the version with every `~` written `.` in the file name; see the table above). New
+  architectures extend the set without changing the scheme.
 
 There are deliberately no unversioned or "latest" **binary** names: the binaries config
 management installs, above all the daemon (ADR-0014), must be pinned to an explicit version,
@@ -95,6 +103,25 @@ install -m 0755 "${ARTIFACT}" /usr/bin/relay-daemon
 /usr/bin/relay-daemon --version   # "relay-daemon 0.1.0 (commit ..., built ...)"
 ```
 
+The packages and the role are verified the same way, with the same download, `cosign
+verify-blob` and `sha256sum --check --ignore-missing` against the signed `SHA256SUMS`, and only
+then installed:
+
+```sh
+# A prerelease's "~" is "." in the file name; for a release, the two are the same.
+PKGVERSION="${VERSION//-/.}"   # a prerelease "-" is "~" in the package, "." in the file name
+DEB="relay-daemon_${PKGVERSION}-1_amd64.deb"
+curl -fsSLO "${BASE}/${DEB}"
+# ... SHA256SUMS and SHA256SUMS.sigstore.json fetched and verified as in steps 1 to 3 ...
+sha256sum --check --ignore-missing SHA256SUMS
+apt-get install -y "./${DEB}"      # or: dnf install -y ./relay-daemon-${PKGVERSION}-1.x86_64.rpm
+```
+
+The Ansible role is the file `relay_daemon-${VERSION}.tar.gz`: verify it as above, extract it
+(`tar -xzf`) into a roles path, and point the role's `relay_daemon_package_dir` at the
+directory holding the verified package of the same release. The role installs the package it
+finds there, so the pairing of role and package is the operator's, here.
+
 The build-provenance attestation can be checked too, and is stronger on one point: it names
 the commit the artifact was built from. **Always pin `--signer-workflow` and `--source-ref`**;
 without them any workflow in the repository could satisfy the check.
@@ -131,6 +158,26 @@ The same sequence applies to the `relay` binary on the Relay hosts.
 Signing is keyless, so there is no long-lived signing key to hold or rotate. The cost: each
 signature writes its metadata (organization, repository, workflow path, tag, commit, artifact
 digests) to the **public** Rekor transparency log, permanently.
+
+### The install matrix gates the packages
+
+Every release runs the install matrix (`.github/workflows/install-matrix.yml`, DI-33) on
+exactly the packages and the role it is about to attach: the platforms DI-33 lists on both
+architectures, the install where systemd is not running, the syscall trace of the packaged unit,
+and the Ansible role under a hash-locked ansible-core. The matrix takes the packages and the
+role from the release's own artifact and checks each against the `SHA256SUMS` that gets signed;
+it rebuilds none of them. The digest of that `SHA256SUMS` is handed from the job that wrote it
+to the matrix and to `sign-push`, and each compares it against the file it downloaded before
+using it, so an artifact replaced between upload and signing is refused. `sign-push`, the first
+job that publishes anything (the Rekor entry, the registry), needs the matrix, so a failing row
+publishes nothing. For a flaky row, use "Re-run failed jobs" (see
+[Release-cutting discipline](#release-cutting-discipline)).
+
+`sign-push` also refuses to run until the owner has recorded, as repository variables, the
+decisions the workflow cannot make for itself: `RELEASE_PUBLIC_REKOR_ACCEPTED`,
+`RELEASE_ATTESTATIONS_AVAILABLE`, and `RELEASE_UNIT_SYSCALL_FILTER_SIGNED_OFF`, each `true`. The
+last records that the owner has checked the packaged unit's syscall filter by hand on a real
+systemd host (DI-3), because the release attaches packages carrying that unit.
 
 ## Release-cutting discipline
 
@@ -234,11 +281,15 @@ repository (`daemon/packaging/expected/` and `relay/packaging/expected/`):
   environment example, example configuration, the Relay's configuration template and guide,
   and catalog.
 
-It does not check timestamps; the binary's bytes are checked separately. The packages are
-uploaded as the run's `packages` artifact and are **not yet attached to the Release**: that
-waits on the install matrix and on the unit's syscall filter being verified on a real systemd
-host (`daemon-installation.md`, DI-33 and DI-3). Until then nothing in `SHA256SUMS` names
-them. The standalone units and example configuration are attached already.
+It does not check timestamps; the binary's bytes are checked separately. A guarded package is
+copied into the release set, named by its own distribution's convention, and listed in
+`SHA256SUMS` beside the binaries, with an SBOM each; the install matrix then runs on those
+bytes (see [The install matrix gates the packages](#the-install-matrix-gates-the-packages)).
+
+The Ansible role tarball compiles nothing and carries repository files only, so it is not built
+twice. It is built from the tagged commit (members sorted, owner 0, every mtime the commit's
+time), and the workflow fails unless what the tarball extracts to equals
+`daemon/packaging/ansible/relay_daemon/` in the checkout.
 
 The **image is not byte-reproducible** (Alpine's package index and file timestamps float).
 What is guaranteed is that its `/usr/local/bin/relay` is the released, rebuild-verified

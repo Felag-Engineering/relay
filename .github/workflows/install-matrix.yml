@@ -14,13 +14,17 @@
 #
 # How it is called. ci.yml calls this workflow for a change in the `packaging=` path class
 # (scripts/ci-changed-paths.sh: daemon, Relay and proto source, the packaging and the matrix
-# itself) and on every push to main. Concurrency comes from the caller,
-# whose workflow-level group cancels in-progress runs, so this file declares none. It uses no
-# build cache, like release.yml, so the release can call it unchanged.
+# itself) and on every push to main. release.yml calls it with `release-dist`,
+# `release-sums-sha256` and `release-version`, and its sign-push job needs it. Concurrency comes
+# from each caller's own workflow-level group, so this file declares none. It uses no build
+# cache, like release.yml.
 #
 # The packages are built here from the checked-out commit, twice: as 0.0.0~matrix1 and as the
 # real version, so every row upgrades from the first to the second without a published
-# release. The platform list is checked against DI-33 by scripts/install-matrix-platforms.sh.
+# release. When the release calls, the new set is not built here: it is the release's own
+# packages, taken from its artifact and checked against its SHA256SUMS, and the ansible-role
+# job runs the release's own role tarball, so what the rows prove is what the release attaches.
+# The platform list is checked against DI-33 by scripts/install-matrix-platforms.sh.
 name: Install matrix
 
 on:
@@ -30,6 +34,22 @@ on:
         description: The Rust toolchain that builds the daemon; the release passes its pinned one.
         type: string
         default: stable
+      release-dist:
+        description: >-
+          The release's artifact holding its packages, role tarball and SHA256SUMS. Empty
+          builds the new package set from the checkout.
+        type: string
+        default: ""
+      release-version:
+        description: The version the release stamped; required with release-dist.
+        type: string
+        default: ""
+      release-sums-sha256:
+        description: >-
+          The sha256 of the release's SHA256SUMS as the job that wrote it computed it; required
+          with release-dist. The matrix refuses a downloaded SHA256SUMS that does not match.
+        type: string
+        default: ""
 
 permissions: {}
 
@@ -81,7 +101,7 @@ jobs:
           TRIPLE: ${{ matrix.triple }}
         run: make build-daemon-release RELEASE_DAEMON_TARGET="$TRIPLE"
 
-      - name: Build the old and the new package sets
+      - name: Build the old package set
         env:
           ARCH: ${{ matrix.arch }}
           TRIPLE: ${{ matrix.triple }}
@@ -93,8 +113,56 @@ jobs:
           # The semver prerelease becomes the package version 0.0.0~matrix1, which sorts below
           # every real version on both dpkg and rpm.
           bash scripts/build-packages.sh 0.0.0-matrix1 "$ARCH" "$daemon_bin" pkgs/old --relay relay/bin/relay
-          bash scripts/build-packages.sh "$version" "$ARCH" "$daemon_bin" pkgs/new --relay relay/bin/relay
           printf '%s\n' "$version" > pkgs/VERSION
+
+      - name: Build the new package set
+        if: inputs.release-dist == ''
+        env:
+          ARCH: ${{ matrix.arch }}
+          TRIPLE: ${{ matrix.triple }}
+        run: |
+          set -euo pipefail
+          daemon_bin="$(make -s print-release-daemon-bin RELEASE_DAEMON_TARGET="$TRIPLE")"
+          version="$(cat pkgs/VERSION)"
+          bash scripts/build-packages.sh "$version" "$ARCH" "$daemon_bin" pkgs/new --relay relay/bin/relay
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: inputs.release-dist != ''
+        with:
+          name: ${{ inputs.release-dist }}
+          path: release
+
+      # The release's packages are the new set, byte for byte, each bound to the SHA256SUMS
+      # that gets signed. Nothing here rebuilds them.
+      - name: Take the new set from the release
+        if: inputs.release-dist != ''
+        env:
+          ARCH: ${{ matrix.arch }}
+          RELEASE_VERSION: ${{ inputs.release-version }}
+          RELEASE_SUMS_SHA256: ${{ inputs.release-sums-sha256 }}
+        run: |
+          set -euo pipefail
+          built="$(cat pkgs/VERSION)"
+          [ -n "$RELEASE_VERSION" ] || { echo "::error::release-version is required with release-dist"; exit 1; }
+          [[ "$RELEASE_SUMS_SHA256" =~ ^[0-9a-f]{64}$ ]] \
+            || { echo "::error::release-sums-sha256 is required with release-dist"; exit 1; }
+          actual="$(sha256sum release/SHA256SUMS | cut -d' ' -f1)"
+          [ "$actual" = "$RELEASE_SUMS_SHA256" ] \
+            || { echo "::error::the downloaded SHA256SUMS is not the one the release wrote ($actual, want $RELEASE_SUMS_SHA256)"; exit 1; }
+          [ "$RELEASE_VERSION" = "$built" ] \
+            || { echo "::error::the release stamped '$RELEASE_VERSION' but this commit builds '$built'"; exit 1; }
+          case "$ARCH" in
+            x86_64) debarch=amd64 ;;
+            aarch64) debarch=arm64 ;;
+            *) echo "::error::unknown arch $ARCH"; exit 1 ;;
+          esac
+          shopt -s nullglob
+          files=(release/*_"${debarch}".deb release/*."${ARCH}".rpm)
+          # relay-daemon and relay, each as a .deb and an .rpm.
+          [ "${#files[@]}" -eq 4 ] || { echo "::error::expected 4 $ARCH packages in the release, found ${#files[@]}"; exit 1; }
+          bash scripts/package-guard.sh listed release/SHA256SUMS "${files[@]}"
+          cp -- "${files[@]}" pkgs/new/
+          find pkgs -type f | sort
 
       # Fails the job before any row runs: a row that upgrades from a version that does not
       # sort below the new one proves nothing.
@@ -220,8 +288,6 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
-    env:
-      ANSIBLE_CORE_VERSION: "2.21.5"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -232,13 +298,62 @@ jobs:
           name: install-matrix-packages-x86_64
           path: pkgs
 
-      # Pinned by version only: the transitive dependencies are not hash-locked. A hash-locked
-      # install is required before release.yml calls this job.
-      - name: Install ansible-core
-        run: pipx install "ansible-core==$ANSIBLE_CORE_VERSION"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: inputs.release-dist != ''
+        with:
+          name: ${{ inputs.release-dist }}
+          path: release
+
+      # ansible-core and its whole dependency closure come from the hash-locked file: no
+      # dependency resolution and no sdist build. The runner image ships an Ansible of its own,
+      # so the venv is put first on PATH and the step fails unless its tools are the ones that
+      # resolve and report the locked version.
+      - name: Install ansible-core (hash-locked)
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/ansible"
+          "$RUNNER_TEMP/ansible/bin/python" -m pip install --require-hashes --no-deps --only-binary=:all: \
+            -r daemon/packaging/ansible/test/requirements.txt
+          # GITHUB_PATH prepends, so the venv wins over the image's own Ansible in later steps.
+          echo "$RUNNER_TEMP/ansible/bin" >> "$GITHUB_PATH"
+          locked="$(sed -n 's/^ansible-core==\([^ ]*\) .*/\1/p' daemon/packaging/ansible/test/requirements.txt)"
+          [ -n "$locked" ] || { echo "::error::no ansible-core pin in requirements.txt"; exit 1; }
+          reported="$("$RUNNER_TEMP/ansible/bin/ansible-playbook" --version)"
+          echo "$reported"
+          grep -qF "[core ${locked}]" <<<"$reported" \
+            || { echo "::error::the locked venv does not report ansible-core $locked"; exit 1; }
+
+      - name: Check the locked ansible-core is the one on PATH
+        run: |
+          set -euo pipefail
+          for tool in ansible-playbook ansible-vault; do
+            resolved="$(command -v "$tool")"
+            [ "$resolved" = "$RUNNER_TEMP/ansible/bin/$tool" ] \
+              || { echo "::error::$tool resolves to $resolved, not the locked venv"; exit 1; }
+          done
 
       - name: Run the role against a container Node
-        run: bash scripts/install-matrix-ansible-role.sh "$PWD/pkgs"
+        env:
+          RELEASE_DIST: ${{ inputs.release-dist }}
+          RELEASE_VERSION: ${{ inputs.release-version }}
+          RELEASE_SUMS_SHA256: ${{ inputs.release-sums-sha256 }}
+        run: |
+          set -euo pipefail
+          if [ -z "$RELEASE_DIST" ]; then
+            bash scripts/install-matrix-ansible-role.sh "$PWD/pkgs"
+            exit 0
+          fi
+          [[ "$RELEASE_SUMS_SHA256" =~ ^[0-9a-f]{64}$ ]] \
+            || { echo "::error::release-sums-sha256 is required with release-dist"; exit 1; }
+          actual="$(sha256sum release/SHA256SUMS | cut -d' ' -f1)"
+          [ "$actual" = "$RELEASE_SUMS_SHA256" ] \
+            || { echo "::error::the downloaded SHA256SUMS is not the one the release wrote ($actual, want $RELEASE_SUMS_SHA256)"; exit 1; }
+          # The release's own role tarball, bound to the SHA256SUMS that gets signed.
+          tarball="release/relay_daemon-${RELEASE_VERSION}.tar.gz"
+          bash scripts/package-guard.sh listed release/SHA256SUMS "$tarball"
+          mkdir "$RUNNER_TEMP/release-role"
+          tar -xzf "$tarball" --no-same-owner -C "$RUNNER_TEMP/release-role"
+          bash scripts/install-matrix-ansible-role.sh "$PWD/pkgs" "$RUNNER_TEMP/release-role"
 
   vm-trace:
     name: Syscall trace, packaged unit (${{ matrix.arch }})

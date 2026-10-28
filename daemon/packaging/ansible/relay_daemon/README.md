@@ -75,4 +75,8 @@ Put the join string in the vault with
   `RELAY_STATE_DIR` override in the environment file is not seen. The role installs nothing
   there, because the daemon is already installed, and `join` itself still changes nothing.
 
-It is not yet a release attachment. Use it from a checkout of the release's tag until it is.
+The release attaches the role as `relay_daemon-<version>.tar.gz`, listed in the signed
+`SHA256SUMS`, and the install matrix runs that tarball before the release publishes. Verify the
+tarball as in [release-artifacts.md](../../../../docs/operations/release-artifacts.md), extract it
+(`tar -xzf`) into your roles path, and point `relay_daemon_package_dir` at the directory holding
+the verified package of the same release.

@@ -15,10 +15,11 @@ the builds are byte-identical and each package's `/usr/bin/relay-daemon` is the 
 It reads every package with `dpkg-deb` and `rpm` and checks its whole content against
 `expected/` and `scripts/`.
 
-**The packages are not yet attached to a release.** They wait until the install matrix proves
-them on every supported platform and the unit's syscall filter is verified on a real systemd
-host. The standalone unit and environment example are release attachments; until the packages
-are, install by hand as below.
+**The release attaches the packages**, with an SBOM each, under the signed `SHA256SUMS`, and
+only after the install matrix has passed on exactly those bytes on every supported platform.
+Verify, then install, as in
+[release-artifacts.md](../../docs/operations/release-artifacts.md). The standalone unit and
+environment example are release attachments too; to install by hand, see below.
 
 - **`relay-daemon`** installs `/usr/bin/relay-daemon`, the unit as
   `/usr/lib/systemd/system/relay-daemon.service`, and reference copies of the default Policy
@@ -47,7 +48,10 @@ purge: removal prints the paths to delete by hand.
 
 `ansible/relay_daemon/` is the Ansible role that installs the daemon package and joins a Node
 from a join string in your vault, with the string on standard input
-([its README](ansible/relay_daemon/README.md)). It is not yet a release attachment.
+([its README](ansible/relay_daemon/README.md)). The release attaches it as
+`relay_daemon-<version>.tar.gz` under `SHA256SUMS`, and the install matrix runs that tarball
+under a hash-locked ansible-core (`ansible/test/requirements.txt`) before the release
+publishes ([release-artifacts.md](../../docs/operations/release-artifacts.md)).
 
 ## Install
 

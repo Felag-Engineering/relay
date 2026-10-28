@@ -1,7 +1,11 @@
 //! Offline proof of what the release workflow promises about the relay-daemon: a static
 //! binary for both architectures, built twice from different paths and refused unless the
 //! two builds are byte-identical, listed in a keylessly signed `SHA256SUMS` (DI-1), and no
-//! workflow that publishes the daemon as a container image (DI-2).
+//! workflow that publishes the daemon as a container image (DI-2). It also proves the
+//! packages' release half: gated on the install matrix, attached under `SHA256SUMS` with an
+//! SBOM each, built twice and unsigned (DI-24, RC-23), and the Ansible role's release half and
+//! the matrix's hash-locked ansible-core and release-mode role (DI-45), reading
+//! `install-matrix.yml` as well.
 //!
 //! A workflow cannot run in a test, so the files are read as text and the assertions are on
 //! properties of the job graph, never on exact lines: a reworded step stays green, a removed
@@ -626,4 +630,921 @@ fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) {
             out.push(path);
         }
     }
+}
+
+// ---- the packages and the Ansible role: the release half of DI-24, RC-23 and DI-45 ----
+
+/// The install matrix's jobs, with the same top-level grant-nothing assertion as `release()`.
+fn matrix() -> Jobs {
+    let text = code(&read(&repo().join(".github/workflows/install-matrix.yml")));
+    let top_level: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("permissions:"))
+        .map(|l| l.split('#').next().unwrap_or("").trim())
+        .collect();
+    assert_eq!(
+        top_level,
+        ["permissions: {}"],
+        "the install matrix grants nothing at its top level"
+    );
+    let all = jobs(&text);
+    assert!(
+        all.len() >= 5,
+        "install-matrix.yml parsed to {:?}",
+        all.keys()
+    );
+    all
+}
+
+/// The `key: value` lines under a job's `with:` (a reusable-workflow call's inputs).
+fn with_inputs(job: &str) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    let mut inside = false;
+    for line in job.lines() {
+        if !inside {
+            inside = line == "    with:";
+            continue;
+        }
+        if line.trim().is_empty() {
+            continue;
+        }
+        if line.len() - line.trim_start().len() < 6 {
+            break;
+        }
+        if let Some((k, v)) = line.trim().split_once(':') {
+            out.insert(k.trim().to_string(), v.trim().to_string());
+        }
+    }
+    out
+}
+
+/// A step's own `if:`.
+fn step_if(step: &str) -> Option<String> {
+    re(r"(?m)^ {8}if:[ \t]*(.*?)[ \t]*$")
+        .captures(step)
+        .map(|c| c[1].to_string())
+}
+
+/// Whether the shell glob `glob` (`*`, `?` and literals) matches the whole of `name`.
+fn glob_matches(glob: &str, name: &str) -> bool {
+    let mut pattern = String::from("^");
+    for ch in glob.chars() {
+        match ch {
+            '*' => pattern.push_str(".*"),
+            '?' => pattern.push('.'),
+            other => pattern.push_str(&regex::escape(&other.to_string())),
+        }
+    }
+    pattern.push('$');
+    re(&pattern).is_match(name)
+}
+
+/// The job that calls the install matrix.
+fn matrix_call(all: &Jobs) -> (&String, &String) {
+    only(all, "the caller of the install matrix", |_, j| {
+        re(r"(?m)^ {4}uses:[ \t]*\./\.github/workflows/install-matrix\.yml[ \t]*$").is_match(j)
+    })
+}
+
+/// The index of the first step of `job` satisfying `pred`.
+fn step_index(job: &str, what: &str, pred: impl Fn(&str) -> bool) -> usize {
+    steps(job)
+        .iter()
+        .position(|s| pred(s))
+        .unwrap_or_else(|| panic!("no step {what}"))
+}
+
+/// The index of the first logical line of `lines` matching `pattern`.
+fn line_index(lines: &[String], what: &str, pattern: &Regex) -> usize {
+    lines
+        .iter()
+        .position(|l| pattern.is_match(l))
+        .unwrap_or_else(|| panic!("no line {what}"))
+}
+
+/// A step that downloads the release's artifact compares the digest of its SHA256SUMS with the
+/// one the comparing job reported (through the environment), before it trusts a line of it.
+fn assert_sums_digest_checked_first(step: &str, what: &str) {
+    assert!(
+        re(r"(?m)^\s+RELEASE_SUMS_SHA256:\s*\$\{\{\s*inputs\.release-sums-sha256\s*\}\}\s*$")
+            .is_match(step),
+        "{what} takes the expected digest from the input through its environment: {step}"
+    );
+    let lines = logical(step);
+    let digest = line_index(
+        &lines,
+        "computing the digest of the downloaded SHA256SUMS",
+        &re(r"sha256sum\s+release/SHA256SUMS"),
+    );
+    let compare = line_index(
+        &lines,
+        "comparing the digest",
+        &re(r#"\[\s+"\$actual"\s+=\s+"\$RELEASE_SUMS_SHA256"\s+\]"#),
+    );
+    let listed = line_index(
+        &lines,
+        "checking a file against SHA256SUMS",
+        &re(r"package-guard\.sh\s+listed\s+release/SHA256SUMS"),
+    );
+    assert!(
+        digest < compare && compare < listed,
+        "{what} compares the downloaded SHA256SUMS' digest before it trusts a line of it: {lines:?}"
+    );
+}
+
+// Proves DI-24, RC-23.
+#[test]
+fn release_publishes_nothing_unless_the_install_matrix_passes_on_its_packages() {
+    let all = release();
+    let (c_name, c) = comparing_job(&all);
+    let (m_name, m) = matrix_call(&all);
+
+    // The matrix is handed the artifact the signer and the Release publish, and the version
+    // the comparing job stamped.
+    let inputs = with_inputs(m);
+    let upload = steps(c)
+        .into_iter()
+        .find(|s| {
+            s.contains("actions/upload-artifact") && re(r"(?m)^\s+path:\s*dist/?\s*$").is_match(s)
+        })
+        .expect("the comparing job uploads dist/");
+    let artifact = re(r"(?m)^\s+name:\s*(\S+)")
+        .captures(&upload)
+        .expect("the upload is named")[1]
+        .to_string();
+    assert_eq!(
+        inputs.get("release-dist"),
+        Some(&artifact),
+        "the matrix tests the artifact that is published"
+    );
+    assert_eq!(
+        inputs.get("release-version"),
+        Some(&format!("${{{{ needs.{c_name}.outputs.version }}}}")),
+        "the matrix is told the version the comparing job stamped"
+    );
+    assert_eq!(
+        inputs.get("release-sums-sha256"),
+        Some(&format!("${{{{ needs.{c_name}.outputs.sums_sha256 }}}}")),
+        "the matrix is told the digest of the SHA256SUMS the comparing job wrote"
+    );
+    assert!(
+        needs(m).iter().any(|n| n == c_name.as_str()),
+        "the matrix runs after {c_name}, on its output"
+    );
+    let granted = perms(m);
+    assert!(
+        granted.values().all(|v| v != "write")
+            && granted.get("contents").is_some_and(|v| v == "read"),
+        "the matrix call holds no write privilege: {granted:?}"
+    );
+
+    // Every job that can publish waits for the matrix, and nothing on its chain runs past a
+    // failure.
+    let privileged: Vec<&String> = all
+        .iter()
+        .filter(|(_, j)| grants_privilege(j))
+        .map(|(n, _)| n)
+        .collect();
+    assert!(!privileged.is_empty(), "no job holds a privilege to guard");
+    for p in privileged {
+        let chain = ancestors(&all, p);
+        assert!(
+            chain.contains(m_name.as_str()),
+            "privileged job {p} does not need the install matrix {m_name} (DI-24)"
+        );
+        let mut checked = chain.clone();
+        checked.insert(p.clone());
+        for j in &checked {
+            let text = &all[j];
+            if let Some(cond) = job_if(text) {
+                for status in ["always()", "cancelled()", "failure()"] {
+                    assert!(
+                        !cond.contains(status),
+                        "job {j} on {p}'s chain runs past a failed matrix: if: {cond}"
+                    );
+                }
+                assert!(
+                    !re(r"success\(\)\s*\|\|").is_match(&cond),
+                    "job {j} on {p}'s chain runs past a failed matrix through `success() ||`: if: {cond}"
+                );
+            }
+            assert!(
+                !re(r"(?m)^ {4}continue-on-error:").is_match(text),
+                "job {j} on {p}'s chain continues on error"
+            );
+        }
+    }
+
+    // Inside the matrix: in release mode it tests the release's bytes, not a rebuild.
+    let raw = code(&read(&repo().join(".github/workflows/install-matrix.yml")));
+    for input in ["release-dist", "release-version", "release-sums-sha256"] {
+        assert!(
+            re(&format!(r"(?m)^ {{6}}{input}:\s*$")).is_match(&raw),
+            "install-matrix.yml declares the {input} input"
+        );
+    }
+    let mx = matrix();
+    let build_steps = steps(&mx["build"]);
+    let download = build_steps
+        .iter()
+        .find(|s| {
+            s.contains("actions/download-artifact")
+                && s.contains("name: ${{ inputs.release-dist }}")
+        })
+        .expect("the build job downloads the release's artifact");
+    assert_eq!(
+        step_if(download).as_deref(),
+        Some("inputs.release-dist != ''"),
+        "the download happens only in release mode"
+    );
+    let rebuilds: Vec<&String> = build_steps
+        .iter()
+        .filter(|s| {
+            logical(s)
+                .iter()
+                .any(|l| l.contains("build-packages.sh") && l.contains("pkgs/new"))
+        })
+        .collect();
+    assert!(
+        !rebuilds.is_empty(),
+        "the build job builds a new set outside release mode"
+    );
+    for s in rebuilds {
+        assert_eq!(
+            step_if(s).as_deref(),
+            Some("inputs.release-dist == ''"),
+            "a rebuild of the new set runs only outside release mode: {s}"
+        );
+    }
+    let take = build_steps
+        .iter()
+        .find(|s| {
+            step_if(s).as_deref() == Some("inputs.release-dist != ''") && s.contains("pkgs/new")
+        })
+        .expect("a release-mode step puts the release's packages into pkgs/new");
+    for needle in [
+        "package-guard.sh listed release/SHA256SUMS",
+        "cp ",
+        "RELEASE_VERSION",
+        "pkgs/VERSION",
+    ] {
+        assert!(
+            take.contains(needle),
+            "the release-mode step names {needle}: {take}"
+        );
+    }
+    // Exactly the architecture's four packages (relay-daemon and relay, each .deb and .rpm).
+    assert!(
+        logical(take)
+            .iter()
+            .any(|l| re(r#""\$\{#files\[@\]\}"\s+-eq\s+4\b"#).is_match(l)),
+        "the release-mode step refuses anything but four packages: {take}"
+    );
+    assert_sums_digest_checked_first(take, "the release-mode package step");
+
+    // The other rows consume the build job's packages and rebuild nothing.
+    for (name, job) in &mx {
+        assert!(
+            !job.contains("continue-on-error"),
+            "matrix job {name} cannot continue past a failure"
+        );
+        if let Some(cond) = job_if(job) {
+            for status in ["always()", "cancelled()", "failure()"] {
+                assert!(
+                    !cond.contains(status),
+                    "matrix job {name} runs past a failed row: if: {cond}"
+                );
+            }
+        }
+        assert!(
+            !grants_privilege(job),
+            "matrix job {name} holds a write privilege"
+        );
+        if name == "build" {
+            continue;
+        }
+        assert!(
+            needs(job).iter().any(|n| n == "build"),
+            "matrix job {name} runs on build's packages"
+        );
+        assert!(
+            steps(job)
+                .iter()
+                .any(|s| s.contains("actions/download-artifact")
+                    && s.contains("install-matrix-packages-")),
+            "matrix job {name} downloads build's packages"
+        );
+        assert!(
+            !job.contains("build-packages.sh"),
+            "matrix job {name} builds no package of its own"
+        );
+    }
+
+    // An input reaches a shell only through the environment, never the script text.
+    let value_or_condition =
+        re(r"^\s*(?:-\s+)?[A-Za-z0-9_-]+:\s*\$\{\{\s*inputs\.[a-z0-9-]+\s*\}\}\s*$|^\s*if:");
+    for line in raw.lines().filter(|l| l.contains("${{ inputs.")) {
+        assert!(
+            value_or_condition.is_match(line),
+            "an input is interpolated into more than a value or a condition: {line}"
+        );
+    }
+}
+
+// Proves DI-24, RC-23.
+#[test]
+fn release_attaches_every_package_and_its_sbom_under_sha256sums() {
+    let all = release();
+    let (c_name, c) = comparing_job(&all);
+    let lines = logical(c);
+
+    // A guarded package is copied into the release set, after every guard on it.
+    let guard_step = step_index(c, "guarding the packages", |s| {
+        s.contains("package-guard.sh") && s.contains("no-config")
+    });
+    let guard = &steps(c)[guard_step];
+    let gl = logical(guard);
+    let copy = line_index(
+        &gl,
+        "copying a package into dist/",
+        &re(r#"\bcp\s+"\$\{f\}"\s+"?dist/"#),
+    );
+    for (what, pattern) in [
+        ("same", r"\bsame\b"),
+        ("content", r"\bcontent\b"),
+        ("no-config", r"\bno-config\b"),
+        ("listed", r"\blisted\b"),
+    ] {
+        let last = gl
+            .iter()
+            .rposition(|l| l.contains("guard") && re(pattern).is_match(l))
+            .unwrap_or_else(|| panic!("the guard step runs `{what}`"));
+        assert!(
+            last < copy,
+            "`{what}` runs before the package is copied: {gl:?}"
+        );
+    }
+    assert!(
+        guard.contains("-eq 8"),
+        "exactly eight packages (two per architecture and family) are staged"
+    );
+    assert!(
+        !steps(c)
+            .iter()
+            .any(|s| re(r"(?m)^\s+name:\s*packages\s*$").is_match(s)),
+        "no second artifact carries the packages"
+    );
+
+    // Each package gets an SBOM, after the guard.
+    let sbom_step = step_index(c, "writing SBOMs for the packages", |s| {
+        s.contains("dist/*.deb")
+            && s.contains("dist/*.rpm")
+            && s.contains("spdx-json=${f}.spdx.json")
+    });
+    assert!(
+        sbom_step > guard_step,
+        "the SBOMs describe guarded packages"
+    );
+
+    // The role is staged, then the sums are written after everything they must list.
+    let role_step = step_index(c, "staging the Ansible role", |s| {
+        s.contains("dist/relay_daemon-${VERSION}.tar.gz") && s.contains("tar ")
+    });
+    let writes_sums = re(r#"(^|[^>])>\s*"?SHA256SUMS"?(\s|$)"#);
+    let writer_step = step_index(c, "writing SHA256SUMS", |s| {
+        logical(s)
+            .iter()
+            .any(|l| l.contains("sha256sum") && l.contains("relay-*") && writes_sums.is_match(l))
+    });
+    assert!(
+        writer_step > guard_step && writer_step > sbom_step && writer_step > role_step,
+        "SHA256SUMS is written after the packages, their SBOMs and the role are in dist/ ({c_name})"
+    );
+    let writer = logical(&steps(c)[writer_step]);
+    let writer_line = writer
+        .iter()
+        .find(|l| l.contains("sha256sum") && l.contains("relay-*") && writes_sums.is_match(l))
+        .expect("the writer line");
+    let globs: Vec<&str> = writer_line
+        .split_whitespace()
+        .skip_while(|t| *t != "sha256sum")
+        .skip(1)
+        .take_while(|t| *t != ">")
+        .collect();
+    let mut names: Vec<String> = Vec::new();
+    for deb in ["relay-daemon_1.2.3-1", "relay_1.2.3-1"] {
+        for arch in ["amd64", "arm64"] {
+            names.push(format!("{deb}_{arch}.deb"));
+        }
+    }
+    for rpm in ["relay-daemon-1.2.3-1", "relay-1.2.3-1"] {
+        for arch in ["x86_64", "aarch64"] {
+            names.push(format!("{rpm}.{arch}.rpm"));
+        }
+    }
+    let sboms: Vec<String> = names.iter().map(|n| format!("{n}.spdx.json")).collect();
+    names.extend(sboms);
+    names.extend(
+        [
+            "relay_daemon-1.2.3.tar.gz",
+            "relay-1.2.3-linux-amd64",
+            "relay-daemon-1.2.3-linux-arm64.spdx.json",
+            "relay.service",
+            "relay.toml.example",
+            "relay-daemon.service",
+            "relay-daemon.env.example",
+        ]
+        .map(String::from),
+    );
+    for name in &names {
+        assert!(
+            globs.iter().any(|g| glob_matches(g, name)),
+            "SHA256SUMS would not list {name}; the writer's globs are {globs:?}"
+        );
+    }
+
+    // Anything left unlisted, or named in a way GitHub rewrites, stops the job.
+    // A published release's names are ^[A-Za-z0-9._-]+$: only a dry run may carry a "+".
+    let writer_text = &steps(c)[writer_step];
+    assert!(
+        re(r"(?m)^\s+[A-Z_]+:\s*\$\{\{\s*github\.event_name == 'push' && startsWith\(github\.ref, 'refs/tags/v'\)\s*\}\}\s*$")
+            .is_match(writer_text),
+        "the name guard learns whether this is a tag push through the environment: {writer_text}"
+    );
+    assert!(
+        writer.iter().any(|l| l.contains("^[A-Za-z0-9._+-]+$")),
+        "a dry run's names may carry a plus: {writer:?}"
+    );
+    assert!(
+        writer
+            .iter()
+            .any(|l| { l.contains("pattern='^[A-Za-z0-9._-]+$'") && l.contains("!= \"true\"") }),
+        "a tag push's names may not carry a plus: {writer:?}"
+    );
+    let writer_at = line_index(&lines, "the SHA256SUMS writer", &writes_sums);
+    let name_check = line_index(&lines, "checking file names", &re(r"A-Za-z0-9"));
+    assert!(
+        name_check < writer_at,
+        "file names are checked before the sums are written"
+    );
+    let find = lines
+        .iter()
+        .enumerate()
+        .skip(writer_at)
+        .find(|(_, l)| l.contains("find dist") && l.contains("SHA256SUMS"))
+        .expect("every file in dist/ is collected after the sums are written")
+        .0;
+    assert!(
+        lines
+            .iter()
+            .skip(find)
+            .any(|l| l.contains("package-guard.sh listed dist/SHA256SUMS")),
+        "every collected file is checked against dist/SHA256SUMS"
+    );
+
+    // What was listed is what is uploaded, signed and attached.
+    let upload_step = step_index(c, "uploading the release set", |s| {
+        s.contains("actions/upload-artifact") && re(r"(?m)^\s+path:\s*dist/?\s*$").is_match(s)
+    });
+    assert!(
+        upload_step > writer_step,
+        "dist/ is uploaded after SHA256SUMS is final"
+    );
+    let (_, releaser) = only(&all, "the job that writes the Release", |_, j| {
+        perms(j).get("contents").is_some_and(|v| v == "write")
+    });
+    let attach: Vec<String> = logical(releaser)
+        .into_iter()
+        .filter(|l| l.contains("gh release") && l.contains("dist/*"))
+        .collect();
+    assert!(
+        attach.iter().any(|l| l.contains("gh release create"))
+            && attach.iter().any(|l| l.contains("gh release upload")),
+        "the Release is created or updated with every file in dist/: {attach:?}"
+    );
+}
+
+// Proves DI-24, RC-23.
+#[test]
+fn release_signs_and_tests_only_the_sha256sums_the_comparing_job_wrote() {
+    let all = release();
+    let (c_name, c) = comparing_job(&all);
+
+    // The comparing job exports the digest of the SHA256SUMS it uploads, computed once the
+    // completeness check has passed.
+    let output = re(
+        r"(?m)^ {6}sums_sha256:\s*\$\{\{\s*steps\.([A-Za-z0-9_-]+)\.outputs\.([A-Za-z0-9_-]+)\s*\}\}\s*$",
+    )
+    .captures(c)
+    .unwrap_or_else(|| panic!("{c_name} exports sums_sha256 from a step output"));
+    let (step_id, key) = (output[1].to_string(), output[2].to_string());
+    let writer = steps(c)
+        .into_iter()
+        .find(|s| re(&format!(r"(?m)^\s+id:\s*{step_id}\s*$")).is_match(s))
+        .unwrap_or_else(|| panic!("no step has id {step_id}"));
+    let lines = logical(&writer);
+    let completeness = line_index(
+        &lines,
+        "checking every file is listed",
+        &re(r"package-guard\.sh\s+listed\s+dist/SHA256SUMS"),
+    );
+    let export = line_index(
+        &lines,
+        "exporting the digest",
+        &re(&format!(
+            r#"{key}=.*sha256sum\s+dist/SHA256SUMS.*>>\s*"\$GITHUB_OUTPUT""#
+        )),
+    );
+    assert!(
+        completeness < export,
+        "the digest of dist/SHA256SUMS is exported after the completeness check: {lines:?}"
+    );
+
+    // The signer compares it with the file it downloaded before it appends to, or signs, it.
+    let (_, signer) = only(&all, "the job that signs", |_, j| {
+        j.contains("cosign sign-blob")
+    });
+    assert!(
+        needs(signer).iter().any(|n| n == c_name.as_str()),
+        "the signer reads {c_name}'s output, so it needs it"
+    );
+    let st = steps(signer);
+    let download = step_index(signer, "downloading the release set", |s| {
+        s.contains("actions/download-artifact") && s.contains("name: release-dist")
+    });
+    let compare = step_index(signer, "comparing the SHA256SUMS digest", |s| {
+        logical(s)
+            .iter()
+            .any(|l| re(r#"\[\s+"\$\{actual\}"\s+=\s+"\$\{SUMS_SHA256\}"\s+\]"#).is_match(l))
+    });
+    let compare_text = &st[compare];
+    assert!(
+        re(&format!(
+            r"(?m)^\s+SUMS_SHA256:\s*\$\{{\{{\s*needs\.{c_name}\.outputs\.sums_sha256\s*\}}\}}\s*$"
+        ))
+        .is_match(compare_text)
+            && compare_text.contains("sha256sum dist/SHA256SUMS"),
+        "the signer compares dist/SHA256SUMS with {c_name}'s digest, through its environment: {compare_text}"
+    );
+    let appends = step_index(signer, "appending to SHA256SUMS", |s| {
+        logical(s)
+            .iter()
+            .any(|l| re(r">>\s*SHA256SUMS").is_match(l))
+    });
+    let signs = step_index(signer, "signing SHA256SUMS", |s| {
+        s.contains("cosign sign-blob")
+    });
+    assert!(
+        download < compare && compare <= appends && appends < signs,
+        "download, then compare, then append, then sign: {download} {compare} {appends} {signs}"
+    );
+    // github-release attaches every file in dist/, so the signer refuses a file the signed
+    // sums do not list: after the last append and before signing, the files present must be
+    // exactly the files listed.
+    let complete = step_index(
+        signer,
+        "checking dist/ and SHA256SUMS list the same files",
+        |s| {
+            let l = logical(s);
+            l.iter().any(|l| {
+                re(r"find\s+\.\s+-maxdepth\s+1\s+-type\s+f\s+!\s+-name\s+SHA256SUMS").is_match(l)
+            }) && l
+                .iter()
+                .any(|l| re(r#"\[\s+"\$\{present\}"\s+=\s+"\$\{listed\}"\s+\]"#).is_match(l))
+        },
+    );
+    assert!(
+        appends <= complete && complete < signs,
+        "the completeness check follows the last append and precedes signing: {appends} {complete} {signs}"
+    );
+    if complete == appends {
+        let in_step = logical(&st[complete]);
+        let append = line_index(&in_step, "appending", &re(r">>\s*SHA256SUMS"));
+        let check = line_index(&in_step, "checking", &re(r#"\[\s+"\$\{present\}""#));
+        assert!(
+            append < check,
+            "the completeness check follows the append: {:?}",
+            st[complete]
+        );
+    }
+    if compare == appends {
+        let in_step = logical(compare_text);
+        let first = line_index(&in_step, "comparing", &re(r#"\[\s+"\$\{actual\}""#));
+        let append = line_index(&in_step, "appending", &re(r">>\s*SHA256SUMS"));
+        assert!(
+            first < append,
+            "the digest is compared before the first append: {compare_text}"
+        );
+    }
+}
+
+// Proves DI-24.
+#[test]
+fn release_signing_waits_on_the_owner_recording_every_decision() {
+    let all = release();
+    let (_, signer) = only(&all, "the job that signs", |_, j| {
+        j.contains("cosign sign-blob")
+    });
+    let st = steps(signer);
+    let gate = step_index(signer, "gating on the owner's decisions", |s| {
+        s.contains("vars.RELEASE_UNIT_SYSCALL_FILTER_SIGNED_OFF")
+    });
+    let gate_text = &st[gate];
+    for variable in [
+        "RELEASE_PUBLIC_REKOR_ACCEPTED",
+        "RELEASE_ATTESTATIONS_AVAILABLE",
+        "RELEASE_UNIT_SYSCALL_FILTER_SIGNED_OFF",
+    ] {
+        assert!(
+            re(&format!(
+                r"(?m)^\s+[A-Z_]+:\s*\$\{{\{{\s*vars\.{variable}\s*\}}\}}\s*$"
+            ))
+            .is_match(gate_text),
+            "the gate reads {variable} through its environment: {gate_text}"
+        );
+    }
+    // The syscall-filter variable must be exactly "true", and an unset one is an error.
+    let name =
+        re(r"(?m)^\s+([A-Z_]+):\s*\$\{\{\s*vars\.RELEASE_UNIT_SYSCALL_FILTER_SIGNED_OFF\s*\}\}")
+            .captures(gate_text)
+            .expect("the syscall-filter variable is bound")[1]
+            .to_string();
+    assert!(
+        logical(gate_text).iter().any(|l| {
+            l.contains(&format!("\"${{{name}}}\" = \"true\"")) && l.contains("exit 1")
+        }),
+        "the gate refuses unless {name} is `true`: {gate_text}"
+    );
+    // Nothing that publishes or reads a credential runs before the gate.
+    let publishing =
+        re(r"cosign|skopeo|docker login|attest-build-provenance|upload-artifact|GH_TOKEN");
+    for (i, step) in st.iter().enumerate().take(gate) {
+        assert!(
+            !publishing.is_match(step),
+            "step {i} publishes or holds a credential before the owner's decisions are checked: {step}"
+        );
+    }
+}
+
+// Proves DI-24, RC-23.
+#[test]
+fn release_packages_are_built_twice_compared_wrap_the_binary_and_carry_no_signature() {
+    let all = release();
+    let build = &all["build"];
+    let (_, c) = comparing_job(&all);
+
+    // Both passes build the packages from the staged binaries.
+    let package_step = steps(build)
+        .into_iter()
+        .find(|s| s.contains("build-packages.sh"))
+        .expect("the build job builds the packages");
+    assert_eq!(
+        step_if(&package_step),
+        None,
+        "both passes build the packages"
+    );
+    let pl = logical(&package_step).join("\n");
+    for needle in [
+        "dist/relay-daemon-${version}-${PLATFORM}",
+        "--relay \"dist/relay-${version}-${PLATFORM}\"",
+        "SHA256SUMS.packages.${ARCH}",
+    ] {
+        assert!(pl.contains(needle), "the package step names {needle}: {pl}");
+    }
+
+    // The comparing job compares them as it compares the binaries.
+    let compare = steps(c)
+        .into_iter()
+        .find(|s| s.contains("cmp "))
+        .expect("a step compares the passes");
+    let cl = logical(&compare);
+    assert!(
+        cl.iter().any(|l| re(
+            r#"\bdiff\s+"\$\{a\}/SHA256SUMS\.packages\.\$\{arch\}"\s+"\$\{b\}/SHA256SUMS\.packages\.\$\{arch\}""#
+        )
+        .is_match(l)),
+        "the packages' sums are compared between passes: {cl:?}"
+    );
+    assert!(
+        cl.iter()
+            .any(|l| re(r#"\bcmp\s+"\$\{f\}"\s+"\$\{b\}/packages/"#).is_match(l)),
+        "each package is compared byte for byte: {cl:?}"
+    );
+    assert!(
+        compare.contains("fail=1"),
+        "a difference sets the failure flag"
+    );
+
+    // They wrap the guarded binary, byte for byte.
+    let guard_step = steps(c)
+        .into_iter()
+        .find(|s| s.contains("package-guard.sh") && s.contains("no-config"))
+        .expect("the comparing job guards the packages");
+    let gl = logical(&guard_step);
+    for (what, pattern) in [
+        (
+            "the daemon binary",
+            r#"\bsame\s+"\$\{f\}"\s+/usr/bin/relay-daemon\s+"\$\{bin\}""#,
+        ),
+        (
+            "the Relay binary",
+            r#"\bsame\s+"\$\{f\}"\s+/usr/bin/relay\s+"\$\{relay_bin\}""#,
+        ),
+        (
+            "the daemon package's content",
+            r#"\bcontent\s+"\$\{f\}"\s+relay-daemon\s"#,
+        ),
+        (
+            "the Relay package's content",
+            r#"\bcontent\s+"\$\{f\}"\s+relay\s"#,
+        ),
+    ] {
+        assert!(
+            gl.iter().any(|l| re(pattern).is_match(l)),
+            "the guard checks {what}: {gl:?}"
+        );
+    }
+
+    // No package is signed on its own: SHA256SUMS is the one thing signed.
+    let signers = re(r"\b(rpmsign|dpkg-sig|debsigs|gpg)\b|\brpm\s+--(addsign|resign)\b");
+    for file in ["release.yml", "install-matrix.yml"] {
+        let text = code(&read(&repo().join(".github/workflows").join(file)));
+        for line in logical(&text) {
+            assert!(
+                !signers.is_match(&line),
+                "{file} signs a package, which carries no signature before v1.0.0 (DI-24): {line}"
+            );
+            if re(r"\bcosign\s+sign-blob\b").is_match(&line) {
+                assert!(
+                    line.split_whitespace()
+                        .last()
+                        .is_some_and(|t| t.ends_with("SHA256SUMS")),
+                    "{file} signs something other than SHA256SUMS: {line}"
+                );
+            }
+        }
+    }
+    for manifest in [
+        "daemon/packaging/nfpm/relay-daemon.yaml",
+        "relay/packaging/nfpm/relay.yaml",
+    ] {
+        let text = code(&read(&repo().join(manifest)));
+        assert!(
+            !re(r"(?m)^\s*(signature|key_file)\s*:").is_match(&text),
+            "{manifest} configures a package signature"
+        );
+    }
+}
+
+// Proves DI-45.
+#[test]
+fn release_attaches_the_ansible_role_and_the_matrix_runs_it_with_hash_locked_ansible_core() {
+    let all = release();
+    let (_, c) = comparing_job(&all);
+
+    // The release builds the role from the tagged commit and checks it against the checkout.
+    let role_step = step_index(c, "staging the Ansible role", |s| {
+        s.contains("dist/relay_daemon-${VERSION}.tar.gz") && s.contains("tar ")
+    });
+    let rl = logical(&steps(c)[role_step]);
+    let tar = rl
+        .iter()
+        .find(|l| l.contains("tar ") && l.contains("--sort=name"))
+        .unwrap_or_else(|| panic!("the role is tarred in sorted order: {rl:?}"));
+    for needle in [
+        "--sort=name",
+        "--mtime=",
+        "--owner=0",
+        "--group=0",
+        "--numeric-owner",
+        "-C daemon/packaging/ansible",
+        "relay_daemon",
+    ] {
+        assert!(
+            tar.contains(needle),
+            "the role's tar line names {needle}: {tar}"
+        );
+    }
+    assert!(
+        re(r"\bgzip\s+-\w*n").is_match(tar),
+        "the role is compressed without a name or timestamp: {tar}"
+    );
+    assert!(
+        rl.iter()
+            .any(|l| l.contains("diff -r") && l.contains("daemon/packaging/ansible/relay_daemon")),
+        "the tarball's extraction is compared with the checkout's role: {rl:?}"
+    );
+    let writes_sums = re(r#"(^|[^>])>\s*"?SHA256SUMS"?(\s|$)"#);
+    let writer_step = step_index(c, "writing SHA256SUMS", |s| {
+        logical(s)
+            .iter()
+            .any(|l| l.contains("sha256sum") && l.contains("relay-*") && writes_sums.is_match(l))
+    });
+    assert!(
+        role_step < writer_step,
+        "the role is in dist/ before SHA256SUMS is written"
+    );
+
+    // The matrix installs a hash-locked ansible-core before it runs the role, from the
+    // release's own tarball.
+    let mx = matrix();
+    let job = &mx["ansible-role"];
+    assert!(
+        !job.contains("pipx install"),
+        "ansible-core is not installed unlocked"
+    );
+    for line in logical(job) {
+        if re(r"\bpip3?\s+install\b").is_match(&line) {
+            assert!(
+                line.contains("--require-hashes"),
+                "an install without hash checking: {line}"
+            );
+        }
+    }
+    let st = steps(job);
+    let install = st
+        .iter()
+        .position(|s| {
+            s.contains("--require-hashes")
+                && s.contains("-r daemon/packaging/ansible/test/requirements.txt")
+        })
+        .expect("a step installs the locked requirements with --require-hashes");
+    let installer = logical(&st[install]).join("\n");
+    assert!(
+        installer.contains("--no-deps") && installer.contains("--only-binary"),
+        "only what the lock names is installed, and no sdist is built: {installer}"
+    );
+    assert!(
+        st[install].contains("ansible-playbook") && st[install].contains("--version"),
+        "the install step checks the version the venv reports"
+    );
+    let on_path = st
+        .iter()
+        .position(|s| {
+            s.contains("command -v")
+                && s.contains("ansible-playbook")
+                && s.contains("ansible-vault")
+                && s.contains("$RUNNER_TEMP/ansible/bin")
+        })
+        .expect("a step checks that the locked tools are the ones on PATH");
+    let run = st
+        .iter()
+        .position(|s| s.contains("install-matrix-ansible-role.sh"))
+        .expect("a step runs the role");
+    assert!(
+        install < on_path && on_path < run,
+        "the locked ansible-core is installed and resolved before the role runs"
+    );
+    assert!(
+        st.iter().any(|s| s.contains("actions/download-artifact")
+            && s.contains("name: ${{ inputs.release-dist }}")),
+        "the job downloads the release's artifact"
+    );
+    assert_sums_digest_checked_first(&st[run], "the role step");
+    let run_lines = logical(&st[run]);
+    assert!(
+        run_lines
+            .iter()
+            .any(|l| l.contains("package-guard.sh listed") && l.contains("SHA256SUMS")),
+        "the tarball is checked against the SHA256SUMS that gets signed: {run_lines:?}"
+    );
+    assert!(
+        st[run].contains("relay_daemon-") && run_lines.iter().any(|l| l.contains("tar -x")),
+        "the release's role tarball is extracted"
+    );
+    assert!(
+        run_lines.iter().any(|l| re(
+            r#"install-matrix-ansible-role\.sh\s+"\$PWD/pkgs"\s+"\$RUNNER_TEMP/[^"]+""#
+        )
+        .is_match(l)),
+        "the role runs from the extracted tarball, not the checkout: {run_lines:?}"
+    );
+
+    // The lock itself: every requirement is pinned and carries at least one hash.
+    let lock = read(&repo().join("daemon/packaging/ansible/test/requirements.txt"));
+    let pin = re(r"^[A-Za-z0-9._-]+==[A-Za-z0-9.!+_-]+$");
+    let hash = re(r"^--hash=sha256:[0-9a-f]{64}$");
+    let mut names = Vec::new();
+    for line in logical(&lock) {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let mut tokens = line.split_whitespace();
+        let first = tokens.next().expect("a requirement");
+        assert!(
+            pin.is_match(first),
+            "a requirement that is not name==version: {line}"
+        );
+        let hashes: Vec<&str> = tokens.collect();
+        assert!(
+            !hashes.is_empty() && hashes.iter().all(|h| hash.is_match(h)),
+            "{first} carries sha256 hashes and nothing else: {line}"
+        );
+        names.push(first.to_string());
+    }
+    assert!(
+        names.iter().any(|n| n.starts_with("ansible-core==")),
+        "the lock names ansible-core: {names:?}"
+    );
 }
