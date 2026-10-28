@@ -465,9 +465,9 @@ _Avoid_: self-approval ban, four-eyes (a count, not an exclusion)
 One rule in the Relay's approval-gate configuration, matching on risk class, blast size,
 Selector namespace, Principal and Operation, and requiring a `count`, `audience`,
 `requester_allowed`, `channel` and `ttl`. Today an optional root-owned file loaded at startup
-(no gate at all when none is configured); designed to become a store-backed operator setting
-only a human `admin` edits, with step-up re-authentication, audited (ADR-0027 amendments of
-2026-09-15/16; the reach-bounding class of invariant 11). Never reachable from an API Token or
+(no gate at all when none is configured); designed to become a section of the Relay
+configuration file that names only what it matches and how long a parked request lives, with
+the shipped configuration gating every `mutate` and Raw Exec (ADR-0047). Never reachable from an API Token or
 an MCP tool. Narrows only: it can demand approval, never grant what Policy refuses.
 _Avoid_: approval policy (collides with **Policy**), approval rule, gate config (for a
 single rule)
@@ -481,18 +481,15 @@ Where an Approval binds to a **Plan hash**, an Approval grant binds to a **Scope
 requesting Account, risk class, an Operation allow-list, a fan-out *ceiling*, and today an
 explicit **Raw Exec opt-in**; no Selector namespace since 2026-09-16, ADR-0027) plus a
 **window** and a **use limit**. Today the opt-in is accepted and priced at the `admin` role
-floor and the window's hard maximum is 24 hours; designed to become a Scope that may not cover
-Raw Exec at all, under a 4-hour maximum (ADR-0027 §Amendment 2026-09-24;
-`docs/specs/approval.md`). Those walls are its entire
+floor and the window's hard maximum is 24 hours. ADR-0047 cuts approval grants altogether
+(`docs/specs/approval.md`). Those walls are its entire
 security argument, so every one of them is mandatory and an unbounded Scope cannot be
 stored. It exists because fatigue is a security property: forty elicitations produce forty
 rubber stamps, and a rubber-stamped Approval is worse than none.
 
 Requesting one is *not* being granted one — it creates an ordinary Approval whose subject
 is a Scope. Today it is answered on the same channel with the same quorum, audience, requester
-exclusion and channel floor as any other request; designed to become a floor rather than an
-equality, so that a grant is issued only by **second-person, out-of-band** approval however
-lenient the Gate rules are (ADR-0027 §Amendment 2026-09-24). What it costs to approve is derived from the Gate rules at
+exclusion and channel floor as any other request. What it costs to approve is derived from the Gate rules at
 the Scope's widest admissible dispatch, so it is never a cheaper path than the work it
 replaces. Every dispatch it releases audits to the same approval ID. **The ask is its own
 audit record**, separate from a single dispatch parking for approval: the two are answered the

@@ -193,7 +193,7 @@ caller its handle.
 
 - **MCP and the Control API.** The Job ID is returned in the result after a short bounded wait,
   so a quick read still reads as synchronous, and the caller polls `get_job` (or the Jobs route)
-  for the rest. There is no MCP task handle: ADR-0047 removed the Tasks extension shim, and MCP
+  for the rest. There is no MCP task handle: ADR-0047 removes the Tasks extension shim, and MCP
   Tasks for long-running Jobs is later work (`roadmap: relay/mcp-tasks-for-long-running-jobs`).
 - **Idempotency key.** Every dispatch accepts an optional key: a tool argument on MCP, and the
   `Idempotency-Key` header on the Control API. A repeat
