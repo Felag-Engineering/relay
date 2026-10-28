@@ -51,10 +51,9 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/accounts"
 )
 
-// Lifetime defaults. These are Relay configuration in the invariant-11 sense —
-// file-only, operator-set at startup, unreachable from any API — and the
-// defaults live here so a deployment that sets nothing still gets bounded
-// sessions.
+// Session lifetimes. The maximum age and the step-up window are built in
+// (RC-43): no setting and no API reaches them. Only the idle timeout is a
+// setting.
 const (
 	// DefaultAbsoluteLifetime is the hard ceiling on a session's age. It is
 	// not extended by activity: a session that has existed this long ends,
@@ -78,7 +77,7 @@ const (
 	//
 	// **No Account of any role may extend it** (spec 11). An admin who could
 	// widen their own step-up window has removed the control, so this is
-	// file-only configuration and there is no code path from a request to it.
+	// built in (RC-43) and there is no code path from a request to it.
 	DefaultStepUpWindow = 5 * time.Minute
 
 	// MaxStepUpWindow is the ceiling an operator's step-up window is clamped

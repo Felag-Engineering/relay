@@ -114,14 +114,14 @@ func TestHostLeverRecords_RefuseMissingIdentifiers(t *testing.T) {
 }
 
 func TestHostConfigReloadRecord_KeysOnlyAndHostAttributed(t *testing.T) {
-	rec, err := HostConfigReloadRecord("id-1", hostLeverNow, []string{"log.format", "approval.webhook_secret"})
+	rec, err := HostConfigReloadRecord("id-1", hostLeverNow, []string{"log.level", "approval.webhook_secret_file"})
 	if err != nil {
 		t.Fatalf("HostConfigReloadRecord: %v", err)
 	}
 	if rec.Kind != audit.KindConfigReload || rec.Principal != "local-host" {
 		t.Errorf("Kind = %q, Principal = %q", rec.Kind, rec.Principal)
 	}
-	if want := "configuration reloaded on the Relay host; changed: log.format, approval.webhook_secret"; rec.Reason != want {
+	if want := "configuration reloaded on the Relay host; changed: log.level, approval.webhook_secret_file"; rec.Reason != want {
 		t.Errorf("Reason = %q, want %q", rec.Reason, want)
 	}
 	// The same attribution as the host credential levers, which match the freeze signal's.
@@ -138,7 +138,7 @@ func TestHostConfigReloadRecord_KeysOnlyAndHostAttributed(t *testing.T) {
 		t.Error("an empty id was accepted")
 	}
 	for _, k := range []string{"relay.example", "http://127.0.0.1:1/hook-token", ""} {
-		if _, err := HostConfigReloadRecord("id", hostLeverNow, []string{"log.format", k}); err == nil {
+		if _, err := HostConfigReloadRecord("id", hostLeverNow, []string{"log.level", k}); err == nil {
 			t.Errorf("non-member key %q was accepted", k)
 		}
 	}

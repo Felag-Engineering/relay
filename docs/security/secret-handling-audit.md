@@ -4,7 +4,7 @@
 > credential model that ADR-0023 has since retired, and before the join string (ADR-0031) and
 > the one configuration file (ADR-0043). It does **not** cover the secrets added since: Account
 > passwords (argon2id hashes, set by `relay init`), Admin Console sessions and their cookies,
-> or the approval webhook signing secret (`webhook_secret` / `webhook_secret_file` in
+> or the approval webhook signing secret (`webhook_secret_file` and `webhook_url_file` in
 > `relay.toml`). A re-audit is pending; until it lands, read the body as a record of what was
 > checked then, not as today's secret inventory. File and line references are as of the audit.
 

@@ -140,12 +140,11 @@ Runtime *objects* (Accounts, API Tokens, Enrollment Tokens, Nodes, Jobs, approva
 managed through `/api/v1`. The line is between configuration and objects, not between
 important and unimportant.
 
-## Secrets are values in the file, or files it names
+## Secrets are files the configuration names
 
-A credential the Relay needs is given inline (`approval.webhook_secret`,
-`approval.webhook_url`) or as the path of a file holding it (`approval.webhook_secret_file`,
-`approval.webhook_url_file`), never in the environment, where it would show in every process
-listing and crash dump.
+A credential the Relay needs is given as the path of a file holding it
+(`approval.webhook_secret_file`, `approval.webhook_url_file`), never inline and never in the
+environment, where it would show in every process listing and crash dump.
 
 At start the Relay refuses to run if it could write the configuration file or any file it
 names, or if any account but itself and root could read the configuration or a secret file.

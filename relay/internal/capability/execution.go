@@ -144,10 +144,10 @@ func requesterOf(p Principal) jobs.Requester {
 	return req
 }
 
-// DefaultDispatchConcurrency is the default bound on how many Tasks of ONE Job
-// are in flight at once. It bounds reach (invariant 11) and is
-// startup-only. It is not the blast cap: the cap bounds how many Nodes a Job
-// may touch (invariant 5); this bounds how many it touches at the same time.
+// DefaultDispatchConcurrency is the bound on how many Tasks of ONE Job are in
+// flight at once. It is built in at 16 (RC-40); no setting reaches it. It is
+// not the blast cap: the cap bounds how many Nodes a Job may touch
+// (invariant 5); this bounds how many it touches at the same time.
 const DefaultDispatchConcurrency = 16
 
 // errDispatchPanicked marks a Task whose dispatch worker panicked. It
@@ -1102,7 +1102,7 @@ func (e *jobEngine) resolveCancelled(ctx context.Context, task jobs.Task) (jobs.
 //
 // What stays best-effort under ADR-0013: (i) a Dispatched Task that wins the
 // race keeps its real outcome; (ii) the pre-send window — Tasks already inside
-// the Tunnel write when the cancel is recorded, at most reach.dispatch_concurrency
+// the Tunnel write when the cancel is recorded, at most the dispatch concurrency
 // per Job. A TaskCancel can reach the daemon before such a Task's TaskRequest,
 // and the daemon treats a cancel for an unknown id as a no-op, so that Task
 // runs. Every other Dispatched Task's worker sees the gate and withholds its

@@ -89,7 +89,7 @@ func newReloadFixture(t *testing.T) *reloadFixture {
 func newReloadFixtureWith(t *testing.T, tlsExtra string) *reloadFixture {
 	t.Helper()
 	f := &reloadFixture{t: t, dir: t.TempDir(), logBuf: &reloadLogBuffer{}}
-	f.body = f.toml(tlsExtra + "[reach]\nmutate_blast_cap = 5\n[log]\nformat = \"text\"\n")
+	f.body = f.toml(tlsExtra + "[reach]\nmutate_blast_cap = 5\n[log]\nlevel = \"info\"\n")
 	f.logs = newSwapHandler(newLogHandler(f.logBuf, mustParse(t, f.body).Log))
 	prev := slog.Default()
 	slog.SetDefault(slog.New(f.logs))
@@ -147,13 +147,18 @@ func TestReloader_SuccessSwapsSnapshotGateAndLog(t *testing.T) {
 		t.Fatal(err)
 	}
 	liveBefore := f.deps.live.cur.Load()
-	f.body = f.toml("[reach]\nmutate_blast_cap = 7\n[log]\nformat = \"json\"\n[approval]\ngate_rules_path = " + strconv.Quote(gatePath) + "\n")
+	f.logBuf.Reset()
+	slog.Debug("before the reload")
+	if out := f.logBuf.String(); out != "" {
+		t.Fatalf("a debug line was logged at the configured info level: %q", out)
+	}
+	f.body = f.toml("[reach]\nmutate_blast_cap = 7\n[log]\nlevel = \"debug\"\n[approval]\ngate_rules_path = " + strconv.Quote(gatePath) + "\n")
 
 	changed, err := f.r.reload(context.Background())
 	if err != nil {
 		t.Fatalf("reload: %v", err)
 	}
-	if want := "reach.mutate_blast_cap log.format approval.gate_rules_path"; strings.Join(sortedByWant(changed, want), " ") != want {
+	if want := "reach.mutate_blast_cap log.level approval.gate_rules_path"; strings.Join(sortedByWant(changed, want), " ") != want {
 		t.Errorf("changed = %v, want %s", changed, want)
 	}
 	if got := f.deps.live.OperatorSettings().MutateBlastCap; got != 7 {
@@ -166,9 +171,9 @@ func TestReloader_SuccessSwapsSnapshotGateAndLog(t *testing.T) {
 		t.Errorf("the gate holds %d rules, want 1", n)
 	}
 	f.logBuf.Reset()
-	slog.Info("after the reload")
-	if out := f.logBuf.String(); !strings.HasPrefix(out, "{") {
-		t.Errorf("log after reload = %q, want JSON", out)
+	slog.Debug("after the reload")
+	if out := f.logBuf.String(); !strings.HasPrefix(out, "{") || !strings.Contains(out, "after the reload") {
+		t.Errorf("log after reload = %q, want a JSON debug line", out)
 	}
 	recs := f.records(audit.KindConfigReload)
 	if len(recs) != 1 || recs[0].Principal != audit.PrincipalLocalHost {
@@ -202,26 +207,26 @@ func TestReloader_RefusalLeavesEverythingUntouched(t *testing.T) {
 	}{
 		{"load error", func(f *reloadFixture) { f.body = "this is not toml [" }, auditsink.ReloadRefusedFile, nil},
 		{"bind-time change", func(f *reloadFixture) {
-			f.body = strings.Replace(f.toml("[reach]\nmutate_blast_cap = 7\n[log]\nformat = \"json\"\n"), "localhost", "other.example", 1)
+			f.body = strings.Replace(f.toml("[reach]\nmutate_blast_cap = 7\n[log]\nlevel = \"debug\"\n"), "localhost", "other.example", 1)
 		}, auditsink.ReloadRefusedRestart, []string{"tls.hostname"}},
 		{"open error", func(f *reloadFixture) {
-			f.body = f.toml("[reach]\nmutate_blast_cap = 7\n[log]\nformat = \"json\"\n")
+			f.body = f.toml("[reach]\nmutate_blast_cap = 7\n[log]\nlevel = \"debug\"\n")
 			f.openErr = errors.New("the gate file is malformed")
 		}, auditsink.ReloadRefusedNamedFiles, nil},
 		{"CA mismatch", func(f *reloadFixture) {
-			f.body = f.toml("[reach]\nmutate_blast_cap = 7\n[log]\nformat = \"json\"\n")
+			f.body = f.toml("[reach]\nmutate_blast_cap = 7\n[log]\nlevel = \"debug\"\n")
 			f.r.open = func(gatePath, _, storePath string) (startup.Files, error) {
 				return testStartupFiles(t, Config{ApprovalGatePath: gatePath, CADir: filepath.Join(f.dir, "replaced-ca"), StorePath: storePath}), nil
 			}
 		}, auditsink.ReloadRefusedCA, nil},
 		{"secret file unreadable", func(f *reloadFixture) {
-			f.body = f.toml("[approval]\nwebhook_url_file = \"/run/x/url\"\n[log]\nformat = \"json\"\n")
+			f.body = f.toml("[approval]\nwebhook_url_file = \"/run/x/url\"\n[log]\nlevel = \"debug\"\n")
 			f.r.load = func(string) (startupConfig, error) {
 				return parseConfig([]byte(f.body), func(string) ([]byte, error) { return nil, errors.New("read failed") })
 			}
 		}, auditsink.ReloadRefusedSecretFile, nil},
 		{"setting refused", func(f *reloadFixture) {
-			f.body = f.toml("[reach]\nmutate_blast_cap = 7\n[log]\nformat = \"json\"\n")
+			f.body = f.toml("[reach]\nmutate_blast_cap = 7\n[log]\nlevel = \"debug\"\n")
 			f.r.load = func(string) (startupConfig, error) {
 				sc := mustParse(t, f.body)
 				sc.Config.DispatchConcurrency = 0
@@ -241,9 +246,9 @@ func TestReloader_RefusalLeavesEverythingUntouched(t *testing.T) {
 				t.Error("a refused reload replaced the snapshot or the gate")
 			}
 			f.logBuf.Reset()
-			slog.Info("after the refusal")
-			if out := f.logBuf.String(); strings.HasPrefix(out, "{") {
-				t.Errorf("log after a refused reload = %q, want the original text format", out)
+			slog.Debug("after the refusal")
+			if out := f.logBuf.String(); out != "" {
+				t.Errorf("log after a refused reload = %q, want the level unchanged", out)
 			}
 			if len(f.records(audit.KindConfigReload)) != 0 {
 				t.Error("a refused reload wrote a config_reload record")
@@ -265,7 +270,7 @@ func TestReloader_RefusalLeavesEverythingUntouched(t *testing.T) {
 
 // Proves RC-47.
 func TestReloader_ExtraNamesChangeRefusedRestartRequired(t *testing.T) {
-	const logTail = "[reach]\nmutate_blast_cap = 5\n[log]\nformat = \"text\"\n"
+	const logTail = "[reach]\nmutate_blast_cap = 5\n[log]\nlevel = \"info\"\n"
 	for _, tc := range []struct{ name, running, next string }{
 		{"a list added", "", "extra_names = [\"lb.example.test\"]\n"},
 		{"a list changed", "extra_names = [\"lb.example.test\"]\n", "extra_names = [\"lb2.example.test\"]\n"},
@@ -307,7 +312,7 @@ func TestReloader_ExtraNamesChangeRefusedRestartRequired(t *testing.T) {
 func TestReloader_CAFingerprintMismatchRefuses(t *testing.T) {
 	f := newReloadFixture(t)
 	liveBefore, gateBefore := f.deps.live.cur.Load(), f.deps.gate.cur.Load()
-	f.body = f.toml("[reach]\nmutate_blast_cap = 7\n[log]\nformat = \"json\"\n")
+	f.body = f.toml("[reach]\nmutate_blast_cap = 7\n[log]\nlevel = \"debug\"\n")
 	f.r.open = func(gatePath, _, storePath string) (startup.Files, error) {
 		// A CA directory key the process is not running on: a different CA.
 		return testStartupFiles(t, Config{ApprovalGatePath: gatePath, CADir: filepath.Join(f.dir, "replaced-ca"), StorePath: storePath}), nil
@@ -323,9 +328,9 @@ func TestReloader_CAFingerprintMismatchRefuses(t *testing.T) {
 		t.Errorf("log = %q, want restart required", f.logBuf.String())
 	}
 	f.logBuf.Reset()
-	slog.Info("after the refusal")
-	if out := f.logBuf.String(); strings.HasPrefix(out, "{") {
-		t.Errorf("log after a refused reload = %q, want the original text format", out)
+	slog.Debug("after the refusal")
+	if out := f.logBuf.String(); out != "" {
+		t.Errorf("log after a refused reload = %q, want the level unchanged", out)
 	}
 	recs := f.records(audit.KindConfigReloadRefused)
 	if len(recs) != 1 || !strings.Contains(recs[0].Reason, "the CA on disk is not the CA this Relay is running") {
@@ -343,7 +348,7 @@ func TestReloader_AuditFailureRefuses(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.r.newID = func() (string, error) { return "collide", nil }
-	f.body = f.toml("[reach]\nmutate_blast_cap = 7\n[log]\nformat = \"json\"\n")
+	f.body = f.toml("[reach]\nmutate_blast_cap = 7\n[log]\nlevel = \"debug\"\n")
 
 	if _, err := f.r.reload(context.Background()); err == nil {
 		t.Fatal("reload succeeded though its audit record could not be written")
@@ -378,7 +383,7 @@ func TestReloader_PanicDoesNotExit(t *testing.T) {
 	f := newReloadFixture(t)
 	good := f.r.open
 	f.r.open = func(string, string, string) (startup.Files, error) { panic("boom") }
-	f.body = f.toml("[reach]\nmutate_blast_cap = 7\n[log]\nformat = \"json\"\n")
+	f.body = f.toml("[reach]\nmutate_blast_cap = 7\n[log]\nlevel = \"debug\"\n")
 
 	hup := make(chan os.Signal, 1)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -502,5 +507,33 @@ func TestSignals_OnlyFreezeAndReloadHandleSignals(t *testing.T) {
 				t.Errorf("%s imports os/signal; only the Freeze and reload levers may", name)
 			}
 		}
+	}
+}
+
+// Proves RC-44.
+func TestReloader_RemovedKeyRefusedNamingKey(t *testing.T) {
+	f := newReloadFixture(t)
+	liveBefore, gateBefore := f.deps.live.cur.Load(), f.deps.gate.cur.Load()
+	f.body = f.toml("[reach]\nmutate_blast_cap = 7\n[log]\nformat = \"json\"\n")
+
+	if _, err := f.r.reload(context.Background()); err == nil {
+		t.Fatal("a reload naming a removed key succeeded")
+	}
+	if f.deps.live.cur.Load() != liveBefore || f.deps.gate.cur.Load() != gateBefore {
+		t.Error("a refused reload replaced the snapshot or the gate")
+	}
+	if !strings.Contains(f.logBuf.String(), "log.format") {
+		t.Errorf("log = %q, want it to name log.format", f.logBuf.String())
+	}
+	f.logBuf.Reset()
+	slog.Debug("after the refusal")
+	if out := f.logBuf.String(); out != "" {
+		t.Errorf("log after a refused reload = %q, want the level unchanged", out)
+	}
+	if len(f.records(audit.KindConfigReload)) != 0 {
+		t.Error("a refused reload wrote a config_reload record")
+	}
+	if n := len(f.records(audit.KindConfigReloadRefused)); n != 1 {
+		t.Fatalf("config_reload_refused records = %d, want 1", n)
 	}
 }

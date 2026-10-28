@@ -4,8 +4,11 @@ import "time"
 
 // OperatorSettings is the reach-bounding operator settings the capability layer
 // reads on every request: how much a dispatch may touch and how fast Nodes may
-// enroll. They are file-configured today (RC-21) and store-backed later
-// (RC-29); no request can set them (invariant 11).
+// enroll. The blast caps, the minimum daemon version and the Node cap come from
+// the configuration file (RC-21); the dispatch concurrency, the cert-expiring
+// window and the Enrollment rate limits are filled by the composition root from
+// built-in constants (RC-38, RC-39, RC-40). No request can set any of them
+// (invariant 11).
 type OperatorSettings struct {
 	// ReadBlastCap and MutateBlastCap are the blast-radius caps by risk class
 	// (ADR-0004). A non-positive value is clamped to the package default by
@@ -13,7 +16,7 @@ type OperatorSettings struct {
 	ReadBlastCap   int
 	MutateBlastCap int
 
-	// DispatchConcurrency bounds in-flight Tasks of one Job; at least 1.
+	// DispatchConcurrency bounds in-flight Tasks of one Job; at least 1. Built in (RC-40).
 	DispatchConcurrency int
 
 	// MinDaemonVersion is the dispatch-level minimum daemon version
@@ -22,10 +25,12 @@ type OperatorSettings struct {
 
 	// CertExpiringWithin is the state:cert-expiring warning window (ADR-0034).
 	// It is a Duration rather than the configured fraction because this
-	// package may not import internal/ca, where the leaf validity lives.
+	// package may not import internal/ca, where the leaf validity lives. The
+	// fraction is built in (RC-39).
 	CertExpiringWithin time.Duration
 
-	// The enrollment rate limits, enforced by the node plane's limiter.
+	// The enrollment rate limits, enforced by the node plane's limiter. Built in
+	// (RC-38).
 	EnrollIPRatePerMinute     int
 	EnrollIPBurst             int
 	EnrollGlobalRatePerMinute int

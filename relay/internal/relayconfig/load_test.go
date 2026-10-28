@@ -100,11 +100,11 @@ func TestLoad_ErrorNamesKeyAndLineNotValue(t *testing.T) {
 		line    int
 		sources []string // text that must never appear
 	}{
-		{"type error", minimal + "[approval]\nwebhook_secret = 123456789012\n", "approval.webhook_secret", 8, []string{"123456789012"}},
+		{"type error", minimal + "[approval]\nwebhook_secret_file = 123456789012\n", "approval.webhook_secret_file", 8, []string{"123456789012"}},
 		{"misspelled key", minimal + "[approval]\nwebhok_secret = \"" + sentinel + "\"\n", "", 8, []string{sentinel, "webhok"}},
-		{"syntax error", minimal + "[approval]\nwebhook_secret = \"" + sentinel + "\" junk\n", "", 8, []string{sentinel, "junk"}},
-		{"shape error", minimal + "[control_plane]\nenabled = true\n[approval]\nwebhook_url = \"" + sentinel + "\"\n", "approval.webhook_url", 10, []string{sentinel}},
-		{"both forms", minimal + "[approval]\nwebhook_url = \"https://x.example/" + sentinel + "\"\nwebhook_url_file = \"/etc/relay/u\"\n", "approval.webhook_url_file", 9, []string{sentinel}},
+		{"syntax error", minimal + "[approval]\nwebhook_secret_file = \"" + sentinel + "\" junk\n", "", 8, []string{sentinel, "junk"}},
+		{"shape error", minimal + "[approval]\nwebhook_url_file = \"" + sentinel + "\"\n", "approval.webhook_url_file", 8, []string{sentinel}},
+		{"removed inline key", minimal + "[approval]\nwebhook_url = \"https://x.example/" + sentinel + "\"\n", "approval.webhook_url", 8, []string{sentinel}},
 		{"integer overflow", minimal + "[reach]\nread_blast_cap = 99999999999999999999\n", "reach.read_blast_cap", 8, []string{"99999999999999999999"}},
 	}
 	for _, tc := range cases {
@@ -136,10 +136,10 @@ func TestLoad_ErrorNamesKeyAndLineNotValue(t *testing.T) {
 }
 
 func TestLoad_ReportsEveryProblem(t *testing.T) {
-	src := minimal + "[reach]\nread_blast_cap = 0\ndispatch_concurrency = 0\n"
+	src := minimal + "[reach]\nread_blast_cap = 0\nmutate_blast_cap = 0\n"
 	got := loadErr(t, src)
 	i := strings.Index(got, "reach.read_blast_cap (line 8)")
-	j := strings.Index(got, "reach.dispatch_concurrency (line 9)")
+	j := strings.Index(got, "reach.mutate_blast_cap (line 9)")
 	if i < 0 || j < 0 || i > j {
 		t.Fatalf("both problems should appear in line order: %q", got)
 	}
@@ -172,4 +172,77 @@ func TestLoad_UnknownKeySegmentsAreNeverRendered(t *testing.T) {
 			}
 		}
 	}
+}
+
+// removedCases are the thirteen keys RC-44 lists, each with a value that must
+// never be echoed.
+var removedCases = []struct{ section, key, value string }{
+	{"enrollment", "ip_rate_per_minute", "5"},
+	{"enrollment", "ip_burst", "3"},
+	{"enrollment", "global_rate_per_minute", "50"},
+	{"enrollment", "global_burst", "10"},
+	{"enrollment", "max_tracked_ips", "100000"},
+	{"enrollment", "cert_expiring_fraction", "0.25"},
+	{"reach", "dispatch_concurrency", "16"},
+	{"approval", "webhook_timeout", `"5s"`},
+	{"approval", "webhook_url", `"https://hooks.example/CANARY-url"`},
+	{"approval", "webhook_secret", `"CANARY-secret"`},
+	{"log", "format", `"json"`},
+	{"console", "session_max_age", `"12h"`},
+	{"console", "step_up_window", `"5m"`},
+}
+
+// Proves RC-44.
+func TestLoad_RemovedKeyRefusedNamingKey(t *testing.T) {
+	if len(removedCases) != 13 || len(removedKeys) != 13 {
+		t.Fatalf("RC-44 lists 13 keys; the test has %d and the loader %d", len(removedCases), len(removedKeys))
+	}
+	for _, tc := range removedCases {
+		key := tc.section + "." + tc.key
+		if schemaKeySet[key] {
+			t.Errorf("%s is a removed key and must not be a schema key", key)
+		}
+		t.Run(key, func(t *testing.T) {
+			got := loadErr(t, minimal+"["+tc.section+"]\n"+tc.key+" = "+tc.value+"\n")
+			if !strings.Contains(got, key+" (line 8)") {
+				t.Fatalf("error does not name the key and line: %q", got)
+			}
+			if strings.Contains(got, "CANARY") || strings.Contains(got, "unrecognised") {
+				t.Fatalf("error echoes the value or reads as an unknown key: %q", got)
+			}
+		})
+	}
+
+	t.Run("written as a table or a dotted key", func(t *testing.T) {
+		for name, src := range map[string]string{
+			"table":  minimal + "[log.format]\nx = 1\n",
+			"dotted": minimal + "[log]\nformat.x = \"CANARY\"\n",
+		} {
+			got := loadErr(t, src)
+			if !strings.Contains(got, "log.format") || strings.Contains(got, "CANARY") {
+				t.Errorf("%s: error = %q", name, got)
+			}
+		}
+	})
+
+	t.Run("written twice", func(t *testing.T) {
+		got := loadErr(t, minimal+"[log]\nformat = \"json\"\nformat = \"CANARY\"\n")
+		if !strings.Contains(got, "log.format (line 9)") || strings.Contains(got, "CANARY") {
+			t.Errorf("error = %q", got)
+		}
+	})
+
+	// A decode error elsewhere in the file is reported first: the removed key is
+	// still refused, and is named once that error is fixed.
+	t.Run("a separate decode error reports first", func(t *testing.T) {
+		src := minimal + "[log]\nformat = \"json\"\n[reach]\nread_blast_cap = \"many\"\n"
+		got := loadErr(t, src)
+		if !strings.Contains(got, "reach.read_blast_cap") {
+			t.Fatalf("error = %q", got)
+		}
+		fixed := strings.Replace(src, "\"many\"", "5", 1)
+		if got := loadErr(t, fixed); !strings.Contains(got, "log.format (line 8)") {
+			t.Fatalf("after the fix, error = %q", got)
+		}
+	})
 }

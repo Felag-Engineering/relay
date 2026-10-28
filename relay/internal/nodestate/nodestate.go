@@ -210,11 +210,12 @@ func Markers(in Input) []Label {
 	return out
 }
 
-// DefaultCertExpiringFraction is ADR-0034's warning threshold: 25% of
-// ca.LeafValidity remaining (84h at the current 336h lifetime). The daemon
-// renews at a jittered 50-75% of the lifetime (daemon/src/renew.rs), so a
-// Node under a quarter remaining has missed its entire renewal window —
-// MarkerCertExpiring is an alarm that automation failed, not a heads-up.
+// DefaultCertExpiringFraction is the built-in warning threshold (RC-39), with no
+// setting: ADR-0034's 25% of ca.LeafValidity remaining (84h at the current
+// 336h lifetime). The daemon renews at a jittered 50-75% of the lifetime
+// (daemon/src/renew.rs), so a Node under a quarter remaining has missed its
+// entire renewal window — MarkerCertExpiring is an alarm that automation
+// failed, not a heads-up.
 const DefaultCertExpiringFraction = 0.25
 
 // CertExpiringWindow converts a fraction of a certificate's lifetime into the

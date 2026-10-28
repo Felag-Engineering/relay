@@ -11,7 +11,11 @@ import (
 	"log/slog"
 
 	"github.com/Felag-Engineering/relay/relay/internal/approvalnotify"
+	"github.com/Felag-Engineering/relay/relay/internal/capability"
+	"github.com/Felag-Engineering/relay/relay/internal/consoleauth"
 	"github.com/Felag-Engineering/relay/relay/internal/hostfile"
+	"github.com/Felag-Engineering/relay/relay/internal/nodestate"
+	"github.com/Felag-Engineering/relay/relay/internal/ratelimit"
 	"github.com/Felag-Engineering/relay/relay/internal/relayconfig"
 )
 
@@ -118,17 +122,27 @@ func parseConfig(data []byte, readSecret func(string) ([]byte, error)) (startupC
 	return startupConfig{Config: fromFile(rc), Log: rc.Log, File: rc, Warnings: warns}, nil
 }
 
-// fromFile maps the validated file onto the Config newServer takes.
+// fromFile maps the validated file onto the Config newServer takes. The values
+// no file key reaches are built-in constants (RC-38 to RC-43).
 func fromFile(rc relayconfig.Config) Config {
+	enroll := ratelimit.Enrollment()
 	return Config{
+		ConsoleSessionMaxAge:   consoleauth.DefaultAbsoluteLifetime,
+		ConsoleStepUpWindow:    consoleauth.DefaultStepUpWindow,
+		ApprovalWebhookTimeout: approvalnotify.DefaultTimeout,
+		DispatchConcurrency:    capability.DefaultDispatchConcurrency,
+		EnrollIPRate:           int(enroll.PerIPRatePerMin),
+		EnrollIPBurst:          int(enroll.PerIPBurst),
+		EnrollGlobalRate:       int(enroll.GlobalRatePerMin),
+		EnrollGlobalBurst:      int(enroll.GlobalBurst),
+		EnrollMaxTrackedIPs:    enroll.MaxTrackedIPs,
+		CertExpiringFraction:   nodestate.DefaultCertExpiringFraction,
 		Addr:                   rc.NodePlane.ListenAddress,
 		AdvertisedAddress:      rc.NodePlane.AdvertisedAddress,
 		ControlEnabled:         rc.ControlPlane.Enabled,
 		ControlAddr:            rc.ControlPlane.ListenAddress,
 		ConsoleEnabled:         rc.Console.Enabled,
-		ConsoleSessionMaxAge:   rc.Console.SessionMaxAge,
 		ConsoleSessionIdle:     rc.Console.SessionIdle,
-		ConsoleStepUpWindow:    rc.Console.StepUpWindow,
 		CADir:                  rc.CA.Dir,
 		StorePath:              rc.Store.Path,
 		Hostname:               rc.TLS.Hostname,
@@ -141,26 +155,14 @@ func fromFile(rc relayconfig.Config) Config {
 		ApprovalGatePath:       rc.Approval.GateRulesPath,
 		ApprovalWebhookURL:     rc.Approval.WebhookURL,
 		ApprovalWebhookSecret:  rc.Approval.WebhookSecret,
-		ApprovalWebhookTimeout: rc.Approval.WebhookTimeout,
 		ReadBlastCap:           rc.Reach.ReadBlastCap,
 		MutateBlastCap:         rc.Reach.MutateBlastCap,
-		DispatchConcurrency:    rc.Reach.DispatchConcurrency,
 		MinDaemonVersion:       rc.Reach.MinDaemonVersion,
-		EnrollIPRate:           rc.Enrollment.IPRatePerMinute,
-		EnrollIPBurst:          rc.Enrollment.IPBurst,
-		EnrollGlobalRate:       rc.Enrollment.GlobalRatePerMinute,
-		EnrollGlobalBurst:      rc.Enrollment.GlobalBurst,
-		EnrollMaxTrackedIPs:    rc.Enrollment.MaxTrackedIPs,
 		MaxNodes:               rc.Enrollment.MaxNodes,
-		CertExpiringFraction:   rc.Enrollment.CertExpiringFraction,
 	}
 }
 
-// newLogHandler renders the log in the configured level and format.
+// newLogHandler renders the log as JSON at the configured level (RC-42).
 func newLogHandler(w io.Writer, l relayconfig.Log) slog.Handler {
-	opts := &slog.HandlerOptions{Level: l.Level}
-	if l.Format == relayconfig.LogJSON {
-		return slog.NewJSONHandler(w, opts)
-	}
-	return slog.NewTextHandler(w, opts)
+	return slog.NewJSONHandler(w, &slog.HandlerOptions{Level: l.Level})
 }

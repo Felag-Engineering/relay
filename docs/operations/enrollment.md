@@ -293,11 +293,10 @@ $ ansible-playbook -i inventory/prod site.yml --limit 'new_nodes'
 ```
 
 Each Node enrolls when `join` runs; already-enrolled Nodes are no-ops. The Relay
-rate-limits enrollment per IP and globally ([relay-install.md](relay-install.md)). For very
-large batches, raise `enrollment.global_rate_per_minute` in `relay.toml` for the window (a
-SIGHUP applies it), or stagger the `join` runs across the batch. In the MVP both
-limits become fixed, with the per-IP limit raised to about 60 a minute, so some 200 Nodes
-behind one NAT address join in minutes with no setting to change.
+rate-limits enrollment per IP and globally ([relay-install.md](relay-install.md)). Both
+limits are fixed: about 60 a minute per source address and 50 a minute overall, so some 200 Nodes behind one NAT address join in about four minutes. A
+`join` the Relay refuses for rate persists nothing and is simply run again; for a much larger
+batch, stagger the `join` runs.
 
 ## 4. Verify the rollout
 

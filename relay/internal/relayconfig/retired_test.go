@@ -33,10 +33,25 @@ func fileExists(p string) bool {
 // Proves RC-13.
 func TestRetiredEnvMap_CoversEveryRetiredName(t *testing.T) {
 	keys := schemaKeys()
+	var builtIn []string
 	for name, key := range retiredEnv {
+		if key == "" {
+			builtIn = append(builtIn, name)
+			continue
+		}
 		if !slices.Contains(keys, key) {
 			t.Errorf("%s maps to %q, which is not a schema key", name, key)
 		}
+	}
+	// A name with no key is one whose value is built in (RC-38 to RC-43).
+	wantBuiltIn := []string{
+		"RELAY_APPROVAL_WEBHOOK_TIMEOUT", "RELAY_CERT_EXPIRING_FRACTION", "RELAY_CONSOLE_SESSION_MAX_AGE",
+		"RELAY_CONSOLE_STEP_UP_WINDOW", "RELAY_DISPATCH_CONCURRENCY", "RELAY_ENROLL_GLOBAL_BURST",
+		"RELAY_ENROLL_GLOBAL_RATE", "RELAY_ENROLL_IP_BURST", "RELAY_ENROLL_IP_RATE", "RELAY_ENROLL_MAX_TRACKED_IPS",
+	}
+	slices.Sort(builtIn)
+	if !slices.Equal(builtIn, wantBuiltIn) {
+		t.Errorf("names with no key = %v, want %v", builtIn, wantBuiltIn)
 	}
 
 	// Every name the binary or its example reads is retired or exempt.
@@ -91,8 +106,17 @@ func TestRefuseRetiredEnv_NamesKeyNotValue(t *testing.T) {
 	}
 
 	err = RefuseRetiredEnv([]string{"RELAY_APPROVAL_WEBHOOK_URL=https://x.example/tok"})
-	if err == nil || !strings.Contains(err.Error(), "approval.webhook_url or approval.webhook_url_file") {
-		t.Errorf("a secret key must render both forms: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "approval.webhook_url_file") || strings.Contains(err.Error(), "x.example") {
+		t.Errorf("a webhook name must name the file key and not the value: %v", err)
+	}
+
+	// A name whose value is built in names no file key and no value.
+	err = RefuseRetiredEnv([]string{"RELAY_ENROLL_IP_RATE=hunter2"})
+	if err == nil || !strings.Contains(err.Error(), "RELAY_ENROLL_IP_RATE") || !strings.Contains(err.Error(), "built in") {
+		t.Errorf("a built-in name must be refused as built in: %v", err)
+	}
+	if err != nil && (strings.Contains(err.Error(), "hunter2") || strings.Contains(err.Error(), "enrollment.") || strings.Contains(err.Error(), "configuration file")) {
+		t.Errorf("a built-in name must name neither a file key nor the value: %v", err)
 	}
 
 	if err := RefuseRetiredEnv([]string{"RELAY_HOSTNAME="}); err == nil {

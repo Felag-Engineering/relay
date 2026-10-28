@@ -117,8 +117,8 @@ change a blast cap or a gate rule. If they move to the store (`roadmap: relay/se
 **R15** returns.
 
 **Step-up is a window for Account acts** (owner decision, 2026-10-05, #879): for the four
-privilege-granting Account acts, step-up is a recent-authentication window (default 5 minutes,
-at most 15, set only in the root-owned file), so a hijacked session inside the window after the
+privilege-granting Account acts, step-up is a recent-authentication window (built in at 5
+minutes, with no setting), so a hijacked session inside the window after the
 human's own step-up can perform them without the password. Bounded by the window, the
 per-session stamp, session rotation on every step-up, and CSRF and CSP.
 

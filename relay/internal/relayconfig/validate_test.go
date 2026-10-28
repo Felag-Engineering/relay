@@ -69,30 +69,14 @@ func TestValidate_InvalidValueRefusedNamingSetting(t *testing.T) {
 		{"store", "path", `"/var/lib/relay/"`},
 		{"tls", "hostname", `"-bad.example"`},
 		{"tls", "hostname", `"relay.example.internal:7654"`},
-		{"console", "session_max_age", `"0s"`},
 		{"console", "session_idle", `"-5m"`},
-		{"console", "step_up_window", `"16m"`},
-		{"console", "step_up_window", `"soon"`},
-		{"approval", "webhook_timeout", `"0s"`},
 		{"approval", "gate_rules_path", `"gates.json"`},
 		{"approval", "webhook_url_file", `"relative"`},
 		{"log", "level", `"verbose"`},
-		{"log", "format", `"xml"`},
 		{"reach", "read_blast_cap", `0`},
 		{"reach", "mutate_blast_cap", `-1`},
-		{"reach", "dispatch_concurrency", `0`},
 		{"reach", "min_daemon_version", `"latest"`},
-		{"enrollment", "ip_rate_per_minute", `0`},
-		{"enrollment", "ip_burst", `0`},
-		{"enrollment", "global_rate_per_minute", `0`},
-		{"enrollment", "global_burst", `0`},
-		{"enrollment", "max_tracked_ips", `0`},
 		{"enrollment", "max_nodes", `-1`},
-		{"enrollment", "cert_expiring_fraction", `0.0`},
-		{"enrollment", "cert_expiring_fraction", `1.5`},
-		{"enrollment", "cert_expiring_fraction", `nan`},
-		{"enrollment", "cert_expiring_fraction", `inf`},
-		{"enrollment", "cert_expiring_fraction", `-inf`},
 	}
 	for _, tc := range cases {
 		name := tc.section + "." + tc.key + "=" + tc.value
@@ -134,14 +118,6 @@ func missingOthers(section string) string {
 		}
 	}
 	return b.String()
-}
-
-func TestValidate_CertExpiringFractionAcceptsIntegerOne(t *testing.T) {
-	// 1 is inside (0, 1]; the TOML integer spelling decodes into the float.
-	cfg := mustLoad(t, minimal+"[enrollment]\ncert_expiring_fraction = 1\n")
-	if cfg.Enrollment.CertExpiringFraction != 1 {
-		t.Fatalf("fraction = %v", cfg.Enrollment.CertExpiringFraction)
-	}
 }
 
 // Proves RC-20.
@@ -271,15 +247,10 @@ func TestValidate_OAuthIssuerRequiresHTTPSUnlessLoopback(t *testing.T) {
 	}
 }
 
-func TestValidate_WebhookSettingsWithoutURLRefused(t *testing.T) {
-	for _, key := range []string{"webhook_secret = \"v\"", "webhook_secret_file = \"/etc/relay/s\"", "webhook_timeout = \"3s\""} {
-		t.Run(key, func(t *testing.T) {
-			got := loadErr(t, minimal+"[approval]\n"+key+"\n")
-			name := "approval." + strings.Fields(key)[0]
-			if !strings.Contains(got, name+" (line 8)") || !strings.Contains(got, "approval.webhook_url") {
-				t.Fatalf("error = %q", got)
-			}
-		})
+func TestValidate_WebhookSecretFileWithoutURLRefused(t *testing.T) {
+	got := loadErr(t, minimal+"[approval]\nwebhook_secret_file = \"/etc/relay/s\"\n")
+	if !strings.Contains(got, "approval.webhook_secret_file (line 8)") || !strings.Contains(got, "approval.webhook_url_file") {
+		t.Fatalf("error = %q", got)
 	}
 }
 

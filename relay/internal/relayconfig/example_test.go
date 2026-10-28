@@ -7,11 +7,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/pelletier/go-toml/v2"
-
-	"github.com/Felag-Engineering/relay/relay/internal/approvalnotify"
 )
 
 var (
@@ -77,17 +74,14 @@ func TestExampleRelayTOML_MatchesConfig(t *testing.T) {
 	})
 
 	t.Run("each commented value is the built-in default", func(t *testing.T) {
-		// Keys whose default stands alone. The two that need a companion key
-		// (oauth.account_claim, approval.webhook_timeout) are checked from the
-		// decoded document below.
+		// Keys whose default stands alone. The one that needs a companion key
+		// (oauth.account_claim) is checked from the decoded document below.
 		defaulted := map[string]bool{
 			"control_plane.enabled": true, "control_plane.listen_address": true,
-			"console.enabled": true, "console.session_max_age": true, "console.session_idle": true, "console.step_up_window": true,
-			"log.level": true, "log.format": true,
-			"reach.read_blast_cap": true, "reach.mutate_blast_cap": true, "reach.dispatch_concurrency": true,
-			"enrollment.ip_rate_per_minute": true, "enrollment.ip_burst": true, "enrollment.global_rate_per_minute": true,
-			"enrollment.global_burst": true, "enrollment.max_tracked_ips": true, "enrollment.max_nodes": true,
-			"enrollment.cert_expiring_fraction": true,
+			"console.enabled": true, "console.session_idle": true,
+			"log.level":            true,
+			"reach.read_blast_cap": true, "reach.mutate_blast_cap": true,
+			"enrollment.max_nodes": true,
 		}
 		shipped, _, err := Load([]byte(example))
 		if err != nil {
@@ -107,9 +101,6 @@ func TestExampleRelayTOML_MatchesConfig(t *testing.T) {
 		}
 		if *doc.OAuth.AccountClaim != defaultAccountClaim {
 			t.Errorf("oauth.account_claim example = %q", *doc.OAuth.AccountClaim)
-		}
-		if d, err := time.ParseDuration(*doc.Approval.WebhookTimeout); err != nil || d != approvalnotify.DefaultTimeout {
-			t.Errorf("approval.webhook_timeout example = %q", *doc.Approval.WebhookTimeout)
 		}
 	})
 }

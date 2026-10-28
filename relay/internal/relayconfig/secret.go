@@ -11,8 +11,8 @@ import (
 
 const redacted = "[redacted]"
 
-// Secret is a configuration value that cannot print itself. It is given
-// inline, or by the path of a file holding it (ADR-0043 decision 2). The value
+// Secret is a configuration value that cannot print itself. It is read from a
+// file the configuration names (RC-41, ADR-0043). The value
 // sits behind a pointer to an unexported struct, so fmt, slog and
 // encoding/json print a placeholder, never the value. Reveal is the only
 // accessor.
@@ -28,16 +28,14 @@ type secretValue struct {
 	resolved bool
 }
 
-func inlineSecret(value string) Secret { return Secret{&secretValue{value: value, resolved: true}} }
-
 func fileSecret(path, key string, line int) Secret {
 	return Secret{&secretValue{path: path, key: key, line: line}}
 }
 
-// IsSet reports whether either form was given.
+// IsSet reports whether a file was named.
 func (s Secret) IsSet() bool { return s.v != nil }
 
-// Path returns the file the value is read from, or "" for an inline secret.
+// Path returns the file the value is read from, or "" when unset.
 func (s Secret) Path() string {
 	if s.v == nil {
 		return ""
@@ -70,8 +68,7 @@ func (s Secret) MarshalText() ([]byte, error) { return []byte(redacted), nil }
 
 // ResolveSecrets reads every file-backed secret through read and stores the
 // value. The caller supplies read so each file is read through its own file
-// check; this package opens nothing. A Config whose secrets are all inline is
-// unchanged.
+// check; this package opens nothing.
 func (c *Config) ResolveSecrets(read func(path string) ([]byte, error)) error {
 	var errs []error
 	for _, s := range []*Secret{&c.Approval.WebhookURL, &c.Approval.WebhookSecret} {

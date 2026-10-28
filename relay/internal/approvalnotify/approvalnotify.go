@@ -66,7 +66,8 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/hostfile"
 )
 
-// DefaultTimeout bounds one delivery attempt end to end.
+// DefaultTimeout bounds one delivery attempt end to end. It is built in (RC-41);
+// no setting reaches it.
 const DefaultTimeout = 5 * time.Second
 
 // maxSecretBytes bounds a secret file. A shared secret is short; the bound
@@ -100,9 +101,8 @@ type Config struct {
 	URL string
 
 	// Secret is the shared signing secret, already read through the file check
-	// (ReadSecretFile) by the composition root, or given inline in the
-	// configuration file. Empty sends unsigned
-	// notifications.
+	// (ReadSecretFile) by the composition root from a file the configuration
+	// names (RC-41). Empty sends unsigned notifications.
 	Secret []byte
 
 	// Timeout bounds one attempt. Zero means DefaultTimeout.

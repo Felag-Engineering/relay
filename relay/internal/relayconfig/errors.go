@@ -60,6 +60,9 @@ func render(key string, line int, reason string) string {
 // or a section's key. Those names come from the schema; any other segment is
 // source text and is never rendered.
 func safeKey(parts []string) (string, bool) {
+	if key, _, removed := removedKey(parts); removed && len(parts) == 2 {
+		return key, true
+	}
 	if len(parts) == 0 || schemaPrefix(parts) != len(parts) {
 		return "", false
 	}

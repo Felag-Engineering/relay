@@ -65,14 +65,9 @@ unknown key, or a value that cannot work, is refused.
 | `store.path` | *(required)* | SQLite store: registry, Jobs/Tasks, audit trail, Accounts, API Tokens, Enrollment Tokens, Freeze state. |
 | `tls.hostname` | *(required)* | The name on the one server certificate both listeners present. **Must match the name daemons dial** (or that name must be an entry of `tls.extra_names`), or their TLS verification fails. The certificate also names loopback and this host's addresses at start, so a daemon may dial one of this host's IPv4 addresses instead. It must be a DNS name or an address a daemon can dial: a wildcard, an unspecified, multicast, broadcast or link-local address, or an IPv4-mapped IPv6 one refuses start. |
 | `tls.extra_names` | *(unset)* | Further DNS names and IP addresses the server certificate names, at most 32; a wildcard, a malformed entry or an empty list refuses start, naming the entry's position. An internationalised name is written in its `xn--` form. Use it when daemons or a browser reach the Relay by a name other than `tls.hostname`: through a load balancer, under a second DNS name, or at a NAT address. Read only at start: a reload that changes it is refused and a restart applies it. |
-| `enrollment.ip_rate_per_minute` / `ip_burst` | `5` / `3` | Per-IP enrollment rate and burst. |
-| `enrollment.global_rate_per_minute` / `global_burst` | `50` / `10` | Global enrollment rate and burst. Raise temporarily for a large bulk enrollment. |
-| `enrollment.max_tracked_ips` | `100000` | Cap on the per-IP rate-limit bucket map. |
 | `enrollment.max_nodes` | `110000` | Registry insert cap (`0` = unlimited). |
-| `enrollment.cert_expiring_fraction` | `0.25` | Fraction of a Node certificate's validity remaining below which `state:cert-expiring` fires (ADR-0034). Must be in `(0, 1]`; there is no off value. |
 | `reach.read_blast_cap` | `10000` | Blast-radius cap for `read`-class Operations (max Nodes per Job; ADR-0004, ADR-0012). |
 | `reach.mutate_blast_cap` | `100` | Blast-radius cap for `mutate`-class Operations and Raw Exec. |
-| `reach.dispatch_concurrency` | `16` | Max Tasks of one Job dispatched at once: how fast a Job reaches its Nodes, not how many. At least 1. Cancel is best-effort (ADR-0013): it withholds a Task whose send has not begun, but a Task already being sent can still run, and so can one a reconnecting Node's reconciliation sent first. |
 | `reach.min_daemon_version` | *(unset)* | Minimum relay-daemon semver (ADR-0014). Unset disables the `outdated` gate. See [iac-upgrades.md](iac-upgrades.md) and the prerelease caveat in [release-artifacts.md](release-artifacts.md). |
 | `oauth.issuer` | *(unset)* | OIDC issuer for human MCP sessions (ADR-0024). Unset disables OAuth; every other `oauth.*` key needs it. See [control-plane-credential.md](control-plane-credential.md). |
 | `oauth.audience` | *(unset)* | This Relay's OAuth resource identifier, checked against each token's `aud`. |
@@ -80,16 +75,22 @@ unknown key, or a value that cannot work, is refused.
 | `oauth.account_claim` | `email` | Token claim naming the Account a session resolves to. |
 | `oauth.required_scope` | *(unset)* | Scope every OAuth token must carry. |
 | `approval.gate_rules_path` | *(unset)* | Root-owned approval-gate rules: which dispatches wait for a human (ADR-0027; [approval-gates.md](approval-gates.md)). Unset disables gating. A configured path that cannot be loaded **refuses startup**. |
-| `approval.webhook_url` / `webhook_url_file` | *(unset)* | HTTPS endpoint notified, fire-and-forget, when a dispatch parks for approval. A secret, inline or in a file. Decisions never arrive this way; they land on `/api/v1`. |
-| `approval.webhook_secret` / `webhook_secret_file` | *(unset)* | Shared secret that signs webhook bodies (HMAC-SHA256). Unset sends unsigned notifications. |
-| `approval.webhook_timeout` | `5s` | Time budget for one webhook delivery attempt. |
+| `approval.webhook_url_file` | *(unset)* | Path of a file holding the HTTPS endpoint notified, fire-and-forget, when a dispatch parks for approval. The URL is a secret, so it is only ever given as a file. Decisions never arrive this way; they land on `/api/v1`. |
+| `approval.webhook_secret_file` | *(unset)* | Path of a file holding the shared secret that signs webhook bodies (HMAC-SHA256). Unset sends unsigned notifications. |
 | `console.enabled` | `false` | Serve the Admin Console on the control-plane listener (ADR-0009, ADR-0026); needs `control_plane.enabled`. The first admin's password is set by `relay init` (below). |
-| `console.session_max_age` | `12h` | Absolute lifetime of a Console session; activity never extends it. |
 | `console.session_idle` | `30m` | Idle timeout of a Console session. |
-| `console.step_up_window` | `5m` | How recently a human must have re-entered their password for a privilege-granting Account act. At most `15m`; a longer value is refused. Sign-in alone does not satisfy it, and a successful step-up rotates the session identifier. |
-| `log.level` / `log.format` | `info` / `text` | `debug`, `info`, `warn`, `error`; `text` or `json`. |
+| `log.level` | `info` | `debug`, `info`, `warn`, `error`. Logs are always JSON. |
 
-A secret is given inline as `key = "..."` or as `key_file = "/path"`, never both. At start
+**Built in, not configured.** These values are constants, with no key: Enrollment is limited
+to 60 a minute per source address (burst 10), 50 a minute overall (burst 10), and 100000
+tracked addresses; `state:cert-expiring` fires at a quarter of a Node certificate's lifetime
+(ADR-0034); a Job sends 16 Tasks at once (cancel is best-effort, ADR-0013: it withholds a
+Task whose send has not begun, but a Task already being sent can still run, and so can one a
+reconnecting Node's reconciliation sent first); a webhook delivery attempt has a 5s budget;
+a Console session lasts at most 12h and the step-up window is 5m. A configuration file that
+names a key that was removed is refused at start and on reload, naming the key.
+
+A secret is given as `key_file = "/path"`, never inline. At start
 the Relay refuses to run if it could write the configuration file or a file it names, or if
 any account but itself and root could read the configuration or a secret file. Place secret
 files like the configuration, `0640 root:relay`.
