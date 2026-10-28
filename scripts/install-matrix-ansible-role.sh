@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Runs the relay_daemon Ansible role against a systemd container Node and a real Relay, and
-# proves the join string reaches no file, argument list or log on the Node
-# (docs/specs/daemon-installation.md DI-45).
+# proves the join string reaches no file, argument list or log on the Node (DI-45), and that a
+# fragment written through the role's handler restarts the daemon onto the new composed Policy
+# (DI-47), both in docs/specs/daemon-installation.md.
 #
 #   install-matrix-ansible-role.sh <pkgdir> [<roles-path>]
 #
@@ -9,19 +10,21 @@
 # job lays them out, the old package sorting below the new one. <roles-path> is an absolute
 # directory holding relay_daemon/; it defaults to the checkout's daemon/packaging/ansible. A
 # release passes the role extracted from its own tarball, so the role under test is the one it
-# attaches. The playbook is always the checkout's test/playbook.yml. Needs docker, ansible-playbook,
+# attaches. The playbooks are always the checkout's, under test/. Needs docker, ansible-playbook,
 # ansible-vault, jq, ssh-keygen, dpkg-deb, base64, head and grep on the runner. Nothing here runs outside CI: it starts a privileged
 # container and installs packages in it.
 #
 # One Debian 13 container runs the Relay and the Node. The role reaches the Node over ssh and
-# sudo from the runner, so the Node is the role's own target. Four runs follow:
+# sudo from the runner, so the Node is the role's own target. Five runs follow:
 #   A  the old package, pipelining forced off: the role installs it, then its guard must refuse
 #      before the join task writes anything;
 #   L  a sudoers drop-in sets log_input: the role must refuse before the join task, then the
 #      drop-in is removed;
 #   B  the second run on that Node, given the new package: the role leaves the installed
 #      daemon at the old version and joins;
-#   C  the enrolled Node again, given the new package: the role changes nothing.
+#   C  the enrolled Node again, given the new package: the role changes nothing;
+#   F  the enrolled Node, given a play that writes a Policy fragment and notifies the role's
+#      handler: the unit restarts and the Relay reports the new composed fingerprint.
 # A strace on the ssh daemon records every execve and every write on the Node's ssh side from
 # before the first connection, so a transient file Ansible would delete is still seen.
 #
@@ -44,6 +47,7 @@ IMAGE=relay-install-matrix:debian-13
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CA_CERT=/var/lib/relay/ca/ca-cert.pem
 DAEMON_STATE=/var/lib/relay-daemon
+FRAGMENT=/etc/relay-daemon/policy.d/50-role-test.toml
 ROLE_DIR="$REPO/daemon/packaging/ansible"
 
 if [ "$#" -lt 1 ] || [ "$#" -gt 2 ]; then
@@ -74,6 +78,11 @@ PATTERNS=()
 PLAY_RC=0
 API_STATUS=""
 API_BODY=""
+NODE_ID=""
+REPORTED_FP=""
+PID_BEFORE_F=""
+FP_BEFORE=""
+FP_AFTER=""
 
 node() { docker exec "$NAME" "$@"; }
 node_i() { docker exec -i "$NAME" "$@"; }
@@ -130,7 +139,7 @@ diagnostics() {
   node journalctl -b --no-pager -n 200 || true
   if [ -n "$WORK" ]; then
     local log
-    for log in run-a.log run-l.log run-b.log run-c.log; do
+    for log in run-a.log run-l.log run-b.log run-c.log run-f.log; do
       if [ -f "$WORK/$log" ]; then
         echo "--- $log"
         cat "$WORK/$log"
@@ -252,17 +261,20 @@ trace_lines() {
 
 # --- runs --------------------------------------------------------------------------------
 
-# play <log> <pkg subdirectory> [extra ansible-playbook args]: the exit status is PLAY_RC. The
-# vault file and password file are inside WORK; the join string reaches Ansible only through
-# the vault.
-play() {
-  local log=$1 sub=$2
-  shift 2
+# play_with <playbook> <log> <pkg subdirectory> [extra ansible-playbook args]: the exit status is
+# PLAY_RC. The vault file and password file are inside WORK; the join string reaches Ansible only
+# through the vault.
+play_with() {
+  local playbook=$1 log=$2 sub=$3
+  shift 3
   PLAY_RC=0
   ansible-playbook -i "$WORK/inventory.ini" --vault-password-file "$WORK/vault-pass" \
     -e @"$WORK/vault.yml" -e "relay_daemon_package_dir=$PKGDIR/$sub" "$@" \
-    "$ROLE_DIR/test/playbook.yml" >"$WORK/$log" 2>&1 || PLAY_RC=$?
+    "$playbook" >"$WORK/$log" 2>&1 || PLAY_RC=$?
 }
+
+# play <log> <pkg subdirectory> [extra ansible-playbook args]: the role's own test playbook.
+play() { play_with "$ROLE_DIR/test/playbook.yml" "$@"; }
 
 recap() { grep -E '^node +: ok=' "$WORK/$1" || true; }
 
@@ -399,6 +411,68 @@ unit_becomes_active_and_enabled() {
   return 1
 }
 
+# node_main_pid: the unit's MainPID, empty when it cannot be read.
+node_main_pid() { node systemctl show -p MainPID --value relay-daemon 2>/dev/null || true; }
+
+# composed_fingerprint: what `policy check` computes over the Node's Policy file and Policy
+# directory together, which is the fingerprint the daemon reports (DI-46). Empty on failure.
+composed_fingerprint() {
+  node relay-daemon policy check /etc/relay-daemon/policy.toml --policy-dir /etc/relay-daemon/policy.d 2>/dev/null \
+    | sed -n 's/^fingerprint: \([0-9a-f]\{64\}\)$/\1/p' || true
+}
+
+# read_reported_fingerprint: sets REPORTED_FP to the Policy fingerprint the Relay holds for the
+# Node, empty when it holds none. Called directly, never in a command substitution.
+read_reported_fingerprint() {
+  relay_api GET "/api/v1/nodes/$NODE_ID"
+  REPORTED_FP=""
+  if [ "$API_STATUS" = 200 ]; then REPORTED_FP=$(printf '%s' "$API_BODY" | jq -r '.policy_fingerprint // empty' || true); fi
+  API_BODY=""
+}
+
+# relay_reports_within_60s <fingerprint>: the Relay reports it for the Node, polled once a second.
+relay_reports_within_60s() {
+  local want=$1 i
+  [ -n "$want" ] || { echo "no fingerprint to compare"; return 1; }
+  for ((i = 0; i < 60; i++)); do
+    read_reported_fingerprint
+    if [ "$REPORTED_FP" = "$want" ]; then return 0; fi
+    sleep 1
+  done
+  echo "Relay reports '$REPORTED_FP', want '$want'"
+  return 1
+}
+
+# unit_restarted_within_30s: the unit is active under a MainPID that is not the one before run F.
+unit_restarted_within_30s() {
+  local i pid=""
+  for ((i = 0; i < 30; i++)); do
+    pid=$(node_main_pid)
+    if node systemctl is-active --quiet relay-daemon && [ "${pid:-0}" -gt 0 ] && [ "$pid" != "$PID_BEFORE_F" ]; then
+      return 0
+    fi
+    sleep 1
+  done
+  echo "MainPID before run F '$PID_BEFORE_F', after '$pid'"
+  return 1
+}
+
+handler_ran() { log_has run-f.log 'RUNNING HANDLER [relay_daemon : Restart relay-daemon]'; }
+
+fragment_is_in_place() {
+  node test -f "$FRAGMENT" && [ "$(node stat -c '%U:%G %a' "$FRAGMENT" 2>/dev/null || true)" = 'root:root 644' ]
+}
+
+fingerprint_changed() {
+  [ -n "$FP_AFTER" ] && [ "$FP_AFTER" != "$FP_BEFORE" ] || { echo "before '$FP_BEFORE', after '$FP_AFTER'"; return 1; }
+}
+
+policy_dir_holds_only_the_play_s_fragment() {
+  [ "$(node find /etc/relay-daemon/policy.d -mindepth 1 2>/dev/null || true)" = "$FRAGMENT" ]
+}
+
+node_id_is_well_formed() { [[ $NODE_ID =~ ^[0-9A-Za-z-]+$ ]]; }
+
 policy_dir_is_empty() {
   node test -d /etc/relay-daemon/policy.d && [ -z "$(node find /etc/relay-daemon/policy.d -mindepth 1)" ]
 }
@@ -484,7 +558,7 @@ journal_holds_no_secret() {
 
 run_logs_hold_no_secret() {
   local n
-  n=$(cat "$WORK/run-a.log" "$WORK/run-l.log" "$WORK/run-b.log" "$WORK/run-c.log" | count_patterns)
+  n=$(cat "$WORK/run-a.log" "$WORK/run-l.log" "$WORK/run-b.log" "$WORK/run-c.log" "$WORK/run-f.log" | count_patterns)
   [ "$n" = 0 ] || { echo "$n run log lines hold a secret"; return 1; }
 }
 
@@ -653,6 +727,29 @@ check DI-45 "no file on the Node holds the join string or the token" no_file_hol
 
 check DI-45 "the journal holds the role's logged module invocations (control)" journal_holds_invocations
 check DI-45 "no log on the Node holds the join string or the token" journal_holds_no_secret
+
+# --- step 11b: run F, a fragment written through the role's handler (DI-47) ---------------
+
+# After the tracer stopped and the file and journal scans, so none of the DI-45 evidence above
+# sees it. The play is an operator's: the role places nothing, the task writes the fragment and
+# notifies the role's handler. Each value is read tolerantly so the check after it names a failure.
+NODE_ID=$(node cat "$DAEMON_STATE/node_id" 2>/dev/null | tr -d '[:space:]' || true)
+precondition "the Node has an id" node_id_is_well_formed
+precondition "no fragment is in place before run F" policy_dir_is_empty
+FP_BEFORE=$(composed_fingerprint)
+precondition "policy check prints a fingerprint before run F" [ -n "$FP_BEFORE" ]
+check DI-47 "before the fragment, the Relay reports the fingerprint policy check computes (control)" relay_reports_within_60s "$FP_BEFORE"
+PID_BEFORE_F=$(node_main_pid)
+precondition "the daemon has a MainPID before run F" [ "${PID_BEFORE_F:-0}" -gt 0 ]
+play_with "$ROLE_DIR/test/policy-fragment.yml" run-f.log new
+check DI-47 "the play that writes a fragment exits 0 with failed=0 and unreachable=0" run_succeeded run-f.log ' unreachable=0 ' ' failed=0 '
+check DI-47 "the fragment is in place, root-owned and 0644" fragment_is_in_place
+check DI-47 "the fragment task notified the role's restart handler and it ran" handler_ran
+check DI-47 "the unit restarted: active again with a new MainPID within 30s" unit_restarted_within_30s
+FP_AFTER=$(composed_fingerprint)
+check DI-47 "the composed fingerprint changed with the fragment" fingerprint_changed
+check DI-47 "the Relay reports the new composed Policy fingerprint within 60s" relay_reports_within_60s "$FP_AFTER"
+check DI-45 "the Policy directory holds nothing but the play's fragment" policy_dir_holds_only_the_play_s_fragment
 
 # --- step 12: the controller's own output (not a claim) -----------------------------------
 
