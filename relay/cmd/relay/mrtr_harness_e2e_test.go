@@ -148,7 +148,7 @@ func TestRelaytest_ElicitationClientSeesTodaysPendingApproval(t *testing.T) {
 	// whether the CLIENT could be asked. A garbage RequestState is therefore
 	// decided and REFUSED rather than silently ignored — still proof that
 	// the retry fields reach the wire, just no longer proof that Relay
-	// ignores them (that claim moved to the AP-70 "client that cannot be
+	// ignores them (that claim moved to the AP-85 "client that cannot be
 	// asked" tests, elicit_e2e_test.go and mcp_elicitation_e2e_test.go).
 	auditBefore := auditLen(t, f)
 	retryRes := relaytest.RetryTool(t, asked, "run_operation", restartNginxArgs(), "not-a-state",

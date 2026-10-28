@@ -2,18 +2,12 @@
 # Raw JSON-RPC poker for the dev fleet's MCP endpoint (docs/dev-fleet.md).
 # DEV-ONLY. Nothing in the build/test/lint gate calls this.
 #
-# WHY THIS EXISTS. Relay's /mcp serves the MCP Tasks extension (SEP-2663,
-# ADR-0028), but no shipping MCP client implements it — not the Go SDK
-# (go-sdk#626), not the TypeScript or Python ones. So `tasks/get`,
-# `tasks/cancel`, and the CreateTaskResult shim cannot be exercised by pointing
-# a normal client at the fleet: the capability that triggers them is advertised
-# in a per-request `_meta` no client sends. This script speaks the wire by hand
-# so those paths are reachable at all.
+# WHY THIS EXISTS. A normal MCP client shows you its own rendering of a tool
+# result, never the JSON-RPC that crossed the wire. This script speaks the wire
+# by hand, so a human (or an AI-agent driving a terminal) can see exactly what
+# Relay's /mcp answers, including to a method it does not serve.
 #
-# It is deliberately NOT a client library. It is a curl wrapper that lets a
-# human (or an AI-agent driving a terminal) see exactly what goes over the wire,
-# which is the only way to check Relay's reading of a spec no one else has
-# implemented yet.
+# It is deliberately NOT a client library. It is a curl wrapper.
 #
 # The /mcp handler is stateless (SEP-2575 puts client capabilities in per-request
 # `_meta`), so there is no `initialize` handshake to maintain here — every call
@@ -60,12 +54,7 @@ Usage: scripts/dev-fleet-mcp.sh <command> [args]
   creds                      Print the admin credential (for an MCP client config)
   creds-approver             Print the approver credential
 
-  call <tool> [json-args]    tools/call WITHOUT the Tasks capability
-                             (what Claude Code and every real client sends today)
-  call-tasks <tool> [json]   tools/call WITH the Tasks capability advertised
-                             (a parked dispatch comes back as a task handle)
-  task-get <taskId>          tasks/get
-  task-cancel <taskId>       tasks/cancel
+  call <tool> [json-args]    tools/call
   raw <method> [json-params] Any JSON-RPC method, verbatim — including ones
                              Relay does not serve (try: raw tasks/update '{}')
 
@@ -129,18 +118,14 @@ claude mcp add --transport http relay https://relay:9443/mcp \\
 EOF
 }
 
-# mcp_post <credential-file> <method> <params-json> <tasks-capable:true|false> [tool-name]
+# mcp_post <credential-file> <method> <params-json> [tool-name]
 mcp_post() {
-    local credfile="$1" method="$2" params="$3" capable="$4" toolname="${5-}"
+    local credfile="$1" method="$2" params="$3" toolname="${4-}"
     need_state
     local cred; cred="$(cat "${credfile}")"
 
-    # Per-request client capabilities (SEP-2575). The Tasks extension key is
-    # what flips Relay's shim from a plain tool result to a task handle.
+    # Per-request client capabilities (SEP-2575): none declared.
     local caps='{}'
-    if [[ "${capable}" == "true" ]]; then
-        caps='{"extensions":{"io.modelcontextprotocol/tasks":{}}}'
-    fi
     local meta
     meta=$(printf '{"io.modelcontextprotocol/protocolVersion":"2026-07-28",'
            printf '"io.modelcontextprotocol/clientInfo":{"name":"dev-fleet-mcp","version":"0.0.1"},'
@@ -218,15 +203,9 @@ case "$1" in
     creds)          need_state; cat "${ADMIN_CRED}" ;;
     creds-approver) need_state; cat "${APPROVER_CRED}" ;;
     call)           [[ $# -ge 2 ]] || usage
-                    mcp_post "${ADMIN_CRED}" tools/call "$(tool_params "$2" "${3-}")" false "$2" ;;
-    call-tasks)     [[ $# -ge 2 ]] || usage
-                    mcp_post "${ADMIN_CRED}" tools/call "$(tool_params "$2" "${3-}")" true "$2" ;;
-    task-get)       [[ $# -ge 2 ]] || usage
-                    mcp_post "${ADMIN_CRED}" tasks/get "$(printf '{"taskId":"%s"}' "$2")" true ;;
-    task-cancel)    [[ $# -ge 2 ]] || usage
-                    mcp_post "${ADMIN_CRED}" tasks/cancel "$(printf '{"taskId":"%s"}' "$2")" true ;;
+                    mcp_post "${ADMIN_CRED}" tools/call "$(tool_params "$2" "${3-}")" "$2" ;;
     raw)            [[ $# -ge 2 ]] || usage
-                    mcp_post "${ADMIN_CRED}" "$2" "$(empty_obj "${3-}")" true ;;
+                    mcp_post "${ADMIN_CRED}" "$2" "$(empty_obj "${3-}")" ;;
     api)            [[ $# -ge 3 ]] || usage; api_call "${ADMIN_CRED}"    "$2" "$3" "${4:-}" ;;
     api-approver)   [[ $# -ge 3 ]] || usage; api_call "${APPROVER_CRED}" "$2" "$3" "${4:-}" ;;
     *)              usage ;;

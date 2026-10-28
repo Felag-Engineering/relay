@@ -250,7 +250,6 @@ linters:
             - github.com/Felag-Engineering/relay/relay/internal/approval$
             - github.com/Felag-Engineering/relay/relay/internal/jobs$
             - github.com/Felag-Engineering/relay/relay/internal/logctx$
-            - github.com/Felag-Engineering/relay/relay/internal/mcptask$
             - github.com/Felag-Engineering/relay/relay/internal/nodestate$
             - github.com/Felag-Engineering/relay/relay/internal/nodevocab$
             - github.com/Felag-Engineering/relay/relay/internal/opvocab$
@@ -332,30 +331,6 @@ linters:
             - github.com/Felag-Engineering/relay/relay/internal/jobs$
             - github.com/Felag-Engineering/relay/relay/internal/opvocab$
           deny: *domain-deny
-        # mcptask additionally never sees the MCP SDK (ADR-0028): the SEP-2663 shim
-        # stays a bounded, deletable piece above this package.
-        mcptask-imports:
-          list-mode: strict
-          files:
-            - "**/internal/mcptask/*.go"
-            - "!$test"
-          allow:
-            - context$
-            - errors$
-            - fmt$
-            - strings$
-            - time$
-            - github.com/Felag-Engineering/relay/relay/internal/approval$
-            - github.com/Felag-Engineering/relay/relay/internal/jobs$
-          deny:
-            - pkg: github.com/Felag-Engineering/relay/relay/internal/relay/v1
-              desc: "a task handle is not a wire type"
-            - pkg: database/sql
-              desc: "the SQLite implementation belongs in internal/store"
-            - pkg: github.com/modelcontextprotocol/go-sdk
-              desc: "ADR-0028: the SDK stays above this package, or the shim stops being deletable"
-            - pkg: github.com/Felag-Engineering/relay/relay/internal/capability
-              desc: "capability imports this package; the dependency runs one way"
         policyalias-imports:
           list-mode: strict
           files:

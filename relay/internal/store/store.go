@@ -30,7 +30,6 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/enroll"
 	"github.com/Felag-Engineering/relay/relay/internal/freeze"
 	"github.com/Felag-Engineering/relay/relay/internal/jobs"
-	"github.com/Felag-Engineering/relay/relay/internal/mcptask"
 	"github.com/Felag-Engineering/relay/relay/internal/policyalias"
 	"github.com/Felag-Engineering/relay/relay/internal/registry"
 )
@@ -229,15 +228,6 @@ func Open(path string, opts ...Option) (*Store, error) {
 	// deliberately no re-chaining here on every Open: it would vouch for any row
 	// inserted outside the chain since the last boot.
 
-	// The approval shape-key backfill is Go rather than migration SQL
-	// because it binds approval.LegacyShapePrefix, so the constant and the
-	// statement cannot drift apart. It is idempotent, so running it on every
-	// Open converges once and then costs one indexed probe.
-	if err := backfillShapeKeys(context.Background(), db); err != nil {
-		db.Close() //nolint:errcheck
-		return nil, fmt.Errorf("backfill approval shape keys %q: %w", path, err)
-	}
-
 	// Diagnostic only, and deliberately after everything that can fail: it
 	// returns nothing and never gates startup (migrate's
 	// tolerate-don't-refuse posture). It shares s.logger, set above before
@@ -363,18 +353,6 @@ func (s *Store) PolicyAliases() policyalias.Reader {
 // and an auditor could no longer answer what was asked or what became of it.
 func (s *Store) Approvals() approval.Repository {
 	return &sqliteApprovals{db: s.db}
-}
-
-// MCPTasks returns the SQLite-backed mcptask.Repository — MCP task handles
-// (ADR-0028, SEP-2663).
-//
-// Durable rather than an in-process map because the MCP handler runs stateless:
-// a handle minted by one Relay instance must be resolvable by whichever
-// instance the client's next poll happens to reach. An in-memory map would work
-// perfectly on one process and fail silently on two, which is the failure mode
-// HA would inherit.
-func (s *Store) MCPTasks() mcptask.Repository {
-	return &sqliteMCPTasks{db: s.db}
 }
 
 // IdempotencyKeys returns the SQLite-backed jobs.IdempotencyRepository:

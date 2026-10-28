@@ -1,6 +1,6 @@
 // Package main: mcp_elicitation_refusals_e2e_test.go is S6 of #646 (v0.7.0):
 // proof for docs/specs/approval.md AP-61, AP-62, AP-64, AP-65, AP-66, AP-67,
-// AP-69, AP-71 (and AP-17 kept proven for an MCP-originated request), plus
+// AP-69, AP-85 (and AP-17 kept proven for an MCP-originated request), plus
 // the ADR-0040-as-amended rescue: the Control API keeps deciding any parked
 // request, including one an MCP client parked, unchanged.
 //
@@ -247,7 +247,7 @@ func assertMachineSelfDecisionRefused(t *testing.T, f *relayFixture, res *sdkmcp
 
 // postRawToolCall hand-builds a JSON-RPC tools/call POST, mirroring
 // TestElicit_ElicitedParkEmitsNoTaskEnvelope_E2E's build (elicit_e2e_test.go),
-// but generalized over header/meta/tool/args and — unlike mcp_tasks_e2e_test.go's
+// but generalized over header/meta/tool/args and — unlike mcp_no_task_handle_e2e_test.go's
 // rawToolCall — never failing the test on a non-200 status: this file's
 // legacy-header rows are refused with a 400 by the SDK transport itself.
 func postRawToolCall(t *testing.T, f *relayFixture, token, header string, meta map[string]any, tool string, args map[string]any) (status int, contentType string, respBody []byte) {
@@ -942,12 +942,12 @@ func TestMCPElicitation_RedriveOfAPendingRequestAsksNobody(t *testing.T) {
 	}
 }
 
-// TestMCPElicitation_ElicitedParkEmitsNoTaskEnvelope is AP-71's e2e proof: a
+// TestMCPElicitation_ElicitedParkEmitsNoTaskEnvelope is AP-85's e2e proof: a
 // client capable of BOTH elicitation and Tasks gets the question and no task
-// envelope, while the armed control — a Tasks-capable, elicitation-incapable
-// client on the SAME fixture — bounces off the now-pending request into
-// today's task envelope, proving the shim IS mounted and this is precedence,
-// not an absent shim.
+// envelope, while the control — a Tasks-capable, elicitation-incapable client
+// on the SAME fixture — bounces off the now-pending request into the ordinary
+// pending_approval result: resultType complete, no task_id or
+// task_expires_at, no taskId.
 func TestMCPElicitation_ElicitedParkEmitsNoTaskEnvelope(t *testing.T) {
 	f, token, _ := startElicitingRelay(t)
 
@@ -1008,20 +1008,32 @@ func TestMCPElicitation_ElicitedParkEmitsNoTaskEnvelope(t *testing.T) {
 		t.Error("resultType is task, want input_required")
 	}
 
-	// ARMED CONTROL: on the SAME fixture, a Tasks-capable client with no
-	// elicitation capability bounces off the now-pending request into
-	// today's task envelope — proving the shim is mounted here.
+	// CONTROL: on the SAME fixture, a Tasks-capable client with no elicitation
+	// capability bounces off the now-pending request into pending_approval.
 	taskOnly := rawToolCall(t, f, token, true, restartNginxArgs())
 	taskJSON, err := json.Marshal(taskOnly["result"])
 	if err != nil {
 		t.Fatalf("re-marshal result: %v", err)
 	}
-	var task taskShimResult
-	if err := json.Unmarshal(taskJSON, &task); err != nil {
-		t.Fatalf("decode task result: %v; result = %s", err, taskJSON)
+	var plain struct {
+		ResultType        string `json:"resultType"`
+		StructuredContent struct {
+			PendingApproval map[string]any `json:"pending_approval"`
+		} `json:"structuredContent"`
 	}
-	if task.ResultType != "task" || task.TaskID == "" {
-		t.Errorf("armed control task = %+v, want a real task envelope", task)
+	if err := json.Unmarshal(taskJSON, &plain); err != nil {
+		t.Fatalf("decode result: %v; result = %s", err, taskJSON)
+	}
+	if plain.ResultType != "complete" || plain.StructuredContent.PendingApproval["status"] != "pending_approval" {
+		t.Errorf("control result = %s, want a complete pending_approval result", taskJSON)
+	}
+	for _, key := range []string{"task_id", "task_expires_at"} {
+		if _, present := plain.StructuredContent.PendingApproval[key]; present {
+			t.Errorf("control pending_approval carries %q; a park has no task handle", key)
+		}
+	}
+	if strings.Contains(string(taskJSON), `"taskId"`) {
+		t.Errorf("control result carries a taskId: %s", taskJSON)
 	}
 }
 

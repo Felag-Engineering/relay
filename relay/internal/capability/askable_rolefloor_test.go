@@ -98,7 +98,7 @@ func newCapService(t *testing.T, s capSeams) *capLayer {
 	rec := capability.NewRecorder(s.audit, nil, nil)
 	ctl := capability.NewControl(rec, s.authz, neverFrozen{})
 	read := capability.NewReadLane(rec, s.reg, emptyQueries{}, emptyQueries{}, nil, nil, &capability.StaticOperatorSettings{}, s.now)
-	appr := capability.NewApprovals(rec, s.gate, s.approvals, s.approvalAuthz, nil, nil, s.now)
+	appr := capability.NewApprovals(rec, s.gate, s.approvals, s.approvalAuthz, nil, s.now)
 	return &capLayer{capability.NewExecutionWithoutEngineForTest(ctl, read, appr), appr}
 }
 

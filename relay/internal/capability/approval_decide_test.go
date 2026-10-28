@@ -488,7 +488,7 @@ func TestNewApprovalsRequiresAnAuthorizer(t *testing.T) {
 			t.Fatal("NewApprovals with a gate and store but no approval authorizer must panic")
 		}
 	}()
-	NewApprovals(rec, gate, store, nil, nil, nil, nil)
+	NewApprovals(rec, gate, store, nil, nil, nil)
 }
 
 type spyNotifier struct{ notices []ApprovalNotice }

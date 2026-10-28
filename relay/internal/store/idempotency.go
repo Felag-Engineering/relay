@@ -30,8 +30,8 @@ func (i *sqliteIdempotency) Claim(ctx context.Context, rec jobs.IdempotencyRecor
 	}
 	defer tx.Rollback() //nolint:errcheck
 
-	// The sweep bounds the table the way mcptasks' DeleteExpired does: a client
-	// that sends a fresh key per run would otherwise add a row forever.
+	// The sweep bounds the table: a client that sends a fresh key per run
+	// would otherwise add a row forever.
 	if _, err := tx.ExecContext(ctx,
 		`DELETE FROM dispatch_idempotency_keys WHERE created_at_ns < ?`, notBefore.UTC().UnixNano()); err != nil {
 		return jobs.IdempotencyRecord{}, false, fmt.Errorf("sweep expired idempotency keys: %w", err)

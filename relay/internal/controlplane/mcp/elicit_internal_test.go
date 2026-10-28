@@ -26,7 +26,7 @@ import (
 // MCP-Protocol-Version header before the handler ever runs.
 
 // elicitInternalCredential/elicitInternalVerifier are a minimal
-// TokenVerifier, exactly like taskgolden_test.go's goldenVerifier, so
+// TokenVerifier, exactly like golden_test.go's goldenVerifier, so
 // authedContext below can inject a real Principal.
 const elicitInternalCredential = accounts.TokenPrefix + "0123456789abcdef.elicit-internal-secret" // test fixture, not a real credential
 

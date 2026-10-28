@@ -129,41 +129,6 @@ func (m *memApprovals) RecordDecision(_ context.Context, id string, d approval.D
 	return updated, nil
 }
 
-// LastApprovedByShape mirrors the SQLite store's semantics: newest RESOLVED
-// approved record with that key, excluding excludeID, and ErrNotFound for an
-// empty or legacy key — so a capability-layer test that passes here is
-// exercising the same contract production reads through.
-func (m *memApprovals) LastApprovedByShape(_ context.Context, shapeKey, excludeID string) (approval.Request, error) {
-	if shapeKey == "" || approval.IsLegacyShapeKey(shapeKey) {
-		return approval.Request{}, approval.ErrNotFound
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	var best approval.Request
-	var found bool
-	ids := make([]string, 0, len(m.byID))
-	for id := range m.byID {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	for _, id := range ids {
-		r := m.byID[id]
-		if r.ID == excludeID || r.ShapeKey != shapeKey || r.State != approval.StateApproved {
-			continue
-		}
-		// Ties break toward the HIGHEST request ID, matching the store's
-		// ORDER BY resolved_at DESC, request_id DESC — ids is sorted
-		// ascending, so a later equal-timestamped row wins.
-		if !found || !r.ResolvedAt.Before(best.ResolvedAt) {
-			best, found = r, true
-		}
-	}
-	if !found {
-		return approval.Request{}, approval.ErrNotFound
-	}
-	return best, nil
-}
-
 // spyApprovalAuthorizer is the permissive default for the #269 park tests,
 // which are about the gate rather than the decision floor. The floor's own
 // behaviour is exercised in approval_decide_test.go and authz_test.go.
@@ -276,14 +241,6 @@ func mutateAct() jobs.Action {
 		Kind: jobs.ActionOperation, OperationName: "service.restart",
 		OperationArgs: map[string]string{"service": "nginx"},
 	}
-}
-
-// resolvedMutateAct is mutateAct as the capability layer resolves it, for a
-// test that compares against what Run hashed or recorded.
-func resolvedMutateAct() jobs.Action {
-	act := mutateAct()
-	act.RiskClass = jobs.RiskClassMutate
-	return act
 }
 
 // TestGatedDispatchParksAndSendsNothing is the core of #269: a gated dispatch
@@ -511,7 +468,7 @@ func TestFrozenRelayNeverEvenParks(t *testing.T) {
 	}
 }
 
-// --- the shape key on the parked record (#415) ----------------------------
+// --- a request is addressed by its plan hash alone (AP-92) ----------------
 
 // shapeFixture is approvalFixture with the registry handed back, so a test can
 // grow the fleet BETWEEN dispatches — which is the whole point of test
@@ -537,47 +494,11 @@ func shapeFixture(t *testing.T, labelled map[string]map[string]string, gate Appr
 	return s, disp, reg
 }
 
-// TestPark_RecordsShapeKey: the parked Request carries a real computed key over
-// the same Action and the same parsed Selector — not an empty one, not a legacy
-// one.
-func TestPark_RecordsShapeKey(t *testing.T) {
-	store := newMemApprovals()
-	s, _, _ := shapeFixture(t, map[string]map[string]string{
-		"node-a": {"role": "web"},
-	}, gateEverything(t, 1), store)
-
-	sel, err := ParseSelector("node:role=web")
-	if err != nil {
-		t.Fatalf("ParseSelector: %v", err)
-	}
-	act := mutateAct()
-	_, err = s.Run(context.Background(), Principal{AccountID: "acct-g", Account: "gleipnir-prod"}, sel, act)
-	var parked *ParkedError
-	if !errors.As(err, &parked) {
-		t.Fatalf("Run: err = %v, want a park", err)
-	}
-
-	got := store.byID[parked.RequestID]
-	shape, err := sel.Shape()
-	if err != nil {
-		t.Fatalf("Shape: %v", err)
-	}
-	want := approval.HashPlanShape(resolvedMutateAct(), shape)
-	if got.ShapeKey != want {
-		t.Errorf("stored ShapeKey = %q, want %q", got.ShapeKey, want)
-	}
-	if approval.IsLegacyShapeKey(got.ShapeKey) {
-		t.Error("a freshly parked Request carries a legacy shape key")
-	}
-}
-
-// TestSameShapeDifferentPlanStillParks IS THE GUARD THAT THE SHAPE KEY NEVER
-// BECOMES A RELEASE LOOKUP.
-//
-// The same Action over the same Selector, after the registry grew, has the SAME
-// shape key and a DIFFERENT plan hash. It must park again. Anything else is an
-// approval-gate bypass: a human approved three Nodes and the fleet delivered
-// four.
+// TestSameShapeDifferentPlanStillParks (AP-92, AP-21): a request is addressed
+// only by its ID and its plan hash. The same Action over the same Selector,
+// after the registry grew, resolves a different fan-out and so a different plan
+// hash. It must park again. Anything else is an approval-gate bypass: a human
+// approved three Nodes and the fleet delivered four.
 func TestSameShapeDifferentPlanStillParks(t *testing.T) {
 	store := newMemApprovals()
 	s, disp, reg := shapeFixture(t, map[string]map[string]string{
@@ -616,81 +537,8 @@ func TestSameShapeDifferentPlanStillParks(t *testing.T) {
 
 	approved := store.byID[first.RequestID]
 	reparked := store.byID[second.RequestID]
-	if approved.ShapeKey != reparked.ShapeKey {
-		t.Fatalf("the two records do not share a shape key (%q vs %q), so this test proves nothing",
-			approved.ShapeKey, reparked.ShapeKey)
-	}
 	if approved.PlanHash == reparked.PlanHash {
 		t.Error("the plan hashes are equal; the fan-out stopped being bound")
-	}
-}
-
-// TestLastApprovedOfSameShape is the anti-fatigue read: the newest APPROVED
-// record of the same shape, never the record being rendered, and never a
-// pending, denied or uncomparable one.
-func TestLastApprovedOfSameShape(t *testing.T) {
-	store := newMemApprovals()
-	s, _, _ := shapeFixture(t, map[string]map[string]string{"node-a": {"role": "web"}}, gateEverything(t, 1), store)
-	ctx := context.Background()
-
-	shape := approval.HashPlanShape(resolvedMutateAct(), approval.SelectorShape{
-		Known: true,
-		Terms: []approval.SelectorTerm{{Namespace: "node", Key: "role", Value: "web"}},
-	})
-	other := approval.HashPlanShape(resolvedMutateAct(), approval.SelectorShape{Known: true})
-
-	seed := func(id, shapeKey string, state approval.State, resolved time.Time) approval.Request {
-		r := approval.Request{
-			ID: id, PlanHash: "hash-" + id, ShapeKey: shapeKey, State: state,
-			CreatedAt: apNow, ExpiresAt: apNow.Add(time.Hour), ResolvedAt: resolved,
-		}
-		store.byID[id] = r
-		return r
-	}
-
-	oldest := seed("req-old", shape, approval.StateApproved, apNow.Add(-2*time.Hour))
-	newest := seed("req-new", shape, approval.StateApproved, apNow.Add(-time.Hour))
-	seed("req-pending", shape, approval.StatePending, time.Time{})
-	seed("req-denied", shape, approval.StateDenied, apNow)
-	seed("req-elsewhere", other, approval.StateApproved, apNow)
-	rendering := seed("req-rendering", shape, approval.StateApproved, apNow.Add(time.Minute))
-
-	got, err := s.LastApprovedOfSameShape(ctx, rendering)
-	if err != nil {
-		t.Fatalf("LastApprovedOfSameShape: %v", err)
-	}
-	if got.ID != newest.ID {
-		t.Errorf("got %q, want the newest approved record of the same shape (%q)", got.ID, newest.ID)
-	}
-
-	// Rendering the oldest still excludes itself but finds the newer one.
-	if got, err := s.LastApprovedOfSameShape(ctx, oldest); err != nil || got.ID == oldest.ID {
-		t.Errorf("LastApprovedOfSameShape(%q) = %q, %v — a record must never find itself", oldest.ID, got.ID, err)
-	}
-
-	// A shape nobody else shares has no comparable prior.
-	lonely := seed("req-lonely", approval.HashPlanShape(jobs.Action{
-		Kind: jobs.ActionRawExec, RawExecArgv: []string{"uptime"}, RiskClass: jobs.RiskClassMutate,
-	}, approval.SelectorShape{Known: true}), approval.StateApproved, apNow)
-	if _, err := s.LastApprovedOfSameShape(ctx, lonely); !errors.Is(err, approval.ErrNotFound) {
-		t.Errorf("err = %v, want approval.ErrNotFound unwrapped", err)
-	}
-
-	// Uncomparable keys are refused before the store is touched.
-	for _, key := range []string{"", approval.LegacyShapeKey("req-legacy")} {
-		r := approval.Request{ID: "req-x", ShapeKey: key, State: approval.StateApproved}
-		if _, err := s.LastApprovedOfSameShape(ctx, r); !errors.Is(err, approval.ErrNotFound) {
-			t.Errorf("shape key %q: err = %v, want approval.ErrNotFound", key, err)
-		}
-	}
-}
-
-// TestLastApprovedOfSameShape_Unwired: the read is unavailable rather
-// than a nil-map panic on a Service built without approvals.
-func TestLastApprovedOfSameShape_Unwired(t *testing.T) {
-	s := build(t, seams{reg: registry.NewInMemory()})
-	if _, err := s.LastApprovedOfSameShape(context.Background(), approval.Request{ShapeKey: "abc"}); !errors.Is(err, ErrApprovalUnavailable) {
-		t.Errorf("err = %v, want ErrApprovalUnavailable", err)
 	}
 }
 

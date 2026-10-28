@@ -13,9 +13,8 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/registry"
 )
 
-// Execution is the dispatch pipeline: Run, Start, Drain, Plan, CancelJob and
-// the MCP task verbs. Construct it with NewExecution; the composition root
-// owns the one instance.
+// Execution is the dispatch pipeline: Run, Start, Drain, Plan and CancelJob.
+// Construct it with NewExecution; the composition root owns the one instance.
 type Execution struct {
 	// control carries the Freeze, the Authorizer and (through its Recorder) the
 	// audit trail, metrics and log. read is the registry and the read lane;
@@ -423,12 +422,6 @@ func (s *Execution) prepareDispatch(ctx context.Context, p Principal, sel Select
 		if ap.created != nil {
 			s.approvals.notifyParked(ctx, *ap.created)
 		}
-		// Attach an MCP task handle, if Tasks are wired. Last, and never
-		// fatally: the park is already durable and already audited, and
-		// ADR-0028 requires the universal result path to stay whole with the
-		// shim deleted — so a handle store that is down costs a client its poll
-		// handle and costs the dispatch nothing.
-		ap.parked.TaskID, ap.parked.TaskExpiresAt = s.approvals.mintTaskHandle(ctx, p, ap.parked.RequestID)
 		return prep{}, ap.parked
 	}
 
@@ -549,10 +542,10 @@ func (s *Execution) reattach(ctx context.Context, p Principal, sel Selector, nod
 	return out, nil
 }
 
-// account is Run's post-dispatch half: it binds the Job onto an MCP task
-// handle, counts the outcomes, and writes the KindDispatch audit record. It is
-// shared by Run and Start. alwaysLog logs an audit-write failure even off the
-// reserved path, for Start's background accounting, whose caller is gone.
+// account is Run's post-dispatch half: it counts the outcomes and writes
+// the KindDispatch audit record. It is shared by Run and Start. alwaysLog logs
+// an audit-write failure even off the reserved path, for Start's background
+// accounting, whose caller is gone.
 func (s *Execution) account(ctx context.Context, p Principal, sel Selector, pr prep, res dispatchResult, dispatchErr error, alwaysLog bool) ([]NodeResult, error) {
 	act, ap, reserved := pr.act, pr.ap, pr.reserved
 
@@ -562,10 +555,10 @@ func (s *Execution) account(ctx context.Context, p Principal, sel Selector, pr p
 	// condition jobEngine.run itself now detaches its own persist-then-dispatch
 	// pipeline for (execution.go's runCtx) — so a client timeout/drop/cancel
 	// landing during or right after dispatch must not be allowed to strand the
-	// accounting for a Job that has already run: bindTaskHandleJob and the
-	// KindDispatch audit record below are the last two writes this call still
-	// owes an approval that already released real work, and dropping them
-	// would leave that Job with no durable trail. Detached
+	// accounting for a Job that has already run: the KindDispatch
+	// audit record below is the last write this call still owes an approval
+	// that already released real work, and dropping it would leave that Job
+	// with no durable trail. Detached
 	// (context.WithoutCancel) for the same reason as runCtx, and additionally
 	// BOUNDED (context.WithTimeout) because, unlike runCtx, this ctx is never
 	// implicitly bounded by anything downstream — no daemon-side wall clock
@@ -586,11 +579,6 @@ func (s *Execution) account(ctx context.Context, p Principal, sel Selector, pr p
 		acctCtx, cancelAcct = context.WithTimeout(context.WithoutCancel(ctx), reservedPostDispatchAccountingTimeout)
 		defer cancelAcct()
 	}
-
-	// And onto the MCP task handle that was waiting for it, so a poll after the
-	// release reports `completed` rather than `working` forever. A handle is
-	// per parked dispatch, so there is exactly one Job to record against it.
-	s.approvals.bindTaskHandleJob(acctCtx, ap.requestID, res.jobID)
 
 	for _, r := range res.results {
 		s.recorder().metrics.IncDispatch(r.Outcome)
@@ -656,13 +644,13 @@ func (s *Execution) account(ctx context.Context, p Principal, sel Selector, pr p
 }
 
 // reservedPostDispatchAccountingTimeout bounds the detached context Run uses
-// for post-dispatch accounting (bindTaskHandleJob, the KindDispatch audit
-// record) on the reserved-Job-ID path (AP-77 continuation): long enough that
-// a healthy local SQLite write never trips it — the same store calls
-// jobEngine.run's own runCtx already makes on this path, unbounded, backed
-// only by the driver's busy_timeout (store.go's busyTimeoutMillis) — and
-// short enough that a wedged store cannot hang the calling goroutine forever
-// once the client that started the call is long gone.
+// for post-dispatch accounting (the KindDispatch audit record) on the
+// reserved-Job-ID path (AP-77 continuation): long enough that a healthy local
+// SQLite write never trips it — the same store calls jobEngine.run's own
+// runCtx already makes on this path, unbounded, backed only by the driver's
+// busy_timeout (store.go's busyTimeoutMillis) — and short enough that a wedged
+// store cannot hang the calling goroutine forever once the client that started
+// the call is long gone.
 const reservedPostDispatchAccountingTimeout = 30 * time.Second
 
 // ErrJobNotRequestedByCaller is CancelJob's refusal for a machine Account
@@ -729,12 +717,6 @@ var ErrJobNotRequestedByCaller = errors.New(
 // EngageFreeze/ReleaseFreeze: the cancel itself is attempted first, and the
 // audit write is skipped if it errors — there is nothing true to record
 // (e.g. jobs.ErrJobNotFound: no Task was ever touched).
-//
-// CancelTask (mcptask.go) calls this and inherits the gate for a Task that
-// already has a Job. A still-parked task handle — one CreateTaskHandle
-// created but no dispatch has claimed yet — is cancelled without ever
-// reaching CancelJob, so that path stays owner-scoped and ungated; only a
-// Job-backed cancel is gated here.
 func (s *Execution) CancelJob(ctx context.Context, p Principal, jobID string) error {
 	if err := s.control.authz.AuthorizeControl(withoutAssertions(ctx), p, ControlCancelJob); err != nil {
 		return s.refuseControl(ctx, p, err)

@@ -42,7 +42,6 @@ type seams struct {
 	gate             ApprovalGate
 	approvals        ApprovalStore
 	approvalAuthz    ApprovalAuthorizer
-	mcpTasks         MCPTaskStore
 	approvalNotifier ApprovalNotifier
 
 	auditQ     AuditQuery
@@ -125,13 +124,13 @@ func build(t *testing.T, s seams) *testSvc {
 	var appr *Approvals
 	if s.gate != nil || s.approvals != nil || s.approvalAuthz != nil {
 		// Panics on a partial set, as WithApprovals did.
-		appr = NewApprovals(rec, s.gate, s.approvals, s.approvalAuthz, s.mcpTasks, s.approvalNotifier, s.now)
+		appr = NewApprovals(rec, s.gate, s.approvals, s.approvalAuthz, s.approvalNotifier, s.now)
 	} else {
 		notifier := s.approvalNotifier
 		if notifier == nil {
 			notifier = noopApprovalNotifier{}
 		}
-		appr = newApprovals(rec, noopApprovalGate{}, nil, nil, s.mcpTasks, notifier, s.now)
+		appr = newApprovals(rec, noopApprovalGate{}, nil, nil, notifier, s.now)
 	}
 
 	if s.hasExecution() && (s.jobsRepo == nil || s.tasksRepo == nil || s.conduit == nil) {
@@ -185,7 +184,7 @@ func buildRaw(t *testing.T, s seams) *testSvc {
 	aliasAdmin := &PolicyAliasAdmin{control: control, src: s.aliases, rec: aliasRec}
 	appr := &Approvals{
 		rec: rec, gate: s.gate, store: s.approvals, authz: s.approvalAuthz,
-		tasks: s.mcpTasks, notifier: s.approvalNotifier, now: s.now,
+		notifier: s.approvalNotifier, now: s.now,
 	}
 	svc := &Execution{
 		control:   control,

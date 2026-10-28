@@ -109,9 +109,9 @@ type auditShapeAlert struct {
 // a CHECK constraint or an aborting trigger on INSERT here: a Relay that cannot
 // write an audit record cannot dispatch, so bricking the control plane on
 // rollback would be worse than the ordering defect. (The append-only triggers block
-// only UPDATE and DELETE, never INSERT, for the same reason.) Unlike
-// backfillShapeKeys, this repairs no audit row and asserts nothing; the only
-// thing it writes is its own alert.
+// only UPDATE and DELETE, never INSERT, for the same reason.) This
+// repairs no audit row and asserts nothing; the only thing it writes is its
+// own alert.
 func warnOnLegacyAuditTimestamps(ctx context.Context, db *sql.DB, logger *slog.Logger) {
 	alert, err := readAuditShapeAlert(ctx, db)
 	if err != nil {

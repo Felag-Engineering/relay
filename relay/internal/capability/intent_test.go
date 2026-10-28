@@ -133,7 +133,7 @@ func TestNewExecutionPanicsWhenAuditSinkHasNoIntentRecorder(t *testing.T) {
 	rec := NewRecorder(&spyAuditSink{}, nil, nil)
 	ctl := NewControl(rec, &spyAuthorizer{}, &fakeFreezeStore{})
 	read := newReadLane(rec, registry.NewInMemory(), nil, nil, nil, nil, testSettings, nil)
-	appr := newApprovals(rec, noopApprovalGate{}, nil, nil, nil, noopApprovalNotifier{}, nil)
+	appr := newApprovals(rec, noopApprovalGate{}, nil, nil, noopApprovalNotifier{}, nil)
 	defer func() {
 		r := recover()
 		if r == nil {

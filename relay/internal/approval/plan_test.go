@@ -85,8 +85,7 @@ func TestHashPlanChangesWithAction(t *testing.T) {
 // argument value, argument key, or node ID may forge a field boundary or a
 // framing count in HashPlan's preimage.
 //
-// It uses an Operation name opvocab does not know (as shape_test.go's
-// injection table does): that is the reachable case — a Template Operation's
+// It uses an Operation name opvocab does not know: that is the reachable case — a Template Operation's
 // argument keys are exactly the ones neither ValidateArgNames call site
 // constrains.
 func TestHashPlanEncodingIsUnambiguous(t *testing.T) {
@@ -137,9 +136,8 @@ func TestHashPlanEncodingIsUnambiguous(t *testing.T) {
 		}
 	}
 
-	// HashPlan additionally hashes the resolved fan-out — HashPlanShape does
-	// not — so the node list gets its own pair of injection cases, mirroring
-	// the argument ones above.
+	// HashPlan also hashes the resolved fan-out, so the node list gets its
+	// own pair of injection cases, mirroring the argument ones above.
 	nodePairs := []struct {
 		name string
 		a, b []string

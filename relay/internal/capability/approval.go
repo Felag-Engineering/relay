@@ -59,10 +59,6 @@ type ApprovalStore interface {
 	BindJob(ctx context.Context, id, jobID string, now time.Time) (approval.Request, error)
 	Get(ctx context.Context, id string) (approval.Request, error)
 	Pending(ctx context.Context) ([]approval.Request, error)
-	// LastApprovedByShape is the approval object's anti-fatigue read (AP-23,
-	// D10): the newest approved record of the same SHAPE. It releases nothing
-	// — see approval.Repository for why that separation is structural.
-	LastApprovedByShape(ctx context.Context, shapeKey, excludeID string) (approval.Request, error)
 	// RecordDecision returns the domain's usual (Request, error) pair. On a
 	// domain refusal, the Request is the one read inside the refusing
 	// transaction — see approval.Repository.
@@ -123,7 +119,7 @@ type noopApprovalNotifier struct{}
 func (noopApprovalNotifier) NotifyParked(context.Context, ApprovalNotice) {}
 
 // Approvals is the approval callout (ADR-0027): the gate, the parked-Request
-// store, the MCP task handles, the role floor on a decision and
+// store, the role floor on a decision and
 // the notifier. It never dispatches — it cannot reach Run, Start or CancelJob —
 // which is what lets the approval seams of every adapter be handed this and not
 // the Execution. Build it with NewApprovals.
@@ -136,11 +132,6 @@ type Approvals struct {
 	// gate was wired without one, which NewApprovals refuses.
 	gate  ApprovalGate
 	store ApprovalStore
-
-	// tasks persists MCP task handles (ADR-0028). Nil disables the
-	// Tasks extension entirely, which loses nothing: the universal
-	// pending_approval result path does not use handles.
-	tasks MCPTaskStore
 
 	// authz is the role floor on a DECISION: deciding a Request
 	// requires the role that Action would have needed to be requested. Nil only
@@ -170,13 +161,6 @@ type Approvals struct {
 // approval mechanism handing out authority instead of withholding it. Passing an
 // incomplete set is a composition-root bug, so it panics rather than degrading.
 //
-// tasks is the MCP task-handle store (ADR-0028), enabling the Tasks
-// extension's server side. Optional, and its absence is not a degraded mode but
-// the prior one: with no store, dispatches park and return the universal
-// `pending_approval` result exactly as before. ADR-0028 requires that
-// path to keep working with the shim deleted, so nothing below it may come to
-// depend on a handle existing.
-//
 // notifier is the out-of-band notification envelope (ADR-0027): where to push a
 // freshly parked dispatch so an approver hears about it. Optional, and
 // deliberately so. The notification is a delivery convenience; the guarantee is
@@ -187,7 +171,7 @@ type Approvals struct {
 // now is the approval clock, a test seam: approval expiry and park timestamps
 // are time-dependent, and a test that sleeps is a test that flakes. Nil is the
 // wall clock in UTC.
-func NewApprovals(rec *Recorder, gate ApprovalGate, store ApprovalStore, authz ApprovalAuthorizer, tasks MCPTaskStore, notifier ApprovalNotifier, now func() time.Time) *Approvals {
+func NewApprovals(rec *Recorder, gate ApprovalGate, store ApprovalStore, authz ApprovalAuthorizer, notifier ApprovalNotifier, now func() time.Time) *Approvals {
 	if rec == nil {
 		panic("capability: NewApprovals: recorder must not be nil")
 	}
@@ -203,19 +187,18 @@ func NewApprovals(rec *Recorder, gate ApprovalGate, store ApprovalStore, authz A
 	if notifier == nil {
 		notifier = noopApprovalNotifier{}
 	}
-	return newApprovals(rec, gate, store, authz, tasks, notifier, now)
+	return newApprovals(rec, gate, store, authz, notifier, now)
 }
 
 // newApprovals assembles an Approvals with no checks. Only NewApprovals and
 // _test.go files call it; it is the only route to an Approvals with the no-op
 // gate or no store.
-func newApprovals(rec *Recorder, gate ApprovalGate, store ApprovalStore, authz ApprovalAuthorizer, tasks MCPTaskStore, notifier ApprovalNotifier, now func() time.Time) *Approvals {
+func newApprovals(rec *Recorder, gate ApprovalGate, store ApprovalStore, authz ApprovalAuthorizer, notifier ApprovalNotifier, now func() time.Time) *Approvals {
 	return &Approvals{
 		rec:           rec,
 		gate:          gate,
 		store:         store,
 		authz:         authz,
-		tasks:         tasks,
 		notifier:      notifier,
 		now:           now,
 		newApprovalID: defaultID,
@@ -262,25 +245,6 @@ type ParkedError struct {
 
 	// ExpiresAt is when the parked request lapses.
 	ExpiresAt time.Time
-
-	// TaskID is the MCP task handle attached to this park (ADR-0028), or
-	// empty when Tasks are not wired or the handle could not be minted.
-	//
-	// Empty is a fully supported answer, not a failure: a surface renders the
-	// universal `pending_approval` result either way, and only a Tasks-capable
-	// client is ever told about a handle at all. Nothing below this line may
-	// come to require one.
-	TaskID string
-
-	// TaskExpiresAt is when that handle stops being pollable — at or before
-	// ExpiresAt above, and never more than mcptask.MaxTTL away.
-	//
-	// Carried separately rather than let a surface reuse ExpiresAt, because the
-	// two answer different questions: ExpiresAt is when the APPROVAL lapses,
-	// TaskExpiresAt is when the HANDLE does. A shim rendering SEP-2663's ttlMs
-	// from the wrong one would tell a client to keep polling something that has
-	// already been swept.
-	TaskExpiresAt time.Time
 
 	// Askable reports whether THIS park can be asked about in-band by THIS
 	// caller, on THIS call — the fact an MCP surface needs to decide whether to
@@ -405,10 +369,9 @@ func (a *Approvals) checkApproval(ctx context.Context, p Principal, sel Selector
 	// An already-satisfied approval for exactly this Plan releases the
 	// dispatch. Anything else — pending, denied, expired, or absent — does not.
 	//
-	// The lookup is by PLAN HASH and nothing else. The shape key is
-	// never consulted here and must never be: it deliberately excludes the
-	// resolved fan-out, so releasing on it would release a dispatch over a Node
-	// set nobody approved.
+	// The lookup is by PLAN HASH and nothing else: the plan hash covers the
+	// resolved fan-out, so no other key may release a dispatch over a Node set
+	// nobody approved.
 	existing, lookupErr := a.store.ByPlanHash(ctx, planHash)
 
 	// An approval releases one execution (AP-77): a Request that is Satisfied
@@ -458,15 +421,7 @@ func (a *Approvals) checkApproval(ctx context.Context, p Principal, sel Selector
 	if err != nil {
 		return approvalDecision{}, err
 	}
-	// The Selector is normalised into shape terms BEFORE the Request exists,
-	// and a failure fails the dispatch rather than parking with a meaningless
-	// key: a record whose shape key means nothing is a record the approval
-	// object could later group wrongly.
-	shape, err := sel.Shape()
-	if err != nil {
-		return approvalDecision{}, fmt.Errorf("capability: normalise selector for shape key: %w", err)
-	}
-	r := approval.NewRequest(id, planHash, p.AccountID, p.Account, act, nodes, shape, rules, req, now)
+	r := approval.NewRequest(id, planHash, p.AccountID, p.Account, act, nodes, rules, req, now)
 	if err := a.store.Create(ctx, r); err != nil {
 		return approvalDecision{}, fmt.Errorf("capability: park dispatch for approval: %w", err)
 	}

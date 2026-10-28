@@ -85,9 +85,8 @@ func toolNameFromAddToolArg(arg ast.Expr) (string, bool) {
 // mcp.New's own wiring would register it conditionally at runtime — the
 // reason this is an AST walk rather than a live ListTools call against
 // newTestServer: mcp.New registers approve_request only when
-// WithApprovalDecider is passed, and tasks/get and tasks/cancel only when a
-// TaskResolver is non-nil, so a live-server check sees only a subset of the
-// package's real registration sites. The AST walk sees every one,
+// WithApprovalDecider is passed, so a live-server check sees only a subset of
+// the package's real registration sites. The AST walk sees every one,
 // regardless of how it is wired at runtime.
 //
 // FAIL CLOSED (security review, cycle 2, SR1): a registration whose name
@@ -194,16 +193,13 @@ func TestNoPreflightToolOrMethodIsRegistered(t *testing.T) {
 		names[f.name] = true
 	}
 
-	// The ten entry points registered today (tools_approval.go:102,
-	// tools_jobs.go:40,62, tools_execution.go:544,591, tools_operations.go:142,
-	// tools_nodes.go:176,212, tasks.go:142,149). Any addition must be named
+	// The eight entry points registered today. Any addition must be named
 	// here and reviewed against PF-1 before it passes.
 	want := []string{
 		"list_nodes", "describe_node", "list_operations",
 		"run_operation", "raw_exec",
 		"cancel_job", "get_job",
 		"approve_request",
-		"tasks/get", "tasks/cancel",
 	}
 	wantSet := make(map[string]bool, len(want))
 	for _, w := range want {
@@ -248,12 +244,11 @@ func TestNoPreflightToolOrMethodIsRegistered(t *testing.T) {
 	}
 }
 
-// noopExecutor, noopTaskResolver and noopApprovalDecider satisfy Executor/
-// TaskResolver/ApprovalDecider well enough to be wired into a real server
-// for liveRegisteredToolNames below — every conditionally-registered tool
-// needs a non-nil collaborator to be MOUNTED, but none of them is ever
-// CALLED (this test only lists tools, it never calls one), so every method
-// here is an unreached stub.
+// noopExecutor and noopApprovalDecider satisfy Executor/ApprovalDecider well
+// enough to be wired into a real server for liveRegisteredToolNames below —
+// every conditionally-registered tool needs a non-nil collaborator to be
+// MOUNTED, but none of them is ever CALLED (this test only lists tools, it
+// never calls one), so every method here is an unreached stub.
 type noopExecutor struct{}
 
 func (noopExecutor) Start(ctx context.Context, p capability.Principal, sel capability.Selector, act jobs.Action, o capability.StartOptions) (capability.StartedJob, error) {
@@ -266,15 +261,6 @@ func (noopExecutor) Plan(ctx context.Context, p capability.Principal, sel capabi
 	return capability.PlanResult{}, nil
 }
 
-type noopTaskResolver struct{}
-
-func (noopTaskResolver) ResolveTask(ctx context.Context, p capability.Principal, taskID string) (capability.TaskView, error) {
-	return capability.TaskView{}, nil
-}
-func (noopTaskResolver) CancelTask(ctx context.Context, p capability.Principal, taskID string) (capability.TaskView, error) {
-	return capability.TaskView{}, nil
-}
-
 type noopApprovalDecider struct{}
 
 func (noopApprovalDecider) DecideApproval(ctx context.Context, p capability.Principal, in capability.ApprovalDecision) (approval.Request, error) {
@@ -282,8 +268,8 @@ func (noopApprovalDecider) DecideApproval(ctx context.Context, p capability.Prin
 }
 
 // liveRegisteredToolNames builds a real mcp.New server with every
-// conditionally-registered tool switched on (a non-nil TaskResolver and an
-// ApprovalDecider, alongside the always-registered ones), serves it over a
+// conditionally-registered tool switched on (an ApprovalDecider, alongside the
+// always-registered ones), serves it over a
 // plain httptest server (New returns a bare http.Handler; the
 // Authenticator.Middleware that wraps it in production is orthogonal to
 // tool registration), and returns the set of tool names a real MCP client's
@@ -294,7 +280,7 @@ func (noopApprovalDecider) DecideApproval(ctx context.Context, p capability.Prin
 // alone would miss any tool the fixture below fails to switch on).
 func liveRegisteredToolNames(t *testing.T) map[string]bool {
 	t.Helper()
-	handler := New(nil, stubOpsLister{}, noopExecutor{}, nil, nil, noopTaskResolver{}, WithApprovalDecider(noopApprovalDecider{}))
+	handler := New(nil, stubOpsLister{}, noopExecutor{}, nil, nil, WithApprovalDecider(noopApprovalDecider{}))
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 

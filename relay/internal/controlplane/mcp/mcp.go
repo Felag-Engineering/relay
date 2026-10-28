@@ -11,7 +11,7 @@
 // results).
 //
 // Every file here except the execution tools (tools_execution.go,
-// tools_jobs.go, tasks.go, tools_approval.go, elicit.go) is a strict file: its
+// tools_jobs.go, tools_approval.go, elicit.go) is a strict file: its
 // non-test source names no capability identifier outside
 // capabilityReadAllowlist (e.g. capability.StateEval, needed for
 // NodeListing/NodeDescription's Eval field), and never capability.Principal.
@@ -204,8 +204,8 @@ const serverVersion = "0.1.0"
 // fixture exercising only the execution tools; a stray read-tool call
 // through a nil lane panics rather than failing legibly, mirroring a nil
 // ReadAuditor.
-// Option configures a server built by New — WithClock overrides the Tasks
-// surface's clock, WithApprovalDecider wires the in-band approval tool,
+// Option configures a server built by New — WithClock overrides the
+// clock, WithApprovalDecider wires the in-band approval tool,
 // WithApprovalElicitation turns on the in-band MRTR question path, and
 // WithToolCallObserver attaches the tool-call event publisher.
 type Option func(*serverOptions)
@@ -229,11 +229,10 @@ func WithLogger(l *slog.Logger) Option {
 	return func(cfg *serverOptions) { cfg.log = l }
 }
 
-// WithClock overrides the clock the Tasks surface renders timestamps from
-// (production default: time.Now().UTC()). cfg.now is also the
-// clock an answered retry opens its sealed request state against (seal
+// WithClock overrides the clock (production default: time.Now().UTC()). It is
+// the clock an answered retry opens its sealed request state against (seal
 // expiry) and passes to acceptElicitedAnswer for its PastDeadline judgement —
-// still a test seam, never configuration (invariant 11).
+// a test seam, never configuration (invariant 11).
 func WithClock(now func() time.Time) Option {
 	return func(o *serverOptions) { o.now = now }
 }
@@ -248,7 +247,7 @@ func WithToolCallObserver(o ToolCallObserver) Option {
 	return func(cfg *serverOptions) { cfg.toolCalls = o }
 }
 
-func New(lane ReadLane, ops OperationLister, exec Executor, results JobResultReader, reads ReadAuditor, tasks TaskResolver, opts ...Option) http.Handler {
+func New(lane ReadLane, ops OperationLister, exec Executor, results JobResultReader, reads ReadAuditor, opts ...Option) http.Handler {
 	cfg := serverOptions{now: func() time.Time { return time.Now().UTC() }}
 	for _, o := range opts {
 		o(&cfg)
@@ -294,11 +293,6 @@ func New(lane ReadLane, ops OperationLister, exec Executor, results JobResultRea
 	registerOperationTools(srv, ops, lane)
 	registerExecutionTools(srv, exec, results, ops, ask, reads, cfg.approvals, cfg.now)
 	registerJobTools(srv, exec, results, reads)
-	// tasks/get and tasks/cancel (SEP-2663). A nil resolver registers
-	// nothing, which is a Relay without the Tasks extension: parked dispatches
-	// still return the universal pending_approval result, so the
-	// extension's absence costs a client its poll handle and nothing else.
-	registerTaskMethods(srv, tasks, results, reads, cfg.now)
 	// approve_request (ADR-0029). A nil decider registers nothing, so
 	// the in-band rung is opt-in at the composition root: without it, parked
 	// dispatches are answerable only on the authenticated /api/v1 endpoint,
@@ -310,18 +304,7 @@ func New(lane ReadLane, ops OperationLister, exec Executor, results JobResultRea
 	// already stateless request/response over shared backing stores — a Job ID
 	// is the durable handle, never an Mcp-Session-Id. Also removes the
 	// per-instance session map that would break behind a round-robin LB.
-	var handler http.Handler = sdkmcp.NewStreamableHTTPHandler(func(*http.Request) *sdkmcp.Server {
+	return sdkmcp.NewStreamableHTTPHandler(func(*http.Request) *sdkmcp.Server {
 		return srv
 	}, &sdkmcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true})
-
-	// The SEP-2663 task-result shim (ADR-0028) wraps the SDK handler,
-	// because the SDK cannot express a CreateTaskResult (its resultType is
-	// unexported and its Result interface is sealed). It is mounted ONLY when
-	// Tasks are wired, so a Relay without the extension has none of this code
-	// on its request path at all — not a disabled branch, an absent one. See
-	// taskshim.go's header for the preconditions this depends on.
-	if tasks != nil {
-		handler = withTaskShim(handler, cfg.now, cfg.log)
-	}
-	return handler
 }

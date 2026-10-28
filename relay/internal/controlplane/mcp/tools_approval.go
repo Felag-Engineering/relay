@@ -20,10 +20,10 @@ import (
 // decision path, and it exists because of a decision recorded in ADR-0029.
 //
 // Everything else about ADR-0027 is unchanged and is enforced by
-// no_decision_test.go, which still scans every other file here and in
-// internal/mcptask. The exemption is a single filename in that test, so the
-// whole of this hole is one `git show` away for any reviewer, and a second
-// decision path cannot appear anywhere else by accident.
+// no_decision_test.go, which still scans every other file here. The exemption
+// is a single filename in that test, so the whole of this hole is one
+// `git show` away for any reviewer, and a second decision path cannot appear
+// anywhere else by accident.
 //
 // # What this file may and may not assume
 //
@@ -102,8 +102,7 @@ type ApprovalDecider interface {
 //
 // Absent, `approve_request` is not registered at all and the Relay behaves
 // exactly as it did before: parked dispatches are answered only on the
-// authenticated /api/v1 decision endpoint. That is the same graceful-absence
-// posture the Tasks resolver takes, and it means the in-band rung is opt-in at
+// authenticated /api/v1 decision endpoint. That makes the in-band rung opt-in at
 // the composition root rather than something a deployment gets by upgrading.
 func WithApprovalDecider(d ApprovalDecider) Option {
 	return func(o *serverOptions) { o.approvals = d }
@@ -146,7 +145,7 @@ var errNoNamedApprover error = noNamedApproverError{}
 
 // assertedApprover validates and trims a caller-asserted approver identity —
 // the bound shared by approve_request's `approver` argument and the answered
-// retry's responder username (owner decision 2, AP-70 as amended).
+// retry's responder username (owner decision 2).
 //
 // Order is load-bearing:
 //

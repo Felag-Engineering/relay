@@ -49,9 +49,7 @@ func (o *capturingObserver) snapshot() []mcp.ToolCallEvent {
 // newObservedServer is toolevents_test.go's own fixture: newTestServer's
 // shape (one Node, a real capability.Execution over a
 // fakeConduit), minus the Policy/Template caches this file's tests don't
-// need, plus observer wired via mcp.WithToolCallObserver and the Execution wired
-// as the Tasks resolver too — tasks/get must never publish a tool-call
-// event, and exercising that needs the extension actually registered.
+// need, plus observer wired via mcp.WithToolCallObserver.
 func newObservedServer(t *testing.T, nodeID, hostname string, observer mcp.ToolCallObserver) (testServer, *fakeConduit) {
 	t.Helper()
 
@@ -93,10 +91,7 @@ func newObservedServer(t *testing.T, nodeID, hostname string, observer mcp.ToolC
 	if observer != nil {
 		opts = append(opts, mcp.WithToolCallObserver(observer))
 	}
-	// The Execution doubles as the Tasks resolver (last arg), exactly like
-	// cmd/relay/control_surfaces.go's mcpSurface.Mount — needed so tasks/get
-	// is actually registered for TestToolCallMiddleware_DoesNotFireFor.
-	handler := mcp.New(testReadLane{svc: capSvc.ReadLane}, opsLister{}, capSvc.Execution, results, nil, capSvc.Execution, opts...)
+	handler := mcp.New(testReadLane{svc: capSvc.ReadLane}, opsLister{}, capSvc.Execution, results, nil, opts...)
 
 	cert := relaytest.SelfSignedServerCert(t, "mcp-test")
 	controlSrv := controlplane.New(
@@ -192,8 +187,8 @@ func TestToolCallMiddleware_RawExec_CarriesFullArgv(t *testing.T) {
 }
 
 // TestToolCallMiddleware_DoesNotFireFor proves the middleware fires ONLY for
-// tools/call: initialize (done implicitly by connect), tools/list, and
-// tasks/get must all leave the observer untouched.
+// tools/call: initialize (done implicitly by connect) and tools/list must
+// both leave the observer untouched.
 func TestToolCallMiddleware_DoesNotFireFor(t *testing.T) {
 	obs := &capturingObserver{}
 	ts, _ := newObservedServer(t, "node-1", "", obs)
@@ -203,33 +198,9 @@ func TestToolCallMiddleware_DoesNotFireFor(t *testing.T) {
 		t.Fatalf("ListTools: %v", err)
 	}
 
-	postTasksGet(t, ts)
-
 	if events := obs.snapshot(); len(events) != 0 {
-		t.Fatalf("got %d events after initialize/tools-list/tasks-get, want 0: %+v", len(events), events)
+		t.Fatalf("got %d events after initialize/tools-list, want 0: %+v", len(events), events)
 	}
-}
-
-// postTasksGet sends a raw tasks/get JSON-RPC request against ts, proving
-// (alongside TestToolCallMiddleware_DoesNotFireFor's assertion) that the
-// middleware's `method == "tools/call"` guard actually excludes it. The
-// request targets an unknown task id — a 4xx/error response is fine; only
-// whether the observer fired matters here.
-func postTasksGet(t *testing.T, ts testServer) {
-	t.Helper()
-	body := `{"jsonrpc":"2.0","id":1,"method":"tasks/get","params":{"taskId":"no-such-task"}}`
-	req, err := http.NewRequest(http.MethodPost, ts.base+"/mcp", strings.NewReader(body))
-	if err != nil {
-		t.Fatalf("NewRequest: %v", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json, text/event-stream")
-	req.Header.Set("MCP-Protocol-Version", "2026-07-28")
-	resp, err := ts.authed.Do(req)
-	if err != nil {
-		t.Fatalf("Do: %v", err)
-	}
-	defer resp.Body.Close()
 }
 
 // TestToolCallMiddleware_LeakTest_ListNodes is the behavioural complement to

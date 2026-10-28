@@ -47,20 +47,6 @@ func Connect(t *testing.T, base string, client *http.Client) *sdkmcp.ClientSessi
 	return session
 }
 
-// ConnectWith is Connect with a hook to configure the underlying client
-// before it dials — the seam a test needs to register custom JSON-RPC methods
-// via sdkmcp.AddSendingCustomMethod, since the extension methods Relay serves
-// (tasks/get, tasks/cancel, SEP-2663) are not on the SDK's standard
-// dispatch table on either side.
-func ConnectWith(t *testing.T, base string, client *http.Client, setup func(*sdkmcp.Client)) *sdkmcp.ClientSession {
-	t.Helper()
-	session, err := tryConnect(t, base, client, ConnectOptions{Setup: setup})
-	if err != nil {
-		t.Fatalf("client.Connect: %v", err)
-	}
-	return session
-}
-
 // TryConnect is Connect without the fatal: it returns the connection error
 // instead, for tests asserting that a credential is *refused* at the MCP
 // endpoint (a revoked token, a disabled Account, a non-credential).
@@ -87,7 +73,7 @@ type ConnectOptions struct {
 	// Session is passed to the Connect call. ProtocolVersion lets a test build
 	// a client that negotiates an older protocol than 2026-07-28 (SEP-2322),
 	// which does not support multi-round-trip on the wire at all — useful for
-	// an AP-70 "cannot be asked" client. An empty value negotiates the latest.
+	// an AP-85 "cannot be asked" client. An empty value negotiates the latest.
 	//
 	// Such a client is NOT the same as one with MultiRoundTrip.Disabled: on an
 	// old protocol version the SDK server transparently fulfills an
@@ -96,14 +82,11 @@ type ConnectOptions struct {
 	// MultiRoundTrip setting — a client built this way must still be prepared
 	// to answer it (e.g. via ElicitationHandler) or the call will hang.
 	Session *sdkmcp.ClientSessionOptions
-	// Setup runs on the constructed client after NewClient and before Connect
-	// — the seam ConnectWith exists for (registering a custom sending method).
-	Setup func(*sdkmcp.Client)
 }
 
-// ConnectWithOptions is Connect/ConnectWith generalized to every ClientOptions
-// and ClientSessionOptions a test may need — for example ElicitingClientOptions
-// combined with a Setup that also registers the Tasks extension methods.
+// ConnectWithOptions is Connect generalized to every ClientOptions and
+// ClientSessionOptions a test may need — for example ElicitingClientOptions
+// with a declared ClientName.
 func ConnectWithOptions(t *testing.T, base string, client *http.Client, o ConnectOptions) *sdkmcp.ClientSession {
 	t.Helper()
 	session, err := tryConnect(t, base, client, o)
@@ -146,9 +129,6 @@ func tryConnect(t *testing.T, base string, client *http.Client, o ConnectOptions
 		name = defaultClientName
 	}
 	c := sdkmcp.NewClient(&sdkmcp.Implementation{Name: name, Version: "0.0.1"}, o.Client)
-	if o.Setup != nil {
-		o.Setup(c)
-	}
 	transport := &sdkmcp.StreamableClientTransport{Endpoint: base + "/mcp", HTTPClient: client}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

@@ -208,12 +208,12 @@ func (answerTestVerifier) Verify(_ context.Context, credential string) (accounts
 
 // approveRequestServer mounts the real MCP handler — with decider wired via
 // WithApprovalDecider — at /mcp behind the real Authenticator.Middleware,
-// served over plain HTTP by httptest (mirrors taskgolden_test.go's
+// served over plain HTTP by httptest (mirrors golden_test.go's
 // goldenServer; that file is package mcp_test, so the verifier is
 // redeclared here rather than shared).
 func approveRequestServer(t *testing.T, decider ApprovalDecider) *httptest.Server {
 	t.Helper()
-	handler := New(nil, stubOpsLister{}, noopExecutor{}, nil, nil, nil, WithApprovalDecider(decider))
+	handler := New(nil, stubOpsLister{}, noopExecutor{}, nil, nil, WithApprovalDecider(decider))
 	mux := http.NewServeMux()
 	mux.Handle("/mcp", handler)
 	srv := httptest.NewServer(controlplane.NewAuthenticator(answerTestVerifier{}).Middleware(mux))
@@ -1612,7 +1612,7 @@ func TestOAuthHumanSession_ChecksTheAccountKindNotTheAuthMethod(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------
-// AP-70 (as amended): approve_request's approver is bound the same way
+// approve_request's approver is bound the same way
 // -----------------------------------------------------------------------
 
 func TestApproveRequest_RefusesRatherThanTruncatesAMalformedApprover(t *testing.T) {

@@ -51,11 +51,9 @@ var toolWrites = map[string]string{
 	"describe_node":   "",
 	"list_operations": "",
 	"get_job":         "",
-	"tasks/get":       "",
 	"run_operation":   "Job",
 	"raw_exec":        "Job",
 	"cancel_job":      "Job",
-	"tasks/cancel":    "Job",
 	"approve_request": "approval Request",
 }
 

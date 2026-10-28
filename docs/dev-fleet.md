@@ -236,11 +236,6 @@ $ NODE_EXTRA_CA_CERTS=$PWD/.dev-fleet/ca-cert.pem claude
 That connects as **`admin`**, the requester, which **cannot** approve its own parked
 dispatches; `dev-approver` does that ([The approval gate](#the-approval-gate)).
 
-Claude Code does not implement the MCP Tasks extension, so gated dispatches come back as
-`pending_approval` **results**, never task handles. That is the universal path; reach the
-Tasks path with
-[`scripts/dev-fleet-mcp.sh`](#driving-the-mcp-tasks-extension-scriptsdev-fleet-mcpsh).
-
 ### Any other MCP client
 
 Point it at `https://relay:9443/mcp` with:
@@ -286,7 +281,7 @@ evaluates Policy (ADR-0002, ADR-0011).
 ## The approval gate
 
 The fleet ships an **approval gate** (`deploy/test/approval-gates.json`, ADR-0027), so
-parked dispatches and MCP task handles can be exercised. This section covers the dev fixture;
+parked dispatches can be exercised. This section covers the dev fixture;
 gates for operators (rule schema, webhook, decision endpoint) are in
 [docs/operations/approval-gates.md](operations/approval-gates.md). The nine-Node demo fleet
 runs a different, in-band gate, its own folder's `deploy/demo/approval-gates.json`
@@ -462,31 +457,18 @@ reports the same.
 `list_nodes()` shows **two distinct `policy_fingerprint` values**, because `daemon-3` loads a
 different Policy file: the registry's drift signal.
 
-## Driving the MCP Tasks extension (`scripts/dev-fleet-mcp.sh`)
+## Driving MCP by hand (`scripts/dev-fleet-mcp.sh`)
 
-Relay serves the MCP Tasks extension (SEP-2663, ADR-0028), but **no shipping MCP client
-implements it**: not the Go SDK
-([go-sdk#626](https://github.com/modelcontextprotocol/go-sdk/issues/626)), TypeScript or
-Python. Its capability is advertised in a per-request `_meta` no client sends, so an ordinary
-client never reaches `tasks/get`, `tasks/cancel` or the `CreateTaskResult` shim.
-
-`scripts/dev-fleet-mcp.sh` speaks that wire by hand. It is a curl wrapper, not a client
+`scripts/dev-fleet-mcp.sh` speaks the MCP wire by hand. It is a curl wrapper, not a client
 library, so it shows exactly what goes over the wire. `FLEET=test` or `FLEET=demo` picks the
 fleet (the make targets set it); unset, it uses `relay-test` if that project has containers,
 else `relay-demo`.
 
 ```console
 $ scripts/dev-fleet-mcp.sh init                 # export CA + both credentials
-$ scripts/dev-fleet-mcp.sh call list_nodes      # ordinary client (no Tasks capability)
-$ scripts/dev-fleet-mcp.sh call-tasks run_operation '{"selector":"tag:env=dev","operation":"pkg.install","args":{"name":"nginx"}}'
-$ scripts/dev-fleet-mcp.sh task-get <taskId>
-$ scripts/dev-fleet-mcp.sh task-cancel <taskId>
+$ scripts/dev-fleet-mcp.sh call list_nodes      # tools/call
 $ scripts/dev-fleet-mcp.sh raw tasks/update '{}' # served? it must not be
 ```
-
-The difference between `call` and `call-tasks` is the whole shim: the same gated dispatch
-returns a `pending_approval` result to an ordinary client and a `resultType: "task"` handle to
-a Tasks-capable one. Both mint the same `taskId`.
 
 ## Survive `down` / `up`
 

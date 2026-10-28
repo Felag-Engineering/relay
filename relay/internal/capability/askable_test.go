@@ -141,7 +141,7 @@ func TestOutOfBandParkIsNeverAskable(t *testing.T) {
 		// since NewRequest itself normalizes it away — must still read as not
 		// askable rather than as satisfiable.
 		r := approval.NewRequest("req-1", "hash-1", askCaller.AccountID, askCaller.Account, mutateAct(),
-			[]string{"node-a"}, approval.SelectorShape{}, []string{"rule"},
+			[]string{"node-a"}, []string{"rule"},
 			approval.Requirement{Count: 1, RequesterAllowed: true, Channel: approval.ChannelInBand, TTL: time.Hour},
 			apNow)
 		r.Require.Channel = approval.ChannelUnspecified
@@ -328,7 +328,7 @@ func TestAskableReadsTheMergedRequirement(t *testing.T) {
 func TestAskableAudienceReadsAsDecideDoes(t *testing.T) {
 	newReq := func(audience []string) approval.Request {
 		return approval.NewRequest("req-1", "hash-1", askCaller.AccountID, askCaller.Account, mutateAct(),
-			[]string{"node-a"}, approval.SelectorShape{}, []string{"rule"},
+			[]string{"node-a"}, []string{"rule"},
 			approval.Requirement{Count: 1, RequesterAllowed: true, Channel: approval.ChannelInBand, Audience: audience},
 			apNow)
 	}

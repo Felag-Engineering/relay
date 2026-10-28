@@ -71,8 +71,7 @@ type surfaceDeps struct {
 	// renders (api.Deps.HarnessSetup, console.Deps.HarnessSetup); public data.
 	harnessSetup harnesssetup.Target
 	ops          mcp.OperationLister
-	// execution is Execution: mcp Executor and TaskResolver; api Exec; console
-	// Cancel.
+	// execution is Execution: mcp Executor; api Exec; console Cancel.
 	execution *capability.Execution
 	// approvals is the approval callout: mcp ApprovalDecider; api Approvals; console
 	// Approvals (Job detail's read).
@@ -165,11 +164,6 @@ type controlSurface interface {
 type mcpSurface struct{}
 
 func (mcpSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
-	// The last argument is the MCP Tasks resolver (ADR-0028) — the SAME
-	// *capability.Execution once more. Resolving a task handle reads an approval
-	// Request and may cancel a Job, so it goes through the one capability layer
-	// like everything else (invariant 10) rather than reaching a store.
-	//
 	// There is no certificate-expiry window option: the MCP read tools
 	// resolve and evaluate nothing — state: Labels arrive already evaluated
 	// on the lane's StateEval, which d.readLane resolves against the same
@@ -194,10 +188,10 @@ func (mcpSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		// ErrWeakChannel refuses every tool-delivered answer.
 		mcp.WithApprovalDecider(d.approvals),
 		// The MRTR envelope over the same decision seam (ADR-0029
-		// decision 6; ADR-0028 as amended 2026-09-24): an askable in-band
-		// park from a client that can be asked is answered with an approval
-		// question instead of today's pending_approval result; a client
-		// that cannot be asked still gets pending_approval (AP-70).
+		// decision 6): an askable in-band park from a client that can be
+		// asked is answered with an approval question instead of today's
+		// pending_approval result; a client that cannot be asked still gets
+		// pending_approval (AP-85).
 		// Effective only alongside WithApprovalDecider, above. No Config
 		// field, flag or env var controls it — the seal key mcp.New mints
 		// for it comes from crypto/rand inside the call, never from
@@ -213,7 +207,7 @@ func (mcpSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 
 	mux.Handle("/mcp", mcp.New(mcpReadLane{svc: d.readLane}, d.ops, d.execution,
 		jobResultReader{jobsRepo: d.jobs, tasksRepo: d.tasks},
-		readAuditor{sink: d.auditSink}, d.execution, opts...))
+		readAuditor{sink: d.auditSink}, opts...))
 }
 
 // apiSurface mounts the /api/v1 Control API slice onto the same mux —

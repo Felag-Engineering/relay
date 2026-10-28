@@ -27,7 +27,7 @@ func req(count int, requesterAllowed bool, audience ...string) Requirement {
 
 func newTestRequest(t *testing.T, r Requirement) Request {
 	t.Helper()
-	return NewRequest("req-1", "hash-abc", "acct-mike", "mike", testAction, []string{"node-a"}, SelectorShape{}, []string{"rule"}, r, t0)
+	return NewRequest("req-1", "hash-abc", "acct-mike", "mike", testAction, []string{"node-a"}, []string{"rule"}, r, t0)
 }
 
 func approveBy(id, name string) Decision {
@@ -406,7 +406,7 @@ func TestUnspecifiedChannelIsRefused(t *testing.T) {
 // check. An out-of-band answer to an in-band rule is more evidence than was
 // asked for, and must be accepted.
 func TestStrongChannelSatisfiesAWeakerRule(t *testing.T) {
-	r := NewRequest("req-2", "hash-abc", "acct-mike", "mike", testAction, []string{"node-a"}, SelectorShape{}, []string{"rule"},
+	r := NewRequest("req-2", "hash-abc", "acct-mike", "mike", testAction, []string{"node-a"}, []string{"rule"},
 		Requirement{Count: 1, Channel: ChannelInBand, TTL: time.Hour}, t0)
 
 	outOfBand := Decision{
@@ -448,7 +448,7 @@ func TestNewRequestRecordsTheActionKind(t *testing.T) {
 		RawExecArgv: []string{"/usr/bin/systemctl", "restart", "nginx"},
 		RiskClass:   jobs.RiskClassMutate,
 	}
-	r := NewRequest("req-3", "hash-x", "acct-g", "gleipnir", rawExec, []string{"node-a"}, SelectorShape{}, nil, req(1, false), t0)
+	r := NewRequest("req-3", "hash-x", "acct-g", "gleipnir", rawExec, []string{"node-a"}, nil, req(1, false), t0)
 
 	if r.ActionKind != jobs.ActionRawExec {
 		t.Errorf("ActionKind = %v, want raw exec", r.ActionKind)

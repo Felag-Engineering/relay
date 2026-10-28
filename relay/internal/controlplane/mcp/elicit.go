@@ -15,8 +15,7 @@ import (
 
 // elicit.go renders an askable park as an MRTR input-required
 // CallToolResult — one elicitation/create form question — instead of the
-// opaque `pending_approval` result (ADR-0029 decision 6; ADR-0028 as amended
-// 2026-09-24).
+// opaque `pending_approval` result (ADR-0029 decision 6).
 //
 // It is an EXEC file (listed in no_dispatch_test.go's execFiles,
 // tools_execution.go's header): it spells capability.Principal and capability.ParkedError, needed
@@ -70,7 +69,7 @@ const (
 )
 
 // WithApprovalElicitation turns on the in-band MRTR question path for an
-// askable park (ADR-0029 decision 6; ADR-0028 amendment 2026-09-24).
+// askable park (ADR-0029 decision 6).
 //
 // Off by default, and effective only together with WithApprovalDecider: Relay
 // never asks a question it cannot accept an answer to. The answer leg is
@@ -181,7 +180,7 @@ func declaredClientName(meta sdkmcp.Meta) (string, bool) {
 // tools_execution.go): a client that cannot be asked never has its retry
 // fields — requestState, inputResponses — read at all, so an unrecognised
 // name's (or an ineligible session's) stray answer fields are ignored exactly
-// as AP-70 already ignores them for any other client that cannot be asked.
+// as AP-85 already ignores them for any other client that cannot be asked.
 //
 // p is the authenticated caller: gleipnir is asked on any session, but
 // claude-code is asked only where oauthHumanSession (tools_approval.go)

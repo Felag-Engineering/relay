@@ -112,37 +112,6 @@ func (a *Approvals) Approval(ctx context.Context, id string) (approval.Request, 
 	return r, nil
 }
 
-// LastApprovedOfSameShape returns the most recent approved Request sharing r's
-// shape key, for the approval object's anti-fatigue diff callout (AP-23, D10,
-// spec console/08): "same as what you approved Tuesday, except the fan-out grew
-// 1,180 -> 2,214".
-//
-// It is a READ, like PendingApprovals — approving nothing and releasing
-// nothing. r itself is excluded, so rendering a record never finds itself.
-//
-// approval.ErrNotFound travels unwrapped when there is no comparable prior, so
-// a surface can say so plainly rather than manufacture a diff. A record with an
-// empty or legacy shape key has no comparable prior BY CONSTRUCTION and is
-// refused before the store is touched: its true shape is unknown, and a diff
-// against an unknown shape is exactly the misleading grouping the shape key
-// exists to avoid.
-func (a *Approvals) LastApprovedOfSameShape(ctx context.Context, r approval.Request) (approval.Request, error) {
-	if a.store == nil {
-		return approval.Request{}, ErrApprovalUnavailable
-	}
-	if r.ShapeKey == "" || approval.IsLegacyShapeKey(r.ShapeKey) {
-		return approval.Request{}, approval.ErrNotFound
-	}
-	prior, err := a.store.LastApprovedByShape(ctx, r.ShapeKey, r.ID)
-	if err != nil {
-		if errors.Is(err, approval.ErrNotFound) {
-			return approval.Request{}, err
-		}
-		return approval.Request{}, fmt.Errorf("capability: read last approved request of same shape: %w", err)
-	}
-	return prior, nil
-}
-
 // DecideApproval records p's answer to a parked Request and returns the
 // Request's resulting state.
 //

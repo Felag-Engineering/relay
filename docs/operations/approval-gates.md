@@ -254,55 +254,21 @@ call once it has been released (including while it is still running), on any sur
 any caller, returns the Job it already released and runs nothing, up to the approval's
 deadline. After the deadline the same call parks for a fresh approval.
 
-## How an AI-agent waits: three envelopes, one decision
+## How an AI-agent waits: two envelopes, one decision
 
 This section is about **how a caller learns it must wait and finds out the answer arrived**.
-None of these envelopes decides anything; that happens only on the decision endpoint (or
+Neither envelope decides anything; that happens only on the decision endpoint (or
 in-band, as above).
 
 | Envelope | Who gets it | How it waits |
 |---|---|---|
 | `202 pending_approval` on `/api/v1` | every Control API caller | re-drive the same call |
 | `pending_approval` tool result over MCP | every MCP client | re-drive the same call |
-| **MCP task handle** (SEP-2663) | MCP clients that advertised the Tasks extension | poll `tasks/get` |
 
-The first two are the **universal path**: a harness with no approval features still drives a
+Both are the **universal path**: a harness with no approval features still drives a
 gated dispatch to completion by calling the same thing again once a human has answered.
 Nothing may come to depend on anything richer
 ([ADR-0027](../adr/0027-approval-callout-notify-via-mcp-decide-out-of-band.md) decision 2).
-
-### The MCP task handle
-
-For a client that advertises `io.modelcontextprotocol/tasks`, a parked `tools/call` returns a
-**task result** carrying a handle, and the client polls `tasks/get` instead of re-driving.
-`tasks/cancel` ends its interest.
-
-What this buys:
-
-- **A poll is no longer a dispatch attempt.** Re-driving runs the whole Selector → authz →
-  blast-cap → gate path just to hear "still waiting"; `tasks/get` reads state.
-- **Server-controlled cadence.** The response carries `pollIntervalMs` (5 s, since the wait is
-  a human one) and `ttlMs`.
-
-What it does **not** change:
-
-- **Who may decide.** A handle is a poll token. The only MCP path that records a decision is
-  the in-band one (`approve_request`, ADR-0029), through the same capability-layer seam as
-  every other decision.
-- **What `tasks/cancel` reaches.** It marks the *handle* cancelled. A still-parked approval
-  request stays pending, queued and decidable, and a re-drive of the same dispatch re-attaches to
-  it. A cancel arrives over the AI's own session; if it could withdraw a pending request, an
-  AI-agent could pull one back the moment it sensed a denial coming. If a Job already exists,
-  cancelling goes through the ordinary Job-cancel path.
-- **Who can see a handle.** Resolving one is owner-only. A handle that is not yours is
-  indistinguishable from one that never existed.
-
-> **This is a temporary implementation.** The Go MCP SDK does not implement SEP-2663, so Relay
-> serves it as a bounded shim
-> ([ADR-0028](../adr/0028-mcp-tasks-extension-transport-layer-shim.md)), deleted when
-> [go-sdk#626](https://github.com/modelcontextprotocol/go-sdk/issues/626) ships Tasks. To tell
-> whether anyone uses the extension, look for `mcp task result issued` in the Relay's logs.
-> Silence means no Tasks-capable client has driven a gated dispatch here.
 
 ## What approval is not
 
