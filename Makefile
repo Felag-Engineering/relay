@@ -299,14 +299,16 @@ test-release-image-guard:
 	bash scripts/release-image-guard-test.sh
 
 # Proves scripts/compose-floor-check.sh refuses each way a Relay container could stop taking its
-# configuration as read-only mounts, or run privileged (RC-27), and accepts the good shape.
+# configuration as read-only mounts, or run privileged (RC-27), or the deployment stack stop
+# running the published image pinned by digest with no build (RC-7), and accepts the good shape.
 # Hermetic: a stub docker serves canned `docker compose config` JSON; needs jq, no engine.
 test-compose-floor-check:
 	$(call need_tool,jq,test-compose-floor-check,apt install jq)
 	@if command -v jq >/dev/null 2>&1; then bash scripts/compose-floor-check-test.sh; fi
 
 # RC-27 on the committed compose stacks and docker/relay.Dockerfile: no floor setting in any
-# Relay environment, every configuration and secret mount read-only, unprivileged. Renders each
+# Relay environment, every configuration and secret mount read-only, unprivileged; and RC-7 on
+# the deployment stack: the published image pinned by digest, with no build. Renders each
 # stack with `docker compose config`, which needs the Compose CLI plugin and jq but no engine.
 # The need_tool convention, written inline because the Compose CLI is a docker plugin, not a
 # binary: under `make verify` a missing plugin or jq is a recorded skip (as for every other
