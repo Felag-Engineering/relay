@@ -8,8 +8,7 @@ Which dispatches must wait for a human before they run
 > rule names only what it matches and how long a parked request lives (no `count`, `audience`,
 > `requester_allowed` or `channel`); `approve_request` is retired and approval grants are removed; gate rules
 > become a section of `relay.toml` rather than a separate file named by
-> `approval.gate_rules_path`; and the inline `webhook_url` and `webhook_secret` keys go, leaving
-> only their `_file` forms. Gate rules stay in the configuration file: the Console has no
+> `approval.gate_rules_path`. Gate rules stay in the configuration file: the Console has no
 > approval or settings screen (roadmap: relay/settings-in-the-console). This page is rewritten
 > when that code lands.
 
@@ -210,17 +209,16 @@ notice once, when a dispatch parks:
 
 ```toml
 [approval]
-webhook_url = "https://notify.internal/relay-approvals"
+webhook_url_file = "/etc/relay/approval-webhook.url"
 webhook_secret_file = "/etc/relay/approval-webhook.key"
 ```
 
 | Key | Meaning |
 |---|---|
-| `webhook_url` / `webhook_url_file` | Where to POST: a secret, given inline or as a file holding it. HTTPS required off-loopback. Unset disables notification. |
-| `webhook_secret` / `webhook_secret_file` | The HMAC-SHA256 signing secret, inline or as a root-owned `0600` file. Unset sends unsigned. |
-| `webhook_timeout` | Budget for one delivery attempt (default `5s`). |
+| `webhook_url_file` | A file holding where to POST: a secret, so only ever given as a file. HTTPS required off-loopback. Unset disables notification. |
+| `webhook_secret_file` | A root-owned `0600` file holding the HMAC-SHA256 signing secret. Unset sends unsigned. |
 
-Give each secret one way, never both. Signed deliveries carry `Relay-Timestamp` and
+Each is a file. The budget for one delivery attempt is built in at `5s`. Signed deliveries carry `Relay-Timestamp` and
 `Relay-Signature: sha256=<hex>` over `"<timestamp>.<body>"`, so a receiver can check
 authenticity *and* freshness. The signature authenticates **the Relay to the receiver**; it
 authorizes nothing, and there is no callback for it to protect. Decisions only arrive on

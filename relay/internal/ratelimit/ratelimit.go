@@ -11,9 +11,32 @@ import (
 	"time"
 )
 
+// The Enrollment limits are built in (RC-38, EN-43); no setting reaches them.
+// The per-source rate is high enough that some 200 Nodes behind one NAT address
+// join in minutes, and the global limit stays the guard against a flood.
+const (
+	EnrollmentPerIPRatePerMin  = 60
+	EnrollmentPerIPBurst       = 10
+	EnrollmentGlobalRatePerMin = 50
+	EnrollmentGlobalBurst      = 10
+	// EnrollmentMaxTrackedIPs bounds the per-IP map against spoofed-source floods.
+	EnrollmentMaxTrackedIPs = 100_000
+)
+
 // defaultMaxTrackedIPs is the per-IP map bound used when Config.MaxTrackedIPs
-// is non-positive. It prevents unbounded-memory DoS from spoofed-source floods.
-const defaultMaxTrackedIPs = 100_000
+// is non-positive.
+const defaultMaxTrackedIPs = EnrollmentMaxTrackedIPs
+
+// Enrollment returns the built-in Enrollment limits (RC-38, EN-43).
+func Enrollment() Config {
+	return Config{
+		PerIPRatePerMin:  EnrollmentPerIPRatePerMin,
+		PerIPBurst:       EnrollmentPerIPBurst,
+		GlobalRatePerMin: EnrollmentGlobalRatePerMin,
+		GlobalBurst:      EnrollmentGlobalBurst,
+		MaxTrackedIPs:    EnrollmentMaxTrackedIPs,
+	}
+}
 
 // Clock returns the current time. Inject a deterministic implementation via
 // WithClock in tests to avoid real sleeps.

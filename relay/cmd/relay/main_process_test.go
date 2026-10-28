@@ -189,7 +189,7 @@ func TestMain_RetiredEnvNameRefusesNamingKey(t *testing.T) {
 			t.Errorf("exit code = %d, want 1\n%s", code, buf.String())
 		}
 		out := buf.String()
-		if !strings.Contains(out, "approval.webhook_url") {
+		if !strings.Contains(out, "approval.webhook_url_file") {
 			t.Errorf("output does not name the key:\n%s", out)
 		}
 		if strings.Contains(out, "T0K3N") {

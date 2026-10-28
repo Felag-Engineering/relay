@@ -7,10 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Felag-Engineering/relay/relay/internal/approvalnotify"
 	"github.com/Felag-Engineering/relay/relay/internal/capability"
 	"github.com/Felag-Engineering/relay/relay/internal/consoleauth"
-	"github.com/Felag-Engineering/relay/relay/internal/nodestate"
 )
 
 // Proves RC-22.
@@ -24,37 +22,24 @@ func TestDefaults_EachReachValueWhenAbsent(t *testing.T) {
 	if cfg.Reach.MinDaemonVersion != "" {
 		t.Errorf("min_daemon_version = %q, want the gate off", cfg.Reach.MinDaemonVersion)
 	}
-	if cfg.Enrollment.CertExpiringFraction != nodestate.DefaultCertExpiringFraction {
-		t.Errorf("cert_expiring_fraction = %v", cfg.Enrollment.CertExpiringFraction)
+	if cfg.Enrollment != (Enrollment{MaxNodes: 110000}) {
+		t.Errorf("enrollment = %+v", cfg.Enrollment)
 	}
-	wantEnroll := Enrollment{
-		IPRatePerMinute: 5, IPBurst: 3, GlobalRatePerMinute: 50, GlobalBurst: 10,
-		MaxTrackedIPs: 100000, MaxNodes: 110000,
-		CertExpiringFraction: nodestate.DefaultCertExpiringFraction,
-	}
-	if cfg.Enrollment != wantEnroll {
-		t.Errorf("enrollment = %+v, want %+v", cfg.Enrollment, wantEnroll)
-	}
-	if cfg.Log.Level != slog.LevelInfo || cfg.Log.Format != LogText {
+	if cfg.Log.Level != slog.LevelInfo {
 		t.Errorf("log = %+v", cfg.Log)
 	}
 
 	// The defaults outside RC-22.
-	if cfg.Reach.DispatchConcurrency != capability.DefaultDispatchConcurrency {
-		t.Errorf("dispatch_concurrency = %d", cfg.Reach.DispatchConcurrency)
-	}
 	if cfg.NodePlane.ListenAddress != ":7654" || cfg.ControlPlane.ListenAddress != ":9443" {
 		t.Errorf("listeners = %q, %q", cfg.NodePlane.ListenAddress, cfg.ControlPlane.ListenAddress)
 	}
 	if cfg.ControlPlane.Enabled || cfg.Console.Enabled {
 		t.Error("the control plane and Console are on by default")
 	}
-	if cfg.Console.SessionMaxAge != consoleauth.DefaultAbsoluteLifetime ||
-		cfg.Console.SessionIdle != consoleauth.DefaultIdleTimeout ||
-		cfg.Console.StepUpWindow != consoleauth.DefaultStepUpWindow {
+	if cfg.Console.SessionIdle != consoleauth.DefaultIdleTimeout {
 		t.Errorf("console durations = %+v", cfg.Console)
 	}
-	if cfg.Approval.WebhookTimeout != approvalnotify.DefaultTimeout || cfg.Approval.WebhookURL.IsSet() || cfg.Approval.WebhookSecret.IsSet() {
+	if cfg.Approval.WebhookURL.IsSet() || cfg.Approval.WebhookSecret.IsSet() {
 		t.Errorf("approval = %+v", cfg.Approval)
 	}
 	if cfg.OAuth != (OAuth{}) {
@@ -99,7 +84,7 @@ func variantOAuth(issuer, audience, claim, scope, publicURL string) string {
 }
 
 const (
-	webhookBase = minimal + "[approval]\nwebhook_url = \"https://hooks.example.internal/x\"\n"
+	webhookBase = minimal + "[approval]\nwebhook_url_file = \"/etc/relay/hook.url\"\n"
 	oauthIssuer = "https://idp.example.com"
 	oauthPublic = "https://relay.example.internal:9443"
 )
@@ -118,82 +103,56 @@ func TestEveryKeyReachesConfig(t *testing.T) {
 	swap := func(old, new string) variant { return variant{minimal, strings.Replace(minimal, old, new, 1)} }
 
 	cases := map[string]variant{
-		"node_plane.listen_address":         m("[node_plane]\nlisten_address = \"127.0.0.1:8000\"\n"),
-		"node_plane.advertised_address":     m("[node_plane]\nadvertised_address = \"relay.example.internal:8000\"\n"),
-		"control_plane.enabled":             m("[control_plane]\nenabled = true\n"),
-		"control_plane.listen_address":      m("[control_plane]\nlisten_address = \":9444\"\n"),
-		"console.enabled":                   m("[control_plane]\nenabled = true\n[console]\nenabled = true\n"),
-		"console.session_max_age":           m("[console]\nsession_max_age = \"1h\"\n"),
-		"console.session_idle":              m("[console]\nsession_idle = \"1m\"\n"),
-		"console.step_up_window":            m("[console]\nstep_up_window = \"1m\"\n"),
-		"ca.dir":                            swap("/var/lib/relay/ca", "/srv/ca"),
-		"store.path":                        swap("/var/lib/relay/relay.db", "/srv/relay.db"),
-		"tls.hostname":                      swap("relay.example.internal", "relay2.example.internal"),
-		"tls.extra_names":                   m("extra_names = [\"lb.example.internal\"]\n"),
-		"oauth.issuer":                      oauth("https://other.example.com", "relay", "", "", oauthPublic),
-		"oauth.audience":                    oauth(oauthIssuer, "other", "", "", oauthPublic),
-		"oauth.account_claim":               oauth(oauthIssuer, "relay", "sub", "", oauthPublic),
-		"oauth.required_scope":              oauth(oauthIssuer, "relay", "", "relay.operate", oauthPublic),
-		"oauth.public_url":                  oauth(oauthIssuer, "relay", "", "", "https://other.example.internal"),
-		"approval.gate_rules_path":          m("[approval]\ngate_rules_path = \"/etc/relay/gates.json\"\n"),
-		"approval.webhook_url":              m("[approval]\nwebhook_url = \"https://hooks.example.internal/x\"\n"),
-		"approval.webhook_url_file":         m("[approval]\nwebhook_url_file = \"/etc/relay/hook.url\"\n"),
-		"approval.webhook_secret":           webhook("webhook_secret = \"v\"\n"),
-		"approval.webhook_secret_file":      webhook("webhook_secret_file = \"/etc/relay/hook.secret\"\n"),
-		"approval.webhook_timeout":          webhook("webhook_timeout = \"9s\"\n"),
-		"log.level":                         m("[log]\nlevel = \"debug\"\n"),
-		"log.format":                        m("[log]\nformat = \"json\"\n"),
-		"reach.read_blast_cap":              m("[reach]\nread_blast_cap = 7\n"),
-		"reach.mutate_blast_cap":            m("[reach]\nmutate_blast_cap = 7\n"),
-		"reach.dispatch_concurrency":        m("[reach]\ndispatch_concurrency = 3\n"),
-		"reach.min_daemon_version":          m("[reach]\nmin_daemon_version = \"1.2.3\"\n"),
-		"enrollment.ip_rate_per_minute":     m("[enrollment]\nip_rate_per_minute = 9\n"),
-		"enrollment.ip_burst":               m("[enrollment]\nip_burst = 9\n"),
-		"enrollment.global_rate_per_minute": m("[enrollment]\nglobal_rate_per_minute = 9\n"),
-		"enrollment.global_burst":           m("[enrollment]\nglobal_burst = 9\n"),
-		"enrollment.max_tracked_ips":        m("[enrollment]\nmax_tracked_ips = 9\n"),
-		"enrollment.max_nodes":              m("[enrollment]\nmax_nodes = 9\n"),
-		"enrollment.cert_expiring_fraction": m("[enrollment]\ncert_expiring_fraction = 0.5\n"),
+		"node_plane.listen_address":     m("[node_plane]\nlisten_address = \"127.0.0.1:8000\"\n"),
+		"node_plane.advertised_address": m("[node_plane]\nadvertised_address = \"relay.example.internal:8000\"\n"),
+		"control_plane.enabled":         m("[control_plane]\nenabled = true\n"),
+		"control_plane.listen_address":  m("[control_plane]\nlisten_address = \":9444\"\n"),
+		"console.enabled":               m("[control_plane]\nenabled = true\n[console]\nenabled = true\n"),
+		"console.session_idle":          m("[console]\nsession_idle = \"1m\"\n"),
+		"ca.dir":                        swap("/var/lib/relay/ca", "/srv/ca"),
+		"store.path":                    swap("/var/lib/relay/relay.db", "/srv/relay.db"),
+		"tls.hostname":                  swap("relay.example.internal", "relay2.example.internal"),
+		"tls.extra_names":               m("extra_names = [\"lb.example.internal\"]\n"),
+		"oauth.issuer":                  oauth("https://other.example.com", "relay", "", "", oauthPublic),
+		"oauth.audience":                oauth(oauthIssuer, "other", "", "", oauthPublic),
+		"oauth.account_claim":           oauth(oauthIssuer, "relay", "sub", "", oauthPublic),
+		"oauth.required_scope":          oauth(oauthIssuer, "relay", "", "relay.operate", oauthPublic),
+		"oauth.public_url":              oauth(oauthIssuer, "relay", "", "", "https://other.example.internal"),
+		"approval.gate_rules_path":      m("[approval]\ngate_rules_path = \"/etc/relay/gates.json\"\n"),
+		"approval.webhook_url_file":     m("[approval]\nwebhook_url_file = \"/etc/relay/hook.url\"\n"),
+		"approval.webhook_secret_file":  webhook("webhook_secret_file = \"/etc/relay/hook.secret\"\n"),
+		"log.level":                     m("[log]\nlevel = \"debug\"\n"),
+		"reach.read_blast_cap":          m("[reach]\nread_blast_cap = 7\n"),
+		"reach.mutate_blast_cap":        m("[reach]\nmutate_blast_cap = 7\n"),
+		"reach.min_daemon_version":      m("[reach]\nmin_daemon_version = \"1.2.3\"\n"),
+		"enrollment.max_nodes":          m("[enrollment]\nmax_nodes = 9\n"),
 	}
 
 	// The Config field each key must land in.
 	fields := map[string]func(Config) any{
-		"node_plane.listen_address":         func(c Config) any { return c.NodePlane.ListenAddress },
-		"node_plane.advertised_address":     func(c Config) any { return c.NodePlane.AdvertisedAddress },
-		"control_plane.enabled":             func(c Config) any { return c.ControlPlane.Enabled },
-		"control_plane.listen_address":      func(c Config) any { return c.ControlPlane.ListenAddress },
-		"console.enabled":                   func(c Config) any { return c.Console.Enabled },
-		"console.session_max_age":           func(c Config) any { return c.Console.SessionMaxAge },
-		"console.session_idle":              func(c Config) any { return c.Console.SessionIdle },
-		"console.step_up_window":            func(c Config) any { return c.Console.StepUpWindow },
-		"ca.dir":                            func(c Config) any { return c.CA.Dir },
-		"store.path":                        func(c Config) any { return c.Store.Path },
-		"tls.hostname":                      func(c Config) any { return c.TLS.Hostname },
-		"tls.extra_names":                   func(c Config) any { return c.TLS.ExtraNames },
-		"oauth.issuer":                      func(c Config) any { return c.OAuth.Issuer },
-		"oauth.audience":                    func(c Config) any { return c.OAuth.Audience },
-		"oauth.account_claim":               func(c Config) any { return c.OAuth.AccountClaim },
-		"oauth.required_scope":              func(c Config) any { return c.OAuth.RequiredScope },
-		"oauth.public_url":                  func(c Config) any { return c.OAuth.PublicURL },
-		"approval.gate_rules_path":          func(c Config) any { return c.Approval.GateRulesPath },
-		"approval.webhook_url":              func(c Config) any { return c.Approval.WebhookURL },
-		"approval.webhook_url_file":         func(c Config) any { return c.Approval.WebhookURL },
-		"approval.webhook_secret":           func(c Config) any { return c.Approval.WebhookSecret },
-		"approval.webhook_secret_file":      func(c Config) any { return c.Approval.WebhookSecret },
-		"approval.webhook_timeout":          func(c Config) any { return c.Approval.WebhookTimeout },
-		"log.level":                         func(c Config) any { return c.Log.Level },
-		"log.format":                        func(c Config) any { return c.Log.Format },
-		"reach.read_blast_cap":              func(c Config) any { return c.Reach.ReadBlastCap },
-		"reach.mutate_blast_cap":            func(c Config) any { return c.Reach.MutateBlastCap },
-		"reach.dispatch_concurrency":        func(c Config) any { return c.Reach.DispatchConcurrency },
-		"reach.min_daemon_version":          func(c Config) any { return c.Reach.MinDaemonVersion },
-		"enrollment.ip_rate_per_minute":     func(c Config) any { return c.Enrollment.IPRatePerMinute },
-		"enrollment.ip_burst":               func(c Config) any { return c.Enrollment.IPBurst },
-		"enrollment.global_rate_per_minute": func(c Config) any { return c.Enrollment.GlobalRatePerMinute },
-		"enrollment.global_burst":           func(c Config) any { return c.Enrollment.GlobalBurst },
-		"enrollment.max_tracked_ips":        func(c Config) any { return c.Enrollment.MaxTrackedIPs },
-		"enrollment.max_nodes":              func(c Config) any { return c.Enrollment.MaxNodes },
-		"enrollment.cert_expiring_fraction": func(c Config) any { return c.Enrollment.CertExpiringFraction },
+		"node_plane.listen_address":     func(c Config) any { return c.NodePlane.ListenAddress },
+		"node_plane.advertised_address": func(c Config) any { return c.NodePlane.AdvertisedAddress },
+		"control_plane.enabled":         func(c Config) any { return c.ControlPlane.Enabled },
+		"control_plane.listen_address":  func(c Config) any { return c.ControlPlane.ListenAddress },
+		"console.enabled":               func(c Config) any { return c.Console.Enabled },
+		"console.session_idle":          func(c Config) any { return c.Console.SessionIdle },
+		"ca.dir":                        func(c Config) any { return c.CA.Dir },
+		"store.path":                    func(c Config) any { return c.Store.Path },
+		"tls.hostname":                  func(c Config) any { return c.TLS.Hostname },
+		"tls.extra_names":               func(c Config) any { return c.TLS.ExtraNames },
+		"oauth.issuer":                  func(c Config) any { return c.OAuth.Issuer },
+		"oauth.audience":                func(c Config) any { return c.OAuth.Audience },
+		"oauth.account_claim":           func(c Config) any { return c.OAuth.AccountClaim },
+		"oauth.required_scope":          func(c Config) any { return c.OAuth.RequiredScope },
+		"oauth.public_url":              func(c Config) any { return c.OAuth.PublicURL },
+		"approval.gate_rules_path":      func(c Config) any { return c.Approval.GateRulesPath },
+		"approval.webhook_url_file":     func(c Config) any { return c.Approval.WebhookURL },
+		"approval.webhook_secret_file":  func(c Config) any { return c.Approval.WebhookSecret },
+		"log.level":                     func(c Config) any { return c.Log.Level },
+		"reach.read_blast_cap":          func(c Config) any { return c.Reach.ReadBlastCap },
+		"reach.mutate_blast_cap":        func(c Config) any { return c.Reach.MutateBlastCap },
+		"reach.min_daemon_version":      func(c Config) any { return c.Reach.MinDaemonVersion },
+		"enrollment.max_nodes":          func(c Config) any { return c.Enrollment.MaxNodes },
 	}
 	if len(fields) != len(cases) {
 		t.Fatalf("fields has %d entries, cases has %d", len(fields), len(cases))

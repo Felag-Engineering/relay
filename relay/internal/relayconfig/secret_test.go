@@ -7,24 +7,40 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"slices"
 	"strings"
 	"testing"
 )
 
 const secretValueText = "s3cr3t-VALUE-9f2"
 
-const webhookSecretFile = minimal + "[approval]\nwebhook_url = \"https://hooks.example.internal/x\"\nwebhook_secret_file = \"/etc/relay/hook.secret\"\n"
+const webhookSecretFile = minimal + "[approval]\nwebhook_url_file = \"/etc/relay/hook.url\"\nwebhook_secret_file = \"/etc/relay/hook.secret\"\n"
+
+// readWebhookFiles reads the secret file as value and the URL file as a URL
+// carrying it.
+func readWebhookFiles(value string) func(string) ([]byte, error) {
+	return func(path string) ([]byte, error) {
+		if strings.HasSuffix(path, ".url") {
+			return []byte("https://hooks.example.internal/" + value + "\n"), nil
+		}
+		return []byte("  " + value + "\n"), nil
+	}
+}
+
+// resolvedFileSecret loads the webhook files configuration and resolves both
+// through an in-memory reader: the secret file holds value, the URL file a URL
+// carrying it.
+func resolvedFileSecret(t *testing.T, value string) Config {
+	t.Helper()
+	cfg := mustLoad(t, webhookSecretFile)
+	if err := cfg.ResolveSecrets(readWebhookFiles(value)); err != nil {
+		t.Fatal(err)
+	}
+	return cfg
+}
 
 // Proves RC-14.
-func TestSecret_InlineAndFileLoad(t *testing.T) {
-	inline := mustLoad(t, minimal+"[approval]\nwebhook_url = \"https://hooks.example.internal/x\"\nwebhook_secret = \""+secretValueText+"\"\n")
-	if v, ok := inline.Approval.WebhookSecret.Reveal(); !ok || v != secretValueText {
-		t.Fatalf("inline Reveal = %q, %v", v, ok)
-	}
-	if inline.Approval.WebhookSecret.Path() != "" {
-		t.Fatal("inline secret has a path")
-	}
-
+func TestSecret_FileLoad(t *testing.T) {
 	cfg := mustLoad(t, webhookSecretFile)
 	s := cfg.Approval.WebhookSecret
 	if s.Path() != "/etc/relay/hook.secret" {
@@ -34,9 +50,10 @@ func TestSecret_InlineAndFileLoad(t *testing.T) {
 		t.Fatal("a file-backed secret reveals before it is resolved")
 	}
 	var asked []string
+	read := readWebhookFiles(secretValueText)
 	err := cfg.ResolveSecrets(func(path string) ([]byte, error) {
 		asked = append(asked, path)
-		return []byte("  " + secretValueText + "\n"), nil
+		return read(path)
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -44,7 +61,7 @@ func TestSecret_InlineAndFileLoad(t *testing.T) {
 	if v, ok := cfg.Approval.WebhookSecret.Reveal(); !ok || v != secretValueText {
 		t.Fatalf("resolved Reveal = %q, %v", v, ok)
 	}
-	if len(asked) != 1 || asked[0] != "/etc/relay/hook.secret" {
+	if want := []string{"/etc/relay/hook.url", "/etc/relay/hook.secret"}; !slices.Equal(asked, want) {
 		t.Fatalf("read called for %v", asked)
 	}
 
@@ -121,23 +138,35 @@ func TestResolveSecrets_ReaderErrorTextIsNeverPrinted(t *testing.T) {
 	}
 }
 
-func TestSecret_BothInlineAndFileRefused(t *testing.T) {
-	cases := []struct{ name, body, want string }{
-		{"webhook url", "webhook_url = \"https://x.example/h\"\nwebhook_url_file = \"/etc/relay/u\"\n", "approval.webhook_url_file (line 9)"},
-		{"webhook secret", "webhook_url = \"https://x.example/h\"\nwebhook_secret = \"v\"\nwebhook_secret_file = \"/etc/relay/s\"\n", "approval.webhook_secret_file (line 10)"},
+// Proves RC-41.
+func TestValidate_WebhookURLAndSecretOnlyFromFiles(t *testing.T) {
+	cases := []struct{ name, body, key, fileKey string }{
+		{"webhook url", "webhook_url = \"https://x.example/CANARY-v\"\n", "approval.webhook_url", "approval.webhook_url_file"},
+		{"webhook secret", "webhook_url_file = \"/etc/relay/u\"\nwebhook_secret = \"CANARY-v\"\n", "approval.webhook_secret", "approval.webhook_secret_file"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			got := loadErr(t, minimal+"[approval]\n"+tc.body)
-			if !strings.Contains(got, tc.want) || !strings.Contains(got, "not both") {
-				t.Fatalf("error = %q", got)
+			if !strings.Contains(got, tc.key+" (line") || !strings.Contains(got, tc.fileKey) {
+				t.Fatalf("error does not name the key and point at the file form: %q", got)
+			}
+			if strings.Contains(got, "CANARY") {
+				t.Fatalf("error echoes the value: %q", got)
 			}
 		})
+	}
+
+	cfg := resolvedFileSecret(t, secretValueText)
+	if v, ok := cfg.Approval.WebhookSecret.Reveal(); !ok || v != secretValueText {
+		t.Fatalf("secret Reveal = %q, %v", v, ok)
+	}
+	if v, ok := cfg.Approval.WebhookURL.Reveal(); !ok || v != "https://hooks.example.internal/"+secretValueText {
+		t.Fatalf("url Reveal = %q, %v", v, ok)
 	}
 }
 
 func TestSecret_NeverPrints(t *testing.T) {
-	cfg := mustLoad(t, minimal+"[approval]\nwebhook_url = \"https://hooks.example.internal/"+secretValueText+"\"\nwebhook_secret = \""+secretValueText+"\"\n")
+	cfg := resolvedFileSecret(t, secretValueText)
 	s := cfg.Approval.WebhookSecret
 	if v, _ := s.Reveal(); v != secretValueText {
 		t.Fatal("test setup: secret not revealed")
@@ -196,28 +225,24 @@ func TestSecret_NeverPrints(t *testing.T) {
 	check("unset Secret", fmt.Sprintf("%v", unset))
 }
 
-func TestSecret_InlineIsTrimmedAndBlankRefused(t *testing.T) {
-	cfg := mustLoad(t, minimal+"[approval]\nwebhook_url = \"https://hooks.example.internal/x\"\nwebhook_secret = \"  "+secretValueText+"\\n\"\n")
+func TestSecret_FileContentIsTrimmedAndEmptyRefused(t *testing.T) {
+	cfg := resolvedFileSecret(t, secretValueText)
 	if v, _ := cfg.Approval.WebhookSecret.Reveal(); v != secretValueText {
 		t.Fatalf("Reveal = %q", v)
 	}
-	for _, blank := range []string{"", "   ", "\\n"} {
-		got := loadErr(t, minimal+"[approval]\nwebhook_url = \"https://hooks.example.internal/x\"\nwebhook_secret = \""+blank+"\"\n")
-		if !strings.Contains(got, "approval.webhook_secret (line 9)") || !strings.Contains(got, "must not be empty") {
-			t.Errorf("blank %q: error = %q", blank, got)
+	for _, blank := range []string{"", "   ", "\n"} {
+		cfg := mustLoad(t, webhookSecretFile)
+		err := cfg.ResolveSecrets(func(string) ([]byte, error) { return []byte(blank), nil })
+		if err == nil || !strings.Contains(err.Error(), "approval.webhook_url_file (line 8)") || !strings.Contains(err.Error(), "the file is empty") {
+			t.Errorf("blank %q: error = %v", blank, err)
 		}
-	}
-	got := loadErr(t, minimal+"[approval]\nwebhook_url = \"  \"\n")
-	if !strings.Contains(got, "approval.webhook_url (line 8)") {
-		t.Errorf("blank URL: error = %q", got)
 	}
 }
 
 func TestResolveSecrets_DoesNotChangeEarlierCopies(t *testing.T) {
 	cfg := mustLoad(t, webhookSecretFile)
 	before := cfg
-	err := cfg.ResolveSecrets(func(string) ([]byte, error) { return []byte(secretValueText), nil })
-	if err != nil {
+	if err := cfg.ResolveSecrets(readWebhookFiles(secretValueText)); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := before.Approval.WebhookSecret.Reveal(); ok {

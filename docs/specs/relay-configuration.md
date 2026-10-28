@@ -1,6 +1,6 @@
 # Relay configuration
 
-**Status:** designed, not built, as of `2026-10-27`.
+**Status:** designed, not built, as of `2026-10-28`.
 **Claim prefix:** `RC`
 **Governed by:** ADR-0043, ADR-0010, ADR-0033, ADR-0030, ADR-0047, ADR-0052, ADR-0027, ADR-0024,
 ADR-0023, ADR-0014, ADR-0004, ADR-0012, ADR-0009, ADR-0021; invariants 5, 10, 11, 14.
@@ -65,12 +65,18 @@ a reload or restart. The Relay installs from an OS package or as a container ima
 - **RC-22** The read and mutate blast caps, the minimum daemon version, the Node cap and the log
   level are values in the configuration file, validated like every other value, with built-in
   defaults where absent.
-- **RC-50** The `state:cert-expiring` fraction is a value in the configuration file, validated
-  like every other value, with a built-in default where absent.
-- **RC-51** The enrollment rate limits, their bursts and the tracked-IP ceiling are values in the
-  configuration file, validated like every other value, with built-in defaults where absent.
-- **RC-52** The log format is a value in the configuration file, with a built-in default where
-  absent.
+- **RC-38** Enrollment rate limiting is built in, not configured: the per-source and global
+  limits, their bursts and the tracked-address ceiling are constants, at the values
+  `enrollment.md` sets.
+- **RC-39** `state:cert-expiring` uses a built-in fraction: it holds for a Node whose certificate
+  has less than a quarter of its lifetime left (`selectors-and-labels.md`).
+- **RC-40** The dispatch concurrency is built in at 16. A `mutate` Job is sent 16 Tasks at a time,
+  which bounds how much of it is already sent when it stops on a failure (`execution.md`).
+- **RC-41** The approval webhook URL and its secret are each read only from a file the
+  configuration names; neither may be written inline. The webhook's request timeout is built in.
+- **RC-42** The Relay's logs are always JSON. The log level stays a setting (RC-22).
+- **RC-43** A Console session's maximum age is built in at 12 hours and the step-up window at 5
+  minutes. The Console session's idle timeout stays a setting.
 - **RC-49** The approval-gate rules file's path is a value in the configuration file, with no
   default (`approval.md`).
 - **RC-27** The Relay container image takes its configuration file, and any secret files it
@@ -112,6 +118,12 @@ a reload or restart. The Relay installs from an OS package or as a container ima
   added. There is no endpoint to refuse it.
 - **RC-35** A configured approval-gate rules file that cannot be loaded refuses start; the
   Relay never runs ungated because a file is unreadable or malformed (`approval.md`).
+- **RC-44** A key the configuration file no longer accepts refuses start, and refuses a reload,
+  naming the key and never its value. The removed keys are `enrollment.ip_rate_per_minute`,
+  `enrollment.ip_burst`, `enrollment.global_rate_per_minute`, `enrollment.global_burst`,
+  `enrollment.max_tracked_ips`, `enrollment.cert_expiring_fraction`, `reach.dispatch_concurrency`,
+  `approval.webhook_timeout`, `approval.webhook_url`, `approval.webhook_secret`, `log.format`,
+  `console.session_max_age` and `console.step_up_window`.
 
 ## Designed, not built
 
@@ -128,13 +140,6 @@ a reload or restart. The Relay installs from an OS package or as a container ima
 | RC-26 | Removing the Relay package keeps configuration and state. `apt purge` removes configuration and moves the CA and the store aside together, re-owned by root and readable by nobody else, and prints where; it never deletes them, never splits them, and never deletes the Relay's Unix account. Purge deletes only paths the package itself created. `.rpm` removal never deletes state and prints the paths to delete by hand. | MVP |
 | RC-34 | Per-Account Console preferences are stored per Account, not fleet-wide. | After MVP |
 | RC-37 | Gate rules are a section of the configuration file, checked, read and reloaded with it (RC-15, RC-16, RC-21), so whoever administers the Relay's host sets them and nothing on the wire can (ADR-0047). The separate gate-rules file goes, and with it its own load checks; a configuration naming `approval.gate_rules_path` is refused at start and on reload, naming the key. What the rules ship as is `approval.md`. Replaces RC-5, RC-8, RC-35 and RC-49 when promoted. | MVP |
-| RC-38 | Enrollment rate limiting is built in, not configured: the per-source and global limits, their bursts and the tracked-address ceiling are constants, at the values `enrollment.md` sets. Replaces RC-51 when promoted. | MVP |
-| RC-39 | `state:cert-expiring` uses a built-in fraction: it holds for a Node whose certificate has less than a quarter of its lifetime left (`selectors-and-labels.md`). Replaces RC-50 when promoted. | MVP |
-| RC-40 | The dispatch concurrency is built in at 16. A `mutate` Job is sent 16 Tasks at a time, which bounds how much of it is already sent when it stops on a failure (`execution.md`). | MVP |
-| RC-41 | The approval webhook URL and its secret are each read only from a file the configuration names; neither may be written inline. The webhook's request timeout is built in. | MVP |
-| RC-42 | The Relay's logs are always JSON. The log level stays a setting (RC-22). Replaces RC-52 when promoted. | MVP |
-| RC-43 | A Console session's maximum age is built in at 12 hours and the step-up window at 5 minutes. The Console session's idle timeout stays a setting. | MVP |
-| RC-44 | A key the configuration file no longer accepts refuses start, and refuses a reload, naming the key and never its value. The removed keys are `enrollment.ip_rate_per_minute`, `enrollment.ip_burst`, `enrollment.global_rate_per_minute`, `enrollment.global_burst`, `enrollment.max_tracked_ips`, `enrollment.cert_expiring_fraction`, `reach.dispatch_concurrency`, `approval.webhook_timeout`, `approval.webhook_url`, `approval.webhook_secret`, `log.format`, `console.session_max_age` and `console.step_up_window`. | MVP |
 | RC-45 | The quickstart installs the Relay from its OS package. The container image with its deployment stack (RC-7, RC-27) stays a supported install, as built. | MVP |
 
 ## Out of scope
@@ -172,22 +177,34 @@ Generated by `make spec-proof` from the tests that name the claim they prove.
 | RC-11 | `TestDeps_HasNoConfigField`, `TestMuxRegistrationsAreTheKnownSites`, `TestNoRouteWritesConfiguration`, `TestNoToolWritesConfiguration` | API, MCP, Relay |
 | RC-12 | `TestMain_ConfigFlagHonoured`, `TestMain_OtherFlagsRefused`, `TestParseArgs` | Relay |
 | RC-13 | `TestFreezeReleaseReason_IsTheOnlyEnvironmentRead`, `TestMain_OtherFlagsRefused`, `TestMain_RetiredEnvNameRefusesNamingKey`, `TestRefuseRetiredEnv_NamesKeyNotValue`, `TestRetiredEnvMap_CoversEveryRetiredName` | Relay, relayconfig |
-| RC-14 | `TestLoadConfig_FileSecretsResolved`, `TestMain_OtherFlagsRefused`, `TestMain_RetiredEnvNameRefusesNamingKey`, `TestSecret_InlineAndFileLoad`, `TestStartupLog_CarriesNoWebhookURLOrSecret` | Relay, relayconfig |
+| RC-14 | `TestLoadConfig_FileSecretsResolved`, `TestMain_OtherFlagsRefused`, `TestMain_RetiredEnvNameRefusesNamingKey`, `TestSecret_FileLoad`, `TestStartupLog_CarriesNoWebhookURLOrSecret` | Relay, relayconfig |
 | RC-20 | `TestMain_CoherentButSuspectConfigStartsWithWarning`, `TestValidate_ConsoleWithoutControlPlaneRefused`, `TestValidate_MutateCapAboveReadCapWarns`, `TestValidate_OAuthWithoutIssuerRefused` | Relay, relayconfig |
 | RC-21 | `TestCapability_ReadsReachSettingsPerRequest`, `TestReload_BindTimeChangeRefusedRestartRequired`, `TestReload_FailedReloadProcessSurvives`, `TestReload_InvalidValueRefusedConfigIntact`, `TestReload_RechecksFileFirst`, `TestReload_ValidChangeAppliedAndAudited` | Relay, capability |
-| RC-22 | `TestApprovalGatePathAbsentMeansNoGate`, `TestDefaults_EachReachValueWhenAbsent`, `TestEveryKeyReachesConfig`, `TestFromFile_CarriesEverySetting`, `TestNewLogHandler_FormatAndLevel`, `TestValidate_InvalidValueRefusedNamingSetting` | Relay, relayconfig |
+| RC-22 | `TestApprovalGatePathAbsentMeansNoGate`, `TestDefaults_EachReachValueWhenAbsent`, `TestEveryKeyReachesConfig`, `TestFromFile_CarriesEverySetting`, `TestNewLogHandler_JSONAtConfiguredLevel`, `TestValidate_InvalidValueRefusedNamingSetting` | Relay, relayconfig |
 | RC-28 | `TestInit_CreatesNamedAdminAndMintsOnce`, `TestInit_NoReservedName`, `TestInit_RecoverReMintsAndAudits`, `TestInit_RecoverRefusesDisabledOrNonAdmin`, `TestInit_RefusesAbsentStore`, `TestInit_RefusesRoot`, `TestInit_RefusesWhenAHumanAccountExists`, `TestInit_RerunEmitsNothing`, `TestInit_TTLAppliesToTheFirstAndTheRecoveredToken`, `TestNewServer_ControlEnabled_SeedsNoAccount`, `TestReadNoEcho_ThePasswordIsNotEchoedAndEchoIsRestored` | Relay |
 | RC-35 | `TestStart_RefusesMalformedGateFile`, `TestStartup_RefusedGateRefusesBeforeTheCA` | Relay, startup |
 | RC-36 | `TestMintEnrollmentToken_JoinStringUsesAdvertisedAddress` | Relay |
+| RC-38 | `TestFromFile_EnrollmentRateLimitsAreBuiltIn` | Relay |
+| RC-39 | `TestFromFile_CertExpiringFractionIsAQuarter` | Relay |
+| RC-40 | `TestFromFile_DispatchConcurrencyIsSixteen` | Relay |
+| RC-41 | `TestFromFile_WebhookTimeoutIsBuiltIn`, `TestValidate_WebhookURLAndSecretOnlyFromFiles` | Relay, relayconfig |
+| RC-42 | `TestNewLogHandler_JSONAtConfiguredLevel` | Relay |
+| RC-43 | `TestFromFile_ConsoleWindowsAreBuiltIn` | Relay |
+| RC-44 | `TestLoad_RemovedKeyRefusedNamingKey`, `TestReloader_RemovedKeyRefusedNamingKey` | Relay, relayconfig |
 | RC-46 | `TestServerCertificateNames`, `TestServerCertificate_NamesEveryHostAJoinStringCarries` | Relay |
 | RC-47 | `TestDiff_ExtraNamesChangeIsRestartRequired`, `TestReloader_ExtraNamesChangeRefusedRestartRequired`, `TestValidate_ExtraNamesCappedAt32`, `TestValidate_ExtraNamesEachEntryChecked` | Relay, relayconfig |
 
-Unproven: RC-7, RC-27, RC-48, RC-49, RC-50, RC-51, RC-52.
+Unproven: RC-7, RC-27, RC-48, RC-49.
 Designed claims a test already cites: RC-15 (`TestDecide_Table`, `TestInit_RefusesRoot`, `TestStart_RefusesConfigWritableByRelay`, `TestStart_RefusesSecretReadableByOthers`); RC-16 (`TestStart_RefusesSymlinkedConfig`); RC-17 (`TestCA_RefusesGroupReadableKeyOrDirectory`, `TestStart_RefusesGroupReadableStateOrKey`); RC-18 (`TestRefusals_CarryNoSecretOrWebhookURL`, `TestReload_AuditNamesSecretKeyNotValue`); RC-19 (`TestPackagedRelayTOML_WithoutFQDNRefusesNamingTLSHostname`); RC-25 (`TestPackagedRelayTOML_FirstInstallSettings`, `TestPackagedRelayTOML_WithoutFQDNRefusesNamingTLSHostname`).
 <!-- proof:end -->
 
 ## Retired
 
+- **RC-50** — `2026-10-28` — the `state:cert-expiring` fraction was a configuration value;
+  replaced by RC-39.
+- **RC-51** — `2026-10-28` — the enrollment rate limits, bursts and tracked-IP ceiling were
+  configuration values; replaced by RC-38.
+- **RC-52** — `2026-10-28` — the log format was a configuration value; replaced by RC-42.
 - **RC-1** — `2026-10-21` — the `bootstrap-token` and `console-password` subcommands are
   replaced by `relay init` (ADR-0030); RC-28 carries the first admin and its recovery.
 - **RC-2** — `2026-10-18` — settings from flags and `RELAY_*` variables are replaced by one

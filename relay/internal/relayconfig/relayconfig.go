@@ -22,14 +22,8 @@ const (
 	defaultNodeAddress     = ":7654"
 	defaultControlAddress  = ":9443"
 	defaultAccountClaim    = "email"
-	defaultIPRate          = 5
-	defaultIPBurst         = 3
-	defaultGlobalRate      = 50
-	defaultGlobalBurst     = 10
-	defaultMaxTrackedIPs   = 100000
 	defaultMaxNodes        = 110000
 	defaultLogLevel        = slog.LevelInfo
-	defaultLogFormat       = LogText
 	defaultNodePort        = "7654"
 	maxPort                = 65535
 	maxHostnameLength      = 253
@@ -38,14 +32,6 @@ const (
 	// maxExtraNames caps tls.extra_names (RC-47). With the composition root's
 	// cap on detected addresses it bounds the certificate's SAN list.
 	maxExtraNames = 32
-)
-
-// LogFormat is how the Relay renders its log.
-type LogFormat string
-
-const (
-	LogText LogFormat = "text"
-	LogJSON LogFormat = "json"
 )
 
 // Config is the validated configuration, shaped by section.
@@ -78,10 +64,8 @@ type ControlPlane struct {
 
 // Console is the Admin Console served on the control-plane listener.
 type Console struct {
-	Enabled       bool
-	SessionMaxAge time.Duration
-	SessionIdle   time.Duration
-	StepUpWindow  time.Duration
+	Enabled     bool
+	SessionIdle time.Duration
 }
 
 // CA holds the directory of the Relay's CA key and certificate.
@@ -110,39 +94,31 @@ type OAuth struct {
 }
 
 // Approval is the approval gate and its notification path. An empty
-// GateRulesPath means no gate; an unset WebhookURL means no notification.
+// GateRulesPath means no gate; an unset WebhookURL means no notification. The
+// URL and the secret are read only from files the configuration names (RC-41).
 type Approval struct {
-	GateRulesPath  string
-	WebhookURL     Secret
-	WebhookSecret  Secret
-	WebhookTimeout time.Duration
+	GateRulesPath string
+	WebhookURL    Secret
+	WebhookSecret Secret
 }
 
-// Log is the log level and format.
+// Log is the log level; the format is always JSON (RC-42).
 type Log struct {
-	Level  slog.Level
-	Format LogFormat
+	Level slog.Level
 }
 
 // Reach is the configuration that bounds how far one dispatch reaches.
 type Reach struct {
-	ReadBlastCap        int
-	MutateBlastCap      int
-	DispatchConcurrency int
+	ReadBlastCap   int
+	MutateBlastCap int
 	// MinDaemonVersion is empty when the gate is off.
 	MinDaemonVersion string
 }
 
-// Enrollment is the Enrollment rate limiting, the registry cap, and the
-// Node identity certificate expiry window.
+// Enrollment is the registry's Node cap. The Enrollment rate limits and the
+// cert-expiring window are built in (RC-38, RC-39).
 type Enrollment struct {
-	IPRatePerMinute      int
-	IPBurst              int
-	GlobalRatePerMinute  int
-	GlobalBurst          int
-	MaxTrackedIPs        int
-	MaxNodes             int // 0 means no cap
-	CertExpiringFraction float64
+	MaxNodes int // 0 means no cap
 }
 
 // EffectiveAdvertisedAddress is the address a join string carries: the

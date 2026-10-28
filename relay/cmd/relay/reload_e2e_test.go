@@ -200,14 +200,14 @@ func (r *reloadRelay) records(kind string) []audit.Record {
 
 // Proves RC-21.
 func TestReload_ValidChangeAppliedAndAudited(t *testing.T) {
-	r := startReloadable(t, "[reach]\nmutate_blast_cap = 5\n\n[log]\nformat = \"text\"\n")
+	r := startReloadable(t, "[reach]\nmutate_blast_cap = 5\n\n[log]\nlevel = \"info\"\n")
 
-	r.rewriteRoot(r.body(reloadBody{sections: "[reach]\nmutate_blast_cap = 7\n\n[log]\nformat = \"json\"\n"}))
+	r.rewriteRoot(r.body(reloadBody{sections: "[reach]\nmutate_blast_cap = 7\n\n[log]\nlevel = \"debug\"\n"}))
 	r.hup()
 	r.waitForLogCount(reloadedMsg, 1)
 
 	line := r.lastJSONLine(reloadedMsg)
-	if got, want := changedKeys(t, line), []string{"log.format", "reach.mutate_blast_cap"}; !slices.Equal(got, want) {
+	if got, want := changedKeys(t, line), []string{"log.level", "reach.mutate_blast_cap"}; !slices.Equal(got, want) {
 		t.Errorf("changed = %v, want %v", got, want)
 	}
 	r.requireAlive()
@@ -220,7 +220,7 @@ func TestReload_ValidChangeAppliedAndAudited(t *testing.T) {
 	if rec.Principal != audit.PrincipalLocalHost || rec.Attribution.Verified.AccountID != "" {
 		t.Errorf("attribution = %q, %+v; want local-host with no AccountID", rec.Principal, rec.Attribution.Verified)
 	}
-	for _, k := range []string{"log.format", "reach.mutate_blast_cap"} {
+	for _, k := range []string{"log.level", "reach.mutate_blast_cap"} {
 		if !strings.Contains(rec.Reason, k) {
 			t.Errorf("Reason %q does not name %s", rec.Reason, k)
 		}
@@ -232,9 +232,9 @@ func TestReload_ValidChangeAppliedAndAudited(t *testing.T) {
 
 // Proves RC-21.
 func TestReload_InvalidValueRefusedConfigIntact(t *testing.T) {
-	r := startReloadable(t, "[reach]\nmutate_blast_cap = 5\n\n[log]\nformat = \"text\"\n")
+	r := startReloadable(t, "[reach]\nmutate_blast_cap = 5\n\n[log]\nlevel = \"info\"\n")
 
-	r.rewriteRoot(r.body(reloadBody{sections: "[reach]\nmutate_blast_cap = 0\n\n[log]\nformat = \"json\"\n"}))
+	r.rewriteRoot(r.body(reloadBody{sections: "[reach]\nmutate_blast_cap = 0\n\n[log]\nlevel = \"debug\"\n"}))
 	r.hup()
 	r.waitForLogCount(refusedMsg, 1)
 	log := r.proc.Log()
@@ -244,15 +244,12 @@ func TestReload_InvalidValueRefusedConfigIntact(t *testing.T) {
 	if strings.Contains(log, reloadedMsg) {
 		t.Errorf("a refused reload logged %q", reloadedMsg)
 	}
-	if strings.Contains(log[strings.Index(log, refusedMsg):], "{\"time\"") {
-		t.Errorf("the log format changed though the reload was refused:\n%s", log)
-	}
 
-	// The refused reload applied nothing: log.format is still a change for the next one.
-	r.rewriteRoot(r.body(reloadBody{sections: "[reach]\nmutate_blast_cap = 5\n\n[log]\nformat = \"json\"\n"}))
+	// The refused reload applied nothing: log.level is still a change for the next one.
+	r.rewriteRoot(r.body(reloadBody{sections: "[reach]\nmutate_blast_cap = 5\n\n[log]\nlevel = \"debug\"\n"}))
 	r.hup()
 	r.waitForLogCount(reloadedMsg, 1)
-	if got, want := changedKeys(t, r.lastJSONLine(reloadedMsg)), []string{"log.format"}; !slices.Equal(got, want) {
+	if got, want := changedKeys(t, r.lastJSONLine(reloadedMsg)), []string{"log.level"}; !slices.Equal(got, want) {
 		t.Errorf("changed = %v, want %v", got, want)
 	}
 
@@ -295,7 +292,7 @@ func TestReload_BindTimeChangeRefusedRestartRequired(t *testing.T) {
 			r.hup()
 			r.waitForLogCount(refusedMsg, before+1)
 
-			if out := r.proc.Log()[mark:]; !strings.Contains(out, "configuration reload refused: restart required") || !strings.Contains(out, "setting="+tc.key) {
+			if out := r.proc.Log()[mark:]; !strings.Contains(out, "configuration reload refused: restart required") || !strings.Contains(out, `"setting":"`+tc.key+`"`) {
 				t.Errorf("no restart-required refusal naming %s:\n%s", tc.key, out)
 			}
 			r.requireAlive()
@@ -380,25 +377,55 @@ func TestReload_RechecksFileFirst(t *testing.T) {
 }
 
 // TestReload_AuditNamesSecretKeyNotValue is RC-18's reload clause: a rotated webhook URL and
-// secret appear on the log and the trail by key, never by value.
+// secret appear on the log and the trail by key, never by value. A secret file rewritten in
+// place, under the same path, is a change as well.
 func TestReload_AuditNamesSecretKeyNotValue(t *testing.T) {
 	banned := []string{"hook-token", "s3cr3t", "127.0.0.1:1"}
-	r := startReloadable(t, "[approval]\nwebhook_url = \"http://127.0.0.1:1/hook-token-A\"\nwebhook_secret = \"s3cr3t-A\"\n")
+	// The mode and owner the file check accepts, as the daemon's secrets are placed.
+	place := func(r *reloadRelay, name, body string) string {
+		return r.layout.WriteFile(r.t, name, body, "root", relaytest.TestUser, "0640")
+	}
+	bin, layout := shippableLayout(t)
+	r := &reloadRelay{t: t, layout: layout, addr: freeAddr(t)}
+	urlA := place(r, "webhook-url-a", "http://127.0.0.1:1/hook-token-A\n")
+	secretA := place(r, "webhook-secret-a", "s3cr3t-A\n")
+	files := func(url, secret string) string {
+		return "[approval]\nwebhook_url_file = \"" + url + "\"\nwebhook_secret_file = \"" + secret + "\"\n"
+	}
+	r.path = layout.WriteFile(t, "relay.toml", r.body(reloadBody{sections: files(urlA, secretA)}), "root", relaytest.TestUser, "0640")
+	r.proc = startShippable(t, layout, bin, "--config", r.path)
+	waitForRelayLog(t, r.proc, "relay listening")
 
-	urlFile := r.layout.WriteFile(t, "webhook-url", "http://127.0.0.1:1/hook-token-B\n", "root", relaytest.TestUser, "0640")
-	r.rewriteRoot(r.body(reloadBody{sections: "[approval]\nwebhook_url_file = \"" + urlFile + "\"\nwebhook_secret = \"s3cr3t-B\"\n"}))
+	urlB := place(r, "webhook-url-b", "http://127.0.0.1:1/hook-token-B\n")
+	secretB := place(r, "webhook-secret-b", "s3cr3t-B\n")
+	r.rewriteRoot(r.body(reloadBody{sections: files(urlB, secretB)}))
 	r.hup()
 	r.waitForLogCount(reloadedMsg, 1)
+	if got, want := changedKeys(t, r.lastJSONLine(reloadedMsg)), []string{"approval.webhook_secret_file", "approval.webhook_url_file"}; !slices.Equal(got, want) {
+		t.Errorf("changed = %v, want %v", got, want)
+	}
+
+	// The secrets agent rewrites the secret file in place: same path, new content.
+	place(r, "webhook-secret-b", "s3cr3t-C\n")
+	r.hup()
+	r.waitForLogCount(reloadedMsg, 2)
+	if got, want := changedKeys(t, r.lastJSONLine(reloadedMsg)), []string{"approval.webhook_secret_file"}; !slices.Equal(got, want) {
+		t.Errorf("in-place rewrite: changed = %v, want %v", got, want)
+	}
 
 	log := r.proc.Log()
-	for _, k := range []string{"approval.webhook_url", "approval.webhook_secret"} {
-		if !strings.Contains(log[strings.Index(log, reloadedMsg):], k) {
-			t.Errorf("the reload line does not name %s:\n%s", k, log)
-		}
-	}
 	for _, b := range banned {
 		if strings.Contains(log, b) {
 			t.Errorf("the log carries %q:\n%s", b, log)
+		}
+	}
+	reloads := r.records(audit.KindConfigReload)
+	if len(reloads) != 2 {
+		t.Fatalf("config_reload records = %d, want 2", len(reloads))
+	}
+	for _, rec := range reloads {
+		if !strings.Contains(rec.Reason, "approval.webhook_secret_file") {
+			t.Errorf("Reason %q does not name approval.webhook_secret_file", rec.Reason)
 		}
 	}
 	for _, kind := range []string{audit.KindConfigReload, audit.KindConfigReloadRefused} {
@@ -407,9 +434,6 @@ func TestReload_AuditNamesSecretKeyNotValue(t *testing.T) {
 				if strings.Contains(rec.Reason, b) {
 					t.Errorf("a %s record carries %q: %q", kind, b, rec.Reason)
 				}
-			}
-			if kind == audit.KindConfigReload && !strings.Contains(rec.Reason, "approval.webhook_secret") {
-				t.Errorf("Reason %q does not name approval.webhook_secret", rec.Reason)
 			}
 		}
 	}

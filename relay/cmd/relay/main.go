@@ -63,7 +63,10 @@ type Config struct {
 	// port. It is read from the configuration file at startup
 	// (node_plane.advertised_address) and no API reaches it (ADR-0043,
 	// invariant 11).
-	AdvertisedAddress   string
+	AdvertisedAddress string
+	// Enroll* are the Enrollment rate limits, built in (RC-38, EN-43):
+	// fromFile sets the ratelimit constants and no file key or API reaches them;
+	// a test may set another value. MaxNodes is the one setting among them.
 	EnrollIPRate        int
 	EnrollIPBurst       int
 	EnrollGlobalRate    int
@@ -83,14 +86,10 @@ type Config struct {
 	ReadBlastCap   int
 	MutateBlastCap int
 
-	// DispatchConcurrency is the per-Job bound on Tasks in flight at once.
-	// It bounds reach, so invariant 11 allows it as runtime-shaped
-	// configuration; it is not the blast cap (how many Nodes a Job may touch)
-	// and not a security-floor value. It is read from the configuration file at
-	// start and on a host reload (RC-21) and is reachable from no API; it is
-	// planned to move to the store-backed settings object (ADR-0010 amendment
-	// 2026-09-15), where invariant 11's "human with step-up, audited" rule
-	// applies. Zero or negative refuses startup.
+	// DispatchConcurrency is the per-Job bound on Tasks in flight at once. It
+	// is built in (RC-40): fromFile sets the constant and no file key or API
+	// reaches it; a test may set another value. It is not the blast cap (how
+	// many Nodes a Job may touch). Zero or negative refuses startup.
 	DispatchConcurrency int
 
 	// MinDaemonVersion is the minimum relay-daemon version (ADR-0014); empty
@@ -102,8 +101,8 @@ type Config struct {
 
 	// CertExpiringFraction sets the state:cert-expiring warning window
 	// (ADR-0034): a Node fires the marker once less than this fraction
-	// of its identity certificate's lifetime remains. Same file-only,
-	// never-API-settable mechanism as the fields above (invariant 11) — a
+	// of its identity certificate's lifetime remains. It is built in (RC-39):
+	// fromFile sets the constant and no file key or API reaches it. It is a
 	// fraction rather than an absolute duration, so it tracks any future
 	// change to ca.LeafValidity instead of going stale against it. There is
 	// deliberately no "off" value: newRunning refuses outside (0, 1],
@@ -135,7 +134,9 @@ type Config struct {
 	//
 	// ApprovalWebhookURL may carry a token: it is a secret and is never logged
 	// or put in an error. ApprovalWebhookSecret signs the outbound body
-	// (HMAC-SHA256); it prints as a placeholder under every verb.
+	// (HMAC-SHA256); it prints as a placeholder under every verb. Both are read
+	// only from files the configuration names (RC-41). ApprovalWebhookTimeout
+	// is built in (RC-41); a test may set another value.
 	ApprovalWebhookURL     relayconfig.Secret
 	ApprovalWebhookSecret  relayconfig.Secret
 	ApprovalWebhookTimeout time.Duration
@@ -156,13 +157,12 @@ type Config struct {
 	// control-plane listener above rather than one of its own — the Console is
 	// internal-only and shares that listener's exposure posture.
 	//
-	// The two duration fields are configuration-file settings in the
-	// invariant-11 sense: operator-set at startup, and there is no code path
-	// from any request to either of them. That matters most for
-	// ConsoleStepUpWindow — an Account that could widen its own step-up window
-	// has removed the strongest per-action control in the system (spec 11).
-	// The loader refuses a value above consoleauth.MaxStepUpWindow. It governs the
-	// privilege-granting Account acts.
+	// ConsoleSessionMaxAge and ConsoleStepUpWindow are built in (RC-43):
+	// fromFile sets the constants, no file key or API reaches them, and a test
+	// may set another value. That matters most for ConsoleStepUpWindow — an
+	// Account that could widen its own step-up window has removed the strongest
+	// per-action control in the system (spec 11). ConsoleSessionIdle is the one
+	// setting.
 	ConsoleEnabled       bool
 	ConsoleSessionMaxAge time.Duration
 	ConsoleSessionIdle   time.Duration

@@ -10,21 +10,16 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Felag-Engineering/relay/relay/internal/approvalnotify"
 	"github.com/Felag-Engineering/relay/relay/internal/capability"
 	"github.com/Felag-Engineering/relay/relay/internal/consoleauth"
-	"github.com/Felag-Engineering/relay/relay/internal/nodestate"
 	"github.com/Felag-Engineering/relay/relay/internal/registry"
 )
 
 const (
 	keyHostname       = "tls.hostname"
 	keyExtraNames     = "tls.extra_names"
-	keyWebhookURL     = "approval.webhook_url"
 	keyWebhookURLFile = "approval.webhook_url_file"
-	keyWebhookSecret  = "approval.webhook_secret"
 	keyWebhookSecFile = "approval.webhook_secret_file"
-	keyWebhookTimeout = "approval.webhook_timeout"
 	keyOAuthIssuer    = "oauth.issuer"
 	keyOAuthAudience  = "oauth.audience"
 	keyOAuthClaim     = "oauth.account_claim"
@@ -68,9 +63,7 @@ func (v *validator) build(d document) Config {
 	c.ControlPlane.ListenAddress = v.address("control_plane.listen_address", d.ControlPlane.ListenAddress, defaultControlAddress, false)
 
 	c.Console.Enabled = boolOr(d.Console.Enabled, false)
-	c.Console.SessionMaxAge = v.duration("console.session_max_age", d.Console.SessionMaxAge, consoleauth.DefaultAbsoluteLifetime, 0)
 	c.Console.SessionIdle = v.duration("console.session_idle", d.Console.SessionIdle, consoleauth.DefaultIdleTimeout, 0)
-	c.Console.StepUpWindow = v.duration("console.step_up_window", d.Console.StepUpWindow, consoleauth.DefaultStepUpWindow, consoleauth.MaxStepUpWindow)
 
 	c.CA.Dir = v.requiredPath("ca.dir", d.CA.Dir)
 	c.Store.Path = v.requiredPath("store.path", d.Store.Path)
@@ -406,60 +399,31 @@ func httpURLProblem(s string) string {
 
 func (v *validator) buildApproval(c *Config, d approvalDoc) {
 	c.Approval.GateRulesPath = v.path("approval.gate_rules_path", d.GateRulesPath)
-	c.Approval.WebhookURL = v.secret(keyWebhookURL, keyWebhookURLFile, d.WebhookURL, d.WebhookURLFile, true)
-	c.Approval.WebhookSecret = v.secret(keyWebhookSecret, keyWebhookSecFile, d.WebhookSecret, d.WebhookSecretFile, false)
-	c.Approval.WebhookTimeout = v.duration(keyWebhookTimeout, d.WebhookTimeout, approvalnotify.DefaultTimeout, 0)
+	c.Approval.WebhookURL = v.secretFile(keyWebhookURLFile, d.WebhookURLFile)
+	c.Approval.WebhookSecret = v.secretFile(keyWebhookSecFile, d.WebhookSecretFile)
 
-	if c.Approval.WebhookURL.IsSet() {
-		return
+	if c.Approval.WebhookURL.IsSet() || d.WebhookURLFile != nil {
+		return // set, or already reported
 	}
-	if d.WebhookURL != nil || d.WebhookURLFile != nil {
-		return // already reported
-	}
-	for _, f := range []struct {
-		key string
-		set bool
-	}{
-		{keyWebhookSecret, d.WebhookSecret != nil},
-		{keyWebhookSecFile, d.WebhookSecretFile != nil},
-		{keyWebhookTimeout, d.WebhookTimeout != nil},
-	} {
-		if f.set {
-			v.fail(f.key, "requires approval.webhook_url or approval.webhook_url_file; it would apply to no notification")
-		}
+	if d.WebhookSecretFile != nil {
+		v.fail(keyWebhookSecFile, "requires approval.webhook_url_file; it would apply to no notification")
 	}
 }
 
-// secret folds a secret's two spellings, x and x_file, into one Secret. Giving
-// both is refused (ADR-0043 decision 2).
-func (v *validator) secret(key, fileKey string, inline, file *string, isURL bool) Secret {
-	switch {
-	case inline != nil && file != nil:
-		v.fail(fileKey, "set "+key+" or "+fileKey+", not both")
-	case inline != nil:
-		s, ok := v.text(key, inline)
-		if !ok {
-			return Secret{}
-		}
-		if s = strings.TrimSpace(s); s == "" {
-			v.fail(key, reasonEmpty)
-			return Secret{}
-		}
-		if isURL && httpURLProblem(s) != "" { // shape only; approvalnotify owns https-unless-loopback
-			v.fail(key, "must be "+absoluteHTTPURL)
-			return Secret{}
-		}
-		return inlineSecret(s)
-	case file != nil:
-		if p := v.path(fileKey, file); p != "" {
-			return fileSecret(p, fileKey, v.idx.of(fileKey))
-		}
+// secretFile turns a secret's file key into a Secret that is resolved later
+// through the file check. A secret is only ever given as a file (RC-41).
+func (v *validator) secretFile(fileKey string, file *string) Secret {
+	if file == nil {
+		return Secret{}
+	}
+	if p := v.path(fileKey, file); p != "" {
+		return fileSecret(p, fileKey, v.idx.of(fileKey))
 	}
 	return Secret{}
 }
 
 func (v *validator) buildLog(c *Config, d logDoc) {
-	c.Log.Level, c.Log.Format = defaultLogLevel, defaultLogFormat
+	c.Log.Level = defaultLogLevel
 	if s, ok := v.text("log.level", d.Level); ok {
 		if l, known := logLevels[s]; known {
 			c.Log.Level = l
@@ -467,20 +431,11 @@ func (v *validator) buildLog(c *Config, d logDoc) {
 			v.fail("log.level", "must be one of debug, info, warn, error")
 		}
 	}
-	if s, ok := v.text("log.format", d.Format); ok {
-		switch LogFormat(s) {
-		case LogText, LogJSON:
-			c.Log.Format = LogFormat(s)
-		default:
-			v.fail("log.format", "must be one of text, json")
-		}
-	}
 }
 
 func (v *validator) buildReach(c *Config, d reachDoc) {
 	c.Reach.ReadBlastCap = v.integer(keyReadBlastCap, d.ReadBlastCap, capability.DefaultReadCap, 1)
 	c.Reach.MutateBlastCap = v.integer(keyMutateBlastCap, d.MutateBlastCap, capability.DefaultMutateCap, 1)
-	c.Reach.DispatchConcurrency = v.integer("reach.dispatch_concurrency", d.DispatchConcurrency, capability.DefaultDispatchConcurrency, 1)
 	if s, ok := v.text("reach.min_daemon_version", d.MinDaemonVersion); ok {
 		if registry.ValidVersion(s) {
 			c.Reach.MinDaemonVersion = s
@@ -500,23 +455,7 @@ func (v *validator) buildReach(c *Config, d reachDoc) {
 }
 
 func (v *validator) buildEnrollment(c *Config, d enrollmentDoc) {
-	e := &c.Enrollment
-	e.IPRatePerMinute = v.integer("enrollment.ip_rate_per_minute", d.IPRatePerMinute, defaultIPRate, 1)
-	e.IPBurst = v.integer("enrollment.ip_burst", d.IPBurst, defaultIPBurst, 1)
-	e.GlobalRatePerMinute = v.integer("enrollment.global_rate_per_minute", d.GlobalRatePerMinute, defaultGlobalRate, 1)
-	e.GlobalBurst = v.integer("enrollment.global_burst", d.GlobalBurst, defaultGlobalBurst, 1)
-	e.MaxTrackedIPs = v.integer("enrollment.max_tracked_ips", d.MaxTrackedIPs, defaultMaxTrackedIPs, 1)
-	e.MaxNodes = v.integer("enrollment.max_nodes", d.MaxNodes, defaultMaxNodes, 0)
-
-	e.CertExpiringFraction = nodestate.DefaultCertExpiringFraction
-	if f := d.CertExpiringFraction; f != nil {
-		// Written as a negation so NaN is refused with the out-of-range values.
-		if !(*f > 0 && *f <= 1) {
-			v.fail("enrollment.cert_expiring_fraction", "must be greater than 0 and at most 1; there is no off value")
-		} else {
-			e.CertExpiringFraction = *f
-		}
-	}
+	c.Enrollment.MaxNodes = v.integer("enrollment.max_nodes", d.MaxNodes, defaultMaxNodes, 0)
 }
 
 // checkAdvertised refuses an advertised address whose host the server

@@ -281,3 +281,88 @@ func TestLimiter_ReadsConfigSourcePerCall(t *testing.T) {
 		t.Fatal("fresh IP second call at lowered burst 1: want denied")
 	}
 }
+
+// Proves EN-43.
+func TestEnrollment_NATBatchJoinsInMinutes(t *testing.T) {
+	clk := &advanceable{t: base}
+	l := New(Enrollment(), WithClock(clk.clock))
+
+	// Some 200 Nodes behind one address arrive at a steady pace: one attempt per
+	// second from that address while the bucket is empty.
+	const nodes = 200
+	admitted := 0
+	for admitted < nodes {
+		if l.Allow("203.0.113.7") {
+			admitted++
+			continue
+		}
+		clk.advance(time.Second)
+		if elapsed := clk.t.Sub(base); elapsed > 5*time.Minute {
+			t.Fatalf("only %d of %d admitted after %v", admitted, nodes, elapsed)
+		}
+	}
+}
+
+// Proves EN-43.
+func TestEnrollment_PerSourceAdmitsSixtyAMinute(t *testing.T) {
+	cfg := Enrollment()
+	cfg.GlobalRatePerMin, cfg.GlobalBurst = 1_000_000, 1_000_000 // not the bottleneck
+	clk := &advanceable{t: base}
+	l := New(cfg, WithClock(clk.clock))
+	const ip = "203.0.113.7"
+
+	for i := 0; i < EnrollmentPerIPBurst; i++ {
+		if !l.Allow(ip) {
+			t.Fatalf("burst call %d denied", i+1)
+		}
+	}
+	if l.Allow(ip) {
+		t.Fatal("a call past the burst was admitted")
+	}
+	for s := 1; s <= 60; s++ {
+		clk.advance(time.Second)
+		if !l.Allow(ip) {
+			t.Fatalf("second %d: the per-source limit admits 60 a minute, got a denial", s)
+		}
+	}
+}
+
+// Proves EN-43.
+func TestEnrollment_GlobalStillGuardsAFlood(t *testing.T) {
+	clk := &advanceable{t: base}
+	l := New(Enrollment(), WithClock(clk.clock))
+
+	// Distinct addresses, so only the global bucket can refuse.
+	n := 0
+	attempt := func() bool {
+		n++
+		return l.Allow(fmt.Sprintf("10.%d.%d.%d", n>>16, (n>>8)&255, n&255))
+	}
+
+	burst := 0
+	for i := 0; i < 1000; i++ {
+		if attempt() {
+			burst++
+		}
+	}
+	if burst != EnrollmentGlobalBurst {
+		t.Fatalf("a flood of distinct addresses at one instant admitted %d, want the global burst %d", burst, EnrollmentGlobalBurst)
+	}
+
+	// Twenty fresh addresses every second for ten minutes: sustained admission
+	// is held to the global rate.
+	const minutes = 10
+	admitted := 0
+	for s := 0; s < minutes*60; s++ {
+		clk.advance(time.Second)
+		for i := 0; i < 20; i++ {
+			if attempt() {
+				admitted++
+			}
+		}
+	}
+	want := EnrollmentGlobalRatePerMin * minutes
+	if admitted < want-1 || admitted > want+1 {
+		t.Fatalf("a sustained flood admitted %d over %d minutes, want about %d", admitted, minutes, want)
+	}
+}

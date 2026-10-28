@@ -37,10 +37,8 @@ type controlPlaneDoc struct {
 }
 
 type consoleDoc struct {
-	Enabled       *bool   `toml:"enabled"`
-	SessionMaxAge *string `toml:"session_max_age"`
-	SessionIdle   *string `toml:"session_idle"`
-	StepUpWindow  *string `toml:"step_up_window"`
+	Enabled     *bool   `toml:"enabled"`
+	SessionIdle *string `toml:"session_idle"`
 }
 
 type caDoc struct {
@@ -66,33 +64,22 @@ type oauthDoc struct {
 
 type approvalDoc struct {
 	GateRulesPath     *string `toml:"gate_rules_path"`
-	WebhookURL        *string `toml:"webhook_url"`
 	WebhookURLFile    *string `toml:"webhook_url_file"`
-	WebhookSecret     *string `toml:"webhook_secret"`
 	WebhookSecretFile *string `toml:"webhook_secret_file"`
-	WebhookTimeout    *string `toml:"webhook_timeout"`
 }
 
 type logDoc struct {
-	Level  *string `toml:"level"`
-	Format *string `toml:"format"`
+	Level *string `toml:"level"`
 }
 
 type reachDoc struct {
-	ReadBlastCap        *int    `toml:"read_blast_cap"`
-	MutateBlastCap      *int    `toml:"mutate_blast_cap"`
-	DispatchConcurrency *int    `toml:"dispatch_concurrency"`
-	MinDaemonVersion    *string `toml:"min_daemon_version"`
+	ReadBlastCap     *int    `toml:"read_blast_cap"`
+	MutateBlastCap   *int    `toml:"mutate_blast_cap"`
+	MinDaemonVersion *string `toml:"min_daemon_version"`
 }
 
 type enrollmentDoc struct {
-	IPRatePerMinute      *int     `toml:"ip_rate_per_minute"`
-	IPBurst              *int     `toml:"ip_burst"`
-	GlobalRatePerMinute  *int     `toml:"global_rate_per_minute"`
-	GlobalBurst          *int     `toml:"global_burst"`
-	MaxTrackedIPs        *int     `toml:"max_tracked_ips"`
-	MaxNodes             *int     `toml:"max_nodes"`
-	CertExpiringFraction *float64 `toml:"cert_expiring_fraction"`
+	MaxNodes *int `toml:"max_nodes"`
 }
 
 // decode parses data strictly: an unknown key is refused. The library's own
@@ -110,6 +97,10 @@ func decode(data []byte) (document, []*Error) {
 		for i := range strict.Errors {
 			line, _ := strict.Errors[i].Position()
 			parts := strict.Errors[i].Key()
+			if key, reason, removed := removedKey(parts); removed {
+				errs = append(errs, &Error{Key: key, Line: line, Reason: reason})
+				continue
+			}
 			key, ok := safeKey(parts)
 			reason := "is not a setting the Relay reads"
 			if !ok {

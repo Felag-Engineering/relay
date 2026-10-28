@@ -62,21 +62,12 @@
 # so it inherits that listener's internal-only exposure.
 # enabled = false
 
-# Absolute lifetime of a Console session. Activity does not extend it: a stolen
-# cookie is a bounded loss rather than a permanent one.
-# session_max_age = "12h"
-
 # Idle timeout of a Console session. The two bounds answer different threats,
 # idle catches the unlocked laptop and absolute the exfiltrated cookie, so
 # neither substitutes for the other.
 # session_idle = "30m"
 
-# How recently a human must have re-entered their password for a
-# privilege-granting Account act to proceed without being asked again. At most
-# 15m: a longer value is refused. No Account of any role can extend it through
-# any API. Keep it short: a window long enough to be convenient is a window
-# long enough for someone else at the same keyboard.
-# step_up_window = "5m"
+# The session's maximum age (12h) and the step-up window (5m) are built in.
 
 # ---------------------------------------------------------------------------
 # State: the CA and the store
@@ -158,21 +149,18 @@ hostname = "relay.example.internal"
 
 # Where to push a Relay-authored notice that a dispatch has parked. Optional:
 # with no URL nothing is pushed and approvers read the queue instead. A secret:
-# give it inline, or name a file that holds it.
+# name a file that holds it.
 #
 # Notification is DELIVERY, never the decision. A deployment whose webhook is
 # down loses a notification, not the guarantee: decisions only ever land on the
 # authenticated /api/v1 endpoint.
-# webhook_url = "https://hooks.example.internal/relay-approvals"
 # webhook_url_file = "/etc/relay/approval-webhook.url"
 
 # The shared secret that signs the outbound webhook body (HMAC-SHA256). Leaving
-# it out sends unsigned notifications. A secret, in either form.
-# webhook_secret = "replace-with-a-long-random-string"
+# it out sends unsigned notifications. A secret: name a file that holds it.
 # webhook_secret_file = "/etc/relay/approval-webhook.secret"
 
-# Total time budget for one delivery attempt.
-# webhook_timeout = "5s"
+# Each delivery attempt has a 5s time budget, built in.
 
 # ---------------------------------------------------------------------------
 # Log
@@ -181,8 +169,7 @@ hostname = "relay.example.internal"
 
 # One of debug, info, warn, error.
 # level = "info"
-# One of text, json.
-# format = "text"
+# Logs are always JSON.
 
 # ---------------------------------------------------------------------------
 # Reach: how far one dispatch goes
@@ -201,9 +188,7 @@ hostname = "relay.example.internal"
 # read_blast_cap = 10000
 # mutate_blast_cap = 100
 
-# How many Tasks of one Job run at once. This bounds how fast a Job reaches its
-# Nodes, not how many it may reach.
-# dispatch_concurrency = 16
+# Tasks of one Job are sent 16 at a time; this is built in.
 
 # Minimum relay-daemon version a Node must report to be dispatched to. Leaving
 # it out turns the gate off. This is the Relay's only lever over daemon
@@ -211,28 +196,14 @@ hostname = "relay.example.internal"
 # min_daemon_version = "0.1.0"
 
 # ---------------------------------------------------------------------------
-# Enrollment: rate limits, the Node cap, and certificate expiry
+# Enrollment: the Node cap
 # ---------------------------------------------------------------------------
 #
-# Enrollment is the one endpoint reachable before a Node has an identity, so it
-# is the one an attacker can reach without a credential. These bound both a
-# single noisy source and the aggregate.
+# The rate limits (about 60 a minute from one address, 50 a minute overall) and
+# the cert-expiring fraction (a quarter of the certificate's lifetime) are
+# built in.
 [enrollment]
-
-# ip_rate_per_minute = 5
-# ip_burst = 3
-# global_rate_per_minute = 50
-# global_burst = 10
-# Cap on the per-IP bucket map, so tracking cannot itself become the memory
-# exhaustion it exists to prevent.
-# max_tracked_ips = 100000
 
 # Registry insert cap: an upper bound on how many Nodes may ever enroll. 0
 # disables the cap.
 # max_nodes = 110000
-
-# Fraction of a Node identity certificate's lifetime remaining below which
-# state:cert-expiring fires. A fraction, not a duration, so it tracks any change
-# to the certificate lifetime. There is no off value: it must be above 0 and at
-# most 1.
-# cert_expiring_fraction = 0.25

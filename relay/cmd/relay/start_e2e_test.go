@@ -143,7 +143,7 @@ func TestMain_CoherentButSuspectConfigStartsWithWarning(t *testing.T) {
 	warnAt := -1
 	offset := 0
 	for _, line := range strings.SplitAfter(out, "\n") {
-		if warnAt < 0 && strings.Contains(line, "level=WARN") && strings.Contains(line, "mutate_blast_cap") {
+		if warnAt < 0 && strings.Contains(line, `"level":"WARN"`) && strings.Contains(line, "mutate_blast_cap") {
 			warnAt = offset
 		}
 		offset += len(line)
@@ -185,15 +185,9 @@ func TestStartupLog_CarriesNoWebhookURLOrSecret(t *testing.T) {
 	}
 	checkClean := func(t *testing.T, out string) {
 		t.Helper()
-		wantInOutput(t, out, "approval webhook enabled", "signed=true")
+		wantInOutput(t, out, "approval webhook enabled", `"signed":true`)
 		wantNoSecret(t, out)
 	}
-
-	t.Run("inline", func(t *testing.T) {
-		checkClean(t, run(t, func(*relaytest.RelayLayout) string {
-			return "webhook_url = \"" + webhookURLValue + "\"\nwebhook_secret = \"" + webhookSecretValue + "\"\n"
-		}))
-	})
 
 	t.Run("file", func(t *testing.T) {
 		checkClean(t, run(t, func(layout *relaytest.RelayLayout) string {
@@ -205,8 +199,8 @@ func TestStartupLog_CarriesNoWebhookURLOrSecret(t *testing.T) {
 
 	t.Run("refusal", func(t *testing.T) {
 		bin, layout := shippableLayout(t)
-		cfg := layout.WriteConfig(t, layoutTOML(layout, freeAddr(t),
-			"\n[approval]\nwebhook_url = \"http://hooks.example.test/T0K3N-path\"\n"))
+		urlFile := layout.WriteFile(t, "webhook-url", "http://hooks.example.test/T0K3N-path\n", "root", relaytest.TestUser, "0640")
+		cfg := layout.WriteConfig(t, layoutTOML(layout, freeAddr(t), "\n[approval]\nwebhook_url_file = \""+urlFile+"\"\n"))
 		wantNoSecret(t, refusedStart(t, layout, bin, cfg))
 	})
 }
@@ -244,23 +238,24 @@ func TestStart_RefusesConfigOwnedByTestUser(t *testing.T) {
 // configuration names, and on the configuration file itself: readable by an account other
 // than the Relay and root refuses start, and the refusal carries no secret.
 func TestStart_RefusesSecretReadableByOthers(t *testing.T) {
-	inline := "\n[approval]\nwebhook_url = \"" + webhookURLValue + "\"\nwebhook_secret = \"" + webhookSecretValue + "\"\n"
 	for _, tc := range []struct {
 		name  string
 		write func(t *testing.T, layout *relaytest.RelayLayout) (cfg, refused string)
 	}{
 		{"world-readable secret file", func(t *testing.T, layout *relaytest.RelayLayout) (string, string) {
+			urlFile := layout.WriteFile(t, "webhook-url", webhookURLValue+"\n", "root", relaytest.TestUser, "0640")
 			secret := layout.WriteFile(t, "webhook-secret", webhookSecretValue+"\n", "root", relaytest.TestUser, "0644")
 			return layout.WriteConfig(t, layoutTOML(layout, freeAddr(t),
-				"\n[approval]\nwebhook_url = \""+webhookURLValue+"\"\nwebhook_secret_file = \""+secret+"\"\n")), secret
+				"\n[approval]\nwebhook_url_file = \""+urlFile+"\"\nwebhook_secret_file = \""+secret+"\"\n")), secret
 		}},
 		{"secret file readable by a group other accounts share", func(t *testing.T, layout *relaytest.RelayLayout) (string, string) {
+			urlFile := layout.WriteFile(t, "webhook-url", webhookURLValue+"\n", "root", relaytest.TestUser, "0640")
 			secret := layout.WriteFile(t, "webhook-secret", webhookSecretValue+"\n", "root", relaytest.TestIOGroup, "0640")
 			return layout.WriteConfig(t, layoutTOML(layout, freeAddr(t),
-				"\n[approval]\nwebhook_url = \""+webhookURLValue+"\"\nwebhook_secret_file = \""+secret+"\"\n")), secret
+				"\n[approval]\nwebhook_url_file = \""+urlFile+"\"\nwebhook_secret_file = \""+secret+"\"\n")), secret
 		}},
-		{"world-readable configuration file holding a secret", func(t *testing.T, layout *relaytest.RelayLayout) (string, string) {
-			cfg := layout.WriteFile(t, "relay.toml", layoutTOML(layout, freeAddr(t), inline), "root", relaytest.TestUser, "0644")
+		{"world-readable configuration file", func(t *testing.T, layout *relaytest.RelayLayout) (string, string) {
+			cfg := layout.WriteFile(t, "relay.toml", layoutTOML(layout, freeAddr(t), ""), "root", relaytest.TestUser, "0644")
 			return cfg, cfg
 		}},
 	} {
@@ -338,35 +333,47 @@ func TestStart_RefusesGroupReadableStateOrKey(t *testing.T) {
 }
 
 // TestRefusals_CarryNoSecretOrWebhookURL is RC-18 on refusal messages: whichever check refuses
-// start, with the webhook URL and secret present inline or by file, no refusal carries either.
+// start, with the webhook URL and secret present in files, no refusal carries either.
 func TestRefusals_CarryNoSecretOrWebhookURL(t *testing.T) {
-	inline := "\n[approval]\nwebhook_url = \"" + webhookURLValue + "\"\nwebhook_secret = \"" + webhookSecretValue + "\"\n"
+	// files places the webhook URL and secret in files the check accepts and returns the
+	// [approval] section naming them.
+	files := func(t *testing.T, layout *relaytest.RelayLayout) string {
+		urlFile := layout.WriteFile(t, "webhook-url", webhookURLValue+"\n", "root", relaytest.TestUser, "0640")
+		secretFile := layout.WriteFile(t, "webhook-secret", webhookSecretValue+"\n", "root", relaytest.TestUser, "0640")
+		return "\n[approval]\nwebhook_url_file = \"" + urlFile + "\"\nwebhook_secret_file = \"" + secretFile + "\"\n"
+	}
 	for _, tc := range []struct {
 		name  string
 		want  string // the refusal, so no case passes on some earlier one
 		write func(t *testing.T, layout *relaytest.RelayLayout) string
 	}{
-		{"an invalid value beside inline secrets", "reach.read_blast_cap", func(t *testing.T, layout *relaytest.RelayLayout) string {
-			return layout.WriteConfig(t, layoutTOML(layout, freeAddr(t), inline+"\n[reach]\nread_blast_cap = 0\n"))
+		{"an invalid value beside webhook files", "reach.read_blast_cap", func(t *testing.T, layout *relaytest.RelayLayout) string {
+			return layout.WriteConfig(t, layoutTOML(layout, freeAddr(t), files(t, layout)+"\n[reach]\nread_blast_cap = 0\n"))
 		}},
-		{"a malformed line beside inline secrets", "line 1", func(t *testing.T, layout *relaytest.RelayLayout) string {
-			return layout.WriteConfig(t, layoutTOML(layout, freeAddr(t), inline+"\nwebhook_timeout = \""+webhookSecretValue+"\n"))
+		{"a malformed line beside webhook files", "line 1", func(t *testing.T, layout *relaytest.RelayLayout) string {
+			return layout.WriteConfig(t, layoutTOML(layout, freeAddr(t), files(t, layout)+"\n[log]\nlevel = \""+webhookSecretValue+"\n"))
+		}},
+		{"an inline webhook URL is refused naming the key, never the value", "approval.webhook_url", func(t *testing.T, layout *relaytest.RelayLayout) string {
+			return layout.WriteConfig(t, layoutTOML(layout, freeAddr(t), "\n[approval]\nwebhook_url = \""+webhookURLValue+"\"\n"))
 		}},
 		{"a plaintext off-host webhook URL", "plaintext http to a non-loopback host", func(t *testing.T, layout *relaytest.RelayLayout) string {
+			urlFile := layout.WriteFile(t, "webhook-url", "http://hooks.example.test/T0K3N-path\n", "root", relaytest.TestUser, "0640")
+			secretFile := layout.WriteFile(t, "webhook-secret", webhookSecretValue+"\n", "root", relaytest.TestUser, "0640")
 			return layout.WriteConfig(t, layoutTOML(layout, freeAddr(t),
-				"\n[approval]\nwebhook_url = \"http://hooks.example.test/T0K3N-path\"\nwebhook_secret = \""+webhookSecretValue+"\"\n"))
+				"\n[approval]\nwebhook_url_file = \""+urlFile+"\"\nwebhook_secret_file = \""+secretFile+"\"\n"))
 		}},
 		{"a webhook URL file holding no URL", "approval.webhook_url_file", func(t *testing.T, layout *relaytest.RelayLayout) string {
 			f := layout.WriteFile(t, "webhook-url", webhookSecretValue+"\n", "root", relaytest.TestUser, "0640")
 			return layout.WriteConfig(t, layoutTOML(layout, freeAddr(t), "\n[approval]\nwebhook_url_file = \""+f+"\"\n"))
 		}},
 		{"a configuration file the check refuses", "the Relay owns it on a filesystem mounted writable", func(t *testing.T, layout *relaytest.RelayLayout) string {
-			return layout.WriteFile(t, "relay.toml", layoutTOML(layout, freeAddr(t), inline), relaytest.TestUser, relaytest.TestUser, "0600")
+			return layout.WriteFile(t, "relay.toml", layoutTOML(layout, freeAddr(t), files(t, layout)), relaytest.TestUser, relaytest.TestUser, "0600")
 		}},
 		{"a secret file the check refuses", "the Relay owns it on a filesystem mounted writable", func(t *testing.T, layout *relaytest.RelayLayout) string {
 			f := layout.WriteFile(t, "webhook-url", webhookURLValue+"\n", relaytest.TestUser, relaytest.TestUser, "0600")
+			g := layout.WriteFile(t, "webhook-secret", webhookSecretValue+"\n", "root", relaytest.TestUser, "0640")
 			return layout.WriteConfig(t, layoutTOML(layout, freeAddr(t),
-				"\n[approval]\nwebhook_url_file = \""+f+"\"\nwebhook_secret = \""+webhookSecretValue+"\"\n"))
+				"\n[approval]\nwebhook_url_file = \""+f+"\"\nwebhook_secret_file = \""+g+"\"\n"))
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
