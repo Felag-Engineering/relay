@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/Felag-Engineering/relay/relay/internal/accounts"
 )
@@ -305,12 +304,21 @@ func (a *AccountAdmin) APITokens(ctx context.Context, p Principal, accountID str
 // no log line, no audit field, no error-string interpolation ("the mint
 // audit row has no field a Plaintext could occupy", enforced structurally by
 // AccountAdminEvent's shape).
-func (a *AccountAdmin) MintAPIToken(ctx context.Context, p Principal, accountID, name string, ttl time.Duration) (accounts.APIToken, accounts.Plaintext, error) {
-	if a.tokens == nil {
+func (a *AccountAdmin) MintAPIToken(ctx context.Context, p Principal, accountID, name string, lifetime APITokenLifetime) (accounts.APIToken, accounts.Plaintext, error) {
+	if a.tokens == nil || a.accountStore == nil {
 		return accounts.APIToken{}, accounts.Plaintext{}, ErrAccountsUnavailable
 	}
 	if err := a.control.authz.AuthorizeControl(withoutAssertions(ctx), p, ControlAPITokenMint); err != nil {
 		return accounts.APIToken{}, accounts.Plaintext{}, a.control.rec.refuseControl(ctx, p, err)
+	}
+
+	acct, err := a.accountStore.Get(ctx, accountID)
+	if err != nil {
+		return accounts.APIToken{}, accounts.Plaintext{}, err
+	}
+	ttl, err := ResolveAPITokenTTL(acct.Kind, lifetime)
+	if err != nil {
+		return accounts.APIToken{}, accounts.Plaintext{}, err
 	}
 
 	tok, plaintext, err := a.tokens.Mint(ctx, accountID, name, ttl)

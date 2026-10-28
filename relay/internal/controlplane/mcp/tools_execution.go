@@ -496,21 +496,18 @@ const (
 //
 //   - ask is non-nil (nil exactly when the option is off, mcp.go:280 — a
 //     server that never asks a question also never accepts an answer);
-//   - clientCanBeAsked(req, p) is true (elicit.go): a client that could never
+//   - clientCanBeAsked(req) is true (elicit.go): a client that could never
 //     have been asked could never have received a question, so any
 //     requestState/inputResponses it sends are stray, and the call is
 //     treated exactly as today's call (AP-85) — its fields
-//     are ignored rather than fed to the decision path. For claude-code this
-//     also means off an OAuth session of a human Account (AP-78): such a
-//     session's requestState/inputResponses are ignored exactly like an
-//     unrecognised client's;
+//     are ignored rather than fed to the decision path;
 //   - the call actually carries a requestState, or at least one answered
 //     input request.
 //
 // This only NARROWS which calls are treated as an answered retry (invariant
 // 10): it can never turn an ordinary call into one, only the reverse.
-func isAnsweredRetry(ask *questioner, req *sdkmcp.CallToolRequest, p capability.Principal) bool {
-	if ask == nil || !clientCanBeAsked(req, p) {
+func isAnsweredRetry(ask *questioner, req *sdkmcp.CallToolRequest) bool {
+	if ask == nil || !clientCanBeAsked(req) {
 		return false
 	}
 	return req.Params.RequestState != "" || len(req.Params.InputResponses) > 0
@@ -690,7 +687,7 @@ func registerExecutionTools(srv *sdkmcp.Server, exec Executor, results JobResult
 		// call never reaches here (it returned above), so a retry carrying
 		// plan=true is handled exactly like today's call regardless of this
 		// check (a plan is not a park).
-		if isAnsweredRetry(ask, req, p) {
+		if isAnsweredRetry(ask, req) {
 			return answerThenDispatch(ctx, req, p, exec, results, reads, answerer, ask, now, toolRunOperation, in, sel, act, o)
 		}
 
@@ -763,7 +760,7 @@ func registerExecutionTools(srv *sdkmcp.Server, exec Executor, results JobResult
 		o := dispatchOpts{wait: wait, key: in.IdempotencyKey}
 
 		// See run_operation's identical branch above.
-		if isAnsweredRetry(ask, req, p) {
+		if isAnsweredRetry(ask, req) {
 			return answerThenDispatch(ctx, req, p, exec, results, reads, answerer, ask, now, toolRawExec, in, sel, act, o)
 		}
 

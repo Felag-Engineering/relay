@@ -31,7 +31,10 @@ a verified chip: a requester or decider rendered dashed, with no recorded Accoun
 The lane key under the header says in words what the label means, including that on a decision
 `machine` means "not recorded as human". The Account that parked the approval, when not the Job's
 requester, shows no kind: the approval record carries none. Nothing on this screen says how an
-actor authenticated.
+actor authenticated, with one exception: beside each approving decision answered in-band, the
+screen says how the Relay identified its decider (an OAuth session, an API Token session or a
+responder assertion), read from that Decision's own record (approval.md AP-88). An out-of-band
+decision, and one recorded before the Relay kept this, shows nothing.
 
 **Plan block.** The shared Plan renderer (`00-foundations.md`): fan-out with cap arithmetic, and
 the plan hash in mono. This is the Plan the Job was dispatched against, not a fresh one.

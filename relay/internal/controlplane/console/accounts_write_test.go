@@ -2229,12 +2229,15 @@ func TestAccountsWrite_TheMintFormOffersNoFreeFormTTL(t *testing.T) {
 			"mint an immortal credential:\n%s", form)
 	}
 	for _, c := range ttlChoices {
+		if c.Default {
+			continue // a machine Account's form has no default entry
+		}
 		if !strings.Contains(form, `value="`+c.Value+`"`) {
 			t.Errorf("the lifetime select does not offer %q", c.Value)
 		}
 	}
 	if strings.Contains(form, "selected") {
-		t.Errorf("an option is pre-selected — a lifetime must be chosen, not defaulted:\n%s", form)
+		t.Errorf("an option is pre-selected on a machine Account's form — a lifetime must be chosen, not defaulted:\n%s", form)
 	}
 
 	// And the handler half: an absent or unrecognised ttl is a 400 that mints

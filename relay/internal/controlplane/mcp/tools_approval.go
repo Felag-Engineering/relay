@@ -46,15 +46,17 @@ import (
 // the claim. An auditor can always tell the two apart, which is the entire
 // point of recording them separately (ADR-0029 decision 2).
 //
-// On a signed-in human session (oauthHumanSession, below) any answered retry
-// is that human's own verified in-band decision, whatever the declared client
-// name and whether or not it carries a responder assertion: a present
-// responder is ignored, and nothing is written to the asserted lane (AP-79).
-// On every other session a responder assertion with gate permission is
-// required (AP-64), otherwise the retry is refused as a machine
-// self-decision. Acceptance never reads the declared client name (AP-78); the
-// name only gates whether a client is asked at all, in elicit.go's
-// clientCanBeAsked, which isAnsweredRetry also applies.
+// What a responder assertion means turns on the session, by the capability
+// layer's one rule (capability.ElicitedResponderRule): on a signed-in human
+// session any answered retry is that human's own verified in-band decision
+// and a present responder is ignored, never written to the asserted lane
+// (AP-79); on an API-token session the responder is optional, and recorded as
+// asserted when present (AP-87); on every other session a responder assertion
+// with gate permission is required, otherwise the retry is refused as a
+// machine self-decision (AP-87). Acceptance never reads the declared client
+// name (AP-86); whether a client is asked at all turns on its advertising
+// elicitation, in elicit.go's clientCanBeAsked, which isAnsweredRetry also
+// applies.
 //
 // tools_execution.go's run_operation and raw_exec are the only callers of
 // acceptElicitedAnswer: a retry carrying requestState/inputResponses is
@@ -91,11 +93,13 @@ func (a approvalAnswererAdapter) AnswerElicited(ctx context.Context, p capabilit
 }
 
 // noNamedApproverError is the "no named human" refusal acceptElicitedAnswer
-// returns for a machine self-decision on the answered retry (AP-64).
+// returns on a session where AP-87 requires a responder and the answer carries
+// no usable one. errUnusableAnswer is the refusal on an API-token session,
+// where this text would be untrue.
 //
 // Unwrap returns approval.ErrMachineSelfDecision so a caller, and the domain's
-// own eligibility rule (see Decision.relaysAnAssertedHuman), can recognise this
-// refusal with errors.Is.
+// own eligibility rule (see Decision.inBandSelfConfirmation), can recognise
+// this refusal with errors.Is.
 type noNamedApproverError struct{}
 
 func (noNamedApproverError) Error() string {
@@ -151,12 +155,13 @@ func withAssertedApprover(ctx context.Context, approver string) context.Context 
 // ApprovalDecisionOutput is the decision block an answered retry's response
 // carries (RunOrPlanOutput.Decision).
 type ApprovalDecisionOutput struct {
-	RequestID  string `json:"request_id" jsonschema:"The request that was answered."`
-	State      string `json:"state" jsonschema:"The request's state at the moment this answer was evaluated — the dispatch that follows may have moved it on further (for example a concurrent approval completing the quorum). One of pending (more approvals still required), approved, denied, or expired."`
-	Progress   string `json:"progress" jsonschema:"Quorum progress, e.g. '1 of 2'."`
-	Channel    string `json:"channel" jsonschema:"The channel the Relay recorded for this call's answer: 'in-band', because the answer arrived over the same session that requested the action, and rules requiring out-of-band strength are not satisfied by it. Empty when this call's answer was not recorded (for example the request was already decided by someone else)."`
-	OnBehalfOf string `json:"on_behalf_of" jsonschema:"The asserted approver identity recorded for this decision. Asserted, never verified. Empty when channel is empty, and also when the decision was the calling human's own verified answer with no asserted approver (an answer given on that human's own OAuth session, whatever the client)."`
-	NextStep   string `json:"next_step" jsonschema:"What to do next."`
+	RequestID    string `json:"request_id" jsonschema:"The request that was answered."`
+	State        string `json:"state" jsonschema:"The request's state at the moment this answer was evaluated — the dispatch that follows may have moved it on further (for example a concurrent approval completing the quorum). One of pending (more approvals still required), approved, denied, or expired."`
+	Progress     string `json:"progress" jsonschema:"Quorum progress, e.g. '1 of 2'."`
+	Channel      string `json:"channel" jsonschema:"The channel the Relay recorded for this call's answer: 'in-band', because the answer arrived over the same session that requested the action, and rules requiring out-of-band strength are not satisfied by it. Empty when this call's answer was not recorded (for example the request was already decided by someone else)."`
+	IdentifiedBy string `json:"identified_by" jsonschema:"How the Relay identified who decided: oauth_session (a human Account's OAuth session, verified), api_token_session (the API Token session's own Account), or responder_assertion (a responder the client asserted, on any other session). Empty when channel is empty."`
+	OnBehalfOf   string `json:"on_behalf_of" jsonschema:"The asserted approver identity recorded for this decision. Asserted, never verified. Empty when channel is empty, when the decision was the calling human's own verified answer with no asserted approver (an answer given on that human's own OAuth session, whatever the client), and when an API-token session's answer carried no responder."`
+	NextStep     string `json:"next_step" jsonschema:"What to do next."`
 }
 
 // renderApprovalError maps a refusal of an elicited answer to an actionable
@@ -205,20 +210,21 @@ func renderApprovalError(err error) error {
 // file's shape.
 const responderMetaKey = "io.gleipnir/responder"
 
-// oauthHumanSession reports whether p is a signed-in human session (AP-79):
-// an OAuth session AND a human Account. On such a session an answered retry
-// is the human's own verified decision whatever the declared client name
-// (acceptElicitedAnswer), and elicit.go asks claude-code only here (AP-78).
-// One definition, so asking and accepting cannot drift.
-//
-// The OAuth resolver copies the Account's Kind through unchecked
-// (controlplane/oauth.go), so "human" is checked here explicitly, never
-// inferred from AuthMethod alone: an OAuth session of a machine Account, or
-// any other auth method entirely (API Token, Console session, unspecified),
-// fails closed. p.Human() itself fails closed on an unset or unrecognised
-// Kind (capability.Principal.Human).
-func oauthHumanSession(p capability.Principal) bool {
-	return p.AuthMethod == capability.AuthMethodOAuth && p.Human()
+// permissionUsername reads the responder assertion in meta as a permission
+// answer naming a user. An unrecognised shape, the wrong gate or a blank
+// username returns unusable, the refusal of the caller's session. A malformed
+// username returns assertedApprover's bound error (AP-10), unchanged on every
+// session.
+func permissionUsername(meta sdkmcp.Meta, unusable error) (string, error) {
+	responder, recognised := recognisedResponder(meta)
+	if !recognised || responder.Gate != responderGatePermission {
+		return "", unusable
+	}
+	u, err := assertedApprover(responder.Username)
+	if errors.Is(err, errNoNamedApprover) {
+		return "", unusable
+	}
+	return u, err
 }
 
 // replayedFromMetaKey marks a response as a client-side replay of an earlier
@@ -371,10 +377,14 @@ type elicitedAnswerResult struct {
 	// Channel is the recorded Decision's channel, copied as a string, set only
 	// when Err is nil. One string copied from one Decision is not the Decisions.
 	Channel string
+	// IdentifiedBy is how the recorded Decision's decider was identified
+	// (AP-88), copied as a string and set only when Err is nil.
+	IdentifiedBy string
 	// OnBehalfOf is the asserted approver value (a responder's username)
 	// handed to the answerer. EMPTY on an AP-79 verified decision — nothing is
 	// written to the asserted lane for an answer on its own human's OAuth
-	// session — and on every refusal before the answerer was
+	// session — on an API-token session's answer that carried no responder,
+	// and on every refusal before the answerer was
 	// reached. See answererReached for whether the answerer was actually
 	// called; that, not this field, is the was-it-recorded signal.
 	OnBehalfOf string
@@ -421,12 +431,14 @@ type elicitedAnswer struct {
 // approval, returning a classification the caller can render without
 // re-deciding anything.
 //
-// AP-64/AP-79 govern which approver gets recorded: on a signed-in human
-// session (oauthHumanSession) any answered retry is that human's own
-// verified decision, whatever the declared client name and whatever any
-// responder assertion says — a present one is ignored, and nothing is
-// written to the asserted lane. On every other session a responder assertion
-// with gate permission is required (AP-64).
+// AP-87 and AP-79 govern which approver gets recorded, by
+// capability.ElicitedResponderRule: on a signed-in human session any answered
+// retry is that human's own verified decision, whatever the declared client
+// name and whatever any responder assertion says — a present one is ignored,
+// and nothing is written to the asserted lane (AP-79). On an API-token session
+// a responder is optional, but a present one must be a valid permission
+// answer, and is recorded as asserted (AP-87). On every other session a
+// responder assertion with gate permission is required (AP-87).
 //
 // open and now are parameters rather than server fields so this function
 // stays testable in isolation and so this issue does not have to touch
@@ -437,7 +449,7 @@ type elicitedAnswer struct {
 // wires this function into run_operation/raw_exec's retry path.
 //
 // The machine-self-decision refusal (errNoNamedApprover) must be rendered
-// AS-IS by the caller, never through renderApprovalError (AP-64).
+// AS-IS by the caller, never through renderApprovalError (AP-87).
 //
 // Every failure before the answerer is called returns elicitedRefused with Err
 // set and the answerer NOT called — nothing is recorded.
@@ -497,49 +509,56 @@ func acceptElicitedAnswer(ctx context.Context, answerer ApprovalAnswerer, open s
 		return refused(errAnswerShape)
 	}
 
-	// Machine self-decision: any of these collapses into the one refusal
-	// (AP-64).
+	// An answer the Relay cannot read collapses into the session's one
+	// refusal: errNoNamedApprover where AP-87 requires a responder,
+	// errUnusableAnswer on an API-token session. The rule is decided by the
+	// capability layer; this adapter only narrows.
+	rule := capability.ElicitedResponderRule(p)
+	unusable := errNoNamedApprover
+	if rule == capability.ResponderRecorded {
+		unusable = errUnusableAnswer
+	}
 	if result.Action != "accept" && result.Action != "decline" {
-		return refused(errNoNamedApprover)
+		return refused(unusable)
 	}
 	if _, replayed := result.Meta[replayedFromMetaKey]; replayed {
-		return refused(errNoNamedApprover)
+		return refused(unusable)
 	}
 	if _, replayed := in.CallMeta[replayedFromMetaKey]; replayed {
-		return refused(errNoNamedApprover)
+		return refused(unusable)
 	}
 	var username string
-	if oauthHumanSession(p) {
-		// AP-79: the signed-in human's own verified decision, whatever the
-		// declared client name. A responder assertion, if present (well-formed
-		// or not), is ignored: it is not parsed and not recorded. username
-		// stays "" — nothing is written to the asserted lane — and the clear
-		// is explicit rather than merely skipping withAssertedApprover:
-		// controlplane/auth.go's Middleware puts X-Relay-On-Behalf-Of into ctx
-		// for every authenticated route including /mcp, so without this a
-		// stray header would otherwise write the asserted lane anyway.
-		// withAssertedApprover preserves the ctx's other assertions (a
-		// traceparent, session_ref).
-		ctx = withAssertedApprover(ctx, "")
-	} else {
-		// AP-64: a responder assertion with gate
-		// permission is required. A responder that is absent, malformed
-		// (recognisedResponder not ok), or not gate "permission" is refused
-		// with errNoNamedApprover.
-		responder, recognised := recognisedResponder(result.Meta)
-		if !recognised || responder.Gate != responderGatePermission {
-			return refused(errNoNamedApprover)
+	switch rule {
+	case capability.ResponderIgnored:
+		// AP-79: a responder assertion, if present (well-formed or not), is
+		// ignored: it is not parsed and not recorded.
+	case capability.ResponderRecorded:
+		// AP-87: optional, but a PRESENT responder must be a valid permission
+		// answer, so a responder of another gate is never dropped and then
+		// accepted.
+		if _, present := result.Meta[responderMetaKey]; present {
+			u, err := permissionUsername(result.Meta, errUnusableAnswer)
+			if err != nil {
+				return refused(err)
+			}
+			username = u
 		}
-		// assertedApprover itself returns errNoNamedApprover for a blank (or
-		// whitespace-only) username, and the bound audit error — never
-		// truncated, never trimmed-then-accepted — for anything malformed.
-		u, err := assertedApprover(responder.Username)
+	default:
+		// ResponderRequired, and any value this switch does not know: a
+		// responder assertion with gate permission is required (AP-87).
+		u, err := permissionUsername(result.Meta, errNoNamedApprover)
 		if err != nil {
 			return refused(err)
 		}
 		username = u
-		ctx = withAssertedApprover(ctx, username)
 	}
+	// Always set, so a stray X-Relay-On-Behalf-Of header (controlplane/auth.go's
+	// Middleware puts it in ctx for every authenticated route including /mcp)
+	// never reaches the asserted lane: capability.AnswerElicited reads only
+	// whether OnBehalfOf is set, and this is the caller that sets it only from a
+	// validated permission-gate responder. withAssertedApprover preserves the
+	// ctx's other assertions (a traceparent, session_ref).
+	ctx = withAssertedApprover(ctx, username)
 
 	approve := result.Action == "accept"
 	updated, err := answerer.AnswerElicited(ctx, p, st.RequestID, st.PlanHash, approve)
@@ -551,6 +570,7 @@ func acceptElicitedAnswer(ctx context.Context, answerer ApprovalAnswerer, open s
 	out.answererReached = true
 	if out.Err == nil {
 		out.Channel = recordedChannel(updated, p.AccountID)
+		out.IdentifiedBy = recordedIdentification(updated, p.AccountID)
 	}
 	return out
 }
@@ -566,6 +586,21 @@ func recordedChannel(req approval.Request, accountID string) string {
 	for i := len(req.Decisions) - 1; i >= 0; i-- {
 		if req.Decisions[i].AccountID == accountID {
 			return req.Decisions[i].Channel.String()
+		}
+	}
+	return ""
+}
+
+// recordedIdentification returns how the capability layer identified the last
+// Decision accountID recorded on req (AP-88), or "" when accountID is empty or
+// recorded none. Same shape as recordedChannel.
+func recordedIdentification(req approval.Request, accountID string) string {
+	if accountID == "" {
+		return ""
+	}
+	for i := len(req.Decisions) - 1; i >= 0; i-- {
+		if req.Decisions[i].AccountID == accountID {
+			return req.Decisions[i].IdentifiedBy.String()
 		}
 	}
 	return ""
@@ -692,6 +727,16 @@ var (
 	// elicitation response keyed by the sealed request ID.
 	errAnswerShape = errors.New("mcp: an answered retry must carry exactly one elicitation response, keyed by the request it answers")
 
+	// errUnusableAnswer is the refusal of an answer the Relay cannot read on an
+	// API-token session (AP-87): cancelled, empty, replayed, or carrying a
+	// responder that is not a permission answer naming a user. It does NOT wrap
+	// approval.ErrMachineSelfDecision: on an API-token session a machine
+	// self-decision is accepted, so saying one was refused would be false.
+	errUnusableAnswer = errors.New("mcp: the elicited answer is refused: it was cancelled or " +
+		"empty, replayed from an earlier question, or carried an io.gleipnir/responder that is " +
+		"not a permission answer naming a user; nothing was recorded, and the request can " +
+		"still be decided by answering again or on the Control API's decision endpoint")
+
 	// errDeclineNotHonoured is classifyElicitedDecision's fail-closed
 	// backstop for a state approval.Request.Decide should never produce.
 	errDeclineNotHonoured = errors.New("mcp: the decline was recorded but the request reports approved; it is not treated as an approval of this call")
@@ -764,6 +809,7 @@ func (r elicitedAnswerResult) decisionOutput(after RunOrPlanOutput) *ApprovalDec
 		// decision wrote nothing to the asserted lane, never that the
 		// decision itself was not recorded.
 		out.Channel = r.Channel
+		out.IdentifiedBy = r.IdentifiedBy
 		out.OnBehalfOf = r.OnBehalfOf
 	}
 
@@ -978,12 +1024,12 @@ func (r elicitedAnswerResult) refusalOutput() *AnswerRefusalOutput {
 	out.NextStep = answerRefusalNextStepUnchanged
 	switch {
 	case errors.Is(r.Err, approval.ErrMachineSelfDecision):
-		// AP-64: the one machine-self-decision message. This arm must come
+		// AP-87: the one machine-self-decision message. This arm must come
 		// before the isKnownApprovalRefusal arm below, which would otherwise
 		// also match ErrMachineSelfDecision and render it generically.
 		out.Reason = errNoNamedApprover.Error()
-	case errors.Is(r.Err, errAnswerStateRefused), errors.Is(r.Err, errAnswerShape):
-		// Both messages already point at the Control API's decision endpoint.
+	case errors.Is(r.Err, errAnswerStateRefused), errors.Is(r.Err, errAnswerShape), errors.Is(r.Err, errUnusableAnswer):
+		// These messages already point at the Control API's decision endpoint.
 		out.Reason = r.Err.Error()
 	case errors.Is(r.Err, audit.ErrAssertedFieldTooLong), errors.Is(r.Err, audit.ErrAssertedFieldInvalid):
 		// assertedApprover's malformed-responder refusal: never truncated,

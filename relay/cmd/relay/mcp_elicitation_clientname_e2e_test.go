@@ -1,14 +1,15 @@
 // Package main: mcp_elicitation_clientname_e2e_test.go is #743's e2e proof —
-// through the REAL composition root — of AP-78 (Relay asks the approval
-// question only where the declared client name is recognised for the
-// calling Principal's own session) and AP-79 (on a signed-in human session —
-// an OAuth session of a human Account — an answered retry is that human's
-// own verified in-band decision, whatever the declared client name). The
-// signed-in identity decides, never the client's declared name (owner
-// decision 2026-09-29): a claude-code retry and a gleipnir retry on the same
-// qualifying session are accepted identically, and a present
-// io.gleipnir/responder on such a session is ignored rather than taking the
-// named path.
+// through the REAL composition root — of AP-86 (Relay asks the approval
+// question of any client that advertises elicitation, on any session, and the
+// declared client name decides nothing), AP-87 (an answer on an API-token
+// session counts as that session's Account, and any other session needs a
+// responder) and AP-79 (on a signed-in human session — an OAuth session of a
+// human Account — an answered retry is that human's own verified in-band
+// decision, whatever the declared client name). The session decides, never the
+// client's declared name (owner decision 2026-09-29): a claude-code retry and
+// a gleipnir retry on the same qualifying session are accepted identically,
+// and a present io.gleipnir/responder on an OAuth human session is ignored
+// rather than taking the named path.
 //
 // Kept out of mcp_elicitation_e2e_test.go and mcp_elicitation_refusals_e2e_test.go,
 // both of which #752 (issue #713, AP-77) is concurrently editing.
@@ -22,7 +23,6 @@
 package main
 
 import (
-	"encoding/json"
 	"net/http"
 	"testing"
 
@@ -35,8 +35,8 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/relaytest"
 )
 
-// connectClaudeCode opens an MRTR-capable session declaring the recognised
-// client name "claude-code" (AP-78), with Claude Code's own observed
+// connectClaudeCode opens an MRTR-capable session declaring the client name
+// "claude-code" (which decides nothing, AP-86), with Claude Code's own observed
 // capability shape (roots listChanged, elicitation advertising both form and
 // url — spec Known limits) and the SDK's automatic answer-fulfilment
 // middleware disabled, so the test drives the retry itself exactly as
@@ -56,8 +56,8 @@ func connectClaudeCode(t *testing.T, f *relayFixture, credential string) *sdkmcp
 // responder assertion at all — Claude Code's own observed retry shape, also
 // used here for a gleipnir retry that carries no responder. Whether this
 // counts as a decision at all depends on the RETRY's own session
-// (oauthHumanSession, tools_approval.go), never on the client name and never
-// on anything else in this ElicitResult.
+// (capability.ElicitedResponderRule), never on the client name and never on
+// anything else in this ElicitResult.
 func answerWithNoResponder(t *testing.T, session *sdkmcp.ClientSession, args map[string]any, q *sdkmcp.CallToolResult, questionID, action string) *sdkmcp.CallToolResult {
 	t.Helper()
 	return relaytest.RetryTool(t, session, "run_operation", args, q.RequestState,
@@ -66,9 +66,9 @@ func answerWithNoResponder(t *testing.T, session *sdkmcp.ClientSession, args map
 
 // assertNotAskedPendingApproval asserts res is an ORDINARY pending_approval
 // result — no question, no answered-retry block of any kind — the shape
-// every call AP-78 does not ask gets, whatever produced the call (a fresh
-// ask or a retry treated as an ordinary call because clientCanBeAsked is
-// false for it).
+// every call that is not asked gets, whatever produced the call (a fresh ask
+// or a retry treated as an ordinary call because clientCanBeAsked is false for
+// it).
 func assertNotAskedPendingApproval(t *testing.T, res *sdkmcp.CallToolResult) {
 	t.Helper()
 	if res.IsError {
@@ -110,127 +110,113 @@ func (rt onBehalfOfRoundTripper) RoundTrip(req *http.Request) (*http.Response, e
 	return rt.base.RoundTrip(req)
 }
 
-// TestMCPElicitation_UnrecognisedMRTRClientGetsPendingApproval is AP-78's e2e
-// proof: through the real composition root, an MRTR-capable,
-// elicitation-advertising client declaring a name Relay does not recognise
-// gets today's pending_approval — carrying a real request_id and plan_hash,
-// no inputRequests, an empty requestState — and dispatches nothing. The armed
-// control, a FRESH fixture whose client declares "gleipnir", really does get
-// asked.
-func TestMCPElicitation_UnrecognisedMRTRClientGetsPendingApproval(t *testing.T) {
-	f, token, _ := startElicitingRelay(t)
-
-	meta := map[string]any{
-		"io.modelcontextprotocol/protocolVersion": "2026-07-28",
-		"io.modelcontextprotocol/clientInfo":      map[string]any{"name": "some-other-client", "version": "0.0.1"},
-		"io.modelcontextprotocol/clientCapabilities": map[string]any{
-			"elicitation": map[string]any{"form": map[string]any{}},
-		},
-	}
-	status, _, body := postRawToolCall(t, f, token, "2026-07-28", meta, "run_operation", restartNginxArgs())
-	if status != http.StatusOK {
-		t.Fatalf("status = %d; body = %s", status, body)
-	}
-
-	var decoded struct {
-		Result *struct {
-			ResultType        string          `json:"resultType"`
-			InputRequests     json.RawMessage `json:"inputRequests"`
-			RequestState      string          `json:"requestState"`
-			StructuredContent struct {
-				PendingApproval *struct {
-					Status    string `json:"status"`
-					RequestID string `json:"request_id"`
-					PlanHash  string `json:"plan_hash"`
-				} `json:"pending_approval"`
-			} `json:"structuredContent"`
-		} `json:"result"`
-	}
-	if err := json.Unmarshal(body, &decoded); err != nil {
-		t.Fatalf("decode: %v; body = %s", err, body)
-	}
-	if decoded.Result == nil {
-		t.Fatalf("no result member: %s", body)
-	}
-	if decoded.Result.ResultType == "input_required" {
-		t.Fatalf("resultType = input_required, want pending_approval (unrecognised client name): %s", body)
-	}
-	if len(decoded.Result.InputRequests) != 0 {
-		t.Errorf("inputRequests present for an unrecognised client name: %s", body)
-	}
-	if decoded.Result.RequestState != "" {
-		t.Errorf("requestState = %q, want empty", decoded.Result.RequestState)
-	}
-	pa := decoded.Result.StructuredContent.PendingApproval
-	if pa == nil || pa.Status != "pending_approval" || pa.RequestID == "" || pa.PlanHash == "" {
-		t.Fatalf("pending_approval = %+v, want a real request_id and plan_hash", pa)
-	}
-	if got := len(allJobs(t, f)); got != 0 {
-		t.Errorf("Jobs = %d, want 0", got)
-	}
-
-	// Armed control: a FRESH fixture, so a distinct Plan cannot dedup onto the
-	// SAME request the unrecognised call above already parked
-	// (capability/approval.go's ByPlanHash) — the same fixture shape, only
-	// the declared client name changed to a recognised one.
-	controlF, controlToken, _ := startElicitingRelay(t)
-	controlSession := connectEliciting(t, controlF, controlToken)
-	askQuestionE2E(t, controlSession)
+// connectNamed opens an MRTR-capable, eliciting session declaring name. An
+// empty name is relaytest's neutral default.
+func connectNamed(t *testing.T, f *relayFixture, credential, name string) *sdkmcp.ClientSession {
+	t.Helper()
+	return relaytest.ConnectWithOptions(t, f.ControlBase, f.ClientFor(credential), relaytest.ConnectOptions{
+		Client:     relaytest.ElicitingClientOptions(),
+		ClientName: name,
+	})
 }
 
-// TestMCPElicitation_ClaudeCodeOnAnAPITokenSessionIsNotAsked is AP-78's
-// e2e proof that the declared name alone is not enough: a HUMAN Account on
-// an API Token session, declaring "claude-code" with Claude Code's own
-// observed capability shape, still gets today's pending_approval — AP-78
-// asks claude-code only on an OAuth session of a human Account.
-func TestMCPElicitation_ClaudeCodeOnAnAPITokenSessionIsNotAsked(t *testing.T) {
-	f, _, _ := startElicitingRelay(t)
-	token := mintAccount(t, f, "hana-api", accounts.KindHuman, accounts.RoleAdmin)
-	session := connectClaudeCode(t, f, token)
-
-	res := relaytest.CallTool(t, session, "run_operation", restartNginxArgs())
-	assertNotAskedPendingApproval(t, res)
-	if got := len(allJobs(t, f)); got != 0 {
-		t.Errorf("Jobs = %d, want 0", got)
-	}
-}
-
-// TestMCPElicitation_ClaudeCodeOnAMachineOAuthSessionIsNotAskedAndNotAccepted
-// is AP-78/AP-79's machine-Account proof: an OAuth session authenticates the
-// Account, but a machine Account's claude-code call is still not asked (a),
-// and — proving the session really is askable for gleipnir, so (a) is about
-// the declared name and Account kind rather than some other fixture defect —
-// a gleipnir ask on the SAME token, retried by a claude-code session, is
-// treated as an ordinary call rather than an accepted answer (b).
-func TestMCPElicitation_ClaudeCodeOnAMachineOAuthSessionIsNotAskedAndNotAccepted(t *testing.T) {
-	f, idp := startOAuthElicitingRelay(t, gateAllMutatesInBandAskable)
-	createAccount(t, f, "bot", accounts.KindMachine, accounts.RoleAdmin)
-	token := idp.token(t, "bot")
-
-	t.Run("claude-code is not asked", func(t *testing.T) {
-		session := connectClaudeCode(t, f, token)
-		res := relaytest.CallTool(t, session, "run_operation", restartNginxArgs())
-		assertNotAskedPendingApproval(t, res)
+// TestMCPElicitation_AnyElicitingClientIsAskedOnAnySession is AP-86's e2e
+// proof: through the real composition root, a client declaring the neutral
+// default name and advertising form elicitation is asked on a machine API
+// token, a human API token and an OAuth session of a human Account. Each
+// subtest uses a FRESH fixture, so a distinct park cannot dedup onto another's
+// request (capability/approval.go's ByPlanHash).
+//
+// Proves AP-86.
+func TestMCPElicitation_AnyElicitingClientIsAskedOnAnySession(t *testing.T) {
+	t.Run("machine API token", func(t *testing.T) {
+		f, token, _ := startElicitingRelay(t)
+		askApproval(t, connectNamed(t, f, token, ""), restartNginxArgs())
 	})
 
-	t.Run("a claude-code retry of a real gleipnir ask is an ordinary call", func(t *testing.T) {
-		gleipnirSession := connectEliciting(t, f, token)
-		q, qid, requestID, _ := askApproval(t, gleipnirSession, sshdRestartArgs())
+	t.Run("human API token", func(t *testing.T) {
+		f, _, _ := startElicitingRelay(t)
+		token := mintAccount(t, f, "hana-api", accounts.KindHuman, accounts.RoleOperator)
+		askApproval(t, connectNamed(t, f, token, ""), restartNginxArgs())
+	})
 
-		ccSession := connectClaudeCode(t, f, token)
-		retry := answerWithNoResponder(t, ccSession, sshdRestartArgs(), q, qid, "accept")
-		assertNotAskedPendingApproval(t, retry)
+	t.Run("OAuth session of a human Account", func(t *testing.T) {
+		f, idp := startOAuthElicitingRelay(t, gateAllMutatesInBandAskable)
+		createAccount(t, f, "hana", accounts.KindHuman, accounts.RoleAdmin)
+		askApproval(t, connectNamed(t, f, idp.token(t, "hana"), ""), restartNginxArgs())
+	})
 
-		if got := len(decisionRecordsFor(t, f, requestID)); got != 0 {
-			t.Errorf("decision records = %d, want 0", got)
-		}
-		if got := fetchApproval(t, f, requestID); got.State != "pending" {
-			t.Errorf("approval state = %q, want pending", got.State)
-		}
+	t.Run("a client advertising no elicitation is not asked", func(t *testing.T) {
+		f, token, _ := startElicitingRelay(t)
+		session := relaytest.Connect(t, f.ControlBase, f.ClientFor(token))
+		res := relaytest.CallTool(t, session, "run_operation", restartNginxArgs())
+		assertNotAskedPendingApproval(t, res)
 		if got := len(allJobs(t, f)); got != 0 {
 			t.Errorf("Jobs = %d, want 0", got)
 		}
 	})
+}
+
+// TestMCPElicitation_ClaudeCodeOnAnAPITokenSessionIsAskedAndItsAnswerCounts
+// is AP-86/AP-87's e2e proof for Claude Code's own shape: a HUMAN Account on
+// an API Token session, declaring "claude-code" with its observed capability
+// shape, is asked, and an accept with no responder is that human's decision
+// on a token session, which runs the Job.
+//
+// Proves AP-86, AP-87.
+func TestMCPElicitation_ClaudeCodeOnAnAPITokenSessionIsAskedAndItsAnswerCounts(t *testing.T) {
+	f, _, _ := startElicitingRelay(t)
+	token := mintAccount(t, f, "hana-api", accounts.KindHuman, accounts.RoleOperator)
+	session := connectClaudeCode(t, f, token)
+
+	q, qid, _, _ := askApproval(t, session, restartNginxArgs())
+	res := answerWithNoResponder(t, session, restartNginxArgs(), q, qid, "accept")
+	if res.NeedsInput() || res.IsError {
+		t.Fatalf("answered retry: NeedsInput=%v IsError=%v content=%+v", res.NeedsInput(), res.IsError, res.Content)
+	}
+	var out mcp.RunOrPlanOutput
+	relaytest.DecodeToolJSON(t, res, &out)
+	if out.JobID == "" {
+		t.Fatal("job_id is empty, want a real Job: a token session's answer counts")
+	}
+	if len(allJobs(t, f)) != 1 {
+		t.Errorf("Jobs = %d, want 1", len(allJobs(t, f)))
+	}
+}
+
+// TestMCPElicitation_ClaudeCodeOnAMachineOAuthSessionIsAskedButNeedsAResponder
+// is AP-86/AP-87/AP-79's machine-Account proof: an OAuth session of a machine
+// Account is asked like any other, but never takes the AP-79 verified path, so
+// an accept with no responder is a machine self-decision. A responder it sends
+// is accepted, recorded as asserted.
+//
+// Proves AP-86, AP-87, AP-79.
+func TestMCPElicitation_ClaudeCodeOnAMachineOAuthSessionIsAskedButNeedsAResponder(t *testing.T) {
+	f, idp := startOAuthElicitingRelay(t, gateAllMutatesInBandAskable)
+	createAccount(t, f, "bot", accounts.KindMachine, accounts.RoleAdmin)
+	token := idp.token(t, "bot")
+	session := connectClaudeCode(t, f, token)
+
+	q, qid, requestID, _ := askApproval(t, session, sshdRestartArgs())
+
+	before := auditLen(t, f)
+	refused := answerWithNoResponder(t, session, sshdRestartArgs(), q, qid, "accept")
+	assertMachineSelfDecisionRefused(t, f, refused, requestID, before)
+	if got := len(decisionRecordsFor(t, f, requestID)); got != 0 {
+		t.Errorf("decision records = %d, want 0", got)
+	}
+
+	res := answerAsResponder(t, session, sshdRestartArgs(), q, qid, "accept")
+	if res.NeedsInput() || res.IsError {
+		t.Fatalf("answered retry: NeedsInput=%v IsError=%v content=%+v", res.NeedsInput(), res.IsError, res.Content)
+	}
+	decisions := decisionRecordsFor(t, f, requestID)
+	if len(decisions) != 1 || decisions[0].Attribution.Asserted.OnBehalfOf != elicitResponderUsername {
+		t.Fatalf("decision records = %+v, want one asserting %q", decisions, elicitResponderUsername)
+	}
+	if got := fetchApproval(t, f, requestID).Decisions; len(got) != 1 || got[0].IdentifiedBy != "responder_assertion" {
+		t.Errorf("decisions = %+v, want identified_by responder_assertion", got)
+	}
 }
 
 // TestMCPElicitation_ClaudeCodeOnAnOAuthHumanSessionIsTheHumansVerifiedDecision
@@ -285,8 +271,12 @@ func TestMCPElicitation_ClaudeCodeOnAnOAuthHumanSessionIsTheHumansVerifiedDecisi
 			t.Errorf("Asserted.OnBehalfOf = %q, want empty — nothing is written to the asserted lane", d.Attribution.Asserted.OnBehalfOf)
 		}
 
-		if got := fetchApproval(t, f, requestID); got.State != "approved" {
+		got := fetchApproval(t, f, requestID)
+		if got.State != "approved" {
 			t.Errorf("approval state = %q, want approved", got.State)
+		}
+		if len(got.Decisions) != 1 || got.Decisions[0].IdentifiedBy != "oauth_session" {
+			t.Errorf("decisions = %+v, want identified_by oauth_session (AP-88)", got.Decisions)
 		}
 	})
 
@@ -441,32 +431,64 @@ func TestMCPElicitation_ClaudeCodeHumanAnswerMeetsTheSameRefusals(t *testing.T) 
 	})
 }
 
-// TestMCPElicitation_SpoofedClaudeCodeOnANonOAuthSessionEarnsNothing is
-// AP-78/AP-79's anti-escalation proof: a gleipnir ask (a real sealed state,
-// on a machine Account's plain API Token session), retried by a claude-code
-// session on the SAME non-OAuth token, is treated as an ordinary call — the
-// name gate in clientCanBeAsked (via isAnsweredRetry) keeps this retry from
-// ever reaching acceptElicitedAnswer, so it never gets the chance to prove
-// acceptance reads the name (it does not — see AP-78's Known-limits row and
-// TestElicitedAnswer_OffAnOAuthHumanSessionOnlyTheNamedFormCounts, the
-// direct acceptance-seam proof that bypasses this gate on purpose).
-func TestMCPElicitation_SpoofedClaudeCodeOnANonOAuthSessionEarnsNothing(t *testing.T) {
-	f, token, _ := startElicitingRelay(t)
-	gleipnirSession := connectEliciting(t, f, token)
-	q, qid, requestID, _ := askApproval(t, gleipnirSession, restartNginxArgs())
+// TestMCPElicitation_SpoofedClientNamesEarnNothingBeyondBeingAsked is
+// AP-86/AP-87's anti-escalation proof: the declared name is self-reported, so
+// it earns nothing beyond being asked. On a machine OAuth session each of
+// claude-code, gleipnir and the default name is asked, and each answer
+// without a responder is refused the same way. On a human API token, a client
+// declaring gleipnir and one declaring some-client record identical decisions.
+//
+// Proves AP-86, AP-87.
+func TestMCPElicitation_SpoofedClientNamesEarnNothingBeyondBeingAsked(t *testing.T) {
+	for _, name := range []string{relaytest.ClaudeCodeClientName, relaytest.GleipnirClientName, ""} {
+		t.Run("machine OAuth session, name "+name, func(t *testing.T) {
+			f, idp := startOAuthElicitingRelay(t, gateAllMutatesInBandAskable)
+			createAccount(t, f, "bot", accounts.KindMachine, accounts.RoleAdmin)
+			session := connectNamed(t, f, idp.token(t, "bot"), name)
 
-	ccSession := connectClaudeCode(t, f, token)
-	retry := answerWithNoResponder(t, ccSession, restartNginxArgs(), q, qid, "accept")
-	assertNotAskedPendingApproval(t, retry)
+			q, qid, requestID, _ := askApproval(t, session, restartNginxArgs())
+			before := auditLen(t, f)
+			res := answerWithNoResponder(t, session, restartNginxArgs(), q, qid, "accept")
+			assertMachineSelfDecisionRefused(t, f, res, requestID, before)
+			if got := len(allJobs(t, f)); got != 0 {
+				t.Errorf("Jobs = %d, want 0", got)
+			}
+		})
+	}
 
-	if got := len(decisionRecordsFor(t, f, requestID)); got != 0 {
-		t.Errorf("decision records = %d, want 0", got)
+	type recorded struct {
+		Answer     string
+		Channel    string
+		OnBehalfOf string
+		TokenUsed  bool
+		Human      bool
+		Identified string
 	}
-	if got := fetchApproval(t, f, requestID); got.State != "pending" {
-		t.Errorf("approval state = %q, want pending", got.State)
+	var got []recorded
+	for _, name := range []string{relaytest.GleipnirClientName, "some-client"} {
+		f, _, _ := startElicitingRelay(t)
+		token := mintAccount(t, f, "hana-api", accounts.KindHuman, accounts.RoleOperator)
+		session := connectNamed(t, f, token, name)
+
+		q, qid, requestID, _ := askApproval(t, session, restartNginxArgs())
+		res := answerWithNoResponder(t, session, restartNginxArgs(), q, qid, "accept")
+		if res.NeedsInput() || res.IsError {
+			t.Fatalf("name %q: answered retry: NeedsInput=%v IsError=%v", name, res.NeedsInput(), res.IsError)
+		}
+		decisions := decisionRecordsFor(t, f, requestID)
+		approved := fetchApproval(t, f, requestID)
+		if len(decisions) != 1 || len(approved.Decisions) != 1 {
+			t.Fatalf("name %q: decision records = %d, approval decisions = %d, want 1 each", name, len(decisions), len(approved.Decisions))
+		}
+		d := decisions[0]
+		got = append(got, recorded{
+			Answer: d.ApprovalAnswer, Channel: d.DecisionChannel, OnBehalfOf: d.Attribution.Asserted.OnBehalfOf,
+			TokenUsed: d.Attribution.Verified.TokenID != "", Human: approved.Decisions[0].Human,
+			Identified: approved.Decisions[0].IdentifiedBy,
+		})
 	}
-	if got := len(allJobs(t, f)); got != 0 {
-		t.Errorf("Jobs = %d, want 0", got)
+	if got[0] != got[1] {
+		t.Errorf("the declared name changed the recorded decision: gleipnir %+v vs some-client %+v", got[0], got[1])
 	}
 }
 
@@ -558,19 +580,18 @@ func TestMCPElicitation_ResponderOnAnOAuthHumanSessionIsIgnored(t *testing.T) {
 
 // TestMCPElicitation_GleipnirOnAnOAuthHumanSessionIsTheHumansVerifiedDecision
 // is the e2e proof that a client name other than claude-code counts as
-// verified too (AP-78/AP-79: the session decides, never the name) — and it
+// verified too (AP-86/AP-79: the session decides, never the name) — and it
 // is FEASIBLE end to end: connectEliciting declares "gleipnir" and accepts
-// any credential, and gleipnir is asked on any session, so an OAuth human
-// token gets a real question. Mirrors
+// any credential, and any eliciting client is asked on any session, so an
+// OAuth human token gets a real question. Mirrors
 // TestMCPElicitation_ClaudeCodeOnAnOAuthHumanSessionIsTheHumansVerifiedDecision's
 // assertions, with connectEliciting in place of connectClaudeCode and
 // answerWithNoResponder for the retry.
 //
-// An arbitrary unrecognised name such as "some-other-client" CANNOT be
-// driven e2e this way: it is never asked at all (AP-78), and retrying
-// another session's question with it is an ordinary call (clientCanBeAsked
-// gates isAnsweredRetry). Unrecognised names are proven only at the
-// acceptance seam (TestElicitedAnswer_VerifiedFormIgnoresTheDeclaredName).
+// Arbitrary names such as "some-other-client" are proven at the acceptance
+// seam (TestElicitedAnswer_VerifiedFormIgnoresTheDeclaredName) and, for what
+// a name earns on a token session, in
+// TestMCPElicitation_SpoofedClientNamesEarnNothingBeyondBeingAsked.
 func TestMCPElicitation_GleipnirOnAnOAuthHumanSessionIsTheHumansVerifiedDecision(t *testing.T) {
 	t.Run("accept dispatches, verified as the human, nothing asserted", func(t *testing.T) {
 		f, idp := startOAuthElicitingRelay(t, gateAllMutatesInBandAskable)
@@ -677,8 +698,8 @@ func TestMCPElicitation_GleipnirOnAnOAuthHumanSessionIsTheHumansVerifiedDecision
 // AP-79's negative e2e proof: an OAuth session of a MACHINE Account never
 // takes the verified path, whatever the declared client name — proving the
 // check is on the Account's kind, not merely on the auth method. The
-// gleipnir session is asked (gleipnir is asked on any session), so both
-// subtests reach acceptElicitedAnswer for real.
+// session is asked (any eliciting client is, AP-86), so both subtests reach
+// acceptElicitedAnswer for real.
 func TestMCPElicitation_MachineOAuthSessionNeverTakesTheVerifiedPath(t *testing.T) {
 	t.Run("no responder is a machine self-decision", func(t *testing.T) {
 		f, idp := startOAuthElicitingRelay(t, gateAllMutatesInBandAskable)
@@ -702,7 +723,7 @@ func TestMCPElicitation_MachineOAuthSessionNeverTakesTheVerifiedPath(t *testing.
 		}
 	})
 
-	t.Run("a valid responder still takes the named path (AP-64 unchanged)", func(t *testing.T) {
+	t.Run("a valid responder still takes the named path (AP-87)", func(t *testing.T) {
 		f, idp := startOAuthElicitingRelay(t, gateAllMutatesInBandAskable)
 		accountID := createAccount(t, f, "bot", accounts.KindMachine, accounts.RoleAdmin)
 		token := idp.token(t, "bot")
@@ -727,12 +748,15 @@ func TestMCPElicitation_MachineOAuthSessionNeverTakesTheVerifiedPath(t *testing.
 	})
 }
 
-// TestMCPElicitation_HumanAPITokenSessionStillNeedsAResponder is AP-79's
-// negative e2e proof that a human Account is not enough on its own: an API
-// Token session of a human Account still needs a named responder (AP-64
-// unchanged), proving the OAuth half of "OAuth session AND human Account" is
-// load-bearing too.
-func TestMCPElicitation_HumanAPITokenSessionStillNeedsAResponder(t *testing.T) {
+// TestMCPElicitation_HumanAPITokenSessionAnswerIsTheHumansTokenSessionDecision
+// is AP-87/AP-88's headline e2e proof: an accept with no responder on the API
+// token session of a HUMAN Account runs the Job, recorded as that human's
+// decision (human, in-band), identified by the API-token session, with nothing
+// in the asserted lane. It is distinct from the AP-79 OAuth verified decision
+// in how it was identified.
+//
+// Proves AP-87, AP-88.
+func TestMCPElicitation_HumanAPITokenSessionAnswerIsTheHumansTokenSessionDecision(t *testing.T) {
 	f, _, _ := startElicitingRelay(t)
 	// RoleOperator, not RoleViewer: the least role that may run a structured
 	// Operation (accounts.go), so the mutate run_operation reaches the
@@ -743,11 +767,36 @@ func TestMCPElicitation_HumanAPITokenSessionStillNeedsAResponder(t *testing.T) {
 	// gateAllMutatesInBandAskable has requester_allowed true, so hana-api is
 	// asked about its own request.
 	q, qid, requestID, _ := askApproval(t, session, restartNginxArgs())
-	before := auditLen(t, f)
 	res := answerWithNoResponder(t, session, restartNginxArgs(), q, qid, "accept")
-	assertMachineSelfDecisionRefused(t, f, res, requestID, before)
+	if res.NeedsInput() || res.IsError {
+		t.Fatalf("answered retry: NeedsInput=%v IsError=%v content=%+v", res.NeedsInput(), res.IsError, res.Content)
+	}
 
-	if got := len(decisionRecordsFor(t, f, requestID)); got != 0 {
-		t.Errorf("decision records = %d, want 0", got)
+	var out mcp.RunOrPlanOutput
+	relaytest.DecodeToolJSON(t, res, &out)
+	if out.JobID == "" {
+		t.Fatal("job_id is empty, want a real Job: a human's token-session answer counts")
+	}
+	if out.Decision == nil {
+		t.Fatalf("Decision is nil: %+v", out)
+	}
+	if out.Decision.State != "approved" || out.Decision.Channel != "in-band" ||
+		out.Decision.OnBehalfOf != "" || out.Decision.IdentifiedBy != "api_token_session" {
+		t.Errorf("Decision = %+v, want approved/in-band/no on_behalf_of/api_token_session", out.Decision)
+	}
+
+	decisions := decisionRecordsFor(t, f, requestID)
+	if len(decisions) != 1 {
+		t.Fatalf("decision records = %d, want exactly 1", len(decisions))
+	}
+	if decisions[0].Attribution.Verified.TokenID == "" {
+		t.Error("Verified.TokenID is empty, want the API Token the session used")
+	}
+	if decisions[0].Attribution.Asserted.OnBehalfOf != "" {
+		t.Errorf("Asserted.OnBehalfOf = %q, want empty", decisions[0].Attribution.Asserted.OnBehalfOf)
+	}
+	got := fetchApproval(t, f, requestID)
+	if len(got.Decisions) != 1 || !got.Decisions[0].Human || got.Decisions[0].IdentifiedBy != "api_token_session" {
+		t.Errorf("decisions = %+v, want one human decision identified by api_token_session", got.Decisions)
 	}
 }

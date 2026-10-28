@@ -115,7 +115,7 @@ type AccountAdministrator interface {
 	SetAccountRole(ctx context.Context, p capability.Principal, id string, role accounts.Role) error
 	SetAccountRoleFrom(ctx context.Context, p capability.Principal, id string, from, to accounts.Role) error
 	SetAccountEnabled(ctx context.Context, p capability.Principal, id string, enabled bool) error
-	MintAPIToken(ctx context.Context, p capability.Principal, accountID, name string, ttl time.Duration) (accounts.APIToken, accounts.Plaintext, error)
+	MintAPIToken(ctx context.Context, p capability.Principal, accountID, name string, lifetime capability.APITokenLifetime) (accounts.APIToken, accounts.Plaintext, error)
 	RevokeAPIToken(ctx context.Context, p capability.Principal, id string) error
 }
 
@@ -457,7 +457,8 @@ func writeFailedWith(w http.ResponseWriter, pg Page, err error, route, ident, un
 			"attribution is never ambiguous. " + undone,
 		}
 	case errors.Is(err, accounts.ErrInvalidName), errors.Is(err, accounts.ErrInvalidKind),
-		errors.Is(err, accounts.ErrInvalidRole), errors.Is(err, accounts.ErrInvalidTTL):
+		errors.Is(err, accounts.ErrInvalidRole), errors.Is(err, accounts.ErrInvalidTTL),
+		errors.Is(err, capability.ErrAPITokenTTLRequired):
 		status, res = http.StatusBadRequest, accountsWriteResultView{
 			Heading: "The Relay refused this: " + err.Error() + ". " + undone,
 		}
@@ -770,33 +771,42 @@ func handleSetAccountEnabled(d Deps) http.HandlerFunc {
 	}
 }
 
-// ttlChoices is the mint form's CLOSED vocabulary, with no default.
+// ttlChoices is the mint form's CLOSED vocabulary. A human Account's form
+// preselects the capability layer's default lifetime; a machine Account's form
+// has no default (ttlOptions leaves it out).
 //
 // A closed select rather than a free-form number, for the reason
 // api/accounts.go gives for making ttl_seconds a POINTER: a forgotten field
-// must never silently mint an immortal credential. Zero means "does not
+// must never silently mint an immortal credential. The default arrives as the
+// explicit value "default", never as a missing field. Zero means "does not
 // expire", which is legitimate — it is what a long-lived CI credential wants
 // — but it has to be ASKED for.
 var ttlChoices = []struct {
-	Value string
-	Label string
-	TTL   time.Duration
+	Value   string
+	Label   string
+	TTL     time.Duration
+	Default bool
 }{
-	{"30d", "30 days", 30 * 24 * time.Hour},
-	{"90d", "90 days", 90 * 24 * time.Hour},
-	{"365d", "365 days", 365 * 24 * time.Hour},
-	{"never", "does not expire", 0},
+	{"default", "7 days (default)", capability.HumanAPITokenDefaultTTL, true},
+	{"30d", "30 days", 30 * 24 * time.Hour, false},
+	{"90d", "90 days", 90 * 24 * time.Hour, false},
+	{"365d", "365 days", 365 * 24 * time.Hour, false},
+	{"never", "does not expire", 0, false},
 }
 
 // ttlFor resolves a submitted ttl value. ok is false for an absent or
 // unrecognised one.
-func ttlFor(value string) (time.Duration, bool) {
+func ttlFor(value string) (capability.APITokenLifetime, bool) {
 	for _, c := range ttlChoices {
-		if c.Value == value {
-			return c.TTL, true
+		if c.Value != value {
+			continue
 		}
+		if c.Default {
+			return capability.DefaultAPITokenLifetime(), true
+		}
+		return capability.ExplicitAPITokenLifetime(c.TTL), true
 	}
-	return 0, false
+	return capability.APITokenLifetime{}, false
 }
 
 // mintedView is the view type in this package with a field a secret can
@@ -869,7 +879,7 @@ func handleMintAPIToken(d Deps) http.HandlerFunc {
 				"pruned later. Nothing was minted.")
 			return
 		}
-		ttl, ok := ttlFor(r.PostFormValue("ttl"))
+		lifetime, ok := ttlFor(r.PostFormValue("ttl"))
 		if !ok {
 			badRequest(w, pg, "This form did not carry a recognisable lifetime. A token that never "+
 				"expires is a legitimate choice and has to be made deliberately. Nothing was minted.")
@@ -882,7 +892,7 @@ func handleMintAPIToken(d Deps) http.HandlerFunc {
 
 		// pg was passed to requireStepUp by pointer, so this render carries the
 		// ROTATED session's CSRF token, with no redirect in between.
-		tok, plaintext, err := d.AccountAdmin.MintAPIToken(r.Context(), caller, id, name, ttl)
+		tok, plaintext, err := d.AccountAdmin.MintAPIToken(r.Context(), caller, id, name, lifetime)
 		if err != nil {
 			// MINT CAN FAIL WITH A LIVE CREDENTIAL ALREADY IN THE STORE.
 			// capability.MintAPIToken returns a live tok AND a live plaintext
@@ -985,6 +995,7 @@ func isMintRefusal(err error) bool {
 	case errors.Is(err, authz.ErrUnauthorized),
 		errors.Is(err, accounts.ErrNotFound),
 		errors.Is(err, accounts.ErrInvalidTTL),
+		errors.Is(err, capability.ErrAPITokenTTLRequired),
 		errors.Is(err, capability.ErrAccountsUnavailable),
 		accounts.IsInvalidToken(err):
 		return true

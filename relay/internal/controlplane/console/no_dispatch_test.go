@@ -1118,7 +1118,7 @@ import (
 )
 func f(a any) {
 	_, _ = a.(interface {
-		MintAPIToken(ctx context.Context, p capability.Principal, accountID, name string, ttl time.Duration) (accounts.APIToken, accounts.Plaintext, error)
+		MintAPIToken(ctx context.Context, p capability.Principal, accountID, name string, lifetime capability.APITokenLifetime) (accounts.APIToken, accounts.Plaintext, error)
 	})
 }
 `,
@@ -1186,7 +1186,7 @@ type AccountAdministrator interface {
 	SetAccountRole(ctx context.Context, p capability.Principal, id string, role accounts.Role) error
 	SetAccountRoleFrom(ctx context.Context, p capability.Principal, id string, from, to accounts.Role) error
 	SetAccountEnabled(ctx context.Context, p capability.Principal, id string, enabled bool) error
-	MintAPIToken(ctx context.Context, p capability.Principal, accountID, name string, ttl time.Duration) (accounts.APIToken, accounts.Plaintext, error)
+	MintAPIToken(ctx context.Context, p capability.Principal, accountID, name string, lifetime capability.APITokenLifetime) (accounts.APIToken, accounts.Plaintext, error)
 	RevokeAPIToken(ctx context.Context, p capability.Principal, id string) error
 }
 func f(a AccountAdministrator) { _ = a.RevokeAPIToken(context.Background(), capability.Principal{}, "tok-1") }

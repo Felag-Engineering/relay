@@ -1,5 +1,5 @@
 // Package main: oauth_idp_e2e_test.go is #743's OAuth e2e fixture — a LOCAL
-// test IdP, not a live OAuth provider (#351 stays open), so AP-78/AP-79's
+// test IdP, not a live OAuth provider (#351 stays open), so AP-86/AP-79's
 // "OAuth session of a human Account" can be built end to end through the
 // REAL composition root: real discovery (oidc.NewProvider against a loopback
 // issuer, main.go's NewOIDCVerifier), the real oauthResolver

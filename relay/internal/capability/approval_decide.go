@@ -143,6 +143,13 @@ func (a *Approvals) Approval(ctx context.Context, id string) (approval.Request, 
 // the Request now is, not proof p could have decided it. A surface that
 // exposes this value must narrow it to what that surface may already read.
 func (a *Approvals) DecideApproval(ctx context.Context, p Principal, in ApprovalDecision) (approval.Request, error) {
+	return a.decide(ctx, p, in, approval.IdentifiedByUnrecorded)
+}
+
+// decide is DecideApproval's body. identifiedBy is a parameter, not a field of
+// ApprovalDecision, so no surface can name it, just as none can name the
+// channel (AP-12): only AnswerElicited passes anything but Unrecorded.
+func (a *Approvals) decide(ctx context.Context, p Principal, in ApprovalDecision, identifiedBy approval.IdentifiedBy) (approval.Request, error) {
 	if a.store == nil {
 		return approval.Request{}, ErrApprovalUnavailable
 	}
@@ -186,8 +193,9 @@ func (a *Approvals) DecideApproval(ctx context.Context, p Principal, in Approval
 		// this from the Authorizer, because an assertion must never be an
 		// authorization input. It is attribution, and attribution is exactly
 		// what it is used for here.
-		OnBehalfOf: AssertionsFromContext(ctx).OnBehalfOf,
-		At:         a.clock(),
+		OnBehalfOf:   AssertionsFromContext(ctx).OnBehalfOf,
+		IdentifiedBy: identifiedBy,
+		At:           a.clock(),
 	}
 
 	updated, err := a.store.RecordDecision(ctx, in.RequestID, d, d.At)
@@ -225,6 +233,53 @@ func (a *Approvals) DecideApproval(ctx context.Context, p Principal, in Approval
 	return updated, nil
 }
 
+// ResponderRule says what an elicited answer's responder assertion means on a
+// session.
+type ResponderRule int
+
+const (
+	// ResponderRequired is the zero value, so it fails closed: any session not
+	// listed below needs a responder assertion (the last sentence of AP-87).
+	ResponderRequired ResponderRule = iota
+	// ResponderRecorded is an API-token session, of either Account kind: the
+	// responder is optional, and recorded as asserted when present (AP-87).
+	ResponderRecorded
+	// ResponderIgnored is an OAuth session of a human Account: the responder is
+	// never read and never recorded (AP-79).
+	ResponderIgnored
+)
+
+// ElicitedResponderRule is the rule for an elicited answer on p's session. It
+// is decided here, once, for the capability layer and the MCP adapter alike.
+func ElicitedResponderRule(p Principal) ResponderRule {
+	return ruleFor(elicitedIdentification(p))
+}
+
+func ruleFor(id approval.IdentifiedBy) ResponderRule {
+	switch id {
+	case approval.IdentifiedByOAuthSession:
+		return ResponderIgnored
+	case approval.IdentifiedByAPITokenSession:
+		return ResponderRecorded
+	default:
+		return ResponderRequired
+	}
+}
+
+// elicitedIdentification is how the Relay identifies the decider of an
+// elicited answer on p's session (AP-88). An API-token session of a Kind that
+// is not human gets DeciderHuman=false downstream: the restrictive reading.
+func elicitedIdentification(p Principal) approval.IdentifiedBy {
+	switch {
+	case p.AuthMethod == AuthMethodOAuth && p.Human():
+		return approval.IdentifiedByOAuthSession
+	case p.AuthMethod == AuthMethodAPIToken:
+		return approval.IdentifiedByAPITokenSession
+	default:
+		return approval.IdentifiedByResponderAssertion
+	}
+}
+
 // AnswerElicited records an answer to a parked dispatch that arrived in-band,
 // as an MRTR elicitation answer on the requesting session's retried call.
 //
@@ -232,13 +287,38 @@ func (a *Approvals) DecideApproval(ctx context.Context, p Principal, in Approval
 // surface that calls it names neither a decision input nor a channel
 // (ADR-0047 decision 4; approval.md AP-12, AP-63). Everything else, the role
 // floor, eligibility, audit and the refusal set, is DecideApproval's.
+//
+// It also decides how the decider was identified (AP-88) and what a responder
+// assertion means on the session (ElicitedResponderRule): on a human's OAuth
+// session any assertion is cleared (AP-79); on a session that is neither that
+// nor an API-token session, an answer without one is a machine
+// self-decision (AP-87).
+//
+// The capability layer sees only whether ctx carries an asserted OnBehalfOf,
+// never the wire shape it came from. A caller sets OnBehalfOf only from a
+// responder assertion it has validated as a permission-gate answer (AP-87,
+// AP-10), and clears it otherwise, so a header or a responder of another gate
+// never reaches the asserted lane. The MCP answered retry is the one caller.
 func (a *Approvals) AnswerElicited(ctx context.Context, p Principal, requestID, planHash string, approve bool) (approval.Request, error) {
-	return a.DecideApproval(ctx, p, ApprovalDecision{
+	id := elicitedIdentification(p)
+	switch ruleFor(id) {
+	case ResponderIgnored:
+		asserted := AssertionsFromContext(ctx)
+		asserted.OnBehalfOf = ""
+		ctx = WithAssertions(ctx, asserted)
+	case ResponderRequired:
+		// A human principal on neither an OAuth nor an API-token session is
+		// refused here too: the fail-closed reading.
+		if strings.TrimSpace(AssertionsFromContext(ctx).OnBehalfOf) == "" {
+			return approval.Request{}, approval.ErrMachineSelfDecision
+		}
+	}
+	return a.decide(ctx, p, ApprovalDecision{
 		RequestID: requestID,
 		PlanHash:  planHash,
 		Approve:   approve,
 		Channel:   approval.ChannelInBand,
-	})
+	}, id)
 }
 
 // isApprovalDomainError reports whether err is one of the domain's eligibility
@@ -314,8 +394,12 @@ func approvalDecisionReason(r approval.Request, d approval.Decision) string {
 	if d.Approve {
 		answer = "approved"
 	}
-	line := fmt.Sprintf("approval request %s %s by %s over %s (%s, request now %s): %s",
-		r.ID, answer, d.Account, d.Channel, r.Progress(), r.State, r.Summary)
+	identified := ""
+	if d.IdentifiedBy != approval.IdentifiedByUnrecorded {
+		identified = ", decider identified by " + d.IdentifiedBy.String()
+	}
+	line := fmt.Sprintf("approval request %s %s by %s over %s%s (%s, request now %s): %s",
+		r.ID, answer, d.Account, d.Channel, identified, r.Progress(), r.State, r.Summary)
 	if note := strings.TrimSpace(d.Reason); note != "" {
 		line += " — reason: " + note
 	}

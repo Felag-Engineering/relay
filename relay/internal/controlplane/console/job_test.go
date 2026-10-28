@@ -1707,3 +1707,53 @@ func TestJob_ApprovalWithNoDecidersSaysSo(t *testing.T) {
 		t.Error("the approval section is not rendered at all for a record with no Decisions")
 	}
 }
+
+// TestJob_DeciderShowsHowItWasIdentified. Two in-band human answers on the
+// same approval read differently when the Relay identified their deciders
+// differently, and an out-of-band decision claims no identification.
+//
+// Proves AP-88.
+func TestJob_DeciderShowsHowItWasIdentified(t *testing.T) {
+	tasks := []capability.TaskRow{mutateTask("node-a", jobs.OutcomeSuccess, "ok")}
+	q := &fakeQueries{
+		jobs:  []capability.JobSummary{oneJob(tasks, jobs.RiskClassMutate)},
+		tasks: tasks,
+		rows:  []capability.AuditRow{{Kind: audit.KindDispatch, JobID: testJobID, ApprovalID: "ap-1"}},
+	}
+	d := jobDeps(q)
+	d.Approvals = &fakeApprovals{pending: []approval.Request{{
+		ID: "ap-1", Require: approval.Requirement{Count: 4},
+		Decisions: []approval.Decision{
+			{Account: "oauth-hana", AccountID: "acct-1", Approve: true, Channel: approval.ChannelInBand, DeciderHuman: true, IdentifiedBy: approval.IdentifiedByOAuthSession, At: testNow},
+			{Account: "token-hana", AccountID: "acct-2", Approve: true, Channel: approval.ChannelInBand, DeciderHuman: true, IdentifiedBy: approval.IdentifiedByAPITokenSession, At: testNow},
+			{Account: "bot", AccountID: "acct-3", Approve: true, Channel: approval.ChannelInBand, OnBehalfOf: "carol", IdentifiedBy: approval.IdentifiedByResponderAssertion, At: testNow},
+			{Account: "oob-mike", AccountID: "acct-4", Approve: true, Channel: approval.ChannelOutOfBand, DeciderHuman: true, At: testNow},
+		},
+	}}}
+	body := jobBody(t, d, jobPath(""))
+
+	blocks := strings.Split(body, `<div class="decider">`)[1:]
+	if len(blocks) != 4 {
+		t.Fatalf("%d decider blocks, want 4", len(blocks))
+	}
+	for i, want := range []string{
+		"identified by OAuth session", "identified by API Token session", "identified by responder assertion", "",
+	} {
+		block := blocks[i]
+		if end := strings.Index(block, "</div>"); end >= 0 {
+			block = block[:end]
+		}
+		if want == "" {
+			if strings.Contains(block, "identified by") {
+				t.Errorf("decider %d claims an identification it has no record of:\n%s", i, block)
+			}
+			continue
+		}
+		if !strings.Contains(block, want) {
+			t.Errorf("decider %d does not say %q:\n%s", i, want, block)
+		}
+	}
+	if strings.Contains(blocks[2], `data-trust="verified" title="The Relay authenticated this identity.">carol<`) {
+		t.Error("the asserted human rendered as VERIFIED")
+	}
+}

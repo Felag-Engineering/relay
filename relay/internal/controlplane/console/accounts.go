@@ -151,6 +151,8 @@ type accountCreateForm struct {
 type ttlOption struct {
 	Value string
 	Label string
+	// Selected marks the default entry, offered only for a human Account.
+	Selected bool
 }
 
 // accountRow is one Account.
@@ -339,7 +341,6 @@ func handleAccounts(d Deps) http.HandlerFunc {
 			v.Write = &accountsWriteControls{
 				CSRFToken:   p.CSRFToken,
 				StepUpFresh: stepUpFresh(d, r),
-				TTLs:        ttlOptions(),
 			}
 			v.NewAccountHref = newAccountPath
 		}
@@ -419,10 +420,16 @@ func roleTargets(held accounts.Role) (raise, lower []string) {
 // ttlOptions projects the mint form's closed lifetime vocabulary
 // (ttlChoices, accounts_write.go) onto the view, so the handler that PARSES a
 // value and the template that OFFERS one read from a single list.
-func ttlOptions() []ttlOption {
+//
+// The default entry is left out unless kind is human: a machine Account's
+// lifetime has no default (capability.ErrAPITokenTTLRequired).
+func ttlOptions(kind accounts.Kind) []ttlOption {
 	out := make([]ttlOption, 0, len(ttlChoices))
 	for _, c := range ttlChoices {
-		out = append(out, ttlOption{Value: c.Value, Label: c.Label})
+		if c.Default && kind != accounts.KindHuman {
+			continue
+		}
+		out = append(out, ttlOption{Value: c.Value, Label: c.Label, Selected: c.Default})
 	}
 	return out
 }

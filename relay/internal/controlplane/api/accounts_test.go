@@ -733,6 +733,7 @@ func TestIdentityAPI_ErrorMapping(t *testing.T) {
 // credential.
 func TestIdentityAPI_MintRequiresExplicitTTL(t *testing.T) {
 	f := newIdentityFixture(t)
+	// mintFor creates a MACHINE Account, which has no default lifetime.
 	acct, _ := f.mintFor(t, "ci", accounts.RoleViewer)
 	path := "/api/v1/accounts/" + acct.ID + "/tokens"
 
@@ -784,9 +785,10 @@ func TestIdentityAPI_AuthorizationIsCheckedAfterRequestValidation(t *testing.T) 
 	_, viewerCred := f.mintFor(t, "caller-viewer", accounts.RoleViewer)
 	path := "/api/v1/accounts/" + target.ID + "/tokens"
 
-	// An invalid body (missing ttl_seconds) fails validation before
-	// AuthorizeControl is ever reached — 400, not 403.
-	rec := f.call(t, viewerCred, http.MethodPost, path, map[string]any{"name": "no-ttl"})
+	// An invalid body (a negative ttl_seconds) fails validation before
+	// AuthorizeControl is ever reached — 400, not 403. An absent ttl_seconds is
+	// not a request-shape error: the capability layer decides its default.
+	rec := f.call(t, viewerCred, http.MethodPost, path, map[string]any{"name": "bad-ttl", "ttl_seconds": -1})
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("viewer with an invalid body: status %d, want 400", rec.Code)
 	}

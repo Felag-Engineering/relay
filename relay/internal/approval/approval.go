@@ -66,7 +66,8 @@ var (
 	ErrPlanChanged = errors.New("approval: decision does not match the request's plan hash")
 
 	// ErrMachineSelfDecision is returned when a machine Account tries to decide
-	// a Request it made itself.
+	// a Request it made itself, other than by the two in-band forms of
+	// inBandSelfConfirmation.
 	//
 	// This is ADR-0027's confirmation ladder made structural: rung 2
 	// (self-confirmation) is HUMAN REQUESTERS ONLY, because an AI-agent confirming
@@ -359,17 +360,74 @@ type Decision struct {
 	// trail carries in the asserted lane, never the verified one.
 	OnBehalfOf string
 
+	// IdentifiedBy is how the capability layer identified the decider of an
+	// in-band answer (AP-88). Only capability.Approvals.AnswerElicited sets it;
+	// no surface can. Unrecorded for every out-of-band decision.
+	IdentifiedBy IdentifiedBy
+
 	At time.Time
 }
 
-// relaysAnAssertedHuman reports whether d is a machine Account relaying an
-// answer a human gave it, rather than one it made itself (ADR-0029 decision 3).
+// IdentifiedBy says how an elicited answer's decider was identified (AP-88).
+type IdentifiedBy int
+
+const (
+	// IdentifiedByUnrecorded is the zero value: every out-of-band decision, and
+	// every row written before the Relay kept this.
+	IdentifiedByUnrecorded IdentifiedBy = iota
+	// IdentifiedByOAuthSession is a human Account's verified OAuth session.
+	IdentifiedByOAuthSession
+	// IdentifiedByAPITokenSession is the session's own Account, on an API Token.
+	IdentifiedByAPITokenSession
+	// IdentifiedByResponderAssertion is a responder the client asserted, on any
+	// other session.
+	IdentifiedByResponderAssertion
+)
+
+// ErrUnknownIdentifiedBy is returned by ParseIdentifiedBy for a value the
+// store should never hold. It is a store-integrity error, not an eligibility
+// refusal.
+var ErrUnknownIdentifiedBy = errors.New("approval: unknown identified_by value")
+
+// String returns the stored and rendered form: "" for Unrecorded.
+func (i IdentifiedBy) String() string {
+	switch i {
+	case IdentifiedByOAuthSession:
+		return "oauth_session"
+	case IdentifiedByAPITokenSession:
+		return "api_token_session"
+	case IdentifiedByResponderAssertion:
+		return "responder_assertion"
+	default:
+		return ""
+	}
+}
+
+// ParseIdentifiedBy is String's inverse.
+func ParseIdentifiedBy(s string) (IdentifiedBy, error) {
+	switch s {
+	case "":
+		return IdentifiedByUnrecorded, nil
+	case "oauth_session":
+		return IdentifiedByOAuthSession, nil
+	case "api_token_session":
+		return IdentifiedByAPITokenSession, nil
+	case "responder_assertion":
+		return IdentifiedByResponderAssertion, nil
+	}
+	return IdentifiedByUnrecorded, fmt.Errorf("%w: %q", ErrUnknownIdentifiedBy, s)
+}
+
+// inBandSelfConfirmation reports whether d is an in-band answer a machine
+// Account may give to its own request: a relayed, asserted human (ADR-0029
+// decision 3), or the session's own answer on an API Token (AP-87).
 //
 // Deliberately a method on Decision rather than an inline condition: it is the
 // single place the carve-out is defined, so widening it is one visible edit
 // rather than a condition drifting apart across call sites.
-func (d Decision) relaysAnAssertedHuman() bool {
-	return d.Channel == ChannelInBand && strings.TrimSpace(d.OnBehalfOf) != ""
+func (d Decision) inBandSelfConfirmation() bool {
+	return d.Channel == ChannelInBand &&
+		(d.IdentifiedBy == IdentifiedByAPITokenSession || strings.TrimSpace(d.OnBehalfOf) != "")
 }
 
 // Request is one parked Job awaiting its Requirement.
@@ -564,15 +622,13 @@ func (r Request) Decide(d Decision, now time.Time) (Request, error) {
 		// answering twice, so its minimum rung is 3 regardless of configuration
 		// — see ErrMachineSelfDecision.
 		//
-		// ADR-0029 carves out exactly one exception: a machine may RELAY an
-		// answer it did not author. That is credible only when both facts hold
-		// together — the decision arrived in-band (so a client with a human in
-		// front of it was the surface), and it names an asserted approver (so
-		// the trail records who that human was said to be). Either alone is
-		// not enough: an in-band decision with no named approver is a machine
-		// answering anonymously, and an asserted approver on an out-of-band
-		// decision is a verified credential that needs no relay.
-		if !d.DeciderHuman && !d.relaysAnAssertedHuman() {
+		// ADR-0029 and AP-87 carve out two in-band forms: a machine may RELAY
+		// an answer it did not author (an in-band decision naming an asserted
+		// approver), or answer on its own API Token session (machine
+		// self-confirmation). An out-of-band decision is never a
+		// self-confirmation (AP-11, AP-48), and an in-band one with neither
+		// form is a machine answering anonymously.
+		if !d.DeciderHuman && !d.inBandSelfConfirmation() {
 			return r, ErrMachineSelfDecision
 		}
 	}

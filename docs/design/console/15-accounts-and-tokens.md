@@ -224,8 +224,10 @@ The mint, and a temporary password's issue (at a human Account's create or by re
 writes on this screen that do **not** post-redirect-get: a plaintext must never enter a URL, a `Location` header or a browser history entry, so it renders in the response
 body, once, with `Cache-Control: no-store`. A mint made from the modal is an ordinary form post, so
 its response is that page; no script carries the value, and the modal is never re-opened onto it
-from a URL. A lifetime is a closed choice with no default — a forgotten field must never silently
-mint an immortal credential.
+from a URL. A lifetime is a closed choice. A human Account's form preselects the capability layer's
+default of seven days (ADR-0047, amended 2026-10-23). A machine Account's form has no
+default, and a forgotten choice is refused: a forgotten field must never silently mint an
+immortal credential.
 
 Revocation is immediate and audited. ADR-0023 retired the shared control-plane credential; nothing
 on this screen may reintroduce one, and there is no such thing as a token not bound to an Account.

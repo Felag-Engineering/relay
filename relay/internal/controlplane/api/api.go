@@ -121,7 +121,7 @@ type AccountAdmin interface {
 	SetAccountRole(ctx context.Context, p capability.Principal, id string, role accounts.Role) error
 	SetAccountEnabled(ctx context.Context, p capability.Principal, id string, enabled bool) error
 	APITokens(ctx context.Context, p capability.Principal, accountID string) ([]accounts.APIToken, error)
-	MintAPIToken(ctx context.Context, p capability.Principal, accountID, name string, ttl time.Duration) (accounts.APIToken, accounts.Plaintext, error)
+	MintAPIToken(ctx context.Context, p capability.Principal, accountID, name string, lifetime capability.APITokenLifetime) (accounts.APIToken, accounts.Plaintext, error)
 	RevokeAPIToken(ctx context.Context, p capability.Principal, id string) error
 }
 

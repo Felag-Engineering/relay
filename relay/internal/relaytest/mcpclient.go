@@ -16,20 +16,14 @@ import (
 // needs.
 const callToolTimeout = 30 * time.Second
 
-// defaultClientName is what ConnectOptions.ClientName defaults to: a name
-// AP-78 does not recognise, so a test that wants the emission predicate to
-// ask a question must opt in with GleipnirClientName (asked on any session)
-// or ClaudeCodeClientName (asked only on an OAuth session of a human
-// Account).
+// defaultClientName is what ConnectOptions.ClientName defaults to: a neutral
+// name. The declared name decides nothing about whether Relay asks (AP-86).
 const defaultClientName = "relaytest-client"
 
-// GleipnirClientName and ClaudeCodeClientName are the declared client names
-// AP-78 recognises (elicit.go's clientNameGleipnir/clientNameClaudeCode),
-// exported so a test can set ConnectOptions.ClientName without repeating the
-// literal. Gleipnir is asked wherever AP-61 otherwise allows, whatever the
-// session; Claude Code is asked only where the calling Principal also
-// authenticated by OAuth with a human Account (AP-78) — declaring
-// ClaudeCodeClientName alone is not enough.
+// GleipnirClientName and ClaudeCodeClientName are real clients' declared
+// names, exported so a test can set ConnectOptions.ClientName without
+// repeating the literal and prove the name earns nothing: Relay asks any
+// client that advertises elicitation, on any session (AP-86).
 const (
 	GleipnirClientName   = "gleipnir"
 	ClaudeCodeClientName = "claude-code"
@@ -65,10 +59,8 @@ type ConnectOptions struct {
 	// switch it off.
 	Client *sdkmcp.ClientOptions
 	// ClientName is the MCP client's declared name: it travels in every
-	// 2026-07-28 request's `_meta` clientInfo, and Relay's emission predicate
-	// asks a question only when it declares a recognised name (AP-78,
-	// GleipnirClientName or ClaudeCodeClientName). Empty means
-	// "relaytest-client", which is deliberately unrecognised.
+	// 2026-07-28 request's `_meta` clientInfo. Relay never reads it to decide
+	// whether to ask (AP-86). Empty means "relaytest-client".
 	ClientName string
 	// Session is passed to the Connect call. ProtocolVersion lets a test build
 	// a client that negotiates an older protocol than 2026-07-28 (SEP-2322),

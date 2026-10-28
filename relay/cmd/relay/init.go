@@ -30,6 +30,7 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/relay/relay/internal/audit"
 	"github.com/Felag-Engineering/relay/relay/internal/auditsink"
+	"github.com/Felag-Engineering/relay/relay/internal/capability"
 	"github.com/Felag-Engineering/relay/relay/internal/relayconfig"
 	"github.com/Felag-Engineering/relay/relay/internal/startup"
 	"github.com/Felag-Engineering/relay/relay/internal/store"
@@ -49,7 +50,8 @@ Run as the Relay's own account, after the Relay has started once:
                 credential, and reports what is there.
 --recover NAME  Mint a new API Token for NAME, an enabled human admin, and print it
                 to stdout once. For an admin who has lost every API Token.
---ttl DURATION  Lifetime of the API Token minted, e.g. 24h. Default 0: no expiry.
+--ttl DURATION  Lifetime of the API Token minted, e.g. 24h. Default 168h (seven
+                days); --ttl 0 means no expiry.
 --config PATH   The Relay's configuration file (default /etc/relay/relay.toml).
 
 The Console password set by --admin is the only one any surface sets, and nothing
@@ -96,7 +98,7 @@ type initOptions struct {
 	configPath  string
 	admin       string
 	recoverName string
-	ttl         time.Duration
+	lifetime    capability.APITokenLifetime
 }
 
 // parseInitFlags parses and validates the arguments. done is true when the
@@ -108,7 +110,7 @@ func parseInitFlags(args []string, stderr *os.File) (opts initOptions, exitCode 
 	path := set.String("config", relayconfig.DefaultPath, "path of the Relay's configuration file")
 	admin := set.String("admin", "", "name of the first admin to create")
 	recoverName := set.String("recover", "", "name of the enabled human admin to mint a new API Token for")
-	ttl := set.Duration("ttl", 0, "lifetime of the API Token minted; 0 means no expiry")
+	ttl := set.Duration("ttl", capability.HumanAPITokenDefaultTTL, "lifetime of the API Token minted; 0 means no expiry")
 	if err := set.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return initOptions{}, 0, true
@@ -130,7 +132,13 @@ func parseInitFlags(args []string, stderr *os.File) (opts initOptions, exitCode 
 		fmt.Fprintln(stderr, "relay init: --ttl must not be negative")
 		return initOptions{}, 2, true
 	}
-	return initOptions{configPath: *path, admin: *admin, recoverName: *recoverName, ttl: *ttl}, 0, false
+	lifetime := capability.DefaultAPITokenLifetime()
+	set.Visit(func(f *flag.Flag) {
+		if f.Name == "ttl" {
+			lifetime = capability.ExplicitAPITokenLifetime(*ttl)
+		}
+	})
+	return initOptions{configPath: *path, admin: *admin, recoverName: *recoverName, lifetime: lifetime}, 0, false
 }
 
 // openRelayStoreForInit runs the server's own front door, in the server's order
@@ -179,11 +187,19 @@ func runInitCommand(args []string, envErr error, stdin, stdout, stderr *os.File)
 	}
 	defer st.Close() //nolint:errcheck
 
+	// Both modes mint only for a human admin, so the human default applies; the
+	// same function every mint path calls decides it.
+	ttl, err := capability.ResolveAPITokenTTL(accounts.KindHuman, opts.lifetime)
+	if err != nil {
+		fmt.Fprintf(stderr, "relay init: %v\n", err)
+		return 2
+	}
+
 	ctx := context.Background()
 	if opts.recoverName != "" {
-		return initRecover(ctx, st, opts.recoverName, opts.ttl, stdout, stderr)
+		return initRecover(ctx, st, opts.recoverName, ttl, stdout, stderr)
 	}
-	return initFirstAdmin(ctx, st, opts.admin, opts.ttl, stdin, stdout, stderr)
+	return initFirstAdmin(ctx, st, opts.admin, ttl, stdin, stdout, stderr)
 }
 
 // initFirstAdmin creates the first admin on a store with no human Account, or

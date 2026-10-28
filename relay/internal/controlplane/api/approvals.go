@@ -84,7 +84,11 @@ type decisionResponse struct {
 	Reason    string `json:"reason,omitempty"`
 	Channel   string `json:"channel"`
 	Human     bool   `json:"human"`
-	At        string `json:"at"`
+	// IdentifiedBy is how the Relay identified the decider of an in-band answer
+	// (AP-88); absent on an out-of-band decision and on one recorded before the
+	// Relay kept it.
+	IdentifiedBy string `json:"identified_by,omitempty"`
+	At           string `json:"at"`
 }
 
 // approvalResponse is a parked dispatch as an approver sees it.
@@ -148,13 +152,14 @@ func renderApproval(r approval.Request) approvalResponse {
 	decisions := make([]decisionResponse, 0, len(r.Decisions))
 	for _, d := range r.Decisions {
 		decisions = append(decisions, decisionResponse{
-			Account:   d.Account,
-			AccountID: d.AccountID,
-			Approve:   d.Approve,
-			Reason:    d.Reason,
-			Channel:   d.Channel.String(),
-			Human:     d.DeciderHuman,
-			At:        controlplane.RFC3339(d.At),
+			Account:      d.Account,
+			AccountID:    d.AccountID,
+			Approve:      d.Approve,
+			Reason:       d.Reason,
+			Channel:      d.Channel.String(),
+			Human:        d.DeciderHuman,
+			IdentifiedBy: d.IdentifiedBy.String(),
+			At:           controlplane.RFC3339(d.At),
 		})
 	}
 	rules := r.MatchedRules

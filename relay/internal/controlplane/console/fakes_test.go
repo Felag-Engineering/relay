@@ -598,7 +598,7 @@ type mintCall struct {
 	Principal capability.Principal
 	AccountID string
 	Name      string
-	TTL       time.Duration
+	TTL       capability.APITokenLifetime
 }
 
 type revokeTokenCall struct {
@@ -681,11 +681,11 @@ func (f *fakeAccountAdmin) SetAccountEnabled(_ context.Context, p capability.Pri
 	return f.enableErr
 }
 
-func (f *fakeAccountAdmin) MintAPIToken(_ context.Context, p capability.Principal, accountID, name string, ttl time.Duration) (accounts.APIToken, accounts.Plaintext, error) {
-	f.mints = append(f.mints, mintCall{Principal: p, AccountID: accountID, Name: name, TTL: ttl})
+func (f *fakeAccountAdmin) MintAPIToken(_ context.Context, p capability.Principal, accountID, name string, lifetime capability.APITokenLifetime) (accounts.APIToken, accounts.Plaintext, error) {
+	f.mints = append(f.mints, mintCall{Principal: p, AccountID: accountID, Name: name, TTL: lifetime})
 	f.record("MintAPIToken")
 	tok := accounts.APIToken{ID: sweepMintedTokenID, AccountID: accountID, Name: name, CreatedAt: testNow}
-	if ttl > 0 {
+	if ttl, _ := lifetime.Explicit(); ttl > 0 {
 		tok.ExpiresAt = testNow.Add(ttl)
 	}
 	// The live plaintext accompanies the error on purpose — see mintErr.
