@@ -8,13 +8,13 @@ ADR-0022, ADR-0032, ADR-0033, ADR-0034, ADR-0048, ADR-0050; invariants 6, 7, 10,
 ## Purpose
 
 Enrollment is how a new server joins the fleet without being handed anything that could
-administer it. An administrator mints a short-lived, use-limited Enrollment Token. A person or a
-config-management run gives its join string to the new Node once. The Node checks that it is
-talking to the real Relay before it sends anything, and the Relay's private certificate
-authority issues it a certificate. From then on that certificate is the Node's identity, and
-nothing else is. A token can only add Nodes: it never runs a command. Revoking a token revokes
-every Node it enrolled. Enrollment owns first contact and the renewal and revocation of a Node's
-identity; every later connection belongs to node connection.
+administer it. An administrator mints an expiring Enrollment Token for a stated number of Nodes,
+or explicitly for unlimited use. Its join string is given to the new Node once. The Node checks
+that it is talking to the real Relay before it sends anything, and the Relay's private
+certificate authority issues it a certificate, which is from then on the Node's only identity. A
+token can only add Nodes: it never runs a command. Revoking a token revokes every Node it
+enrolled. Enrollment owns first contact and the renewal and revocation of a Node's identity;
+every later connection belongs to node connection.
 
 ## Surfaces
 
@@ -22,8 +22,9 @@ identity; every later connection belongs to node connection.
 |---|---|
 | Control API | An `admin` mints a token with `POST /api/v1/enrollment-tokens`, receiving the plaintext token and its **join string** once, and revokes one with `DELETE /api/v1/enrollment-tokens/{id}`. |
 | Node plane | The certless `Enrollment.Enroll` RPC accepts a token, a CSR and declared `node:` Labels; `Enrollment.Renew` is mTLS-authenticated. |
-| relay-daemon | Enrolls by a join string on first start with no persisted identity: it pins the Relay's CA fingerprint, enrolls, persists its identity and the Relay address, and reuses that identity on every later start. Where the join string lives on a Node and how `relay-daemon join` delivers it is `daemon-installation.md`; EN-30 (designed) moves the enrollment into `join`. |
+| relay-daemon | `relay-daemon join` reads a join string, pins the Relay's CA fingerprint, enrolls in that process and persists the identity and the Relay address; the unit start reuses that identity and reads no join string (EN-30, EN-32). Where the join string comes from is `daemon-installation.md`. |
 | Console | Shows enrollment attempts and each Node's enrollment provenance. It does not mint tokens today; EN-36 (designed) gives it a mint. |
+| `relay init` | Designed: mints the first Enrollment Token on the Relay host through its mint form and shows its join string once (EN-39, EN-46). |
 | MCP | No enrollment tool: no mint and no revoke. An AI-agent may read a Node's provenance through `query.md` and nothing more. |
 
 "The daemon" below names the relay-daemon binary in whichever form runs it: the process its
@@ -36,8 +37,10 @@ alone, it says so.
 
 - **EN-1** The Control API authorizes the caller as `admin` for a mint before it reads the
   request body. A mint is audited with the actor's attribution and the public token ID.
-- **EN-2** A token has a positive TTL of at most one year and an optional positive `max_uses`.
-  A missing or non-positive `max_uses` is unlimited.
+- **EN-31** A token has a positive TTL of at most one year. A mint request names a positive
+  `max_uses` or sets `unlimited: true`; one that does neither, does both, or names a negative
+  `max_uses` is refused with `400`. The Control API has no default for the TTL or the use limit:
+  every mint names both.
 - **EN-40** A mint names zero or more **initial tags**, each a well-formed `tag:` label rendering
   as exactly one Selector term; a mint may name none. An entry that is not such a label refuses
   the mint and is never rewritten (ADR-0050).
@@ -162,14 +165,11 @@ alone, it says so.
 
 ## Designed, not built
 
-EN-31 bounds a token and replaces EN-2; the promoting PR lands it, with the owner retiring EN-2
-and its proof rows, together. EN-36 and EN-39 carry ADR-0048.
-
 | Claim | Statement | Milestone |
 |---|---|---|
-| EN-31 | A token has a positive TTL of at most one year. A mint request names a positive `max_uses` or asks explicitly for unlimited use; one that does neither is refused. A surface that offers a mint form asks how many Nodes the token is for, sets the use limit to that number and the TTL to two hours by default, so a used-up or expired token needs no revoke (ADR-0048); the Control API takes explicit values and has no default. Replaces EN-2 when promoted. | v0.6.5 — Install Path: relay init, join string, packages |
-| EN-36 | The Console mints an Enrollment Token through the same capability action and `admin` floor as the Control API, asking how many Nodes it is for (EN-31), and shows the join string once, apart from the command that consumes it (EN-39) (ADR-0048; #434). | MVP |
-| EN-39 | `relay init` shows a freshly minted join string once, apart from the command that consumes it: the command is `sudo relay-daemon join`, and the string is pasted at its prompt, so it is never part of a command line (ADR-0048). | v0.6.5 — Install Path: relay init, join string, packages |
+| EN-36 | The Console's mint form (EN-46) mints an Enrollment Token through the same capability action and `admin` floor as the Control API, and shows the join string once, apart from the command that consumes it (EN-39) (ADR-0048; #434). | MVP |
+| EN-39 | `relay init` mints through its mint form (EN-46) and shows the freshly minted join string once, apart from the command that consumes it: the command is `sudo relay-daemon join`, and the string is pasted at its prompt, so it is never part of a command line (ADR-0048). | v0.6.5 — Install Path: relay init, join string, packages |
+| EN-46 | Wherever a surface offers a mint form (`relay init`, EN-39; the Console, EN-36), it asks how many Nodes the token is for. The use limit is the number given, and the form offers no unlimited option; the TTL defaults to two hours and may be changed. The form mints through the same mint action EN-31 governs, with both values explicit (ADR-0048). | v0.6.5 — Install Path: relay init, join string, packages |
 
 ## Out of scope
 
@@ -185,8 +185,8 @@ and its proof rows, together. EN-36 and EN-39 carry ADR-0048.
   (EN-21).
 - **Dispatch approvals and approval gates**: `approval.md`.
 - **Fencing off a token's Nodes without revoking them**: `roadmap: relay/quarantine`.
-  Containment today is revoking the token (EN-19); each Node stays addressable by
-  `relay:node-id` (EN-38).
+  Containment today is revoking the token (EN-19); once EN-38 lands, each Node stays
+  addressable by `relay:node-id`.
 - **Enrollment as an approval**, attestation verifiers and a pipeline-driven approval:
   `roadmap: relay/enrollment-is-an-approval`. Replacing a Node in place, so a second enrollment
   inherits the old record (EN-16), waits in the private roadmap too.
@@ -229,6 +229,7 @@ Generated by `make spec-proof` from the tests that name the claim they prove.
 | EN-27 | `pin_mismatch_sends_no_token` | daemon |
 | EN-29 | `TestUnaryInterceptor_RevokedAfterConnect_RenewRefused` | Node plane |
 | EN-30 | `TestCrossBinary_RestartWithoutJoinOrAddrUsesPersistedState`, `join_enroll_config_never_reads_a_ca_path_or_a_bare_token`, `join_enrolls_in_process_and_persists_identity`, `join_pin_applies_to_an_overridden_address`, `join_takes_no_ca_bundle_path_and_no_bare_token` | Relay, daemon |
+| EN-31 | `TestHandleMintToken_InvalidInitialTagOrTTL`, `TestHandleMintToken_UseLimit`, `TestMinter_Mint_UseLimitMustBeNamed` | API, enroll |
 | EN-32 | `TestCrossBinary_RestartWithoutJoinOrAddrUsesPersistedState`, `fresh_enroll_persists_identity`, `idempotency_no_op_when_identity_present`, `join_enrolls_in_process_and_persists_identity`, `plan_has_two_outcomes`, `unenrolled_start_never_dials` | Relay, daemon |
 | EN-33 | `a_failure_after_the_relay_answered_says_a_node_may_be_recorded`, `fresh_enroll_fails_closed_on_key_cert_mismatch`, `join_failed_persist_leaves_no_partial_identity`, `join_interrupted_during_enrollment_persists_nothing`, `join_pin_mismatch_sends_no_token_and_leaves_nothing_on_disk`, `join_token_rejected_leaves_nothing_on_disk`, `join_unreachable_relay_leaves_nothing_on_disk`, `unconfigured_node_exits_zero`, `unenrolled_start_never_dials` | daemon |
 | EN-35 | `TestCreate_RelayLabelRefusedNamingIt`, `TestHandleMintToken_RelayLabelRefusedNamingIt`, `TestParseInitialTags` | API, enroll, registry |
@@ -239,8 +240,7 @@ Generated by `make spec-proof` from the tests that name the claim they prove.
 | EN-44 | `TestCreate_MachineAccountNamingTagsRefused`, `TestEnroll_RefusedMinterLeavesNoNodeAndBurnsNoUse`, `TestHandleMintToken_MachineAccountInitialTags`, `TestTagWriter_CheckInitialTags_DecidesBeforeAnyNodeExists`, `TestTagWriter_WriteInitialTags_RefusesAMachineMinter`, `TestValidate_StoredMachineMintedTagsRefusedBeforeAUse` | API, capability, enroll |
 | EN-45 | `TestMigration0033_ScopeLabelsBecomeTagsAndTheAuditChainVerifies`, `TestMigration0033_UnusedHumanTokenEnrollsWithItsScopeAsTags`, `TestMigration0033_UsedHumanTokenIsNotConvertedAndIsListed` | store |
 
-Unproven: EN-2, EN-16, EN-21, EN-22.
-Designed claims a test already cites: EN-31 (`TestHandleMintToken_InvalidInitialTagOrTTL`, `TestHandleMintToken_UseLimit`, `TestMinter_Mint_UseLimitMustBeNamed`).
+Unproven: EN-16, EN-21, EN-22.
 <!-- proof:end -->
 
 ## Retired
@@ -252,6 +252,8 @@ Designed claims a test already cites: EN-31 (`TestHandleMintToken_InvalidInitial
   EN-42.
 - **EN-38** — `2026-10-27` — the `relay:node-id` stamp as a claim of its own; folded into EN-41,
   which writes it and no other `relay:` label.
+- **EN-2** — `2026-10-28` — replaced by EN-31: a mint names its use limit or asks explicitly
+  for unlimited use, and a missing `max_uses` is refused rather than unlimited (#1136).
 - **EN-6** — `2026-10-25` — the join string's contract named no reader; replaced by EN-30, under
   which `relay-daemon join` consumes it and the unit start reads none.
 - **EN-14** — `2026-10-25` — the daemon enrolled at start and the join string was inert after;

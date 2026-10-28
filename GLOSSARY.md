@@ -250,10 +250,11 @@ from the command that consumes it, and each release ships an Ansible role.
 _Avoid_: enrollment kit, onboarding package
 
 **Enrollment Token**:
-The expiring, use-limited, revocable credential a daemon presents to join the fleet. Distinct
-from a Node's identity certificate: the token authorizes *enrollment* and writes any **initial
-tags** its mint names on each Node it enrolls (ADR-0050), beside the `relay:node-id` every
-enrollment stamps; the certificate is the resulting *identity*. Can only enroll, never run Operations.
+The expiring, revocable credential a daemon presents to join the fleet, use-limited unless its
+mint asks explicitly for unlimited use. Distinct from a Node's identity certificate: the token
+authorizes *enrollment* and writes any **initial tags** its mint names on each Node it enrolls
+(ADR-0050), beside the `relay:node-id` every enrollment stamps; the certificate is the
+resulting *identity*. Can only enroll, never run Operations.
 _Avoid_: API key, secret, join key
 
 **Join string**:

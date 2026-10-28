@@ -143,15 +143,15 @@ and that rule is the only thing keeping it honest.
 | # | The clause | What is actually true today | Tracked |
 |---|---|---|---|
 | 7 | Legacy `relay:` scope labels | `tag:` labels are stored on the Node record and written only through the capability layer's tag write, by a human Account at `operator` or above, on the Control API and the Console; `tag:` Selector terms resolve on every surface. A token's labels are written as initial tags, and on upgrade earlier scope labels are copied to tags (ADR-0050). What is not yet true, on Relays installed before that change only: the earlier `relay:` scope labels stay beside their tag copies, so `relay:` still holds keys no Relay action defines, and Nodes enrolled before `relay:node-id` existed lack it. Quarantine, the one later action that would write `relay:` labels, is cut from the MVP (`roadmap: relay/quarantine`). Behaviour detail in `docs/specs/selectors-and-labels.md`. | #1201 |
-| 10 | Console execution | The Console does not execute, and ADR-0052 makes that the design; what remains is dead code. The route-gating mechanism is real and tested both ways, but the composition root hardcodes it off and ships no config key to change it — deliberately, since there is no execution route to gate. Forced on, `/console/run` renders a placeholder, not a composer. Everything else in the invariant, `no_dispatch` included, is true today. | #1156 |
 
 ### Writing or amending an invariant
 
-Two rules, each learned from a gap above.
+Two rules, each learned from a gap between an invariant and the code.
 
 **A constraint, not a status report.** Write *"where X happens, it happens thus"*, never
 *"X happens."* A constraint stays true across the milestone that builds it; a status claim goes
-stale the moment it ships or slips. That is why invariants 7 and 10 are stale.
+stale the moment it ships or slips. That is why invariant 7 is stale, and why invariant 10 was
+until ADR-0052.
 
 **The property, not the mechanism that currently delivers it.** A mechanism-shaped invariant
 breaks when a second mechanism satisfies the same property differently, as the Template tier
