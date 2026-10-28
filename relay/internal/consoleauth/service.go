@@ -167,6 +167,9 @@ type Service struct {
 	throttle  *Throttle
 	audit     Auditor
 
+	// passwordChanges records ChangePassword; nil refuses the change.
+	passwordChanges PasswordChangeRecorder
+
 	stepUpWindow time.Duration
 	sleep        func(ctx context.Context, d time.Duration) error
 	log          *slog.Logger
@@ -324,15 +327,12 @@ func (s *Service) Login(ctx context.Context, a Attempt) (SessionID, Session, err
 		return SessionID{}, Session{}, &ThrottledError{RetryAfter: wait}
 	}
 
-	acct, hash, ok := s.credential(ctx, existing, found)
-	if !ok || !hash.Verify(a.Password) {
-		// The equal-time burn for every non-verification failure. When the
-		// Account resolved, hash.Verify has already done a real derivation and
-		// this is skipped — otherwise a wrong password would cost twice what a
-		// wrong username does, which is the same oracle read backwards.
-		if !ok {
-			accounts.VerifyNothing(a.Password)
-		}
+	// Read before the credential is: a password change completing after this
+	// point makes what is read below stale, and issuing refuses it.
+	epoch := s.sessions.CredentialEpoch(existing.ID)
+	// fail is the one refusal: the same throttle count, audit record and
+	// error whether the credential was wrong or went stale mid-sign-in.
+	fail := func() (SessionID, Session, error) {
 		s.throttle.Fail(a.Source, name)
 		if err := s.recordLogin(ctx, LoginEvent{
 			Kind:          auditKindLoginFailed,
@@ -344,6 +344,18 @@ func (s *Service) Login(ctx context.Context, a Attempt) (SessionID, Session, err
 			return SessionID{}, Session{}, err
 		}
 		return SessionID{}, Session{}, ErrBadCredentials
+	}
+
+	acct, stored, ok := s.credential(ctx, existing, found)
+	if !ok || !stored.Hash.Verify(a.Password) {
+		// The equal-time burn for every non-verification failure. When the
+		// Account resolved, hash.Verify has already done a real derivation and
+		// this is skipped — otherwise a wrong password would cost twice what a
+		// wrong username does, which is the same oracle read backwards.
+		if !ok {
+			accounts.VerifyNothing(a.Password)
+		}
+		return fail()
 	}
 
 	// Session fixation: whatever identifier the browser arrived holding is
@@ -359,8 +371,14 @@ func (s *Service) Login(ctx context.Context, a Attempt) (SessionID, Session, err
 		Kind:      acct.Kind,
 		Method:    MethodPassword,
 		Source:    a.Source,
+		// A temporary password opens a session that reaches only the
+		// password change (ADR-0045 decision 5).
+		Restricted: stored.Temporary(),
 	}
-	id, err := s.sessions.Issue(sess)
+	id, err := s.sessions.IssueAt(sess, epoch)
+	if errors.Is(err, ErrCredentialChanged) {
+		return fail()
+	}
 	if err != nil {
 		return SessionID{}, Session{}, err
 	}
@@ -506,6 +524,12 @@ func (s *Service) StepUp(ctx context.Context, id SessionID, password accounts.Pa
 	if err != nil {
 		return SessionID{}, err
 	}
+	// A restricted session takes no granting act, so it has no step-up to
+	// take; the password change proves its own credential (ADR-0045 decision
+	// 5). Nothing is compared and nothing is recorded.
+	if sess.Restricted {
+		return SessionID{}, ErrPasswordChangeRequired
+	}
 	name := accounts.NormalizeName(sess.Account)
 
 	if wait := s.throttle.Check(source, name); wait > 0 {
@@ -524,8 +548,8 @@ func (s *Service) StepUp(ctx context.Context, id SessionID, password accounts.Pa
 		return SessionID{}, &ThrottledError{RetryAfter: wait}
 	}
 
-	_, hash, ok := s.resolve(ctx, name)
-	if !ok || !hash.Verify(password) {
+	_, stored, ok := s.resolve(ctx, name)
+	if !ok || !stored.Hash.Verify(password) {
 		if !ok {
 			accounts.VerifyNothing(password)
 		}
@@ -578,7 +602,7 @@ func (s *Service) RequireStepUp(id SessionID) error {
 //
 // The collapse happens HERE, below the caller, on purpose: the caller cannot
 // accidentally branch on a distinction it never receives.
-func (s *Service) resolve(ctx context.Context, name string) (accounts.Account, accounts.PasswordHash, bool) {
+func (s *Service) resolve(ctx context.Context, name string) (accounts.Account, accounts.StoredPassword, bool) {
 	acct, found := s.lookup(ctx, name)
 	return s.credential(ctx, acct, found)
 }
@@ -607,29 +631,34 @@ func recordableName(acct accounts.Account, found bool) string {
 }
 
 // credential decides whether the looked-up Account may sign in and fetches its
-// password hash, collapsing every reason it may not into a single false.
-func (s *Service) credential(ctx context.Context, acct accounts.Account, found bool) (accounts.Account, accounts.PasswordHash, bool) {
+// stored password, collapsing every reason it may not into a single false. An
+// expired temporary password is one of them: it takes the same refusal as a
+// wrong password (ADR-0045 decision 3), judged by this package's clock.
+func (s *Service) credential(ctx context.Context, acct accounts.Account, found bool) (accounts.Account, accounts.StoredPassword, bool) {
 	if !found {
-		return accounts.Account{}, accounts.PasswordHash{}, false
+		return accounts.Account{}, accounts.StoredPassword{}, false
 	}
 	if !acct.Enabled {
-		return accounts.Account{}, accounts.PasswordHash{}, false
+		return accounts.Account{}, accounts.StoredPassword{}, false
 	}
 	// The Console establishes a per-HUMAN identity (ADR-0009: reusing a shared
 	// machine credential for humans yields no per-human identity, no RBAC and
 	// no per-human audit). A machine Account has no business holding a browser
 	// session even if someone sets a password on it.
 	if acct.Kind != accounts.KindHuman {
-		return accounts.Account{}, accounts.PasswordHash{}, false
+		return accounts.Account{}, accounts.StoredPassword{}, false
 	}
-	hash, err := s.passwords.GetPassword(ctx, acct.ID)
+	stored, err := s.passwords.GetPassword(ctx, acct.ID)
 	if err != nil {
 		// Includes ErrNoPassword and ErrPasswordHashMalformed. A damaged
 		// credential refuses the sign-in; it never falls through to "no
 		// password required".
-		return accounts.Account{}, accounts.PasswordHash{}, false
+		return accounts.Account{}, accounts.StoredPassword{}, false
 	}
-	return acct, hash, true
+	if stored.ExpiredAt(s.now()) {
+		return accounts.Account{}, accounts.StoredPassword{}, false
+	}
+	return acct, stored, true
 }
 
 // recordLogin writes one authentication event, tolerating a nil Auditor so

@@ -121,9 +121,11 @@ func buildLoginFixture(t *testing.T, audited bool, mutate func(*Deps)) *loginFix
 	authn := controlplane.NewAuthenticator(
 		roleVerifier{role: accounts.RoleAdmin},
 		controlplane.WithConsoleSessions(svc, controlplane.ConsoleSessionOptions{
-			Public:       Unauthenticated,
-			Scope:        SessionScope,
-			Unauthorized: UnauthorizedHandler(),
+			Public:                 Unauthenticated,
+			Scope:                  SessionScope,
+			Unauthorized:           UnauthorizedHandler(),
+			PasswordChangeOnly:     PasswordChangeOnly,
+			PasswordChangeRequired: PasswordChangeRequiredHandler(),
 		}),
 	)
 	mux := http.NewServeMux()
@@ -260,6 +262,12 @@ func TestConsole_OnlyLoginAndItsAssetsAreReachableUnauthenticated(t *testing.T) 
 		// it matches on the CLEANED path for exactly this reason.
 		"/console/nodes/../login/../",
 		"/console/login/../accounts",
+		// An encoding can decode to a public path while the router
+		// dispatches another route.
+		"/console/accounts/x%2F..%2F..%2Flogin",
+		"/console/nodes/n1%2F..%2F..%2Fassets%2Fx",
+		"/console/%6cogin",
+		"/console/assets/%2e%2e/accounts",
 	}
 
 	for _, p := range public {

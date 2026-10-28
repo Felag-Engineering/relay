@@ -94,6 +94,18 @@ var (
 	// refuse the sign-in rather than be treated as "no password set", which
 	// would turn database damage into an authentication bypass.
 	ErrPasswordHashMalformed = errors.New("accounts: stored password hash is malformed")
+
+	// ErrPasswordOwned means the Account's human has set their own password,
+	// so no control issues it a temporary one (ADR-0045 decision 4).
+	ErrPasswordOwned = errors.New("accounts: the account's human has set their own password")
+
+	// ErrMachinePassword means a password was asked of a machine Account,
+	// which never holds one from any surface (ADR-0045 decision 1).
+	ErrMachinePassword = errors.New("accounts: a machine account never holds a password")
+
+	// ErrPasswordChanged means the stored password is no longer the one that
+	// was verified: a compare-and-set on the hash found it different.
+	ErrPasswordChanged = errors.New("accounts: the stored password changed since it was verified")
 )
 
 const redactedPassword = "[REDACTED password]"
@@ -336,13 +348,17 @@ type PasswordRepository interface {
 	// existing one. Returns ErrNotFound if the Account does not exist.
 	SetPassword(ctx context.Context, accountID string, h PasswordHash) error
 
-	// GetPassword returns accountID's stored password hash, or ErrNoPassword
-	// if the Account has none (a machine Account, or an OIDC-only human).
+	// GetPassword returns accountID's stored password, or ErrNoPassword if
+	// the Account has none (a machine Account, or an OIDC-only human).
+	//
+	// It returns the temporary state with the hash, never the hash alone: a
+	// reader that got only the hash could accept an expired temporary
+	// password.
 	//
 	// ErrNoPassword and ErrNotFound are distinct here, at the repository — and
 	// the login path collapses them into one indistinguishable refusal, which
 	// is where that decision belongs.
-	GetPassword(ctx context.Context, accountID string) (PasswordHash, error)
+	GetPassword(ctx context.Context, accountID string) (StoredPassword, error)
 
 	// ClearPassword removes accountID's local password. Removing a credential
 	// is not the same act as disabling the Account (Account.Enabled), and the

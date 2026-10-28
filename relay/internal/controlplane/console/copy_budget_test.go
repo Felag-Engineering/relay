@@ -661,6 +661,7 @@ var copyBudgets = map[string]int{
 	"/console/accounts":                0,
 	"/console/accounts/{account_name}": 20,
 	"/console/new-account":             5,
+	"/console/account":                 0,
 	"/console/access":                  0,
 	"day one":                          75,
 

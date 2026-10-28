@@ -104,7 +104,45 @@ const (
 	// Account at operator or above. It takes no step-up, because a tag gates
 	// nothing (ADR-0050 decisions 2 and 5).
 	ControlTagWrite ControlAction = "tag_write"
+
+	// ControlTemporaryPasswordIssue is issuing a temporary password to a human
+	// Account, at its creation or by re-issue (ADR-0045 decisions 1, 4, 11):
+	// admin and human Account only, because an API Token carries no step-up
+	// and so could otherwise mint a human identity with a password it holds.
+	ControlTemporaryPasswordIssue ControlAction = "temporary_password_issue"
 )
+
+// TemporaryPasswordRecorder writes the Console's temporary-password acts AND
+// their audit records in one transaction: nil means both landed, an error means
+// neither did. It is kept off AuditSink, exactly like TagWriteRecorder, so a
+// sink that cannot make the two atomic cannot claim to.
+type TemporaryPasswordRecorder interface {
+	// RecordAccountCreateWithTemporaryPassword creates the Account a and its
+	// temporary password, and records account_create and
+	// password_temporary_set.
+	RecordAccountCreateWithTemporaryPassword(ctx context.Context, e TemporaryPasswordEvent, a accounts.Account) (accounts.Account, error)
+	// RecordTemporaryPasswordIssue issues e.AccountID a temporary password and
+	// records password_temporary_set.
+	RecordTemporaryPasswordIssue(ctx context.Context, e TemporaryPasswordEvent) error
+}
+
+// TemporaryPasswordEvent is one issuance. It carries the hash and never the
+// plaintext: it has no field a plaintext could occupy.
+type TemporaryPasswordEvent struct {
+	Principal Principal
+	// AccountID is the subject; empty on a create, whose Account is minted
+	// inside the write.
+	AccountID string
+	Hash      accounts.PasswordHash
+	ExpiresAt time.Time
+	Asserted  Assertions
+}
+
+// TemporaryPasswordStatusSource is the read a temporary-password status needs.
+// accounts.PasswordStatusReader satisfies it; it cannot return a hash.
+type TemporaryPasswordStatusSource interface {
+	Status(ctx context.Context, accountID string) (accounts.PasswordStatus, error)
+}
 
 // PolicyAliasSource is the read side of Policy aliases: every alias the Relay
 // holds, fingerprint to alias. It is read-only, and an alias never reaches

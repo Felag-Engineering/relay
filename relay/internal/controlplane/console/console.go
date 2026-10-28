@@ -196,6 +196,14 @@ type Deps struct {
 	// drawn only for a human (readPolicyAliases). Nil means no control renders
 	// and the route answers unavailable.
 	AliasWriter PolicyAliasWriter
+
+	// TemporaryPasswords is the Console's fifth write seam
+	// (temporarypassword.go): the same capability.TemporaryPasswords the
+	// Control API and MCP are never handed (ADR-0045 decision 11). Creating a
+	// human Account issues its temporary password through it, so a human
+	// create with this nil is refused as unavailable rather than made
+	// passwordless. Nil also means no re-issue control renders.
+	TemporaryPasswords TemporaryPasswordIssuer
 }
 
 // logger resolves Deps.Logger, falling back to slog.Default() when unset.
@@ -397,6 +405,12 @@ func Routes(d Deps) []Route {
 		{"POST", "/console/accounts/{account_id}/tokens", NavEntry{}, accounts.RoleAdmin, handleMintAPIToken},
 		{"POST", "/console/api-tokens/{token_id}/revoke", NavEntry{}, accounts.RoleAdmin, handleRevokeAPIToken},
 
+		// Re-issuing a temporary password (temporarypassword.go): three
+		// segments under /console/accounts/ like role, enabled and tokens.
+		// MinRole admin narrows to authz.ControlTemporaryPasswordIssue's floor
+		// and widens nothing; the human-only rule is the capability layer's.
+		{"POST", "/console/accounts/{account_id}/temporary-password", NavEntry{}, accounts.RoleAdmin, handleIssueTemporaryPassword},
+
 		// The confirmation pages for the three acts that reduce authority.
 		// They are reads at the same admin floor as ControlAccountRead and
 		// ControlAPITokenRead, so MinRole narrows to the capability layer's
@@ -438,6 +452,15 @@ func Routes(d Deps) []Route {
 		{"GET", LoginPath, NavEntry{}, accounts.RoleViewer, handleLoginForm},
 		{"POST", LoginPath, NavEntry{}, accounts.RoleViewer, handleLoginSubmit},
 		{"POST", LogoutPath, NavEntry{}, accounts.RoleViewer, handleLogout},
+
+		// Your account (password.go): a signed-in human changes only their own
+		// password (ADR-0045). Every role may, so both are RoleViewer and the
+		// proof of the current password is consoleauth's. /console/account is
+		// not /console/accounts, and neither path is a literal beneath a
+		// constrained wildcard. A session opened with a temporary password
+		// reaches these two and sign-out and nothing else (PasswordChangeOnly).
+		{"GET", yourAccountPath, NavEntry{}, accounts.RoleViewer, handleYourAccount},
+		{"POST", changePasswordPath, NavEntry{}, accounts.RoleViewer, handleChangePassword},
 
 		// Cancel: one of the Console's write routes. Cancel cannot run
 		// anything, only ask something already running to stop. MinRole here

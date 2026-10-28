@@ -86,6 +86,9 @@ type surfaceDeps struct {
 	accountAdmin *capability.AccountAdmin
 	// tagWriter backs api.TagWriter and console.Deps.Tags; MCP never holds it.
 	tagWriter *capability.TagWriter
+	// temporaryPasswords backs console.Deps.TemporaryPasswords only; the Control
+	// API and MCP never hold it (ADR-0045 decision 11).
+	temporaryPasswords *capability.TemporaryPasswords
 	// policyAliasAdmin backs console.Deps.AliasWriter only; the Control API and
 	// MCP never hold it.
 	policyAliasAdmin *capability.PolicyAliasAdmin
@@ -363,6 +366,10 @@ func (consoleSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		// offers the control to a human admin. Through the helper for the
 		// typed-nil reason consoleTagsOrNil documents.
 		AliasWriter: consolePolicyAliasesOrNil(d.policyAliasAdmin),
+		// TemporaryPasswords: the Console's fifth write seam. The Control API
+		// mount is not handed it, so the API creates humans with no password
+		// (ADR-0045 decision 11); MCP has no Account administration at all.
+		TemporaryPasswords: consoleTemporaryPasswordsOrNil(d.temporaryPasswords),
 	})
 	mux.Handle("/console/", console.Secure(consoleMux, d.logger))
 }
@@ -535,6 +542,15 @@ func consolePolicyAliasesOrNil(w *capability.PolicyAliasAdmin) console.PolicyAli
 		return nil
 	}
 	return w
+}
+
+// consoleTemporaryPasswordsOrNil returns t as a console.TemporaryPasswordIssuer,
+// or an untyped nil when t is nil, for the reason consoleTagsOrNil documents.
+func consoleTemporaryPasswordsOrNil(t *capability.TemporaryPasswords) console.TemporaryPasswordIssuer {
+	if t == nil {
+		return nil
+	}
+	return t
 }
 
 // readAuditorOrNil returns s as an api.ReadAuditor, or an untyped nil when s

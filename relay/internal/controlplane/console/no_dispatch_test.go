@@ -44,9 +44,10 @@ import (
 // capability.Principal, since that is how a page attributes what it renders.
 
 // writeSeamName reports whether name is a write seam the Console must never
-// recover by assertion: the package's four, JobCanceller (cancel.go),
-// AccountAdministrator (accounts_write.go), TagWriter (tags.go) and
-// PolicyAliasWriter (policyaliases.go), each in its own file so seams.go's
+// recover by assertion: the package's five, JobCanceller (cancel.go),
+// AccountAdministrator (accounts_write.go), TagWriter (tags.go),
+// PolicyAliasWriter (policyaliases.go) and TemporaryPasswordIssuer
+// (temporarypassword.go), each in its own file so seams.go's
 // "every seam here is read-only" claim stays unqualified, and ApprovalDecider,
 // which is RETIRED — the Console decides no approval (AP-80) — and stays on
 // the list so that re-declaring one and recovering it still trips. Each is
@@ -57,7 +58,7 @@ import (
 // about what a write seam IS, and a single list is what makes them.
 func writeSeamName(name string) bool {
 	switch name {
-	case "ApprovalDecider", "JobCanceller", "AccountAdministrator", "TagWriter", "PolicyAliasWriter":
+	case "ApprovalDecider", "JobCanceller", "AccountAdministrator", "TagWriter", "PolicyAliasWriter", "TemporaryPasswordIssuer":
 		return true
 	default:
 		return false

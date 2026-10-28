@@ -91,6 +91,15 @@ type consoleLane struct {
 	// sign-in page rather than a bare 401 with a WWW-Authenticate challenge no
 	// browser can satisfy.
 	unauthorized http.Handler
+
+	// passwordChangeOnly reports whether a request targets what a restricted
+	// session may reach: the password change and sign-out (ADR-0045 decision
+	// 5). passwordChangeRequired answers every other request of a restricted
+	// session. Both are supplied by the package that owns the routes, like
+	// public and scope, and Middleware applies them in the one place, so a
+	// route added later cannot forget the restriction.
+	passwordChangeOnly     func(*http.Request) bool
+	passwordChangeRequired http.Handler
 }
 
 // ConsoleSessionOptions configures the browser lane.
@@ -113,6 +122,15 @@ type ConsoleSessionOptions struct {
 	// Required for the same reason: the fallback would be a 401 the browser
 	// shows as a blank page.
 	Unauthorized http.Handler
+
+	// PasswordChangeOnly reports whether a request is one a restricted
+	// session (opened with a temporary password) may reach. Required: a nil
+	// predicate would leave a restricted session unbounded.
+	PasswordChangeOnly func(*http.Request) bool
+
+	// PasswordChangeRequired renders the answer to any other request of a
+	// restricted session. Required for the same reason.
+	PasswordChangeRequired http.Handler
 }
 
 // WithConsoleSessions makes the control plane accept human browser sessions
@@ -131,13 +149,19 @@ func WithConsoleSessions(resolver ConsoleSessionResolver, opts ConsoleSessionOpt
 		panic("controlplane: WithConsoleSessions requires a Scope predicate; without one a Console session cookie authenticates every surface on this listener, including /api/v1/raw-exec")
 	case opts.Unauthorized == nil:
 		panic("controlplane: WithConsoleSessions requires an Unauthorized handler")
+	case opts.PasswordChangeOnly == nil:
+		panic("controlplane: WithConsoleSessions requires a PasswordChangeOnly predicate; without one a session opened with a temporary password is unbounded")
+	case opts.PasswordChangeRequired == nil:
+		panic("controlplane: WithConsoleSessions requires a PasswordChangeRequired handler")
 	}
 	return func(a *Authenticator) {
 		a.console = &consoleLane{
-			resolver:     resolver,
-			public:       opts.Public,
-			scope:        opts.Scope,
-			unauthorized: opts.Unauthorized,
+			resolver:               resolver,
+			public:                 opts.Public,
+			scope:                  opts.Scope,
+			unauthorized:           opts.Unauthorized,
+			passwordChangeOnly:     opts.PasswordChangeOnly,
+			passwordChangeRequired: opts.PasswordChangeRequired,
 		}
 	}
 }
@@ -231,6 +255,12 @@ type ConsoleSession struct {
 	// logged deliberately, for the ordinary reason any credential-shaped
 	// value must not be.
 	CSRFToken consoleauth.CSRFToken
+
+	// Restricted is true for a session opened with a temporary password: it
+	// reaches only the password change and sign-out (ADR-0045 decision 5).
+	// A third narrow, non-identity field, refreshed from the session store on
+	// every resolution rather than a sign-in snapshot.
+	Restricted bool
 }
 
 // ConsoleSessionFromContext returns the ConsoleSession that Middleware
@@ -265,5 +295,6 @@ func (a *Authenticator) authenticateConsole(ctx context.Context, id consoleauth.
 		ID:              id,
 		AuthenticatedAt: sess.AuthenticatedAt,
 		CSRFToken:       a.console.resolver.CSRFToken(id),
+		Restricted:      sess.Restricted,
 	}}, true
 }

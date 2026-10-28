@@ -267,10 +267,11 @@ func TestConsole_KindLabelIsNotAChip(t *testing.T) {
 // `.Kind` (TestAccountsConfirm_NoCallerRoleComparisonLivesInTheConfirmationPages
 // pins that).
 var registryKindFiles = map[string]bool{
-	"accounts.go":         true,
-	"accounts_page.go":    true,
-	"accounts_write.go":   true,
-	"accounts_confirm.go": true,
+	"accounts.go":          true,
+	"accounts_page.go":     true,
+	"accounts_write.go":    true,
+	"accounts_confirm.go":  true,
+	"temporarypassword.go": true,
 }
 
 // TestConsole_RegistryKindIsReadOnlyByTheAccountsScreens is the kind rule made

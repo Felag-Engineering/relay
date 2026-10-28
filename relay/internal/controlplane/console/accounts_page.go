@@ -6,8 +6,10 @@ package console
 // the path only locates the page. Nothing here compares a role (invariant 10).
 
 import (
+	"context"
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/Felag-Engineering/relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/relay/relay/internal/authz"
@@ -43,6 +45,20 @@ type accountPageView struct {
 
 	// LowerHint is drawn inside the Lower role form (lowerRoleHint).
 	LowerHint string
+
+	// Temporary is nil unless this is a human Account whose human has never
+	// set their own password and the issue control is wired (ADR-0045
+	// decision 4): once they have, the section is not drawn.
+	Temporary *temporaryPasswordSection
+}
+
+// temporaryPasswordSection is the Account page's Temporary password section.
+// Exactly one of Live, Expired, None and Unreadable is true.
+type temporaryPasswordSection struct {
+	Live, Expired, None, Unreadable bool
+	ExpiresAt                       time.Time
+	// Action is empty when the state could not be read: no control renders.
+	Action string
 }
 
 // roleLines is the role panel's text, one entry per role in ascending
@@ -216,6 +232,15 @@ func handleAccount(d Deps) http.HandlerFunc {
 			}
 		}
 
+		if accountsOffered(d) && d.TemporaryPasswords != nil && a.Kind == accounts.KindHuman {
+			section, err := temporarySection(r.Context(), d, caller, a.ID, d.now())
+			if err != nil {
+				accountsReadFailed(w, p, err)
+				return
+			}
+			v.Temporary = section
+		}
+
 		tokens, tokErr := d.Accounts.APITokens(r.Context(), caller, a.ID)
 		switch {
 		case tokErr == nil:
@@ -250,6 +275,39 @@ func handleAccount(d Deps) http.HandlerFunc {
 
 		renderScreen(w, p, accountPageTmpl, v)
 	}
+}
+
+// temporarySection reads the Account's password status and describes it. It
+// returns nil when the human has set their own password (nothing is drawn), and
+// an error only for the capability layer's refusal, which the caller renders as
+// it made it. Any other failed read draws the section as unreadable, with no
+// control. Whether a temporary password is live is judged by the clock the page
+// is rendered with; the sign-in check is consoleauth's.
+func temporarySection(ctx context.Context, d Deps, caller capability.Principal, accountID string, now time.Time) (*temporaryPasswordSection, error) {
+	status, err := d.TemporaryPasswords.PasswordStatus(ctx, caller, accountID)
+	switch {
+	case errors.Is(err, authz.ErrUnauthorized):
+		return nil, err
+	case err != nil:
+		// A failed read degrades this one section, with no control; it does not
+		// refuse the page.
+		return &temporaryPasswordSection{Unreadable: true}, nil //nolint:nilerr // see the comment above
+	case status.Own:
+		return nil, nil
+	}
+	s := &temporaryPasswordSection{
+		ExpiresAt: status.TemporaryUntil,
+		Action:    issueTemporaryPasswordAction(accountID),
+	}
+	switch {
+	case status.TemporaryUntil.IsZero():
+		s.None = true
+	case now.Before(status.TemporaryUntil):
+		s.Live = true
+	default:
+		s.Expired = true
+	}
+	return s, nil
 }
 
 // handleNewAccount implements GET /console/new-account. It reads no Account
@@ -343,6 +401,26 @@ var accountPageTmpl = newScreen("account", `
   {{end}}
   {{end}}
 </section>
+
+{{with .Temporary}}
+<section class="panel" id="temporary-password">
+  <h2>Temporary password</h2>
+  {{if .Live}}<p class="rolestate">Live, expires {{stamp .ExpiresAt}}.</p>
+  {{else if .Expired}}<p class="rolestate">Expired {{stamp .ExpiresAt}}.</p>
+  {{else if .None}}<p class="rolestate">None issued.</p>
+  {{else}}<p class="note">This Account&#39;s temporary password could not be read.</p>{{end}}
+  {{with .Action}}{{if $.Write}}
+  <form class="ctlform ctlgrid" method="post" action="{{.}}">
+    <input type="hidden" name="csrf_token" value="{{$.Write.CSRFToken}}">
+    <div class="fld">
+      <label class="fldlabel" for="temp-password">{{if $.Write.StepUpFresh}}Your password to issue a temporary password &mdash; optional, you confirmed it recently{{else}}Your password &mdash; required to issue a temporary password{{end}}</label>
+      <input id="temp-password" name="password" type="password" autocomplete="current-password"{{if not $.Write.StepUpFresh}} required{{end}}>
+    </div>
+    <button class="btn grant" type="submit">Issue new temporary password</button>
+  </form>
+  {{end}}{{end}}
+</section>
+{{end}}
 
 <section class="panel" id="tokens">
   <h2>API Tokens</h2>

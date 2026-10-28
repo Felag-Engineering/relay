@@ -186,7 +186,12 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 		// console.principal, never an unattributed action.
 		if a.console != nil && a.console.public(r) {
 			if res, ok := a.authenticateRequest(r); ok {
-				next.ServeHTTP(w, r.WithContext(a.contextWith(r.Context(), res)))
+				ctx := a.contextWith(r.Context(), res)
+				if res.console != nil && res.console.Restricted && !a.console.passwordChangeOnly(r) {
+					a.console.passwordChangeRequired.ServeHTTP(w, r.WithContext(ctx))
+					return
+				}
+				next.ServeHTTP(w, r.WithContext(ctx))
 				return
 			}
 			next.ServeHTTP(w, r)
@@ -202,6 +207,15 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 			// that a credential is real and only its Account is switched off.
 			a.countRefusal(r)
 			a.refuse(w, r)
+			return
+		}
+
+		// A session opened with a temporary password reaches only the password
+		// change and sign-out (ADR-0045 decision 5). This gate and the one in the
+		// sign-in-page branch above are the only places that bound it, so a route
+		// added later cannot forget to.
+		if res.console != nil && res.console.Restricted && !a.console.passwordChangeOnly(r) {
+			a.console.passwordChangeRequired.ServeHTTP(w, r.WithContext(a.contextWith(r.Context(), res)))
 			return
 		}
 

@@ -60,10 +60,13 @@ When stdin is not a terminal, the password is its first line; no flag takes it.
 - **Token lifetime.** `--ttl <duration>` (e.g. `24h`) sets the lifetime of the token either
   form mints. Without it the token does not expire: use it to create the Accounts your callers
   need, then mint yourself a token with a lifetime and revoke this one, as below.
-- **The Console password cannot be reset.** The password `--admin` sets is the only Console
-  password any surface sets, and nothing resets it, `--recover` included. A forgotten Console
-  password is not recoverable. Other human Accounts reach the Console only through OAuth, where
-  it is configured.
+- **A Console password is never reset.** `--recover` never touches one, and no surface sets a
+  password a human has set. The password `--admin` sets is the first admin's; the admin changes
+  it under "Your account" in the Console, proving the current one. A forgotten Console
+  password is not recoverable: an admin disables the Account and creates a new one. Other
+  human Accounts get a temporary password from an admin in the Console, which they change at
+  first sign-in (ADR-0045); a human created through `POST /api/v1/accounts` has none until
+  an admin issues one from its Account page in the Console.
 
 ## The intended flow
 

@@ -359,7 +359,9 @@ func TestAccountsWrite_ASuccessfulActReturnsWhereItWasMade(t *testing.T) {
 		form url.Values
 		want string
 	}{
-		{"create", createAccountAction(), createForm("newbie", "p"), list(doneCreated)},
+		// A machine Account's create redirects as before; a human's reveals a
+		// temporary password and is covered by TestAccountsWrite_ACreateOfAHuman....
+		{"create a machine Account", createAccountAction(), url.Values{"name": {"ci-bot"}, "kind": {"machine"}, "role": {"viewer"}, "password": {"p"}}, list(doneCreated)},
 		{"raise", setAccountRoleAction(targetViewerID), url.Values{"role": {"operator"}, "password": {"p"}}, page("ana", doneRole)},
 		{"lower", setAccountRoleAction(targetOperatorID), url.Values{"role": {"viewer"}}, page("gleipnir-prod", doneRole)},
 		{"enable", setAccountEnabledAction(targetDisabledID), url.Values{"enabled": {"true"}, "password": {"p"}}, page("retired-ci", doneEnabled)},

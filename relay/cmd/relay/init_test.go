@@ -140,7 +140,7 @@ func TestInitFirstAdmin_CreatesOnceAndPrintsOnlyTheCredential(t *testing.T) {
 	if err != nil {
 		t.Fatalf("no password stored: %v", err)
 	}
-	if !hash.Verify(accounts.NewPassword(initTestPassword)) {
+	if !hash.Hash.Verify(accounts.NewPassword(initTestPassword)) {
 		t.Error("the stored password does not verify")
 	}
 	recs, err := st.Audit().List(ctx)

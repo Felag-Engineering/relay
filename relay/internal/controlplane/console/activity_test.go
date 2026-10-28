@@ -331,8 +331,8 @@ func TestActivity_AccessFamiliesAreNotKinds(t *testing.T) {
 			t.Errorf("activityTrailKinds contains Access kind %q", k)
 		}
 	}
-	if n != 15 {
-		t.Fatalf("the loop classified %d Access kinds, want exactly 15 — the assertions above proved "+
+	if n != 17 {
+		t.Fatalf("the loop classified %d Access kinds, want exactly 17 — the assertions above proved "+
 			"nothing about the rest of the vocabulary", n)
 	}
 

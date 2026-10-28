@@ -35,16 +35,33 @@ func (r *sqlitePasswords) SetPassword(ctx context.Context, accountID string, h a
 }
 
 func setPasswordExec(ctx context.Context, ex execer, accountID string, h accounts.PasswordHash, now time.Time) error {
+	return upsertPasswordExec(ctx, ex, accountID, h, "", now)
+}
+
+// setTemporaryPasswordExec stores h as accountID's temporary password, refused
+// at and after until (ADR-0045), replacing any existing one.
+func setTemporaryPasswordExec(ctx context.Context, ex execer, accountID string, h accounts.PasswordHash, until, now time.Time) error {
+	if until.IsZero() {
+		return fmt.Errorf("store: refusing a temporary password with no expiry for account %q", accountID)
+	}
+	return upsertPasswordExec(ctx, ex, accountID, h, until.UTC().Format(time.RFC3339Nano), now)
+}
+
+// upsertPasswordExec is the one write of account_passwords' hash. A host-lever
+// set writes an empty temporary_until and so clears temporary state: only a
+// temporary issue writes an instant.
+func upsertPasswordExec(ctx context.Context, ex execer, accountID string, h accounts.PasswordHash, temporaryUntil string, now time.Time) error {
 	if h.IsZero() {
 		return fmt.Errorf("store: refusing to store an empty password hash for account %q", accountID)
 	}
 	_, err := ex.ExecContext(ctx, `
-		INSERT INTO account_passwords (account_id, password_hash, updated_at)
-		VALUES (?, ?, ?)
+		INSERT INTO account_passwords (account_id, password_hash, updated_at, temporary_until)
+		VALUES (?, ?, ?, ?)
 		ON CONFLICT(account_id) DO UPDATE SET
-			password_hash = excluded.password_hash,
-			updated_at    = excluded.updated_at`,
-		accountID, h.Encoded(), now.UTC().Format(time.RFC3339Nano))
+			password_hash   = excluded.password_hash,
+			updated_at      = excluded.updated_at,
+			temporary_until = excluded.temporary_until`,
+		accountID, h.Encoded(), now.UTC().Format(time.RFC3339Nano), temporaryUntil)
 	if err != nil {
 		if isForeignKeyViolation(err) {
 			return accounts.ErrNotFound
@@ -54,24 +71,69 @@ func setPasswordExec(ctx context.Context, ex execer, accountID string, h account
 	return nil
 }
 
-// GetPassword returns accountID's stored hash, or accounts.ErrNoPassword.
+// GetPassword returns accountID's stored password, or accounts.ErrNoPassword.
 //
 // A stored value that will not parse is returned as
 // accounts.ErrPasswordHashMalformed, NOT as ErrNoPassword. The distinction is
 // the whole point of parsing here: "no credential" and "a damaged credential"
 // must not be the same answer, or corrupting a row would be an authentication
-// bypass rather than an outage.
-func (r *sqlitePasswords) GetPassword(ctx context.Context, accountID string) (accounts.PasswordHash, error) {
-	var encoded string
+// bypass rather than an outage. An unparseable temporary_until is the same
+// failure, never read as "the human's own password".
+func (r *sqlitePasswords) GetPassword(ctx context.Context, accountID string) (accounts.StoredPassword, error) {
+	var encoded, until string
 	err := r.db.QueryRowContext(ctx,
-		`SELECT password_hash FROM account_passwords WHERE account_id = ?`, accountID).Scan(&encoded)
+		`SELECT password_hash, temporary_until FROM account_passwords WHERE account_id = ?`, accountID).Scan(&encoded, &until)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		return accounts.PasswordHash{}, accounts.ErrNoPassword
+		return accounts.StoredPassword{}, accounts.ErrNoPassword
 	case err != nil:
-		return accounts.PasswordHash{}, fmt.Errorf("store: get account password: %w", err)
+		return accounts.StoredPassword{}, fmt.Errorf("store: get account password: %w", err)
 	}
-	return accounts.ParsePasswordHash(encoded)
+	h, err := accounts.ParsePasswordHash(encoded)
+	if err != nil {
+		return accounts.StoredPassword{}, err
+	}
+	sp := accounts.StoredPassword{Hash: h}
+	if until != "" {
+		sp.TemporaryUntil, err = time.Parse(time.RFC3339Nano, until)
+		if err != nil {
+			return accounts.StoredPassword{}, accounts.ErrPasswordHashMalformed
+		}
+	}
+	return sp, nil
+}
+
+// sqlitePasswordStatus implements accounts.PasswordStatusReader. It never
+// selects password_hash, so a status read cannot return one.
+type sqlitePasswordStatus struct{ db *sql.DB }
+
+var _ accounts.PasswordStatusReader = (*sqlitePasswordStatus)(nil)
+
+// Status derives eligibility from the row alone: an Account with no row, or a
+// row with a temporary_until, has not set its own password. A future lever
+// that deletes a row would make an Account eligible for a temporary password
+// again, and must decide that deliberately.
+func (r *sqlitePasswordStatus) Status(ctx context.Context, accountID string) (accounts.PasswordStatus, error) {
+	var hasRow bool
+	var until string
+	err := r.db.QueryRowContext(ctx, `
+		SELECT p.account_id IS NOT NULL, COALESCE(p.temporary_until, '')
+		FROM accounts a LEFT JOIN account_passwords p ON p.account_id = a.id
+		WHERE a.id = ?`, accountID).Scan(&hasRow, &until)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return accounts.PasswordStatus{}, accounts.ErrNotFound
+	case err != nil:
+		return accounts.PasswordStatus{}, fmt.Errorf("store: get account password status: %w", err)
+	}
+	st := accounts.PasswordStatus{Own: hasRow && until == ""}
+	if until != "" {
+		st.TemporaryUntil, err = time.Parse(time.RFC3339Nano, until)
+		if err != nil {
+			return accounts.PasswordStatus{}, accounts.ErrPasswordHashMalformed
+		}
+	}
+	return st, nil
 }
 
 // ClearPassword removes accountID's local password. Removing a row that is not

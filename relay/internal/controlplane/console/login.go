@@ -79,14 +79,17 @@ const (
 //
 // An interface rather than a *consoleauth.Service so this package stays
 // renderable in a test without a store, and so the set of things a Console
-// handler can do to a session is enumerable by reading six method names.
+// handler can do to a session is enumerable by reading seven method names.
 //
 // StepUp returns the session's ROTATED identifier: a step-up is a privilege
 // change, and the old identifier is dead on return. CSRFToken is here for the
 // same reason: a page rendered in the same response must carry the NEW id's
 // token. RequireStepUp is how the window is read — from consoleauth, never
-// decided in this package.
+// decided in this package. ChangePassword changes the session's own
+// Account's password and returns the rotated identifier, with its own proof
+// of the current password (ADR-0045); no target Account is passed.
 type Authenticator interface {
+	ChangePassword(ctx context.Context, id consoleauth.SessionID, c consoleauth.PasswordChange) (consoleauth.SessionID, error)
 	Login(ctx context.Context, a consoleauth.Attempt) (consoleauth.SessionID, consoleauth.Session, error)
 	Logout(ctx context.Context, id consoleauth.SessionID, source string) error
 	StepUp(ctx context.Context, id consoleauth.SessionID, password accounts.Password, source string) (consoleauth.SessionID, error)
@@ -104,7 +107,16 @@ type Authenticator interface {
 // login_test.go rather than described here and hoped for. It matches on the
 // cleaned path, so `/console/../console/login` and `/console/nodes/../login`
 // cannot smuggle a different route through it.
+//
+// A request whose path carries percent-encoding the standard library would not
+// emit (RawPath set) is never public: the router splits the escaped path and
+// unescapes each segment afterwards, so the decoded path can name the sign-in
+// page or an asset while the router dispatches another route. Nothing the
+// Console links to is encoded that way.
 func Unauthenticated(r *http.Request) bool {
+	if r.URL.RawPath != "" {
+		return false
+	}
 	path := cleanPath(r.URL.Path)
 	return path == LoginPath || strings.HasPrefix(path, AssetsPrefix)
 }

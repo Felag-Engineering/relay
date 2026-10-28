@@ -328,6 +328,23 @@ var consoleReadAudit = map[string]readAuditRule{
 			"api_token_mint carrying the token ID and never the Plaintext " +
 			"(accountadmin.go), and consoleauth records its own step_up event",
 	},
+	"GET " + yourAccountPath: {
+		path: "",
+		why: "renders the change-password form and reads no fleet, trail or Account data; " +
+			"POST " + changePasswordPath + " records the change",
+	},
+	"POST " + changePasswordPath: {
+		path: "",
+		why: "a write, not a read: consoleauth records the proof of the current password as " +
+			"step_up, step_up_failed or step_up_throttled and the change as password_change, " +
+			"never the password or its hash (ADR-0045)",
+	},
+	"POST /console/accounts/{account_id}/temporary-password": {
+		path: "",
+		why: "a write, not a read: the capability layer records the issue as " +
+			"password_temporary_set with its Principal and the expiry, never the password " +
+			"or its hash, and consoleauth records its own step_up event (ADR-0045)",
+	},
 	"POST /console/api-tokens/{token_id}/revoke": {
 		path: "",
 		why: "a write, not a read (#655): the capability layer records the revocation as " +

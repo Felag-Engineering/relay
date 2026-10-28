@@ -246,6 +246,7 @@ func (*RoleGate) AuthorizeApprovalDecision(_ context.Context, p capability.Princ
 //	set, rename or clear a
 //	  Policy alias               admin      query.md (+ human-only)
 //	write a tag                  operator   ADR-0050 (+ human-only)
+//	issue a temporary password   admin      ADR-0045 (+ human-only)
 //
 // The eight Account/API-Token rows are humanOnly: false — STATUS-QUO
 // PRESERVATION, not a claim that admin is already the strongest role (that
@@ -306,6 +307,8 @@ func requiredControlRole(act capability.ControlAction) (role accounts.Role, labe
 		return accounts.RoleAdmin, "setting, renaming or clearing a Policy alias", true, true
 	case capability.ControlTagWrite:
 		return accounts.RoleOperator, "writing a tag", true, true
+	case capability.ControlTemporaryPasswordIssue:
+		return accounts.RoleAdmin, "issuing a temporary password", true, true
 	default:
 		return "", "", false, false
 	}
