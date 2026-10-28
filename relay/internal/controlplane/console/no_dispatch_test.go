@@ -225,14 +225,15 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 	// nothing on its own; see the fixtures below for both directions.
 	//
 	// The approval verbs are here because the approval mechanism's WRITE HALF
-	// has NO seam in this package: the Console decides no approval and opens
-	// or closes no Grant window (AP-80). That is a fact about the TYPES the
+	// has NO seam in this package: the Console decides no approval (AP-80).
+	// That is a fact about the TYPES the
 	// composition root hands this package, not a promise about the handlers,
 	// and it only holds if a door cannot open by anonymous recovery:
 	// Deps.Approvals is wired to the *capability.Approvals that carries
-	// DecideApproval, RequestGrant and RevokeGrant (control_surfaces.go), so
-	// an anonymous-interface assertion would recover any of them without
-	// naming a banned type or adding an import. This verb list is what keeps
+	// DecideApproval (control_surfaces.go), so an anonymous-interface
+	// assertion would recover it without naming a banned type or adding an
+	// import. The Revoke and Request verbs stay listed as defence in depth
+	// against a grant-shaped write ever returning. This verb list is what keeps
 	// that door shut — the same hole for ApprovalReader that the events.Bus
 	// ban closes for the event seam.
 	//
@@ -301,9 +302,10 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 
 	// approvalListingMethod matches the READ methods of *capability.Approvals
 	// that ApprovalReader deliberately does not declare. Deps.Approvals is
-	// wired to *capability.Approvals, which carries PendingApprovals,
-	// LastApprovedOfSameShape, ActiveGrants and GrantForApproval beyond the
-	// one Approval read the seam declares. The narrowing holds only if those
+	// wired to *capability.Approvals, which carries PendingApprovals and
+	// LastApprovedOfSameShape beyond the one Approval read the seam declares.
+	// The Active and GrantFor prefixes stay listed as defence in depth against
+	// a grant read ever returning. The narrowing holds only if those
 	// cannot be recovered by anonymous assertion — the same hole the write-verb
 	// list closes for writes. Like writeSurfaceMethod, it is consulted only for
 	// type assertions and type-switch cases, so a named seam DECLARING such a
@@ -393,7 +395,7 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 					} else if approvalListingMethod(name.Name) {
 						violations = append(violations, fmt.Sprintf(
 							"%s: type-asserts to an anonymous interface declaring %s — the Console lists no "+
-								"pending approval and no Grant (AP-80); recovering a listing read from the "+
+								"pending approval (AP-80); recovering a listing read from the "+
 								"narrowed approval seam undoes that", fileName, name.Name))
 					}
 				}
@@ -414,14 +416,6 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 						// undoing that, and there is no allowlisted file.
 						violations = append(violations, fmt.Sprintf(
 							"%s references capability.ApprovalDecision — the Console decides no approval (AP-80); naming the decision argument type is the first half of undoing that",
-							fileName))
-					case "GrantRequest":
-						// The argument type of the approval mechanism's other
-						// write verb. No file in this package may open a Grant
-						// window, so this stays banned outright — never narrowed
-						// to an allowlist.
-						violations = append(violations, fmt.Sprintf(
-							"%s references capability.GrantRequest — the Console never asks for a Grant; naming the argument type of a write is the first half of undoing that",
 							fileName))
 					}
 				}

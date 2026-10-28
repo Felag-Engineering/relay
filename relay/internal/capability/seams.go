@@ -360,14 +360,8 @@ const (
 	// is how a safety feature gets switched off.
 	AuditKindApprovalRequested
 
-	// AuditKindApprovalGrantRequested is a request for a batch/window Grant
-	// (ADR-0027 decision 12) — an ask for STANDING authority over many
-	// future dispatches, written by RequestGrant. Distinct from
-	// AuditKindApprovalRequested so that kind keeps meaning "one Plan is
-	// parked": a Grant and a park have blast radii that are not comparable,
-	// and filing them together made the trail say they were the same act.
-	// ApprovalID, PlanHash and GrantID are all set on it.
-	AuditKindApprovalGrantRequested
+	// Reserved: this value is never written, so no later AuditKind value moves.
+	_
 
 	// AuditKindApprovalPendingObserved is a re-drive of a dispatch that is
 	// ALREADY parked: checkApproval found an existing pending Request
@@ -401,13 +395,11 @@ const (
 	// half of the story.
 	//
 	// ApprovalAnswer and DecisionChannel are set by DecideApproval on
-	// this kind only, and are deliberately empty on the grant-revocation entry
-	// RevokeGrant writes — a revocation is not a Decision, so nobody answered
-	// a parked Job.
+	// this kind only.
 	AuditKindApprovalDecided
 
 	// AuditKindDispatchIntent is a Job's dispatch intent: Principal,
-	// Selector, Action, JobID, ApprovalID, GrantID and Asserted are set, plus
+	// Selector, Action, JobID, ApprovalID and Asserted are set, plus
 	// CapCleared. It is recorded with the Job's Tasks in one transaction, by
 	// IntentRecorder.RecordIntent and never by AuditSink.Record, so it exists
 	// before any Task can be dispatched. Results and Reason are empty.
@@ -415,7 +407,7 @@ const (
 	AuditKindDispatchIntent
 
 	// AuditKindJobHalt is a mutate Job's halt (execution.md, Halting a failing
-	// mutation): JobID, Action, Halt, ApprovalID and GrantID are set. Principal
+	// mutation): JobID, Action, Halt and ApprovalID are set. Principal
 	// is not recorded, since the halt is the Relay's act and not an Account's
 	// (audit.KindJobHalt); Results and Reason are empty. Appended at the end so
 	// no existing AuditKind value moves.
@@ -423,14 +415,14 @@ const (
 )
 
 // ApprovalAnswer is the structured answer a Decision carries. package
-// capability may not import internal/audit (.golangci.yml's capability-imports rule),
-// so this mirrors — rather than shares — audit.ApprovalAnswer*; auditsink,
-// the one package that imports capability, audit, AND approval, pins the two
-// vocabularies equal.
+// capability may not import internal/audit (.golangci.yml's
+// capability-imports rule), so this mirrors — rather than shares —
+// audit.ApprovalAnswer*; auditsink, the one package that imports capability,
+// audit, AND approval, pins the two vocabularies equal.
 //
-// ApprovalAnswerUnrecorded (the zero value) means "no answer" — a grant
-// revocation, or an AuditEntry a future kind writes without one — and NEVER
-// "denied": "no value" is not "a value that means no".
+// ApprovalAnswerUnrecorded (the zero value) means "no answer" — an AuditEntry
+// a kind writes without one — and NEVER "denied": "no value" is not "a value
+// that means no".
 type ApprovalAnswer string
 
 const (
@@ -473,12 +465,6 @@ type AuditEntry struct {
 	ApprovalID string
 	PlanHash   string
 
-	// GrantID is the batch/window Grant that released this dispatch (ADR-0027
-	// decision 12), empty when a single-Plan approval or no gate did. Recorded
-	// so a grant's full blast radius — every Job it released, across its whole
-	// window — is one query rather than a reconstruction from timestamps.
-	GrantID string
-
 	// Asserted is the caller-claimed attribution lane, read off the
 	// request context by Execution.Run/Plan. Recorded, never consulted — see
 	// assertions.go.
@@ -486,9 +472,7 @@ type AuditEntry struct {
 
 	// ApprovalAnswer and DecisionChannel are the structured counterpart to a
 	// KindApprovalDecided entry's prose Reason (ADR-0027 decision 10).
-	// Set by DecideApproval, and deliberately EMPTY on the grant-revocation
-	// entry RevokeGrant writes — a revocation is not a Decision; nobody
-	// answered a parked Job.
+	// Set by DecideApproval.
 	//
 	// DecisionChannel is approval.Channel, not a string, so the value cannot
 	// be forged into a channel the surface did not stamp.

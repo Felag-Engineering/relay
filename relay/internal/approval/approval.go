@@ -291,9 +291,9 @@ func mergeStricter(a, b Requirement) Requirement {
 // unrestricted probe merging with a malformed one must not launder it into
 // unrestricted: the malformed side's blank entry is carried into the result
 // instead, so the merged Requirement is still AudienceMalformed() and every
-// caller that checks it (Request.Decide, capability.RequestGrant,
-// capability.checkApproval) still fires. Only when NEITHER side is malformed
-// does the "empty absorbs" shortcut apply.
+// caller that checks it (Request.Decide, capability.checkApproval) still
+// fires. Only when NEITHER side is malformed does the "empty absorbs" shortcut
+// apply.
 func unionAudience(a, b []string) []string {
 	if ValidateAudience(a) == nil && ValidateAudience(b) == nil {
 		if len(a) == 0 || len(b) == 0 {

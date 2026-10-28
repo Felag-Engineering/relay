@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/Felag-Engineering/relay/relay/internal/approval"
-	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 )
 
 var backfillNow = time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC)
@@ -43,96 +42,32 @@ func shapeKeyOf(t *testing.T, db *sql.DB, requestID string) string {
 	return key
 }
 
-// seedGrantRequest creates a Grant and its authorizing Request through the
-// normal write path, so the row the backfill later repairs is a real one.
-func seedGrantRequest(t *testing.T, st *Store, requestID, grantID string, scope approval.Scope) approval.Grant {
-	t.Helper()
+// TestBackfill_HistoricalGrantRequestGetsALegacyKey: a request that an
+// approval grant once named, whose shape_key is still empty (a database
+// upgraded from before migration 0022), is stamped like every other record:
+// its own legacy shape, never a lookup match. The approval_grants row stays.
+func TestBackfill_HistoricalGrantRequestGetsALegacyKey(t *testing.T) {
+	st, db := openStore(t)
 	ctx := context.Background()
-	g := approval.Grant{
-		ID:        grantID,
-		RequestID: requestID,
-		Scope:     scope,
-		StartsAt:  backfillNow,
-		ExpiresAt: backfillNow.Add(2 * time.Hour),
-		MaxUses:   20,
-		Summary:   approval.SummarizeScope(scope, backfillNow, backfillNow.Add(2*time.Hour), 20),
-		CreatedAt: backfillNow,
+	if err := st.Approvals().Create(ctx, pendingRequest("req-grant", "grant-subject-hash", 1, time.Hour)); err != nil {
+		t.Fatalf("create request: %v", err)
 	}
-	r := approval.NewGrantRequest(g, "acct-g", "gleipnir-prod", []string{"batch-rule"},
-		approval.Requirement{Count: 1, Channel: approval.ChannelOutOfBand, TTL: time.Hour}, backfillNow)
-	if err := st.Approvals().Create(ctx, r); err != nil {
-		t.Fatalf("create grant request: %v", err)
-	}
-	if err := st.Grants().CreateGrant(ctx, g); err != nil {
-		t.Fatalf("create grant: %v", err)
-	}
-	return g
-}
-
-func backfillScope() approval.Scope {
-	return approval.Scope{
-		Account:    "gleipnir-prod",
-		RiskClass:  jobs.RiskClassMutate,
-		MaxFanOut:  10,
-		Operations: []string{"service.restart", "pkg.install"},
-		RawExec:    true,
-	}
-}
-
-// TestBackfill_RecomputesGrantRequestsExactly is acceptance 5 for the case
-// where the truth survives: a Grant's Scope is fully stored, so its shape key
-// is recomputed rather than guessed — and it comes out equal to what a freshly
-// created identical Grant gets, because the backfill calls the SAME function
-// the write path calls.
-func TestBackfill_RecomputesGrantRequestsExactly(t *testing.T) {
-	st, db := openStore(t)
-	scope := backfillScope()
-	g := seedGrantRequest(t, st, "req-grant", "grant-1", scope)
-
-	fresh := shapeKeyOf(t, db, "req-grant")
+	insertHistoricalGrant(t, db, "req-grant", "grant-1")
 	blankShapeKeys(t, db)
-	if err := backfillShapeKeys(context.Background(), db); err != nil {
+
+	if err := backfillShapeKeys(ctx, db); err != nil {
 		t.Fatalf("backfillShapeKeys: %v", err)
 	}
 
-	restored := shapeKeyOf(t, db, "req-grant")
-	if restored != approval.HashGrantShape(scope) {
-		t.Errorf("restored key = %q, want HashGrantShape(scope) = %q", restored, approval.HashGrantShape(scope))
+	if got, want := shapeKeyOf(t, db, "req-grant"), approval.LegacyShapeKey("req-grant"); got != want {
+		t.Errorf("historical grant request key = %q, want the legacy key %q", got, want)
 	}
-	if restored != g.ShapeKey() {
-		t.Errorf("restored key = %q, want the Grant's own key %q", restored, g.ShapeKey())
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM approval_grants WHERE grant_id = 'grant-1'`).Scan(&n); err != nil {
+		t.Fatalf("count grants: %v", err)
 	}
-	if restored != fresh {
-		t.Errorf("restored key = %q, want the key a fresh write produced %q", restored, fresh)
-	}
-	if approval.IsLegacyShapeKey(restored) {
-		t.Error("a recomputable grant request was stamped legacy")
-	}
-}
-
-// TestBackfill_RecomputesALegacyPinnedGrantRequestExactly is
-// TestBackfill_RecomputesGrantRequestsExactly's sibling for a pre-#482 row: a
-// Grant stored with a namespace pin (scope_selector_namespace still holding a
-// value) must recompute to exactly the shape key a Grant carrying that value
-// as LegacyNamespacePin would produce — because that is what scanGrant reads
-// it back as.
-func TestBackfill_RecomputesALegacyPinnedGrantRequestExactly(t *testing.T) {
-	st, db := openStore(t)
-	scope := backfillScope()
-	seedGrantRequest(t, st, "req-grant", "grant-1", scope)
-	if _, err := db.Exec(`UPDATE approval_grants SET scope_selector_namespace = 'node' WHERE grant_id = 'grant-1'`); err != nil {
-		t.Fatalf("pin the stored grant: %v", err)
-	}
-
-	blankShapeKeys(t, db)
-	if err := backfillShapeKeys(context.Background(), db); err != nil {
-		t.Fatalf("backfillShapeKeys: %v", err)
-	}
-
-	restored := shapeKeyOf(t, db, "req-grant")
-	want := approval.Grant{Scope: scope, LegacyNamespacePin: "node"}.ShapeKey()
-	if restored != want {
-		t.Errorf("restored key = %q, want the legacy-pinned Grant's own key %q", restored, want)
+	if n != 1 {
+		t.Errorf("approval_grants rows for grant-1 = %d, want 1: the backfill must leave history alone", n)
 	}
 }
 
@@ -141,7 +76,10 @@ func TestBackfill_RecomputesALegacyPinnedGrantRequestExactly(t *testing.T) {
 // guard is what makes running this on every Open safe.
 func TestBackfill_IsIdempotent(t *testing.T) {
 	st, db := openStore(t)
-	seedGrantRequest(t, st, "req-grant", "grant-1", backfillScope())
+	if err := st.Approvals().Create(context.Background(),
+		pendingRequest("req-grant", "hash-grant", 1, time.Hour)); err != nil {
+		t.Fatalf("create grant request: %v", err)
+	}
 	if err := st.Approvals().Create(context.Background(),
 		pendingRequest("req-plan", "hash-plan", 1, time.Hour)); err != nil {
 		t.Fatalf("create plan request: %v", err)
@@ -215,29 +153,6 @@ func TestBackfill_PlanRequestsGetUniqueLegacyKeys(t *testing.T) {
 	// record whose shape nobody knows.
 	if _, err := st.Approvals().LastApprovedByShape(ctx, a, ""); !errors.Is(err, approval.ErrNotFound) {
 		t.Errorf("LastApprovedByShape(legacy key) = %v, want ErrNotFound", err)
-	}
-}
-
-// TestBackfill_GrantRequestsAreNotLegacyStamped: with both kinds present, Pass
-// A wins for the grant request. Reordering or merging the two passes would let
-// the legacy fill consume the rows that CAN be recomputed.
-func TestBackfill_GrantRequestsAreNotLegacyStamped(t *testing.T) {
-	st, db := openStore(t)
-	ctx := context.Background()
-	seedGrantRequest(t, st, "req-grant", "grant-1", backfillScope())
-	if err := st.Approvals().Create(ctx, pendingRequest("req-plan", "hash-plan", 1, time.Hour)); err != nil {
-		t.Fatalf("create plan request: %v", err)
-	}
-	blankShapeKeys(t, db)
-	if err := backfillShapeKeys(ctx, db); err != nil {
-		t.Fatalf("backfillShapeKeys: %v", err)
-	}
-
-	if got, want := shapeKeyOf(t, db, "req-grant"), approval.HashGrantShape(backfillScope()); got != want {
-		t.Errorf("grant request key = %q, want the recomputed %q", got, want)
-	}
-	if got, want := shapeKeyOf(t, db, "req-plan"), approval.LegacyShapeKey("req-plan"); got != want {
-		t.Errorf("plan request key = %q, want %q", got, want)
 	}
 }
 

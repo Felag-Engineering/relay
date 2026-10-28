@@ -417,9 +417,8 @@ func TestStoredAudienceWithBlankEntryFailsClosed(t *testing.T) {
 		// column of exactly "" (from a stored Audience of [""]) scans back
 		// byte-identical to a genuinely unrestricted audience, so that legacy
 		// row can never be distinguished from an intentionally unrestricted
-		// one by any read, so it is not — and cannot be — exercised here;
-		// operators who had such a rule should revoke any outstanding
-		// Approval grants approved under it (#608). "," and " " also fail
+		// one by any read, so it is not — and cannot be — exercised here.
+		// "," and " " also fail
 		// closed, but their stored column scans to an audience with no
 		// named account at all either way.
 		{name: "trailing comma", column: "ana,"},

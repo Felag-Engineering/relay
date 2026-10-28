@@ -193,11 +193,6 @@ type Deps struct {
 	// separate interface so this package's seams stay named after what each
 	// route needs.
 	Approvals ApprovalService
-	// ApprovalGrants backs the batch/window grant routes (ADR-0027
-	// decision 12) — the same *capability.Approvals again, named separately for
-	// the same reason Approvals is. Nil disables the routes with a 500 rather
-	// than silently accepting requests that would grant nothing.
-	ApprovalGrants ApprovalGrantService
 	// Reads records read-access events for the Job read route (ADR-0025).
 	// Nil skips recording, so tests and any unwired surface work; the
 	// composition root always supplies it.
@@ -299,17 +294,6 @@ func Routes() []Route {
 		{"GET", "/api/v1/approvals", handleListApprovals},
 		{"GET", "/api/v1/approvals/{id}", handleGetApproval},
 		{"POST", "/api/v1/approvals/{id}/decision", handleDecideApproval},
-
-		// Batch/window approvals (ADR-0027 decision 12). Note what is
-		// NOT here: a route that approves a grant. Requesting one creates an
-		// ordinary approval Request, answered through the decision route above
-		// — so quorum, audience, requester exclusion, and channel strength are
-		// the same code for a window as for a single dispatch, and cannot drift
-		// apart. See approval_grants.go.
-		{"POST", "/api/v1/approval-grants", handleCreateGrant},
-		{"GET", "/api/v1/approval-grants", handleListGrants},
-		{"GET", "/api/v1/approval-grants/{id}", handleGetGrant},
-		{"POST", "/api/v1/approval-grants/{id}/revoke", handleRevokeGrant},
 	}
 }
 

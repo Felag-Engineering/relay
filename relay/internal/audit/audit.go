@@ -122,27 +122,10 @@ const (
 	// hammering a parked request, just not filed as repeat asks.
 	KindApprovalPendingObserved = "approval_pending_observed"
 
-	// KindApprovalGrantRequested is a request for a batch/window Grant
-	// (ADR-0027 decision 12): an ask for STANDING authority over many future
-	// dispatches, not a single Plan waiting for a single answer.
-	//
-	// Distinct from KindApprovalRequested for the reason
-	// KindApprovalPendingObserved is split out of it — so that kind keeps
-	// meaning one thing. Filed together, "somebody asked for a window covering every
-	// mutate on the fleet for the next hour" rendered identically to "one
-	// dispatch is parked", and the blast radii are not comparable: a Grant
-	// releases many Jobs, a park releases one.
-	//
-	// GrantID distinguishes them structurally and always has. A separate kind
-	// is the stronger form of the same fact: a surface that forgets to check
-	// GrantID renders a wrong sentence, whereas one that forgets this kind
-	// fails audit's partition test instead (see Kinds).
-	//
-	// This is the ASK, not the grant of it. The Grant row exists from this
-	// moment but cannot be claimed until the Request reaches approved, which
-	// the store's claim query enforces — so the window this names is still
-	// shut. RevokeGrant's closing of it is a KindApprovalDecided carrying a
-	// GrantID, not this kind.
+	// KindApprovalGrantRequested is an approval-grant request. No current path
+	// writes one (docs/specs/approval.md AP-84); the kind stays so records
+	// written while grants existed still parse, partition and render, and it is
+	// listed in allKinds for that reason.
 	KindApprovalGrantRequested = "approval_grant_requested"
 
 	// KindApprovalExpired is a parked dispatch that ran out of time
@@ -301,7 +284,7 @@ const (
 
 // ApprovalAnswer values name the structured answer a KindApprovalDecided
 // Record carries (ADR-0027 decision 10). EMPTY means "this row records
-// no approve/deny answer" — a grant revocation, or an older row — and
+// no approve/deny answer" — a historical grant revocation, or an older row — and
 // NEVER "denied": conflating "no value" with "a value that means no" is a
 // known bug class. Values are byte-identical to
 // approval.StateApproved/StateDenied.String(); this
@@ -512,24 +495,17 @@ type Record struct {
 	Stderr    []byte
 	Truncated bool
 
-	// ApprovalID and GrantID join a record to the approval callout that
-	// authorized it (ADR-0027). Both are empty for the overwhelming majority of
-	// records, and empty means "no approval was involved" — never "unknown".
+	// ApprovalID joins a record to the approval that authorized it
+	// (ADR-0027). It is empty for the overwhelming majority of records, and
+	// empty means "no approval was involved" — never "unknown". It is a column
+	// rather than prose in Reason because "what ran under this approval" must
+	// be a WHERE clause. It is set on a park, on a decision, and on every
+	// dispatch the approval released.
 	//
-	// They exist as columns rather than as prose in Reason because the
-	// questions they answer are asked under time pressure and must be a WHERE
-	// clause: "what ran under this approval", and — for a batch/window Grant,
-	// which covers many dispatches — "what did that window actually release".
-	//
-	// ApprovalID is set on a park, on a decision, and on every dispatch either
-	// a single approval or a Grant released. For a Grant it is the Grant's own
-	// authorizing Request, which is what makes every covered Job share one
-	// approval ID.
-	//
-	// GrantID is set only when a Grant released the dispatch. Its presence is
-	// the difference between "a human approved THIS plan" and "a human approved
-	// a window this plan fell inside" — a distinction an auditor needs and
-	// cannot recover from ApprovalID alone.
+	// GrantID is set on historical records that an approval grant released or
+	// revoked; no current path sets it (docs/specs/approval.md AP-84). The
+	// column and the field stay so those records read back and the audit chain
+	// over them still verifies.
 	ApprovalID string
 	GrantID    string
 
@@ -602,14 +578,14 @@ type Repository interface {
 	// ByApproval returns all Records authorized by an approval Request,
 	// ordered by Timestamp, ties broken by ID — including the park and the
 	// decision themselves, so
-	// one query answers "who asked, who approved, and what then ran". For a
-	// batch/window Grant's Request this is every dispatch the window released,
-	// and each released Job's dispatch_intent row.
+	// one query answers "who asked, who approved, and what then ran".
 	ByApproval(ctx context.Context, approvalID string) ([]Record, error)
 
-	// ByGrant returns all Records released by a batch/window Grant, ordered by
-	// Timestamp, ties broken by ID. Narrower than ByApproval on the same Request: this is
-	// the dispatch outcome rows and each released Job's dispatch_intent row.
+	// ByGrant returns the historical Records released by an approval grant,
+	// ordered by Timestamp, ties broken by ID. No current path writes one
+	// (docs/specs/approval.md AP-84); it reads records written while grants
+	// existed. Narrower than ByApproval on the same Request: this is the
+	// dispatch outcome rows and each released Job's dispatch_intent row.
 	// Filter by kind for one or the other.
 	ByGrant(ctx context.Context, grantID string) ([]Record, error)
 

@@ -92,17 +92,15 @@ type AuditReader interface {
 
 // ApprovalReader is Job detail's read of the one approval record a dispatch
 // names (ADR-0027), so the Job header can show its approvers, rule, quorum and
-// plan hash. It declares no PendingApprovals, LastApprovedOfSameShape,
-// ActiveGrants or GrantForApproval, so no Console screen lists pending requests
-// or Grants (AP-80). *capability.Approvals satisfies it and still carries those
-// methods. The no_dispatch guard refuses a type assertion or type-switch case
-// that recovers them through an anonymous interface or a named local interface
-// declaring one of them; it does not catch a type declared in another package.
+// plan hash. It declares no PendingApprovals or LastApprovedOfSameShape, so no
+// Console screen lists pending requests (AP-80). *capability.Approvals
+// satisfies it and still carries those methods. The no_dispatch guard refuses a
+// type assertion or type-switch case that recovers them through an anonymous
+// interface or a named local interface declaring one of them; it does not
+// catch a type declared in another package.
 //
-// DecideApproval, RequestGrant and RevokeGrant are absent from every seam this
-// package holds. RevokeGrant is worth naming explicitly because it is the one a
-// future editor is most likely to add — closing a window feels safer than
-// opening one — and it is still a write on the approval mechanism.
+// DecideApproval is absent from every seam this package holds: it is a write on
+// the approval mechanism.
 type ApprovalReader interface {
 	Approval(ctx context.Context, id string) (approval.Request, error)
 }

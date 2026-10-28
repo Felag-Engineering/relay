@@ -555,7 +555,7 @@ func newCapService(t *testing.T, s capSeams) *capability.Execution {
 	if err != nil {
 		t.Fatalf("approval.NewGate: %v", err)
 	}
-	appr := capability.NewApprovals(rec, gate, unreachableApprovalStore{}, denyApprovalDecisions{}, nil, nil, nil, nil)
+	appr := capability.NewApprovals(rec, gate, unreachableApprovalStore{}, denyApprovalDecisions{}, nil, nil, nil)
 	return capability.NewExecution(ctl, read, appr, capability.NewBlastCap(settings), nil, s.jobsRepo, s.tasksRepo, s.conduit, settings, nil, nil)
 }
 

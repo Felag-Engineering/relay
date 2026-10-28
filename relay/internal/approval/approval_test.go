@@ -738,7 +738,7 @@ func TestUnionAudienceNeverLetsAnEmptySideAbsorbAMalformedOne(t *testing.T) {
 }
 
 // TestMergeStricterPreservesAMalformedAudience is the same property one level
-// up: Gate.Evaluate and RequirementForScope both merge matching Requirements
+// up: Gate.Evaluate merges matching Requirements
 // with mergeStricter, and a malformed audience on either side must make the
 // MERGED Requirement malformed too, not just the unmerged inputs.
 func TestMergeStricterPreservesAMalformedAudience(t *testing.T) {
@@ -846,5 +846,22 @@ func TestRequest_ReleaseRefusesAnUnsatisfiedRequest(t *testing.T) {
 				t.Errorf("JobID = %q, want unchanged %q", got.JobID, tc.r.JobID)
 			}
 		})
+	}
+}
+
+// TestGateRuleAcceptsExactlyTheKnownNamespaces pins that Rule.Validate accepts
+// exactly knownNamespaces and nothing else. Rule.Validate consults
+// knownNamespaces directly rather than a second hardcoded set (gate.go), so
+// there is one vocabulary to drift.
+func TestGateRuleAcceptsExactlyTheKnownNamespaces(t *testing.T) {
+	for _, ns := range knownNamespaces {
+		r := Rule{Name: "r", Match: Match{SelectorNamespace: ns}, Require: Requirement{Count: 1}}
+		if err := r.Validate(); err != nil {
+			t.Errorf("a gate rule matching selector_namespace %q did not validate: %v", ns, err)
+		}
+	}
+	bad := Rule{Name: "r", Match: Match{SelectorNamespace: "tenant"}, Require: Requirement{Count: 1}}
+	if err := bad.Validate(); err == nil {
+		t.Error("a gate rule matching an unknown namespace validated; knownNamespaces has drifted from Rule.Validate's vocabulary")
 	}
 }

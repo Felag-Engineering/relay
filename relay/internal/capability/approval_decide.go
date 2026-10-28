@@ -307,7 +307,7 @@ func requestOnRefusal(r approval.Request, err error) approval.Request {
 // ApprovalAnswer vocabulary. There is no third case: DecideApproval
 // only ever calls this with a real decider's answer, so
 // ApprovalAnswerUnrecorded is reserved for entries that never went through
-// here at all (RevokeGrant's revocation).
+// here at all.
 func approvalAnswerOf(approve bool) ApprovalAnswer {
 	if approve {
 		return ApprovalAnswerApproved

@@ -91,7 +91,7 @@ import (
 // ApprovalDecider records a decision against a parked approval Request.
 //
 // Deliberately one method wide. The MCP surface has no business reading the
-// approval queue through this seam, listing grants, or reaching anything else
+// approval queue through this seam or reaching anything else
 // on capability.Approvals — a narrow interface is what keeps "this file may
 // record a decision" from drifting into "this file has the approval API".
 type ApprovalDecider interface {

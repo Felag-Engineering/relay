@@ -701,15 +701,11 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 	readLane := capability.NewReadLane(rec, reg, queries, queries, policyCache, vocabCache, live, nil, capability.WithPolicyAliasSource(st.PolicyAliases()))
 
 	// The approval callout (ADR-0027), over the one Recorder and the same
-	// RoleGate as dispatch. Batch/window grants (ADR-0027 decision
-	// 12) are wired unconditionally alongside the gate: a Grant can only ever be
-	// created through an approval Request the gate itself required, so with no
-	// rules configured nothing is gated, nothing can be granted, and the store
-	// simply holds no rows. MCP task handles (ADR-0028) are wired for the
-	// same reason: a handle is only ever minted for a dispatch the gate parked,
-	// so with no rules configured nothing parks and the table stays empty. A nil
-	// clock is the real one.
-	approvals := capability.NewApprovals(rec, approvalGate, st.Approvals(), roleGate, st.Grants(), st.MCPTasks(), liveNotifier{live}, nil)
+	// RoleGate as dispatch. MCP task handles (ADR-0028) are wired
+	// unconditionally: a handle is only ever minted for a dispatch the gate
+	// parked, so with no rules configured nothing parks and the table stays
+	// empty. A nil clock is the real one.
+	approvals := capability.NewApprovals(rec, approvalGate, st.Approvals(), roleGate, st.MCPTasks(), liveNotifier{live}, nil)
 
 	var execution *capability.Execution
 	var controlSrv *controlplane.Server

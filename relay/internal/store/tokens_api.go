@@ -140,3 +140,12 @@ func scanToken(s rowScanner) (accounts.APIToken, error) {
 		RevokedAt:  revoked,
 	}, nil
 }
+
+// nullTime renders the zero time as SQL NULL, so "never revoked" is an absent
+// value rather than year 1 — which the revoked_at IS NULL guards depend on.
+func nullTime(t time.Time) any {
+	if t.IsZero() {
+		return nil
+	}
+	return formatTime(roundTripTime(t))
+}

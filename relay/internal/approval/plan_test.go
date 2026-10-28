@@ -3,7 +3,6 @@ package approval
 import (
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 )
@@ -249,47 +248,31 @@ func TestHashPlanIgnoresNilVersusEmptyOperationArgs(t *testing.T) {
 	}
 }
 
-// TestPlanHashAndScopeHashNeverCollide: HashPlan and HashScope both write into
-// the same approval_requests.plan_hash column, and ByPlanHash
-// (capability/approval.go) is the release lookup — a collision between the
-// two spaces would let an approved GRANT REQUEST release an ordinary
-// dispatch. Modeled on TestPlanAndGrantShapesNeverCollide (shape_test.go).
+// TestPlanHashNeverWritesTheGrantKind: historical grant-request rows in
+// approval_requests.plan_hash were hashed under kind "grant", and ByPlanHash
+// (capability/approval.go) is the release lookup, so a HashPlan preimage must
+// never start with that kind value. Otherwise a historical approved grant
+// request could release an ordinary dispatch.
 //
 // The loop below sweeps a bounded range of jobs.ActionKind values, including
 // a few out-of-range ones, but a bounded sweep can never be exhaustive over
-// every int the Go type permits — a future `case jobs.ActionKind(7): return
-// "grant"` outside this range would slip past it undetected. The real
-// guarantee this test rests on is ActionKindName's default arm (plan.go):
-// every kind this build does not explicitly recognize falls through to that
-// arm, which returns the literal "unspecified", never "grant". That is what
-// makes "grant" exclusively HashScope's own literal "kind" field value
-// (grant.go), so the two preimage spaces diverge at byte zero for every
-// ActionKind this build can produce or ever read back from storage. The
-// second assertion below pins that default-arm literal directly, using a
-// kind value chosen to be far outside any plausible named constant so it is
-// guaranteed to hit default regardless of how many named cases exist by the
-// time this test runs; the bounded sweep is defense in depth on top of it,
-// not the guarantee itself.
-func TestPlanHashAndScopeHashNeverCollide(t *testing.T) {
+// every int the Go type permits. The real guarantee this test rests on is
+// ActionKindName's default arm (plan.go): every kind this build does not
+// explicitly recognize falls through to that arm, which returns the literal
+// "unspecified", never "grant". The second assertion pins that default-arm
+// literal directly, using a kind value far outside any plausible named
+// constant so it hits default however many named cases exist; the bounded
+// sweep is defense in depth on top of it, not the guarantee itself.
+func TestPlanHashNeverWritesTheGrantKind(t *testing.T) {
 	for k := jobs.ActionKind(-2); k <= 5; k++ {
 		if name := ActionKindName(k); name == "grant" {
-			t.Errorf("ActionKindName(%d) = %q, want anything but \"grant\" — HashScope reserves that kind value", int(k), name)
+			t.Errorf("ActionKindName(%d) = %q, want anything but \"grant\" — historical grant-request plan hashes use that kind value", int(k), name)
 		}
 	}
 
 	if name := ActionKindName(jobs.ActionKind(1 << 20)); name != "unspecified" {
 		t.Errorf("ActionKindName(1<<20) = %q, want %q — this pins the switch's default arm, "+
 			"which is the actual guarantee this test relies on, not the bounded sweep above", name, "unspecified")
-	}
-
-	// One sampled digest inequality on top of the structural proof above.
-	planHash := HashPlan(restart("nginx"), []string{"node-a"})
-	scopeHash := HashScope(Scope{
-		Account: "acct", RiskClass: jobs.RiskClassMutate,
-		Operations: []string{"service.restart"}, MaxFanOut: 10,
-	}, t0, t0.Add(time.Hour), 5)
-	if planHash == scopeHash {
-		t.Error("a HashPlan digest collided with a HashScope digest")
 	}
 }
 

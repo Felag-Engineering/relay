@@ -21,9 +21,8 @@ import (
 // Three rules govern everything below, and each is load-bearing:
 //
 //  1. THE SHAPE KEY IS NEVER AN AUTHORIZATION OR RELEASE LOOKUP. A dispatch
-//     proceeds on a matching PlanHash or on a claimed Grant whose Scope covers
-//     it (see capability.checkApproval), and on nothing else; HashScope is what
-//     binds the Grant's own approval. The shape key deliberately excludes the
+//     proceeds on a matching PlanHash (see capability.checkApproval) and on
+//     nothing else. The shape key deliberately excludes the
 //     resolved fan-out, so a key match means "these look alike", never "this
 //     was approved". A release path that consulted it would be an approval-gate
 //     bypass, and capability's TestSameShapeDifferentPlanStillParks exists to
@@ -43,21 +42,17 @@ import (
 //     in HashPlanShape is case-folded, whitespace-trimmed, or Unicode-
 //     normalised, because Selector.Matches is an exact map lookup and the
 //     daemon compares argument values byte-for-byte: folding here would let two
-//     Selectors that target DIFFERENT Nodes share a key. The single exception
-//     is HashGrantShape's account and Operation names, which Grant.Covers
-//     itself compares with strings.EqualFold.
+//     Selectors that target DIFFERENT Nodes share a key.
 //
 // The writer primitives (writeField, writeCount) live in encoding.go and are
-// shared with plan.go's HashPlan and grant.go's HashScope. The primitives
-// themselves are golden-pinned (TestEncodingFormatIsPinned), HashScope's
-// output is golden-pinned separately (TestHashScopeDigestIsPinned, because it
-// must not move), and HashPlan's is instead held to the injectivity property
-// (TestHashPlanIsInjectiveOverDistinctPlans) rather than a literal digest.
-// So a shared edit to either primitive shows up as a failing test rather than
-// a silent re-point of the stored bindings.
+// shared with plan.go's HashPlan. The primitives themselves are golden-pinned
+// (TestEncodingFormatIsPinned), and HashPlan's output is instead held to the
+// injectivity property (TestHashPlanIsInjectiveOverDistinctPlans) rather than
+// a literal digest. So a shared edit to either primitive shows up as a failing
+// test rather than a silent re-point of the stored bindings.
 //
 // HashPlan uses the same argument KEY/VALUE split as this file — the key and
-// the value are separate length-prefixed fields (arg.k, arg.v). All three
+// the value are separate length-prefixed fields (arg.k, arg.v). Both
 // constructions in this package share encoding.go's primitives and none of
 // them folds caller-controlled bytes into a field name.
 
@@ -223,57 +218,4 @@ func canonicalTerms(sel []SelectorTerm) []SelectorTerm {
 		out = append(out, t)
 	}
 	return out
-}
-
-// HashGrantShape hashes a Grant's Scope minus the bounds that are SCALE: the
-// window, the use limit, and the fan-out ceiling.
-//
-// Excluding MaxFanOut is deliberate and is the most valuable half of the
-// feature here. D10 excludes fan-out, and a ceiling is fan-out: "same scope,
-// ceiling grew 10 -> 500" is precisely the diff the callout exists to shout,
-// and it only renders if the two records share a key. HashScope — the Grant's
-// actual approval binding — still covers all three, so none of them can move
-// without invalidating the approval.
-//
-// Account and Operation names are lower-cased HERE AND ONLY HERE, because
-// Grant.Covers compares both with strings.EqualFold.
-//
-// The namespace field is always empty for a Scope (AP-33: a Scope has no
-// namespace term). It carries a legacy Grant's pin only through
-// [Grant.ShapeKey], via hashGrantShape below, so every stored shape_key
-// (pinned or not) recomputes byte-identically.
-func HashGrantShape(s Scope) string { return hashGrantShape(s, "") }
-
-// hashGrantShape is HashGrantShape's body, taking the legacy namespace pin
-// separately since it is a Grant-level fact and not part of Scope.
-func hashGrantShape(s Scope, legacyNamespacePin string) string {
-	h := sha256.New()
-
-	writeField(h, "shape", ShapeKeyVersion)
-	writeField(h, "domain", "grant")
-	writeField(h, "risk", jobs.RiskClassName(s.RiskClass))
-	writeField(h, "account", strings.ToLower(s.Account))
-	writeField(h, "namespace", legacyNamespacePin)
-	fmt.Fprintf(h, "raw_exec=%t\n", s.RawExec)
-
-	ops := make([]string, 0, len(s.Operations))
-	for _, op := range s.Operations {
-		ops = append(ops, strings.ToLower(op))
-	}
-	sort.Strings(ops)
-	// De-duplicated AFTER folding, so "NGINX" and "nginx" — which Covers treats
-	// as one Operation — do not read as two.
-	deduped := ops[:0]
-	for i, op := range ops {
-		if i > 0 && op == ops[i-1] {
-			continue
-		}
-		deduped = append(deduped, op)
-	}
-	writeCount(h, "ops", len(deduped))
-	for _, op := range deduped {
-		writeField(h, "op", op)
-	}
-
-	return hex.EncodeToString(h.Sum(nil))
 }

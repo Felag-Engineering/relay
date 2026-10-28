@@ -132,7 +132,7 @@ func TestNewExecution_RefusesSplitOperatorSettings(t *testing.T) {
 		rec := NewRecorder(&intentSpySink{&spyAuditSink{}, &nonAtomicIntents{tr: tr}}, nil, nil)
 		ctl := NewControl(rec, &spyAuthorizer{}, &fakeFreezeStore{})
 		read := newReadLane(rec, registry.NewInMemory(), nil, nil, nil, nil, readSrc, nil)
-		appr := newApprovals(rec, noopApprovalGate{}, nil, nil, nil, nil, noopApprovalNotifier{}, nil)
+		appr := newApprovals(rec, noopApprovalGate{}, nil, nil, nil, noopApprovalNotifier{}, nil)
 		NewExecution(ctl, read, appr, NewBlastCap(capSrc), nil, jr, tr, newFakeConduit(nil), execSrc, nil, nil)
 	}
 	wantPanic := func(t *testing.T, want string, f func()) {

@@ -74,8 +74,8 @@ type surfaceDeps struct {
 	// execution is Execution: mcp Executor and TaskResolver; api Exec; console
 	// Cancel.
 	execution *capability.Execution
-	// approvals is the approval callout: mcp ApprovalDecider; api Approvals and
-	// ApprovalGrants; console Approvals (Job detail's read).
+	// approvals is the approval callout: mcp ApprovalDecider; api Approvals; console
+	// Approvals (Job detail's read).
 	approvals *capability.Approvals
 	// freezeControl is the Freeze and its role floor (api.Freezer).
 	freezeControl *capability.Control
@@ -260,11 +260,6 @@ func (apiSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		// arrives, so the API endpoint and the MCP elicitation envelope both
 		// reach it through this one object.
 		Approvals: d.approvals,
-		// Batch/window approval grants (ADR-0027 decision 12) — the same
-		// object once more. Requesting a grant creates an ordinary approval
-		// Request answered through the decision route above, so the two share
-		// one quorum implementation rather than each carrying its own.
-		ApprovalGrants: d.approvals,
 		// Read auditing for the Job read route (ADR-0025). *auditsink.Sink
 		// satisfies api.ReadAuditor directly — no adapter needed here, unlike
 		// mcp's readAuditor below, because package api may name capability

@@ -162,7 +162,7 @@ func installDevHarness(cfg Config, deps *appDeps) (stop func(), err error) {
 	// of which consults them.
 	q := auditquery.New(deps.store.AuditQueries(), deps.store.JobQueries())
 	read := capability.NewReadLane(rec, deps.registry, q, q, nil, nil, deps.live, nil)
-	approvals := capability.NewApprovals(rec, gate, deps.store.Approvals(), devHarnessAuthorizer{}, nil, nil, nil, nil)
+	approvals := capability.NewApprovals(rec, gate, deps.store.Approvals(), devHarnessAuthorizer{}, nil, nil, nil)
 	execution := capability.NewExecution(ctl, read, approvals,
 		capability.NewBlastCap(deps.live), nil,
 		deps.jobs, deps.tasks, router, deps.live, nil, nil)

@@ -45,7 +45,7 @@ var riskClassConstants = map[string]bool{
 //
 // Allowed without listing: the type J.RiskClass, the display function
 // J.RiskClassName, and a RiskClass key in a composite literal of any other
-// type (view models, approval.GrantScope). allowed maps a function to the
+// type (view models). allowed maps a function to the
 // reason it may name a class constant, so the allowlist documents itself; a
 // switch `case J.RiskClassRead:` is a false positive on purpose and belongs in
 // allowed, not in a widened rule.

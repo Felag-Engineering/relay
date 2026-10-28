@@ -1306,7 +1306,6 @@ func TestRecordCarriesTheApprovalLinkOnEveryKind(t *testing.T) {
 
 	kinds := []capability.AuditKind{
 		capability.AuditKindApprovalRequested,
-		capability.AuditKindApprovalGrantRequested,
 		capability.AuditKindApprovalPendingObserved,
 		capability.AuditKindApprovalDecided,
 		capability.AuditKindDispatch,
@@ -1314,7 +1313,7 @@ func TestRecordCarriesTheApprovalLinkOnEveryKind(t *testing.T) {
 	for _, kind := range kinds {
 		entry := capability.AuditEntry{
 			Kind: kind, Principal: p, Action: act,
-			ApprovalID: "appr-1", GrantID: "grant-1",
+			ApprovalID: "appr-1",
 			// Reason is set for every kind so the assertion below can hold the
 			// per-kind branches to carrying it. Dropping base.Reason from one
 			// of them stores a record whose prose is blank, which on the
@@ -1338,17 +1337,11 @@ func TestRecordCarriesTheApprovalLinkOnEveryKind(t *testing.T) {
 	if len(got) != len(kinds) {
 		t.Fatalf("ByApproval returned %d records, want %d — one per Kind that can carry a link", len(got), len(kinds))
 	}
-	for _, r := range got {
-		if r.GrantID != "grant-1" {
-			t.Errorf("record %q (kind %s) has grant %q, want grant-1", r.ID, r.Kind, r.GrantID)
-		}
-	}
 	// Each capability Kind must land under its own audit kind — in particular a
 	// re-drive (#379) must not fall through to the dispatch branch and be
 	// recorded as something that ran.
 	wantKinds := map[string]bool{
 		audit.KindApprovalRequested:       true,
-		audit.KindApprovalGrantRequested:  true,
 		audit.KindApprovalPendingObserved: true,
 		audit.KindApprovalDecided:         true,
 		audit.KindDispatch:                true,
@@ -1360,7 +1353,6 @@ func TestRecordCarriesTheApprovalLinkOnEveryKind(t *testing.T) {
 	// results rather than a sentence, and its branch does not set Reason at all.
 	reasonKinds := map[string]bool{
 		audit.KindApprovalRequested:       true,
-		audit.KindApprovalGrantRequested:  true,
 		audit.KindApprovalPendingObserved: true,
 		audit.KindApprovalDecided:         true,
 	}
@@ -1409,7 +1401,6 @@ func TestRecord_ApprovalDecidedCarriesTheAnswerChannelAndPlanHash(t *testing.T) 
 
 	approver := capability.Principal{Account: "ana", Role: "operator"}
 	denier := capability.Principal{Account: "bo", Role: "operator"}
-	revoker := capability.Principal{Account: "ops-console", Role: "admin"}
 
 	if err := sink.Record(context.Background(), capability.AuditEntry{
 		Kind: capability.AuditKindApprovalDecided, Principal: approver,
@@ -1425,15 +1416,6 @@ func TestRecord_ApprovalDecidedCarriesTheAnswerChannelAndPlanHash(t *testing.T) 
 	}); err != nil {
 		t.Fatalf("Record(denied): %v", err)
 	}
-	if err := sink.Record(context.Background(), capability.AuditEntry{
-		Kind: capability.AuditKindApprovalDecided, Principal: revoker,
-		ApprovalID: "appr-revoked", GrantID: "grant-1", PlanHash: "hash-revoked",
-		// ApprovalAnswer and DecisionChannel deliberately left zero: RevokeGrant
-		// never sets them.
-	}); err != nil {
-		t.Fatalf("Record(revocation): %v", err)
-	}
-
 	approved, err := repo.ByApproval(context.Background(), "appr-approved")
 	if err != nil || len(approved) != 1 {
 		t.Fatalf("ByApproval(appr-approved): %v (%d records)", err, len(approved))
@@ -1457,23 +1439,6 @@ func TestRecord_ApprovalDecidedCarriesTheAnswerChannelAndPlanHash(t *testing.T) 
 	}
 	if denied[0].DecisionChannel != approval.ChannelInBand.String() {
 		t.Errorf("denied record DecisionChannel = %q, want %q", denied[0].DecisionChannel, approval.ChannelInBand.String())
-	}
-
-	revoked, err := repo.ByApproval(context.Background(), "appr-revoked")
-	if err != nil || len(revoked) != 1 {
-		t.Fatalf("ByApproval(appr-revoked): %v (%d records)", err, len(revoked))
-	}
-	// The revocation's three are "" and NOT "unspecified": empty means "not
-	// recorded", and a fourth spelling nothing else understands would defeat
-	// the point of a fixed vocabulary.
-	if revoked[0].ApprovalAnswer != "" {
-		t.Errorf("revocation ApprovalAnswer = %q, want empty", revoked[0].ApprovalAnswer)
-	}
-	if revoked[0].DecisionChannel != "" {
-		t.Errorf("revocation DecisionChannel = %q, want empty, not %q", revoked[0].DecisionChannel, "unspecified")
-	}
-	if revoked[0].PlanHash != "hash-revoked" {
-		t.Errorf("revocation PlanHash = %q, want %q", revoked[0].PlanHash, "hash-revoked")
 	}
 }
 
@@ -1641,7 +1606,7 @@ func TestRecordJobHalt_CarriesTheApprovalLink(t *testing.T) {
 	sink := New(repo, WithNewID(sequentialIDs("audit-")), WithClock(fixedClock(time.Date(2026, 10, 26, 0, 0, 0, 0, time.UTC))))
 
 	entry := haltEntry(jobs.Halt{TaskID: "task-1", NodeID: "node-1", Outcome: jobs.OutcomeFailure})
-	entry.ApprovalID, entry.GrantID = "appr-1", "grant-1"
+	entry.ApprovalID = "appr-1"
 	if err := sink.Record(context.Background(), entry); err != nil {
 		t.Fatalf("Record: %v", err)
 	}
@@ -1649,8 +1614,8 @@ func TestRecordJobHalt_CarriesTheApprovalLink(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ByApproval: %v", err)
 	}
-	if len(got) != 1 || got[0].Kind != audit.KindJobHalt || got[0].GrantID != "grant-1" {
-		t.Errorf("ByApproval = %+v, want the one job_halt row under grant-1", got)
+	if len(got) != 1 || got[0].Kind != audit.KindJobHalt || got[0].ApprovalID != "appr-1" {
+		t.Errorf("ByApproval = %+v, want the one job_halt row under appr-1", got)
 	}
 }
 
@@ -1669,5 +1634,65 @@ func TestRecordJobHalt_RefusesAnEntryWithNoHalt(t *testing.T) {
 	records, _ := repo.ByJob(context.Background(), "job-1")
 	if len(records) != 0 {
 		t.Errorf("a refused halt entry wrote %d records, want none", len(records))
+	}
+}
+
+// Proves AP-84.
+//
+// TestSink_NoRecordCarriesAGrantLink: no entry the sink accepts can carry a
+// grant (capability.AuditEntry has no GrantID), and every approval-linked record
+// it writes, whatever its kind, reads back with an approval link and no grant
+// link. Records written while grants existed are the only ones with a grant_id.
+func TestSink_NoRecordCarriesAGrantLink(t *testing.T) {
+	if _, ok := reflect.TypeOf(capability.AuditEntry{}).FieldByName("GrantID"); ok {
+		t.Fatal("capability.AuditEntry has a GrantID field; approval grants are removed")
+	}
+
+	st, repo, _ := openSinkStore(t)
+	sink := New(repo, WithNewID(sequentialIDs("audit-")),
+		WithClock(fixedClock(time.Date(2026, 8, 16, 9, 0, 0, 0, time.UTC))),
+		WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil))))
+	ctx := context.Background()
+
+	p := capability.Principal{Account: "gleipnir", Role: "operator"}
+	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "service.restart", RiskClass: jobs.RiskClassMutate}
+	for _, kind := range []capability.AuditKind{
+		capability.AuditKindApprovalRequested,
+		capability.AuditKindApprovalDecided,
+		capability.AuditKindDispatch,
+	} {
+		entry := capability.AuditEntry{Kind: kind, Principal: p, Action: act, ApprovalID: "appr-1", Reason: "linked"}
+		if kind == capability.AuditKindDispatch {
+			entry.JobID = "job-1"
+			entry.Results = []capability.NodeResult{{NodeID: "node-a", Outcome: jobs.OutcomeSuccess}}
+		}
+		if err := sink.Record(ctx, entry); err != nil {
+			t.Fatalf("Record(%v): %v", kind, err)
+		}
+	}
+	halt := haltEntry(jobs.Halt{TaskID: "task-1", NodeID: "node-1", Outcome: jobs.OutcomeFailure})
+	halt.ApprovalID = "appr-1"
+	if err := sink.Record(ctx, halt); err != nil {
+		t.Fatalf("Record(job halt): %v", err)
+	}
+	tasks := intentJob(t, st, "job-2", jobs.RiskClassMutate, "node-a")
+	if err := sink.RecordIntent(ctx, intentEntry("job-2", jobs.RiskClassMutate, 1), tasks); err != nil {
+		t.Fatalf("RecordIntent: %v", err)
+	}
+
+	got, err := repo.ByApproval(ctx, "appr-1")
+	if err != nil {
+		t.Fatalf("ByApproval: %v", err)
+	}
+	if len(got) != 5 {
+		t.Fatalf("ByApproval returned %d records, want 5 (request, decision, dispatch, halt, intent)", len(got))
+	}
+	for _, r := range got {
+		if r.GrantID != "" {
+			t.Errorf("record %q (kind %s) carries grant %q, want none", r.ID, r.Kind, r.GrantID)
+		}
+		if r.Kind == audit.KindApprovalGrantRequested {
+			t.Errorf("record %q has kind %s, which no current path writes", r.ID, r.Kind)
+		}
 	}
 }

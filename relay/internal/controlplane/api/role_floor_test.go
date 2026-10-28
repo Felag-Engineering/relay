@@ -125,13 +125,6 @@ var routeFloors = map[string]floorKind{
 	"GET /api/v1/approvals":                floorNone,
 	"GET /api/v1/approvals/{id}":           floorNone,
 	"POST /api/v1/approvals/{id}/decision": floorCapability,
-
-	// Approval grants (#378). Requesting one creates an ordinary approval
-	// Request, so the floor is the gate's, in the capability layer.
-	"POST /api/v1/approval-grants":             floorCapability,
-	"GET /api/v1/approval-grants":              floorNone,
-	"GET /api/v1/approval-grants/{id}":         floorNone,
-	"POST /api/v1/approval-grants/{id}/revoke": floorCapability,
 }
 
 // surfaceGateFuncs are the identifiers that count as "this handler reaches a

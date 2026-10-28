@@ -218,7 +218,7 @@ func (a *sqliteAudit) ByApproval(ctx context.Context, approvalID string) ([]audi
 	return a.query(ctx, `WHERE approval_id = ?`, approvalID)
 }
 
-// ByGrant returns all Records released by a batch/window Grant, ordered by
+// ByGrant returns the historical Records released by an approval grant, ordered by
 // Timestamp, ties broken by ID.
 func (a *sqliteAudit) ByGrant(ctx context.Context, grantID string) ([]audit.Record, error) {
 	return a.query(ctx, `WHERE grant_id = ?`, grantID)

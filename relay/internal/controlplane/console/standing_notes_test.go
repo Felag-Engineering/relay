@@ -104,11 +104,6 @@ func TestStandingNotes_NoScreenRendersAnAboutDisclosure(t *testing.T) {
 		t.Fatal("no screen was rendered, so nothing was checked")
 	}
 	check("day one", get(t, newTestHandler(dayOneDeps(), accounts.RoleAdmin), "/console/").Body.String())
-	for _, pg := range budgetPages(t) {
-		if pg.key == "grant card" {
-			check("grant card", get(t, pg.h, pg.path).Body.String())
-		}
-	}
 	for _, src := range consoleTemplateSources(t) {
 		for _, banned := range []string{`class="about"`, `"about-docs"`} {
 			if strings.Contains(src.text, banned) {

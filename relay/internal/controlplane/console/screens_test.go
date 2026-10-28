@@ -2878,8 +2878,10 @@ func simulateCVD(hex, vision string) string {
 // --- Approval records on Activity -------------------------------------------
 
 // sinkParkAndGrantRequestRecords builds one ordinary park and one grant
-// request THROUGH THE REAL SINK, so the kinds under test are the ones the
-// product writes rather than two literals this test invented (#463/#517/#520).
+// request. The park goes THROUGH THE REAL SINK. The grant request stands in for
+// one written while approval grants existed (docs/specs/approval.md AP-84), and
+// no current path writes one: it is recorded as an ordinary approval request,
+// then given the kind and GrantID that only a historical record carries.
 func sinkParkAndGrantRequestRecords(t *testing.T) (park, grantReq audit.Record) {
 	t.Helper()
 	repo := &captureRepo{}
@@ -2902,10 +2904,9 @@ func sinkParkAndGrantRequestRecords(t *testing.T) (park, grantReq audit.Record) 
 		t.Fatalf("sink.Record(park): %v", err)
 	}
 	if err := sink.Record(ctx, capability.AuditEntry{
-		Kind:       capability.AuditKindApprovalGrantRequested,
+		Kind:       capability.AuditKindApprovalRequested,
 		Principal:  granter,
 		ApprovalID: "appr-grant",
-		GrantID:    "grant-9",
 		Reason:     "batch/window grant requested: mutate on node:role=web for 1h",
 	}); err != nil {
 		t.Fatalf("sink.Record(grant request): %v", err)
@@ -2913,13 +2914,11 @@ func sinkParkAndGrantRequestRecords(t *testing.T) (park, grantReq audit.Record) 
 	if len(repo.recs) != 2 {
 		t.Fatalf("the sink wrote %d records for 2 entries, want 2", len(repo.recs))
 	}
+	repo.recs[1].Kind = audit.KindApprovalGrantRequested
+	repo.recs[1].GrantID = "grant-9"
 	park, grantReq = repo.recs[0], repo.recs[1]
 	if park.Kind != audit.KindApprovalRequested {
 		t.Fatalf("the park record has Kind %q, want %q", park.Kind, audit.KindApprovalRequested)
-	}
-	if grantReq.Kind != audit.KindApprovalGrantRequested {
-		t.Fatalf("the grant request has Kind %q, want %q — the sink is not mapping the new kind",
-			grantReq.Kind, audit.KindApprovalGrantRequested)
 	}
 	// The prose survives the sink. Building through the real sink only buys
 	// something if the record coming OUT is asserted; otherwise this helper is
@@ -2975,8 +2974,10 @@ func TestApprovalGrantRequestDoesNotRenderAsAPark(t *testing.T) {
 
 // fourApprovalDecisionRecords builds one approved Decision, one denied
 // Decision, one grant revocation, and one answerless (pre-#545) Decision
-// record THROUGH the real sink, never hand-built audit.Record literals, so
-// the shape is the one the product writes. Each carries a DIFFERENT verified
+// record. The approved, denied and answerless records are built THROUGH the
+// real sink, so the shape is the one the product writes. The revocation is a
+// historical record (docs/specs/approval.md AP-84): no current path writes one,
+// so its GrantID is stamped after the sink. Each carries a DIFFERENT verified
 // Account so a row-scoped assertion can locate exactly one by a needle that
 // is not itself a field under test (#538's reasoning, reused here for
 // #545's approved/denied pair).
@@ -3013,8 +3014,8 @@ func fourApprovalDecisionRecords(t *testing.T) (approved, denied, revoked, legac
 	if err := sink.Record(ctx, capability.AuditEntry{
 		Kind:       capability.AuditKindApprovalDecided,
 		Principal:  capability.Principal{AccountID: "acct-ops", Account: "ops-console", Role: "admin", Kind: "machine"},
-		ApprovalID: "appr-ops", GrantID: "grant-ops",
-		Reason: "approval grant grant-ops revoked by ops-console: closing the maintenance window early",
+		ApprovalID: "appr-ops",
+		Reason:     "approval grant grant-ops revoked by ops-console: closing the maintenance window early",
 	}); err != nil {
 		t.Fatalf("sink.Record(revoked): %v", err)
 	}
@@ -3033,6 +3034,7 @@ func fourApprovalDecisionRecords(t *testing.T) (approved, denied, revoked, legac
 	if len(repo.recs) != 4 {
 		t.Fatalf("the sink wrote %d records for 4 entries, want 4", len(repo.recs))
 	}
+	repo.recs[2].GrantID = "grant-ops"
 	return repo.recs[0], repo.recs[1], repo.recs[2], repo.recs[3]
 }
 

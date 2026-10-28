@@ -1089,7 +1089,7 @@ func TestNewExecutionRefusesDefaultSeams(t *testing.T) {
 	rec := NewRecorder(noopAuditSink{}, nil, nil)
 	ctl := newControl(rec, allowAllAuthorizer{}, noopFreezeStore{})
 	read := newReadLane(rec, reg, nil, nil, nil, nil, testSettings, nil)
-	appr := newApprovals(rec, noopApprovalGate{}, nil, nil, nil, nil, noopApprovalNotifier{}, nil)
+	appr := newApprovals(rec, noopApprovalGate{}, nil, nil, nil, noopApprovalNotifier{}, nil)
 
 	defer func() {
 		if recover() == nil {
@@ -1121,7 +1121,7 @@ func TestNewExecutionAcceptsRealSeams(t *testing.T) {
 	rec := NewRecorder(&intentSpySink{audit, &nonAtomicIntents{tr: tasksRepo}}, nil, nil)
 	svc := NewExecution(NewControl(rec, authz, freezeStore),
 		newReadLane(rec, reg, nil, nil, nil, nil, testSettings, nil),
-		newApprovals(rec, noopApprovalGate{}, nil, nil, nil, nil, noopApprovalNotifier{}, nil),
+		newApprovals(rec, noopApprovalGate{}, nil, nil, nil, noopApprovalNotifier{}, nil),
 		capChecker, nil, jobsRepo, tasksRepo, conduit, testSettings, sequentialIDs("id-"), nil,
 	)
 
@@ -1254,7 +1254,7 @@ func TestNewExecutionRefusesWithoutFreeze(t *testing.T) {
 	rec := NewRecorder(&intentSpySink{&spyAuditSink{}, &nonAtomicIntents{tr: tasksRepo}}, nil, nil)
 	ctl := newControl(rec, &spyAuthorizer{}, noopFreezeStore{})
 	read := newReadLane(rec, reg, nil, nil, nil, nil, testSettings, nil)
-	appr := newApprovals(rec, noopApprovalGate{}, nil, nil, nil, nil, noopApprovalNotifier{}, nil)
+	appr := newApprovals(rec, noopApprovalGate{}, nil, nil, nil, noopApprovalNotifier{}, nil)
 
 	defer func() {
 		if recover() == nil {
@@ -1277,28 +1277,28 @@ func TestNewExecution_RefusesEachFailOpenSeam(t *testing.T) {
 			rec := NewRecorder(&intentSpySink{&spyAuditSink{}, &nonAtomicIntents{tr: tr}}, nil, nil)
 			return newControl(rec, allowAllAuthorizer{}, &fakeFreezeStore{}),
 				newReadLane(rec, registry.NewInMemory(), nil, nil, nil, nil, testSettings, nil),
-				newApprovals(rec, noopApprovalGate{}, nil, nil, nil, nil, noopApprovalNotifier{}, nil),
+				newApprovals(rec, noopApprovalGate{}, nil, nil, nil, noopApprovalNotifier{}, nil),
 				&spyCapChecker{}
 		}},
 		{"no-op CapChecker", "noopCapChecker", func(t *testing.T, tr jobs.TaskRepository) (*Control, *ReadLane, *Approvals, CapChecker) {
 			rec := NewRecorder(&intentSpySink{&spyAuditSink{}, &nonAtomicIntents{tr: tr}}, nil, nil)
 			return newControl(rec, &spyAuthorizer{}, &fakeFreezeStore{}),
 				newReadLane(rec, registry.NewInMemory(), nil, nil, nil, nil, testSettings, nil),
-				newApprovals(rec, noopApprovalGate{}, nil, nil, nil, nil, noopApprovalNotifier{}, nil),
+				newApprovals(rec, noopApprovalGate{}, nil, nil, nil, noopApprovalNotifier{}, nil),
 				noopCapChecker{}
 		}},
 		{"no-op AuditSink", "noopAuditSink", func(t *testing.T, tr jobs.TaskRepository) (*Control, *ReadLane, *Approvals, CapChecker) {
 			rec := NewRecorder(noopAuditSink{}, nil, nil)
 			return newControl(rec, &spyAuthorizer{}, &fakeFreezeStore{}),
 				newReadLane(rec, registry.NewInMemory(), nil, nil, nil, nil, testSettings, nil),
-				newApprovals(rec, noopApprovalGate{}, nil, nil, nil, nil, noopApprovalNotifier{}, nil),
+				newApprovals(rec, noopApprovalGate{}, nil, nil, nil, noopApprovalNotifier{}, nil),
 				&spyCapChecker{}
 		}},
 		{"no-op FreezeStore", "noopFreezeStore", func(t *testing.T, tr jobs.TaskRepository) (*Control, *ReadLane, *Approvals, CapChecker) {
 			rec := NewRecorder(&intentSpySink{&spyAuditSink{}, &nonAtomicIntents{tr: tr}}, nil, nil)
 			return newControl(rec, &spyAuthorizer{}, noopFreezeStore{}),
 				newReadLane(rec, registry.NewInMemory(), nil, nil, nil, nil, testSettings, nil),
-				newApprovals(rec, noopApprovalGate{}, nil, nil, nil, nil, noopApprovalNotifier{}, nil),
+				newApprovals(rec, noopApprovalGate{}, nil, nil, nil, noopApprovalNotifier{}, nil),
 				&spyCapChecker{}
 		}},
 	}
@@ -1336,7 +1336,7 @@ func TestNewExecution_NilOptionalSeamsTakeTheirSafeDefaults(t *testing.T) {
 	rec := NewRecorder(&intentSpySink{&spyAuditSink{}, intents}, nil, nil)
 	x := NewExecution(NewControl(rec, &spyAuthorizer{}, &fakeFreezeStore{}),
 		newReadLane(rec, reg, nil, nil, nil, nil, testSettings, nil),
-		newApprovals(rec, noopApprovalGate{}, nil, nil, nil, nil, noopApprovalNotifier{}, nil),
+		newApprovals(rec, noopApprovalGate{}, nil, nil, nil, noopApprovalNotifier{}, nil),
 		&spyCapChecker{}, nil, jobsRepo, tasksRepo, conduit, testSettings, nil, nil)
 
 	if _, ok := x.jobEvents.(noopJobEventSink); !ok {
@@ -2650,7 +2650,7 @@ func TestNewExecutionPanicsOnNonPositiveDispatchConcurrency(t *testing.T) {
 	// Every other argument is valid, so only the concurrency check can fire.
 	rec := NewRecorder(&intentSpySink{&spyAuditSink{}, &nonAtomicIntents{tr: tr}}, nil, nil)
 	ctl := NewControl(rec, &spyAuthorizer{}, &fakeFreezeStore{})
-	appr := newApprovals(rec, noopApprovalGate{}, nil, nil, nil, nil, noopApprovalNotifier{}, nil)
+	appr := newApprovals(rec, noopApprovalGate{}, nil, nil, nil, noopApprovalNotifier{}, nil)
 	for _, n := range []int{0, -1} {
 		settings := concurrencyOf(n)
 		read := newReadLane(rec, registry.NewInMemory(), nil, nil, nil, nil, settings, nil)

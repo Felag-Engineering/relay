@@ -52,9 +52,9 @@ const gateAllMutates = `{
 // Node in the registry, so a dispatch resolves to a real fan-out.
 //
 // extra is appended to the startRelay call — opt-in and source-compatible,
-// so both existing callers of this function (this file and
-// approval_grant_e2e_test.go) are untouched. approval_console_absent_e2e_test.go
-// passes WithConfig(func(c *Config) { c.ConsoleEnabled = true }): without it,
+// so existing callers of this function are untouched.
+// approval_console_absent_e2e_test.go passes
+// WithConfig(func(c *Config) { c.ConsoleEnabled = true }): without it,
 // cfg.ConsoleEnabled defaults false (main.go) and consoleSurface{} is never
 // appended (main.go), so every /console/ request would 404.
 func startGatedRelay(t *testing.T, rules string, extra ...FixtureOption) *relayFixture {

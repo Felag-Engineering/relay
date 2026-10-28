@@ -70,7 +70,7 @@ import (
 const (
 	// maxSourceWords caps a measured element in template source on its
 	// longest branch path, each output action counted as one word. It is 18,
-	// not 15, because the two ruled Approval grant card sentences are 18.
+	// not 15; tightening it is a copy decision of its own.
 	maxSourceWords = 18
 	// maxTitleWords caps a title or aria-label: a tooltip is a note nobody
 	// budgets, so it is held to the one-sentence rule itself.

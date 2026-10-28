@@ -741,21 +741,21 @@ func TestExecution_HaltIsRecordedOnTheJobAndAudited(t *testing.T) {
 }
 
 // TestExecution_HaltAuditCarriesTheApprovalLink: an approval-released Job's
-// halt row names the approval and the Grant that released it, as the dispatch
+// halt row names the approval that released it, as the dispatch
 // row does.
 func TestExecution_HaltAuditCarriesTheApprovalLink(t *testing.T) {
 	spy := &spyAuditSink{}
 	svc := build(t, seams{audit: spy})
 	halt := jobs.Halt{TaskID: "task-1", NodeID: "node-1", Outcome: jobs.OutcomeTimeout, Resolved: true}
-	pr := prep{act: mutateRawExec(), ap: approvalDecision{requestID: "appr-1", grantID: "grant-1"}}
+	pr := prep{act: mutateRawExec(), ap: approvalDecision{requestID: "appr-1"}}
 
 	if _, err := svc.account(context.Background(), Principal{Account: "alice"}, Selector{}, pr,
 		dispatchResult{jobID: "job-1", halt: halt}, nil, false); err != nil {
 		t.Fatalf("account: %v", err)
 	}
 	entry := spy.haltEntry(t)
-	if entry.ApprovalID != "appr-1" || entry.GrantID != "grant-1" || entry.JobID != "job-1" {
-		t.Errorf("halt entry = %+v, want job-1 under approval appr-1 and grant grant-1", entry)
+	if entry.ApprovalID != "appr-1" || entry.JobID != "job-1" {
+		t.Errorf("halt entry = %+v, want job-1 under approval appr-1", entry)
 	}
 }
 

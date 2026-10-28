@@ -595,7 +595,6 @@ func (e *jobEngine) persist(ctx context.Context, d dispatch, detach bool) (pj *p
 		Action:     d.action,
 		JobID:      jobID,
 		ApprovalID: d.approvalID,
-		GrantID:    d.grantID,
 		Asserted:   AssertionsFromContext(runCtx),
 		CapCleared: len(d.nodes),
 	}

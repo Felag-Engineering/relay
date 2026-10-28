@@ -61,7 +61,6 @@ role's reach reads in one place.
 | Engage a Freeze over the Control API | `operator`, **human Account only** | `freeze.md` |
 | Release a Freeze over the Control API | `admin`, with a reason | `freeze.md` |
 | Decide an approval | the role floor the Action required | `approval.md` |
-| Issue an approval grant | second-person, out-of-band approval | `approval.md` |
 | Mint an Enrollment Token | `admin` | `enrollment.md` |
 | Set, rename or clear a Policy alias (designed, not built) | `admin`, **human Account only** | `query.md` |
 | Administer Accounts and API Tokens | `admin` | this spec |

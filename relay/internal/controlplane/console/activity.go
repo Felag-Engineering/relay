@@ -1545,7 +1545,7 @@ func summarize(f trailFacts) string {
 		return "re-drove a dispatch that is already parked"
 	case audit.KindApprovalDecided:
 		// Same discriminators as agents.go's agentCallFrom, no new vocabulary:
-		// GrantID is RevokeGrant's structural marker; the structured
+		// GrantID marks a historical grant revocation (approval.md AP-84); the structured
 		// answer otherwise names which way the decision went; a
 		// decision recorded with neither falls back to the original sentence.
 		switch {

@@ -69,29 +69,6 @@ type ApprovalStore interface {
 	RecordDecision(ctx context.Context, id string, d approval.Decision, now time.Time) (approval.Request, error)
 }
 
-// ApprovalGrantStore is the batch/window Grant persistence the capability layer
-// needs (ADR-0027 decision 12): consuming a Grant on the dispatch path, and
-// creating, reading, and revoking one on the management path
-// (approval_grant.go).
-//
-// It mirrors approval.GrantRepository exactly rather than narrowing to the
-// claim, because both halves live behind this one Approvals — the surfaces adapt
-// the capability layer, they do not reach past it to a store (invariant 10).
-//
-// Nil means grants are not wired, which behaves exactly as "no grant covers
-// anything" on dispatch — the safe direction, and the behaviour of every
-// deployment that never creates one — and ErrApprovalUnavailable on the
-// management path, so a surface that offers grants against a Relay that has not
-// enabled them fails loudly rather than silently doing nothing.
-type ApprovalGrantStore interface {
-	CreateGrant(ctx context.Context, g approval.Grant) error
-	GetGrant(ctx context.Context, id string) (approval.Grant, error)
-	GrantByRequest(ctx context.Context, requestID string) (approval.Grant, error)
-	ActiveGrants(ctx context.Context, now time.Time) ([]approval.Grant, error)
-	ClaimGrant(ctx context.Context, d approval.Dispatch, now time.Time) (approval.Grant, bool, error)
-	RevokeGrant(ctx context.Context, id, revokedBy, reason string, now time.Time) (approval.Grant, error)
-}
-
 // ApprovalAuthorizer answers "may this Principal decide a Request for an Action
 // of this kind?".
 //
@@ -146,7 +123,7 @@ type noopApprovalNotifier struct{}
 func (noopApprovalNotifier) NotifyParked(context.Context, ApprovalNotice) {}
 
 // Approvals is the approval callout (ADR-0027): the gate, the parked-Request
-// store, the Grant store, the MCP task handles, the role floor on a decision and
+// store, the MCP task handles, the role floor on a decision and
 // the notifier. It never dispatches — it cannot reach Run, Start or CancelJob —
 // which is what lets the approval seams of every adapter be handed this and not
 // the Execution. Build it with NewApprovals.
@@ -159,11 +136,6 @@ type Approvals struct {
 	// gate was wired without one, which NewApprovals refuses.
 	gate  ApprovalGate
 	store ApprovalStore
-
-	// grants is the batch/window Grant store (ADR-0027 decision 12). Nil means
-	// no grant ever covers anything, which is both the default and the safe
-	// direction.
-	grants ApprovalGrantStore
 
 	// tasks persists MCP task handles (ADR-0028). Nil disables the
 	// Tasks extension entirely, which loses nothing: the universal
@@ -198,12 +170,6 @@ type Approvals struct {
 // approval mechanism handing out authority instead of withholding it. Passing an
 // incomplete set is a composition-root bug, so it panics rather than degrading.
 //
-// grants is the batch/window Grant store (ADR-0027 decision 12). Optional.
-// Nil means no grant ever covers anything, which is the safe direction and the
-// behaviour of every deployment that never creates one — a grant can only ever
-// RELEASE a dispatch the gate already gated, so its absence can never let
-// something through.
-//
 // tasks is the MCP task-handle store (ADR-0028), enabling the Tasks
 // extension's server side. Optional, and its absence is not a degraded mode but
 // the prior one: with no store, dispatches park and return the universal
@@ -221,7 +187,7 @@ type Approvals struct {
 // now is the approval clock, a test seam: approval expiry and park timestamps
 // are time-dependent, and a test that sleeps is a test that flakes. Nil is the
 // wall clock in UTC.
-func NewApprovals(rec *Recorder, gate ApprovalGate, store ApprovalStore, authz ApprovalAuthorizer, grants ApprovalGrantStore, tasks MCPTaskStore, notifier ApprovalNotifier, now func() time.Time) *Approvals {
+func NewApprovals(rec *Recorder, gate ApprovalGate, store ApprovalStore, authz ApprovalAuthorizer, tasks MCPTaskStore, notifier ApprovalNotifier, now func() time.Time) *Approvals {
 	if rec == nil {
 		panic("capability: NewApprovals: recorder must not be nil")
 	}
@@ -237,19 +203,18 @@ func NewApprovals(rec *Recorder, gate ApprovalGate, store ApprovalStore, authz A
 	if notifier == nil {
 		notifier = noopApprovalNotifier{}
 	}
-	return newApprovals(rec, gate, store, authz, grants, tasks, notifier, now)
+	return newApprovals(rec, gate, store, authz, tasks, notifier, now)
 }
 
 // newApprovals assembles an Approvals with no checks. Only NewApprovals and
 // _test.go files call it; it is the only route to an Approvals with the no-op
 // gate or no store.
-func newApprovals(rec *Recorder, gate ApprovalGate, store ApprovalStore, authz ApprovalAuthorizer, grants ApprovalGrantStore, tasks MCPTaskStore, notifier ApprovalNotifier, now func() time.Time) *Approvals {
+func newApprovals(rec *Recorder, gate ApprovalGate, store ApprovalStore, authz ApprovalAuthorizer, tasks MCPTaskStore, notifier ApprovalNotifier, now func() time.Time) *Approvals {
 	return &Approvals{
 		rec:           rec,
 		gate:          gate,
 		store:         store,
 		authz:         authz,
-		grants:        grants,
 		tasks:         tasks,
 		notifier:      notifier,
 		now:           now,
@@ -370,8 +335,7 @@ type approvalDecision struct {
 	// when no approval was required — the satisfied Request whose release this
 	// dispatch must claim (or re-attach to). For a single-Plan approval,
 	// Execution.Run must claim it with approvals.BindJob before dispatching
-	// (AP-77); for a grant-released dispatch (grantID non-empty) it is never
-	// claimed — see Run's grant-rationale comment.
+	// (AP-77), or re-attach to it.
 	requestID string
 	// reattachJobID is set when the satisfied Request named by requestID has
 	// ALREADY bound a Job (AP-77: an approval releases one execution). Set
@@ -380,11 +344,6 @@ type approvalDecision struct {
 	reattachJobID string
 	// parked is set when the dispatch was parked instead.
 	parked *ParkedError
-	// grantID is the batch/window Grant that released this dispatch, empty when
-	// a single-Plan approval or no gate did. Carried into audit so "which grant
-	// authorised this" is a join rather than a reconstruction, and so a grant's
-	// full blast radius — every Job it released — is one query.
-	grantID string
 	// created is set only when THIS call created the Request, so a notification
 	// fires once per park rather than once per retry. A caller re-driving a
 	// dispatch that is already waiting must not re-page the approver: an
@@ -424,15 +383,14 @@ func (a *Approvals) checkApproval(ctx context.Context, p Principal, sel Selector
 		return approvalDecision{proceed: true}, nil
 	}
 	// A blank audience entry never becomes an approver: refused here, before
-	// any Approval grant is claimed or any Request is created, so a non-validating
-	// ApprovalGate cannot park a dispatch behind a Request that reads back
-	// unrestricted. This is the single call site for whatever Evaluate
-	// returns, including a Requirement *approval.Gate merged from several
-	// matching rules (mergeStricter): that merge never lets an unrestricted
-	// rule's audience absorb a malformed one — a blank entry survives the
-	// merge (see unionAudience) — so a merge upstream cannot defeat this
-	// check. A real *approval.Gate cannot produce a malformed
-	// Requirement in the first place (approval.Rule.Validate).
+	// any Request is created, so a non-validating ApprovalGate cannot park a
+	// dispatch behind a Request that reads back unrestricted. This is the
+	// single call site for whatever Evaluate returns, including a Requirement
+	// *approval.Gate merged from several matching rules (mergeStricter): that
+	// merge never lets an unrestricted rule's audience absorb a malformed one
+	// — a blank entry survives the merge (see unionAudience) — so a merge
+	// upstream cannot defeat this check. A real *approval.Gate cannot produce
+	// a malformed Requirement in the first place (approval.Rule.Validate).
 	if err := approval.ValidateAudience(req.Audience); err != nil {
 		return approvalDecision{}, fmt.Errorf("capability: dispatch approval requirement from rules %s: require.audience: %w", strings.Join(rules, ", "), err)
 	}
@@ -453,68 +411,27 @@ func (a *Approvals) checkApproval(ctx context.Context, p Principal, sel Selector
 	// set nobody approved.
 	existing, lookupErr := a.store.ByPlanHash(ctx, planHash)
 
-	// An approval releases one execution (AP-77), and that check runs BEFORE a
-	// batch/window Grant is even consulted — deliberately ahead of the Grant
-	// check below, not folded into the switch after it. AP-77's text is
-	// unconditional ("any later dispatch ... re-attaches"): if a Grant covering
-	// this exact plan were claimed first, a timeout re-drive of an
-	// already-released approval would run a genuinely new Job under the Grant
-	// whenever one happened to exist, which is exactly the second execution
-	// AP-77 forbids. Re-attaching first is the more restrictive reading, and it
-	// costs a covering Grant nothing it needed: the Grant's OWN uses are
-	// untouched (a re-attach consumes no Grant use), and the Grant still
-	// releases every dispatch that does NOT match an already-released Request.
-	//
-	// Checked only while the Request is Satisfied (approved, inside its
-	// deadline, quorum met) — a Request that has already bound a Job never
-	// falls into the unbound case below. Once the deadline passes, Satisfied
-	// is false, the approved row is not pending, and the dispatch falls through
-	// to the Grant check and then a fresh park. That keeps a spent approval
-	// from becoming a permanent replay of one Job (AP-77).
+	// An approval releases one execution (AP-77): a Request that is Satisfied
+	// (approved, inside its deadline, quorum met) and has already bound a Job
+	// never falls into the unbound case below, so a re-drive re-attaches to that
+	// Job and dispatches nothing. Once the deadline passes, Satisfied is false,
+	// the approved row is not pending, and the dispatch falls through to a fresh
+	// park. That keeps a spent approval from becoming a permanent replay of one
+	// Job (AP-77).
 	if lookupErr == nil && existing.Satisfied(now) && existing.Released() {
 		return approvalDecision{requestID: existing.ID, reattachJobID: existing.JobID}, nil
 	}
 
-	// A store failure reading THIS plan's existing Request is refused HERE,
-	// before a Grant is ever consulted (SEC-2/C2-S1, AP-77): a
-	// released Request the Relay cannot currently read must never be silently
-	// shadowed by a covering Grant that goes on to run the plan a second time.
-	// Only ErrNotFound — "no Request exists for this plan" — falls through to
-	// the Grant check and the switch below; any other error fails the
-	// dispatch closed, and a covering Grant's own uses are left untouched
-	// (ClaimGrant below is never reached).
+	// A store failure reading THIS plan's existing Request fails the dispatch
+	// closed (AP-77): a released Request the Relay cannot currently read must
+	// never be treated as absent and run a second time. Only ErrNotFound — "no
+	// Request exists for this plan" — falls through to the switch below.
 	if lookupErr != nil && lookupErr != approval.ErrNotFound { //nolint:errorlint // a wrapped ErrNotFound would take the fail-closed branch, never the permissive one
 		return approvalDecision{}, fmt.Errorf("capability: read approval for plan: %w", lookupErr)
 	}
 
-	// A batch/window Grant (ADR-0027 decision 12) is consulted only AFTER the
-	// gate said this dispatch is gated AND after the checks above found no
-	// already-released Request for this exact plan (and no store failure
-	// reading for one), and that order is the point: a Grant answers a
-	// requirement that already exists, and it must never re-run a plan an
-	// approval already spent (AP-77, above). It can never create a
-	// requirement, and it can never reach a dispatch the gate did not gate —
-	// so an ungated deployment is unaffected by grants entirely.
-	//
-	// Everything before this line still ran: Freeze, Selector resolution,
-	// authz, and the blast cap. A Grant substitutes for the HUMAN, not for the
-	// pipeline, so it cannot release something Policy or the cap would refuse.
-	//
-	// The claim is atomic (see GrantRepository.ClaimGrant): find-and-consume in
-	// one transaction, because a bound enforced outside a transaction is not a
-	// bound under concurrency.
-	if a.grants != nil {
-		g, ok, err := a.grants.ClaimGrant(ctx, d, now)
-		if err != nil {
-			return approvalDecision{}, fmt.Errorf("capability: claim approval grant: %w", err)
-		}
-		if ok {
-			return approvalDecision{proceed: true, requestID: g.RequestID, grantID: g.ID}, nil
-		}
-	}
-
 	// lookupErr is nil or approval.ErrNotFound here — anything else already
-	// returned above, before the Grant was ever consulted.
+	// returned above.
 	switch {
 	case lookupErr == nil && existing.Satisfied(now):
 		return approvalDecision{proceed: true, requestID: existing.ID}, nil
