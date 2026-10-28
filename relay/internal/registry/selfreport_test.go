@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -65,6 +66,17 @@ func TestLabelBoundsMatchTagBounds(t *testing.T) {
 	}
 	if MaxTagValueLen != MaxLabelValueLen || MaxLabelValueLen != 255 {
 		t.Errorf("value bounds: tag %d, label %d, want both 255", MaxTagValueLen, MaxLabelValueLen)
+	}
+	if MaxNodeLabels != 64 || MaxTagsPerNode != 64 {
+		t.Errorf("count bounds: tags %d, node: labels %d, want both 64", MaxTagsPerNode, MaxNodeLabels)
+	}
+}
+
+func TestWithinNodeLabelCap(t *testing.T) {
+	for n, want := range map[int]bool{0: true, 1: true, MaxNodeLabels: true, MaxNodeLabels + 1: false, 1000: false} {
+		if got := WithinNodeLabelCap(n); got != want {
+			t.Errorf("WithinNodeLabelCap(%d) = %v, want %v", n, got, want)
+		}
 	}
 }
 
@@ -132,6 +144,41 @@ func TestDeclineMalformedSelfReport(t *testing.T) {
 	}
 	if got, _ := DeclineMalformedSelfReport(SelfReport{Facts: Facts{IPAddresses: []string{}}}); got.Facts.IPAddresses == nil {
 		t.Error("an empty, non-nil IPAddresses came back nil; the nil-versus-empty distinction must hold")
+	}
+}
+
+// addrs returns n distinct, well-formed IPv4 addresses.
+func addrs(n int) []string {
+	out := make([]string, n)
+	for i := range out {
+		out[i] = fmt.Sprintf("10.%d.%d.1", i/256, i%256)
+	}
+	return out
+}
+
+// TestDeclineMalformedSelfReport_IPAddressCap pins the per-Node address count:
+// a list at the cap is kept whole, and one over it is omitted whole and named
+// once, never truncated.
+func TestDeclineMalformedSelfReport_IPAddressCap(t *testing.T) {
+	got, omitted := DeclineMalformedSelfReport(SelfReport{Facts: Facts{IPAddresses: addrs(MaxReportedIPAddresses)}})
+	if len(omitted) != 0 || len(got.Facts.IPAddresses) != MaxReportedIPAddresses {
+		t.Errorf("at the cap: kept %d, omitted %v; want all %d kept and nothing omitted",
+			len(got.Facts.IPAddresses), omitted, MaxReportedIPAddresses)
+	}
+
+	over := addrs(MaxReportedIPAddresses + 1)
+	got, omitted = DeclineMalformedSelfReport(SelfReport{Facts: Facts{IPAddresses: over}})
+	if got.Facts.IPAddresses != nil || strings.Join(omitted, ",") != FieldIPAddresses {
+		t.Errorf("over the cap: IPAddresses = %d entries, omitted %v; want nil and [%s]",
+			len(got.Facts.IPAddresses), omitted, FieldIPAddresses)
+	}
+
+	withBad := addrs(MaxReportedIPAddresses + 1)
+	withBad[3] = "not-an-ip"
+	got, omitted = DeclineMalformedSelfReport(SelfReport{Facts: Facts{IPAddresses: withBad}})
+	if got.Facts.IPAddresses != nil || strings.Join(omitted, ",") != FieldIPAddresses {
+		t.Errorf("over the cap with a malformed entry: IPAddresses = %d entries, omitted %v; want nil and %s named once",
+			len(got.Facts.IPAddresses), omitted, FieldIPAddresses)
 	}
 }
 

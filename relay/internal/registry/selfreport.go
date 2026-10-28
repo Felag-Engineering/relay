@@ -16,6 +16,12 @@ import (
 // value is bounded only by gRPC's message cap. It does not bound Labels.
 const MaxSelfReportedTextBytes = 253
 
+// MaxReportedIPAddresses bounds how many addresses a Node may report in its
+// Facts. A longer list is omitted whole (recorded as not reported) and never
+// truncated. 256 is far beyond a well-behaved Node's non-loopback interface
+// addresses; without it the list is bounded only by gRPC's message cap.
+const MaxReportedIPAddresses = 256
+
 // TemplateUnloadable is the literal the daemon reports in place of a
 // template-set fingerprint when its local set failed to load (ADR-0021).
 const TemplateUnloadable = "unloadable"
@@ -52,7 +58,8 @@ type SelfReport struct {
 //
 // The IP list keeps the nil-versus-empty distinction: it is returned unchanged
 // when every entry passes, and rebuilt from nil when one is dropped, so an
-// all-dropped list is nil.
+// all-dropped list is nil. A list longer than MaxReportedIPAddresses is omitted
+// whole.
 //
 // For template_set_fingerprint "" means "no templates loaded", not "not
 // reported", so a malformed value reads as the Node claiming no templates: a
@@ -70,7 +77,10 @@ func DeclineMalformedSelfReport(r SelfReport) (SelfReport, []string) {
 	text(FieldKernel, &r.Facts.Kernel)
 	text(FieldArch, &r.Facts.Arch)
 
-	if slices.ContainsFunc(r.Facts.IPAddresses, func(s string) bool { return !WellFormedIPAddress(s) }) {
+	if len(r.Facts.IPAddresses) > MaxReportedIPAddresses {
+		r.Facts.IPAddresses = nil
+		omitted = append(omitted, FieldIPAddresses)
+	} else if slices.ContainsFunc(r.Facts.IPAddresses, func(s string) bool { return !WellFormedIPAddress(s) }) {
 		var kept []string
 		for _, s := range r.Facts.IPAddresses {
 			if WellFormedIPAddress(s) {

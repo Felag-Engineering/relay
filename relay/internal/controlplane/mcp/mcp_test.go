@@ -150,6 +150,10 @@ type testServer struct {
 	// aliases is the counted Policy alias source the capability layer was
 	// built over, with an alias seeded for node A's fingerprint.
 	aliases *countingAliases
+	// policy and vocab are the caches the capability layer reads, exposed so a
+	// test can replace what a Node reported after the fixture is built.
+	policy *policyview.Cache
+	vocab  *nodevocab.Cache
 }
 
 // newTestServer builds the fixture described on testServer with generous
@@ -270,7 +274,7 @@ func newTestServerWithConcurrency(t *testing.T, accountID string, readCap, mutat
 	// Node has no templates".
 	vocabCache := nodevocab.New()
 	vocabCache.Set(nodeA, nodevocab.Snapshot{
-		Fingerprint: "sha256:node-a-template-set",
+		Fingerprint: nodeATemplateSet,
 		Templates: []nodevocab.Template{
 			{Name: "disk.usage", RiskClass: int32(jobs.RiskClassRead)},
 			{
@@ -371,8 +375,14 @@ func newTestServerWithConcurrency(t *testing.T, accountID string, readCap, mutat
 		conduit: conduit,
 		reg:     reg,
 		aliases: aliases,
+		policy:  policyCache,
+		vocab:   vocabCache,
 	}
 }
+
+// nodeATemplateSet is a well-formed template-set fingerprint (64 lowercase
+// hex), the form a relay-daemon reports and the read lane's bound accepts.
+const nodeATemplateSet = "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0"
 
 // aliasSeedName is the Policy alias the fixture gives node A's fingerprint.
 const aliasSeedName = "zz-seeded-policy-alias"
@@ -1043,7 +1053,7 @@ func TestMCP_DescribeNode(t *testing.T) {
 		if !out.TemplateVocabulary.Reported {
 			t.Fatal("TemplateVocabulary.Reported = false, want true (a snapshot was captured for node A)")
 		}
-		if out.TemplateVocabulary.Fingerprint != "sha256:node-a-template-set" {
+		if out.TemplateVocabulary.Fingerprint != nodeATemplateSet {
 			t.Errorf("TemplateVocabulary.Fingerprint = %q, want the reported template-set fingerprint",
 				out.TemplateVocabulary.Fingerprint)
 		}
@@ -1096,6 +1106,53 @@ func TestMCP_DescribeNode(t *testing.T) {
 			t.Fatal("describe_node(no-such-node): IsError = false, want true")
 		}
 	})
+}
+
+// TestMCP_SnapshotFingerprintsThatFailTheBoundAreNeverRendered pins that the
+// fingerprints a cached Policy or Template snapshot carries pass the same bound
+// as a Hello fingerprint before describe_node and list_operations draw them: a
+// value that fails is served empty, and appears nowhere in the response.
+func TestMCP_SnapshotFingerprintsThatFailTheBoundAreNeverRendered(t *testing.T) {
+	const marker = "MALFORMED-SNAPSHOT-FP"
+	hostile := marker + `"><script>`
+	ts := newTestServer(t)
+	ts.policy.Set(ts.nodeA, policyview.Snapshot{PolicyFingerprint: hostile, AllowedOperations: []string{"system.facts"}})
+	ts.vocab.Set(ts.nodeA, nodevocab.Snapshot{
+		Fingerprint: hostile,
+		Templates:   []nodevocab.Template{{Name: "disk.usage", RiskClass: int32(jobs.RiskClassRead)}},
+	})
+	session := ts.connect(t)
+
+	res := callTool(t, session, "list_operations", map[string]any{"node_id": ts.nodeA})
+	raw := resultText(t, res)
+	var ops mcp.ListOperationsOutput
+	decodeResult(t, res, &ops)
+	if !ops.TemplatesReported {
+		t.Error("list_operations: TemplatesReported = false, want the snapshot still reported")
+	}
+	if ops.TemplateSetFingerprint != "" {
+		t.Errorf("list_operations: TemplateSetFingerprint = %q, want empty", ops.TemplateSetFingerprint)
+	}
+	if strings.Contains(raw, marker) {
+		t.Errorf("list_operations response carries the malformed snapshot fingerprint: %s", raw)
+	}
+
+	res = callTool(t, session, "describe_node", map[string]any{"node_id": ts.nodeA})
+	raw = resultText(t, res)
+	var node mcp.DescribeNodeOutput
+	decodeResult(t, res, &node)
+	if !node.EffectivePolicy.Reported || !node.TemplateVocabulary.Reported {
+		t.Error("describe_node: a snapshot with a failing fingerprint must still read as reported")
+	}
+	if node.EffectivePolicy.PolicyFingerprint != "" {
+		t.Errorf("describe_node: effective_policy.policy_fingerprint = %q, want empty", node.EffectivePolicy.PolicyFingerprint)
+	}
+	if node.TemplateVocabulary.Fingerprint != "" {
+		t.Errorf("describe_node: template_vocabulary fingerprint = %q, want empty", node.TemplateVocabulary.Fingerprint)
+	}
+	if strings.Contains(raw, marker) {
+		t.Errorf("describe_node response carries the malformed snapshot fingerprint: %s", raw)
+	}
 }
 
 // TestMCP_DescribeNode_BoundsTheNodeIdBeforeRecordingIt is QRY-27's MCP-seam
@@ -1331,7 +1388,7 @@ func TestMCP_ListOperations_PerNode(t *testing.T) {
 		if !out.TemplatesReported {
 			t.Error("TemplatesReported = false, want true (node A reported a template set)")
 		}
-		if out.TemplateSetFingerprint != "sha256:node-a-template-set" {
+		if out.TemplateSetFingerprint != nodeATemplateSet {
 			t.Errorf("TemplateSetFingerprint = %q, want the reported fingerprint", out.TemplateSetFingerprint)
 		}
 

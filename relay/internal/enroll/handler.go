@@ -466,6 +466,16 @@ func (s *Server) Enroll(ctx context.Context, req *relayv1.EnrollRequest) (*relay
 		}
 		nodeLabels[bare] = l.GetValue()
 	}
+	// The count is checked after the per-label checks and refuses the whole
+	// request for the same reason: keeping some labels would be the Relay
+	// choosing which of a Node's labels a Selector sees. Numbers only, never a
+	// key or value.
+	if !registry.WithinNodeLabelCap(len(nodeLabels)) {
+		s.attempt(ctx, AttemptEvent{Reason: AttemptMalformed, Source: source})
+		return nil, status.Errorf(codes.InvalidArgument,
+			"self_labels: a Node declares at most %d node: labels, defaults included; %d were sent",
+			registry.MaxNodeLabels, len(nodeLabels))
+	}
 
 	// d. Extract the public token ID from the credential for provenance storage.
 	//    This is the non-secret half of "id.secret"; used only after Validate succeeds.

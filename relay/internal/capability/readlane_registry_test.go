@@ -612,3 +612,99 @@ func TestListOperations_FailsClosedWhenTheReadCannotBeAudited(t *testing.T) {
 		}
 	})
 }
+
+// failingFingerprints are Node-reported snapshot fingerprints the Hello bound
+// refuses; the lane serves each as "" before any surface draws it.
+func failingFingerprints() map[string]string {
+	hex64 := strings.Repeat("ab", 32)
+	return map[string]string{
+		"sha256 prefix":         "sha256:" + hex64,
+		"uppercase hex":         strings.ToUpper(hex64),
+		"63 hex":                hex64[:63],
+		"65 hex":                hex64 + "a",
+		"bidi override":         "\u202e" + hex64[:60],
+		"quote and angle":       `"><script>` + hex64[:40],
+		"one mebibyte":          strings.Repeat("a", 1<<20),
+		"snapshot of nonsense":  "sha256:snapfp",
+		"whitespace-padded hex": " " + hex64,
+	}
+}
+
+// TestBoundedSnapshots_ServeAFailingFingerprintAsEmpty pins the two pure
+// bound functions: a well-formed (or empty) fingerprint is kept, any other is
+// served as "", and no other field changes.
+func TestBoundedSnapshots_ServeAFailingFingerprintAsEmpty(t *testing.T) {
+	hex64 := strings.Repeat("ab", 32)
+	policyKept := []string{"", hex64}
+	templateKept := []string{"", hex64, registry.TemplateUnloadable}
+	for _, fp := range policyKept {
+		in := policyview.Snapshot{PolicyFingerprint: fp, RawExecEnabled: true, AllowedOperations: []string{"system.facts"}}
+		got := boundedPolicySnapshot(in)
+		if got.PolicyFingerprint != fp || !got.RawExecEnabled || len(got.AllowedOperations) != 1 {
+			t.Errorf("boundedPolicySnapshot(%q) = %+v, want it unchanged", fp, got)
+		}
+	}
+	for _, fp := range templateKept {
+		in := nodevocab.Snapshot{Fingerprint: fp, Templates: []nodevocab.Template{readTemplate("svc.status")}}
+		got := boundedTemplateSnapshot(in)
+		if got.Fingerprint != fp || len(got.Templates) != 1 {
+			t.Errorf("boundedTemplateSnapshot(%q) = %+v, want it unchanged", fp, got)
+		}
+	}
+	for name, fp := range failingFingerprints() {
+		pin := policyview.Snapshot{PolicyFingerprint: fp, RawExecEnabled: true, AllowedOperations: []string{"system.facts"}}
+		pgot := boundedPolicySnapshot(pin)
+		if pgot.PolicyFingerprint != "" || !pgot.RawExecEnabled || len(pgot.AllowedOperations) != 1 {
+			t.Errorf("%s: boundedPolicySnapshot = %+v, want the fingerprint served empty and every other field unchanged", name, pgot)
+		}
+		tin := nodevocab.Snapshot{Fingerprint: fp, Templates: []nodevocab.Template{readTemplate("svc.status")}}
+		tgot := boundedTemplateSnapshot(tin)
+		if tgot.Fingerprint != "" || len(tgot.Templates) != 1 {
+			t.Errorf("%s: boundedTemplateSnapshot = %+v, want the fingerprint served empty and the Templates unchanged", name, tgot)
+		}
+	}
+	// "unloadable" is a template-set marker only; as a Policy fingerprint it
+	// is not a SHA-256.
+	if got := boundedPolicySnapshot(policyview.Snapshot{PolicyFingerprint: registry.TemplateUnloadable}); got.PolicyFingerprint != "" {
+		t.Errorf("boundedPolicySnapshot(unloadable) = %q, want empty", got.PolicyFingerprint)
+	}
+}
+
+// TestDescribeNode_SnapshotFingerprintsThatFailTheBoundAreServedEmpty proves
+// the bound holds at the lane every surface reads through, and that a served
+// "" still reads as a reported snapshot.
+func TestDescribeNode_SnapshotFingerprintsThatFailTheBoundAreServedEmpty(t *testing.T) {
+	for name, fp := range failingFingerprints() {
+		policy := fakePolicyView{"node-1": policyview.Snapshot{PolicyFingerprint: fp, RawExecEnabled: true}}
+		vocab := fakeTemplateVocab{"node-1": nodevocab.Snapshot{Fingerprint: fp, Templates: []nodevocab.Template{readTemplate("svc.status")}}}
+		svc, _ := registryLaneFixtureWithViews(t, policy, vocab, registry.Report{NodeID: "node-1"})
+
+		d, err := svc.DescribeNode(context.Background(), testPrincipal, "node-1")
+		if err != nil {
+			t.Fatalf("%s: DescribeNode: %v", name, err)
+		}
+		if !d.PolicyReported || d.Policy.PolicyFingerprint != "" || !d.Policy.RawExecEnabled {
+			t.Errorf("%s: Policy = %+v reported=%v, want a reported snapshot with an empty fingerprint", name, d.Policy, d.PolicyReported)
+		}
+		if !d.TemplatesReported || d.Templates.Fingerprint != "" || len(d.Templates.Templates) != 1 {
+			t.Errorf("%s: Templates = %+v reported=%v, want a reported snapshot with an empty fingerprint", name, d.Templates, d.TemplatesReported)
+		}
+	}
+}
+
+// TestListOperations_TemplateSnapshotFingerprintThatFailsTheBoundIsServedEmpty
+// is the same proof for list_operations' per-Node half.
+func TestListOperations_TemplateSnapshotFingerprintThatFailsTheBoundIsServedEmpty(t *testing.T) {
+	for name, fp := range failingFingerprints() {
+		vocab := fakeTemplateVocab{"node-1": nodevocab.Snapshot{Fingerprint: fp, Templates: []nodevocab.Template{readTemplate("svc.status")}}}
+		svc, _ := registryLaneFixtureWithViews(t, fakePolicyView{}, vocab, registry.Report{NodeID: "node-1"})
+
+		got, err := svc.ListOperations(context.Background(), testPrincipal, "node-1")
+		if err != nil {
+			t.Fatalf("%s: ListOperations: %v", name, err)
+		}
+		if !got.Reported || got.Templates.Fingerprint != "" || len(got.Templates.Templates) != 1 {
+			t.Errorf("%s: OperationVocabulary = %+v, want a reported snapshot with an empty fingerprint", name, got)
+		}
+	}
+}

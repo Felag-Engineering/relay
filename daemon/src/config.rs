@@ -19,9 +19,9 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use crate::enroll::{
-    node_labels_from_env, parse_node_labels, state_dir_from_env, with_default_node_labels,
+    checked_node_labels, node_labels_from_env, parse_node_labels, state_dir_from_env,
 };
-use crate::enroll::{EnrollConfig, EnrollError};
+use crate::enroll::{EnrollConfig, EnrollError, NodeLabelError};
 use crate::gen::Facts;
 use crate::identity::{self, load_relay_addr, validate_endpoint_scheme, IdentityError};
 use relay_transport::join_string::{JoinString, JoinStringError};
@@ -66,6 +66,10 @@ pub enum ConfigError {
     NoRelayAddr { state_dir: PathBuf },
     #[error("cannot read the persisted Relay address: {0}")]
     PersistedAddr(#[from] IdentityError),
+    /// A declared `RELAY_NODE_LABELS` entry the Relay would refuse. Names the
+    /// key, never the value.
+    #[error(transparent)]
+    NodeLabels(#[from] NodeLabelError),
     #[error("the join string is malformed: {0}")]
     MalformedJoin(JoinStringError),
     #[error("the join string is malformed: not valid UTF-8")]
@@ -284,7 +288,7 @@ pub struct Config {
     pub template_dir: PathBuf,
     /// `RELAY_NODE_LABELS` as bare `(key, value)` pairs, followed by the
     /// daemon's default hostname, OS and architecture labels that
-    /// `RELAY_NODE_LABELS` does not set ([`with_default_node_labels`]); `node:`
+    /// `RELAY_NODE_LABELS` does not set ([`checked_node_labels`]); `node:`
     /// prefix is added at send time by `enroll::node_labels_to_proto`
     /// (ADR-0006 §7).
     pub node_labels: Vec<(String, String)>,
@@ -301,9 +305,11 @@ impl Config {
     /// Reads all shared daemon configuration from the environment for an
     /// enrolled Node: the address is the override, else the persisted one.
     ///
-    /// Fails only when no Relay address source exists or the persisted address
-    /// is unreadable or malformed. Defaults are applied for every other missing
-    /// or unparsable env var; an empty `RELAY_SERVER_NAME` counts as unset.
+    /// Fails when no Relay address source exists, the persisted address is
+    /// unreadable or malformed, or a `RELAY_NODE_LABELS` entry is over the
+    /// Relay's limits (checked by [`checked_node_labels`]). Defaults are applied
+    /// for every other missing or unparsable env var; an empty
+    /// `RELAY_SERVER_NAME` counts as unset.
     pub fn from_env() -> Result<Config, ConfigError> {
         let state_dir = state_dir_from_env();
         let relay_addr = resolve_relay_addr(relay_addr_override_from_args_env(), &state_dir)?;
@@ -319,7 +325,7 @@ impl Config {
         // the live `system.facts` Operation exactly — see system_facts.rs.
         let facts = crate::operations::system_facts::gather_facts();
 
-        let (node_labels, left_out) = with_default_node_labels(node_labels_from_env(), &facts);
+        let (node_labels, left_out) = checked_node_labels(node_labels_from_env(), &facts)?;
         for key in left_out {
             warn!(
                 key,
@@ -384,7 +390,8 @@ pub const MAX_OUTPUT_BYTES: usize = 1024 * 1024; // 1 MiB
 /// - `RELAY_ENROLL_ADDRESS` overrides only the enrollment dial target. The CA
 ///   pin applies to whichever endpoint is dialled;
 /// - `RELAY_SERVER_NAME` and `RELAY_NODE_LABELS` are the SNI name and the labels,
-///   with the default labels added ([`with_default_node_labels`]).
+///   with the default labels added and the set checked against the Relay's limits
+///   ([`checked_node_labels`]); an entry over them is refused.
 ///
 /// It reads no other setting: no CA bundle path and no bare token (EN-30), and
 /// no argv. Alongside the configuration it returns the keys of any default
@@ -410,7 +417,7 @@ pub fn join_enroll_config(
     let declared = setting("RELAY_NODE_LABELS")
         .map(|v| parse_node_labels(&v))
         .unwrap_or_default();
-    let (node_labels, left_out) = with_default_node_labels(declared, &facts);
+    let (node_labels, left_out) = checked_node_labels(declared, &facts)?;
 
     let config = EnrollConfig {
         join,
@@ -470,6 +477,7 @@ pub(crate) fn resolve_relay_addr(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::enroll::with_default_node_labels;
     use std::cell::RefCell;
     use std::collections::{BTreeSet, HashMap};
     use std::sync::Mutex;
@@ -568,6 +576,34 @@ mod tests {
         std::env::remove_var("RELAY_ADDRESS");
         let os: Vec<_> = cfg.node_labels.iter().filter(|(k, _)| k == "os").collect();
         assert_eq!(os, [&("os".to_string(), "custom".to_string())]);
+    }
+
+    #[test]
+    fn config_from_env_refuses_an_over_long_relay_node_labels_entry() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _dir = isolated_state_dir("cfg-label-too-long");
+        std::env::set_var("RELAY_ADDRESS", "https://relay:7654");
+        std::env::set_var(
+            "RELAY_NODE_LABELS",
+            format!("role={}", "SECRETVALUE".repeat(24)),
+        );
+
+        let err = Config::from_env()
+            .err()
+            .expect("an over-long value must refuse the start");
+
+        std::env::remove_var("RELAY_NODE_LABELS");
+        std::env::remove_var("RELAY_ADDRESS");
+        assert!(matches!(
+            err,
+            ConfigError::NodeLabels(NodeLabelError::ValueTooLong { .. })
+        ));
+        let message = err.to_string();
+        assert!(message.contains("\"role\""), "names the key: {message}");
+        assert!(
+            !message.contains("SECRETVALUE"),
+            "never the value: {message}"
+        );
     }
 
     #[test]
@@ -763,6 +799,20 @@ mod tests {
             ec.node_labels,
             with_default_node_labels(vec![], &ec.facts).0
         );
+    }
+
+    #[test]
+    fn join_enroll_config_refuses_an_over_long_relay_node_labels_entry() {
+        let labels = format!("{}=web", "k".repeat(64));
+        let err = join_enroll_config(decoded("relay:7654"), PathBuf::from("/state"), &|name| {
+            (name == "RELAY_NODE_LABELS").then(|| labels.clone())
+        })
+        .err()
+        .expect("an over-long key must refuse the join");
+        assert!(matches!(
+            err,
+            EnrollError::NodeLabels(NodeLabelError::KeyTooLong { .. })
+        ));
     }
 
     #[test]

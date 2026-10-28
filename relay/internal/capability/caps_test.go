@@ -126,7 +126,8 @@ func seedNodes(t *testing.T, n int) registry.Repository {
 	reg := registry.NewInMemory()
 	for i := 0; i < n; i++ {
 		if _, err := reg.Upsert(registry.Report{
-			NodeID: fmt.Sprintf("node-%d", i),
+			NodeID:                 fmt.Sprintf("node-%d", i),
+			TemplateSetFingerprint: reportedTemplateSet,
 		}.WithNodeLabels(map[string]string{"role": "web"})); err != nil {
 			t.Fatalf("Upsert(node-%d): %v", i, err)
 		}

@@ -30,6 +30,7 @@ package registrytest
 
 import (
 	"errors"
+	"fmt"
 	"maps"
 	"slices"
 	"strings"
@@ -193,6 +194,16 @@ func RunRepositoryConformance(t *testing.T, newRepo Factory) {
 			{
 				name: "ip addresses: all dropped is none",
 				seed: func(r *registry.Report) { r.Facts.IPAddresses = []string{"10.0.0.1/24"} },
+				want: func(r *registry.Report) { r.Facts.IPAddresses = nil },
+			},
+			{
+				name: "ip addresses: a list at the cap is kept",
+				seed: func(r *registry.Report) { r.Facts.IPAddresses = ipList(registry.MaxReportedIPAddresses) },
+				want: func(r *registry.Report) { r.Facts.IPAddresses = ipList(registry.MaxReportedIPAddresses) },
+			},
+			{
+				name: "ip addresses: a list over the cap is omitted whole",
+				seed: func(r *registry.Report) { r.Facts.IPAddresses = ipList(registry.MaxReportedIPAddresses + 1) },
 				want: func(r *registry.Report) { r.Facts.IPAddresses = nil },
 			},
 		}
@@ -1004,6 +1015,15 @@ var (
 	templateFP1   = strings.Repeat("c", 64)
 	templateFPNew = strings.Repeat("d", 64)
 )
+
+// ipList returns n distinct well-formed IPv4 addresses.
+func ipList(n int) []string {
+	out := make([]string, n)
+	for i := range out {
+		out[i] = fmt.Sprintf("10.%d.%d.1", i/256, i%256)
+	}
+	return out
+}
 
 // fullReport returns a Report with every field this package may populate, so
 // a test can tell a field that was preserved from one that was dropped. It

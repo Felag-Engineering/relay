@@ -193,6 +193,20 @@ const (
 	MaxLabelValueLen = 255
 )
 
+// MaxNodeLabels bounds how many node: Labels one Node may declare, the
+// daemon's default labels included (selectors-and-labels "Limits"). A set over
+// it is refused whole and never truncated, because keeping some would be the
+// Relay choosing which of a Node's labels a Selector sees.
+const MaxNodeLabels = 64
+
+// WithinNodeLabelCap reports whether n distinct node: Labels fit the per-Node
+// cap. It is the one count rule for a node: label set, applied by both node:
+// ingress callers after their per-label checks; each keeps its own
+// refuse-or-drop outcome.
+func WithinNodeLabelCap(n int) bool {
+	return n <= MaxNodeLabels
+}
+
 // WellFormedNodeLabel reports whether a bare node: key and its value may be
 // recorded or served: WellFormedLabel, with the key at most MaxLabelKeyLen and
 // the value at most MaxLabelValueLen bytes. The node: ingress

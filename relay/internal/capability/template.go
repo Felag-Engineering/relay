@@ -36,6 +36,9 @@
 //     fingerprint the Node's latest Hello carried is stale — the daemon has
 //     restarted with a different set and its new report has not landed yet —
 //     and counts as no report at all.
+//   - A Node whose latest Hello carried no loaded Templates — no template-set
+//     fingerprint, or the unloadable marker — holds none: it is excluded even
+//     when a cached report carries some.
 //
 // resolveAction COMPUTES and never refuses: the caller authorizes first and
 // only then acts on resolvedAction.refusal, so a caller who may not ask
@@ -147,6 +150,13 @@ func (s *Execution) resolveAction(act jobs.Action, matched []registry.Node) reso
 			out.excluded = append(out.excluded, excludedNode{node: n, reason: TemplateNotReportedReason})
 			continue
 		}
+		// The Node's latest Hello reported no loaded Templates (or a
+		// fingerprint the ingress refused), so it has none whatever a cached
+		// snapshot claims; two empty fingerprints never make a report current.
+		if n.TemplateSetFingerprint == "" || n.TemplateSetFingerprint == registry.TemplateUnloadable {
+			out.excluded = append(out.excluded, excludedNode{node: n, reason: TemplateNotInVocabularyReason})
+			continue
+		}
 		t, ok := findTemplate(snap, act.OperationName)
 		if !ok {
 			out.excluded = append(out.excluded, excludedNode{node: n, reason: TemplateNotInVocabularyReason})
@@ -185,7 +195,8 @@ func (s *Execution) templateSnapshot(nodeID string) (nodevocab.Snapshot, bool) {
 	if s.read.nodeVocab == nil {
 		return nodevocab.Snapshot{}, false
 	}
-	return s.read.nodeVocab.Get(nodeID)
+	snap, ok := s.read.nodeVocab.Get(nodeID)
+	return boundedTemplateSnapshot(snap), ok
 }
 
 // findTemplate returns the Template named name in snap, if the Node reports it.

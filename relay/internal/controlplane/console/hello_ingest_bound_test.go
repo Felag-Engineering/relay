@@ -1,11 +1,17 @@
 package console
 
 import (
+	"html"
+	"net/http"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
+	"github.com/Felag-Engineering/relay/relay/internal/accounts"
+	"github.com/Felag-Engineering/relay/relay/internal/auditsink"
+	"github.com/Felag-Engineering/relay/relay/internal/policyview"
 	"github.com/Felag-Engineering/relay/relay/internal/protoconv"
 	"github.com/Felag-Engineering/relay/relay/internal/registry"
 	relayv1 "github.com/Felag-Engineering/relay/relay/internal/relay/v1"
@@ -212,5 +218,82 @@ func TestFleet_FingerprintFacetLinksAreNeverKeyedOnAMalformedHelloValue(t *testi
 		if sum != g.Count {
 			t.Errorf("group %q: facet counts sum to %d, want the group's %d Nodes", g.Key, sum, g.Count)
 		}
+	}
+}
+
+// snapshotFPFixture seeds a registry Node with no Hello-recorded Policy
+// fingerprint but a daemon version (so the Node page marks its Policy panel
+// "Not corroborated by a recorded Hello" and draws the snapshot's own
+// fingerprint), caches snapshotFP as that Node's Policy snapshot fingerprint,
+// and returns the Node page body fetched through a real ReadLane.
+func snapshotFPFixture(t *testing.T, snapshotFP string) string {
+	t.Helper()
+	const nodeID = "node-snap"
+	reg := registry.NewInMemory()
+	if _, err := reg.Upsert(registry.Report{NodeID: nodeID, DaemonVersion: goodDaemonVersion}); err != nil {
+		t.Fatalf("Upsert %s: %v", nodeID, err)
+	}
+	policy := policyview.New()
+	policy.Set(nodeID, policyview.Snapshot{PolicyFingerprint: snapshotFP, AllowedOperations: []string{"system.facts"}})
+	sink := auditsink.New(&recordingTrail{}, auditsink.WithClock(func() time.Time { return testNow }))
+	svc := newCapService(capSeams{
+		reg:        reg,
+		audit:      sink,
+		auditQ:     emptyAuditQuery{},
+		jobQ:       emptyJobQuery{},
+		policyView: policy,
+	})
+	d := renderableDeps()
+	d.Queries = svc.ReadLane
+
+	rec := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/nodes/"+nodeID)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET the Node page = %d, want 200", rec.Code)
+	}
+	return rec.Body.String()
+}
+
+// TestNode_SnapshotPolicyFingerprintThatFailsTheBoundIsNeverRendered covers
+// the Node page's code title attribute, which draws the fingerprint a cached
+// Policy snapshot carries. The value is Node-reported, so the read lane serves
+// it as "" when it fails the Hello bound, and the page states the snapshot
+// carries none rather than drawing it.
+//
+// MUTATION: returning the cached snapshot unbounded from DescribeNode turns
+// this red.
+func TestNode_SnapshotPolicyFingerprintThatFailsTheBoundIsNeverRendered(t *testing.T) {
+	const uncorroborated = "Not corroborated by a recorded Hello"
+	hostile := map[string]string{
+		"bidi override":   "abcdefghij" + bidiRune + strings.Repeat("a", 51),
+		"quote and angle": `"><script>alert(1)</script>` + strings.Repeat("a", 40),
+		"sha256 prefix":   "sha256:" + hexFP("a")[:57],
+		"oversized":       strings.Repeat("a", 1<<20),
+	}
+	for name, value := range hostile {
+		t.Run(name, func(t *testing.T) {
+			body := snapshotFPFixture(t, value)
+			if !strings.Contains(body, uncorroborated) {
+				t.Fatal("the Policy panel is not in its uncorroborated branch, so this test would pass vacuously")
+			}
+			if !strings.Contains(body, "This snapshot carries no Policy fingerprint of its own.") {
+				t.Error("the page does not state the snapshot carries no fingerprint")
+			}
+			if strings.Contains(body, value) || strings.Contains(body, html.EscapeString(value)) {
+				t.Error("the page draws the Node-reported snapshot fingerprint")
+			}
+			if strings.Contains(body, bidiRune) {
+				t.Error("the page carries U+202E from a snapshot fingerprint")
+			}
+		})
+	}
+
+	// Positive control on the same fixture: a well-formed fingerprint is drawn,
+	// in the code element's title attribute.
+	body := snapshotFPFixture(t, hexFP("c"))
+	if !strings.Contains(body, uncorroborated) || !strings.Contains(body, "This snapshot carries its own Policy fingerprint") {
+		t.Fatal("a well-formed snapshot fingerprint is not drawn on the uncorroborated panel")
+	}
+	if !strings.Contains(body, `title="`+hexFP("c")+`"`) {
+		t.Error("the code element's title attribute does not carry the well-formed fingerprint")
 	}
 }
