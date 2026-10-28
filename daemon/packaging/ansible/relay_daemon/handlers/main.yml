@@ -1,0 +1,8 @@
+---
+# The role's only handler. An operator's task that writes a Policy fragment notifies it, because
+# the daemon loads Policy once, at start (DI-15, DI-36). None of the role's own tasks notify it:
+# the role places no fragment and changes nothing on an enrolled Node (DI-45).
+- name: Restart relay-daemon
+  ansible.builtin.systemd_service:
+    name: relay-daemon
+    state: restarted

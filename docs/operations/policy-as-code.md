@@ -271,8 +271,11 @@ The role that installs the daemon pushes the Policy file ([enrollment.md](enroll
   notify: restart relay-daemon
 ```
 
+With the role applied, notify `relay_daemon : Restart relay-daemon` instead.
+
 A Node with fragments needs a Policy file too (an empty one will do), and a task per fragment.
-These are your own task and handler, in your own role; the example is not a shipped one:
+The fragment task is yours. The release's role (`relay_daemon`) carries the restart handler, so a
+play that applies the role notifies `relay_daemon : Restart relay-daemon`:
 
 ```yaml
 - name: Install a Policy fragment (root-owned; no backup, ever)
@@ -282,8 +285,12 @@ These are your own task and handler, in your own role; the example is not a ship
     owner: root
     group: root
     mode: "0644"
-  notify: restart relay-daemon
+  notify: "relay_daemon : Restart relay-daemon"
+```
 
+A play without the role keeps its own handler. This one is yours, not a shipped one:
+
+```yaml
 # handlers/main.yml
 - name: restart relay-daemon
   ansible.builtin.systemd:

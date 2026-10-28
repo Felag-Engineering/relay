@@ -19,6 +19,11 @@ It also:
   then be recorded (see Limits);
 - changes nothing on an enrolled Node;
 - places no Policy fragment. Policy is yours to deliver (ADR-0002);
+- carries a handler, `relay_daemon : Restart relay-daemon`, that restarts the daemon. Notify it
+  from your own task that writes a Policy fragment, because the daemon loads Policy only at
+  start. The handler does not validate: check the composed Policy first, the Policy file and the Policy directory together:
+  `relay-daemon policy check /etc/relay-daemon/policy.toml --policy-dir /etc/relay-daemon/policy.d --strict`
+  ([policy-as-code.md](../../../../docs/operations/policy-as-code.md));
 - never upgrades or downgrades an installed daemon, whatever its version: it joins the daemon
   it finds as it is. Upgrades are your config management's (ADR-0014).
 
@@ -40,6 +45,15 @@ Put the join string in the vault with
     - role: relay_daemon
       vars:
         relay_daemon_package_dir: /srv/relay-daemon-package
+  tasks:
+    - name: Place a Policy fragment
+      ansible.builtin.copy:
+        src: policies/10-nginx.toml
+        dest: /etc/relay-daemon/policy.d/10-nginx.toml
+        owner: root
+        group: root
+        mode: "0644"
+      notify: "relay_daemon : Restart relay-daemon"
 ```
 
 ## Limits

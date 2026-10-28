@@ -51,7 +51,8 @@ from a join string in your vault, with the string on standard input
 ([its README](ansible/relay_daemon/README.md)). The release attaches it as
 `relay_daemon-<version>.tar.gz` under `SHA256SUMS`, and the install matrix runs that tarball
 under a hash-locked ansible-core (`ansible/test/requirements.txt`) before the release
-publishes ([release-artifacts.md](../../docs/operations/release-artifacts.md)).
+publishes ([release-artifacts.md](../../docs/operations/release-artifacts.md)). It carries a
+restart handler for your own Policy fragment tasks to notify (DI-47).
 
 ## Install
 

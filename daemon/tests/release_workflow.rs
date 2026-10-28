@@ -5,7 +5,8 @@
 //! packages' release half: gated on the install matrix, attached under `SHA256SUMS` with an
 //! SBOM each, built twice and unsigned (DI-24, RC-23), and the Ansible role's release half and
 //! the matrix's hash-locked ansible-core and release-mode role (DI-45), reading
-//! `install-matrix.yml` as well.
+//! `install-matrix.yml` as well, and the role's restart handler with the matrix's fragment run
+//! (DI-47), reading the role, its test fixture and the matrix script.
 //!
 //! A workflow cannot run in a test, so the files are read as text and the assertions are on
 //! properties of the job graph, never on exact lines: a reworded step stays green, a removed
@@ -1546,5 +1547,116 @@ fn release_attaches_the_ansible_role_and_the_matrix_runs_it_with_hash_locked_ans
     assert!(
         names.iter().any(|n| n.starts_with("ansible-core==")),
         "the lock names ansible-core: {names:?}"
+    );
+}
+
+// Proves DI-47.
+#[test]
+fn the_ansible_role_restarts_the_daemon_when_a_fragment_changes_and_the_matrix_proves_the_new_fingerprint(
+) {
+    let ansible = repo().join("daemon/packaging/ansible");
+
+    // The role carries exactly one handler, and it restarts the unit.
+    let handler = code(&read(&ansible.join("relay_daemon/handlers/main.yml")));
+    assert_eq!(
+        handler.matches("- name:").count(),
+        1,
+        "the role carries one handler: {handler}"
+    );
+    assert!(
+        re(r"(?m)^- name: Restart relay-daemon\s*$").is_match(&handler),
+        "the handler is named Restart relay-daemon: {handler}"
+    );
+    assert!(
+        re(r"ansible\.builtin\.systemd(_service)?:").is_match(&handler)
+            && re(r"(?m)^\s+name: relay-daemon\s*$").is_match(&handler)
+            && re(r"(?m)^\s+state: restarted\s*$").is_match(&handler),
+        "the handler restarts the relay-daemon unit: {handler}"
+    );
+
+    // The role still places no fragment (DI-45) and notifies nothing itself.
+    let mut files = Vec::new();
+    collect_files(&ansible.join("relay_daemon"), &mut files);
+    for file in files
+        .iter()
+        .filter(|f| f.file_name().is_some_and(|n| n != "README.md"))
+    {
+        let text = code(&read(file));
+        assert!(
+            !text.contains("policy.d") && !text.contains("/etc/relay-daemon/policy"),
+            "the role names no Policy path: {}",
+            file.display()
+        );
+    }
+    let tasks = code(&read(&ansible.join("relay_daemon/tasks/main.yml")));
+    assert!(
+        !tasks.contains("notify:"),
+        "no task of the role notifies the handler"
+    );
+
+    // The fixture is an operator's play: the role, then a task of its own that writes a fragment
+    // and notifies the role's handler by its role-qualified name.
+    let fixture = code(&read(&ansible.join("test/policy-fragment.yml")));
+    assert!(
+        re(r"(?m)^\s+- relay_daemon\s*$").is_match(&fixture),
+        "the fixture applies the role: {fixture}"
+    );
+    for needle in [
+        "dest: /etc/relay-daemon/policy.d/",
+        "notify: \"relay_daemon : Restart relay-daemon\"",
+        "owner: root",
+        "mode: \"0644\"",
+    ] {
+        assert!(
+            fixture.contains(needle),
+            "the fixture holds {needle}: {fixture}"
+        );
+    }
+    assert!(
+        !fixture.contains("backup:"),
+        "a backup copy would be composed as a fragment"
+    );
+
+    // The matrix script runs that fixture on the enrolled Node and checks the restart and the
+    // fingerprint the Relay reports.
+    let script = code(&read(
+        &repo().join("scripts/install-matrix-ansible-role.sh"),
+    ));
+    let lines: Vec<&str> = script.lines().collect();
+    let run_b = lines
+        .iter()
+        .position(|l| l.starts_with("play run-b.log"))
+        .expect("the script runs run B");
+    let run_f = lines
+        .iter()
+        .position(|l| l.starts_with("play_with") && l.contains("test/policy-fragment.yml"))
+        .expect("the script runs the fragment play");
+    assert!(run_b < run_f, "the fragment play runs on the enrolled Node");
+    assert!(
+        lines
+            .iter()
+            .filter(|l| l.starts_with("check DI-47"))
+            .count()
+            >= 4,
+        "the script checks DI-47 at least four ways"
+    );
+    for needle in [
+        "RUNNING HANDLER [relay_daemon : Restart relay-daemon]",
+        "MainPID",
+        "policy check",
+        "--policy-dir /etc/relay-daemon/policy.d",
+        "/api/v1/nodes/",
+        "policy_fingerprint",
+    ] {
+        assert!(script.contains(needle), "the script holds {needle}");
+    }
+
+    // The matrix runs that script.
+    let mx = matrix();
+    assert!(
+        steps(&mx["ansible-role"])
+            .iter()
+            .any(|s| s.contains("install-matrix-ansible-role.sh")),
+        "the install matrix runs the role script"
     );
 }

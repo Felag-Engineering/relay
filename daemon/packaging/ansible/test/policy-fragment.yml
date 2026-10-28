@@ -1,0 +1,21 @@
+---
+# The fixture for run F of scripts/install-matrix-ansible-role.sh. It is the operator's task, not
+# the role's, that writes the fragment and notifies the role's handler (DI-45, DI-47). Never
+# shipped: the release tarball carries relay_daemon/ only.
+- hosts: node
+  become: true
+  gather_facts: false
+  roles:
+    - relay_daemon
+  tasks:
+    - name: Place a Policy fragment, as an operator's own task does
+      ansible.builtin.copy:
+        dest: /etc/relay-daemon/policy.d/50-role-test.toml
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [[deny]]
+          name = "file.read"
+          args = [["/etc/relay-role-test"]]
+      notify: "relay_daemon : Restart relay-daemon"
