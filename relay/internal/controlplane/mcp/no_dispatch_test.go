@@ -63,7 +63,7 @@ var capabilityReadAllowlist = map[string]bool{
 // execFiles are the files relaxed from capabilityReadAllowlist: the execution
 // tools, which spell capability.Principal/Selector/NodeResult/FrozenError/
 // CapExceededError and the like for the Executor and
-// ApprovalDecider seams and for error rendering. Every other non-test file in
+// ApprovalAnswerer seams and for error rendering. Every other non-test file in
 // this package is STRICT by default, so a new file is guarded the moment it
 // exists: a new read tool needs no entry here, and a new file that needs more
 // of package capability fails this guard until it is listed — which is the
@@ -73,15 +73,14 @@ var capabilityReadAllowlist = map[string]bool{
 var execFiles = map[string]bool{
 	"tools_execution.go": true,
 	"tools_jobs.go":      true,
-	// tools_approval.go serves approve_request, the in-band approval rung
-	// (ADR-0029). It spells capability.Principal and
-	// capability.ApprovalDecision for the ApprovalDecider seam. Approving
-	// releases a Plan; it does not run one.
+	// tools_approval.go accepts an elicited answer (ADR-0029 decision 6). It
+	// spells capability.Principal for the ApprovalAnswerer seam. Recording an
+	// answer releases a Plan; it does not run one.
 	"tools_approval.go": true,
 	// elicit.go renders an askable park as an MRTR question (ADR-0029
 	// decision 6). It spells capability.ParkedError/Principal to read what
 	// the capability layer already decided, and names no decision identifier
-	// at all (no_decision_test.go needs no exemption for it).
+	// at all.
 	"elicit.go": true,
 }
 

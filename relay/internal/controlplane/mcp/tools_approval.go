@@ -16,59 +16,35 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/controlplane/mcp/requeststate"
 )
 
-// tools_approval.go is THE ONE FILE in this package permitted to name a
-// decision path, and it exists because of a decision recorded in ADR-0029.
+// tools_approval.go accepts an MRTR answer to a parked approval (ADR-0029
+// decision 6) and renders the outcome of the answered retry.
 //
-// Everything else about ADR-0027 is unchanged and is enforced by
-// no_decision_test.go, which still scans every other file here. The exemption
-// is a single filename in that test, so the whole of this hole is one
-// `git show` away for any reviewer, and a second decision path cannot appear
-// anywhere else by accident.
+// It records the answer only through the capability layer's single in-band
+// entry point (AnswerElicited), which sets the channel itself, so this file,
+// like every file in the package, names no decision identifier and no channel
+// (ADR-0047 decision 4). no_decision_test.go scans it. The channel it renders
+// is the one the capability layer recorded for the answer, read back from the
+// returned Request.
 //
 // # What this file may and may not assume
 //
-// It may record a decision. It may NOT decide what a decision means: the
-// eligibility rules — requester exclusion, audience, quorum, plan binding,
-// channel strength, expiry — all live in package approval and are enforced by
-// Request.Decide on the way to the store. This file supplies three facts and
-// nothing else: WHO was authenticated, WHAT they answered, and that the answer
-// arrived IN-BAND.
-//
-// That last fact is set here and is never read from the caller's input.
-// approval.Decision's own comment is the reason: "A channel a client could
-// name is a channel a client could upgrade." A tool argument asking for
-// out-of-band strength would be exactly that, so the channel is a constant
-// below and there is no field for it in the input type.
+// It may hand an answer to the capability layer. It may NOT decide what an
+// answer means: the eligibility rules (requester exclusion, audience, quorum,
+// plan binding, channel strength, expiry) all live in package approval and are
+// enforced by Request.Decide on the way to the store. This file supplies three
+// facts and nothing else: WHO was authenticated, WHAT they answered, and which
+// sealed request and plan the answer is for.
 //
 // # Why the approver is asserted, never verified
 //
-// The call arrives on the requesting session's credential. Relay therefore
-// knows which Account made the call and cannot know whether a human answered —
-// only that the client says one did. So the approver travels in the ASSERTED
-// attribution lane (capability.Assertions.OnBehalfOf), which is masked from
-// authorization by construction and lands in the audit trail's asserted
+// The retried call arrives on the requesting session's credential. Relay
+// therefore knows which Account made the call and cannot know whether a human
+// answered, only that the client says one did. So the responder travels in the
+// ASSERTED attribution lane (capability.Assertions.OnBehalfOf), which is masked
+// from authorization by construction and lands in the audit trail's asserted
 // columns. `approved_by` stays the verified Account; `on_behalf_of` carries
 // the claim. An auditor can always tell the two apart, which is the entire
 // point of recording them separately (ADR-0029 decision 2).
-//
-// approve_request is always asserted this way, including on an OAuth human
-// session, because the tool is model-called: treating its approver as
-// verified would record a model-supplied approver as verified, when the
-// tool call only ever lets it assert one. The answered retry's AP-79
-// exception to this rule is described below.
-//
-// # The second envelope (ADR-0029 decision 6)
-//
-// acceptElicitedAnswer, below, is the MRTR answer path: a retried tool call
-// carrying an elicitation response to a parked approval. It lives here, in
-// the one exempt file, by the same choice that put approve_request here —
-// the seal check (package requeststate), the responder-assertion rule, the
-// verified-decision rule (AP-78/AP-79, below), and the classification of what
-// capability.Approvals.DecideApproval returned are ALL written in this file, so
-// a reviewer can audit the whole of this hole by opening one file, and that
-// promise is kept by what is written in the file rather than by the AST scan
-// (no_decision_test.go still enforces the scan; this paragraph is the
-// reviewer's map of what to read).
 //
 // On a signed-in human session (oauthHumanSession, below) any answered retry
 // is that human's own verified in-band decision, whatever the declared client
@@ -76,62 +52,50 @@ import (
 // responder is ignored, and nothing is written to the asserted lane (AP-79).
 // On every other session a responder assertion with gate permission is
 // required (AP-64), otherwise the retry is refused as a machine
-// self-decision, exactly as approve_request with no approver is. Acceptance
-// never reads the declared client name (AP-78) — the name only gates
-// whether a client is asked at all, in elicit.go's clientCanBeAsked, which
-// isAnsweredRetry also applies.
+// self-decision. Acceptance never reads the declared client name (AP-78); the
+// name only gates whether a client is asked at all, in elicit.go's
+// clientCanBeAsked, which isAnsweredRetry also applies.
 //
 // tools_execution.go's run_operation and raw_exec are the only callers of
-// acceptElicitedAnswer (S4a-2): a retry carrying requestState/
-// inputResponses is decided here first, and tools_execution.go's
-// answerThenDispatch then re-enters the whole dispatch pipeline once. The
-// composition root passes WithApprovalElicitation, so this path is reachable
-// from main.
+// acceptElicitedAnswer: a retry carrying requestState/inputResponses is
+// accepted here first, and tools_execution.go's answerThenDispatch then
+// re-enters the whole dispatch pipeline once.
 
-// ApprovalDecider records a decision against a parked approval Request.
+// ApprovalAnswerer records an elicited answer to a parked approval Request.
 //
 // Deliberately one method wide. The MCP surface has no business reading the
-// approval queue through this seam or reaching anything else
-// on capability.Approvals — a narrow interface is what keeps "this file may
-// record a decision" from drifting into "this file has the approval API".
-type ApprovalDecider interface {
-	DecideApproval(ctx context.Context, p capability.Principal, in capability.ApprovalDecision) (approval.Request, error)
+// approval queue through this seam or reaching anything else on
+// capability.Approvals; mcp.New re-wraps the value so nothing wider can be
+// recovered from it.
+type ApprovalAnswerer interface {
+	AnswerElicited(ctx context.Context, p capability.Principal, requestID, planHash string, approve bool) (approval.Request, error)
 }
 
-// WithApprovalDecider enables the in-band approval tool (ADR-0029).
+// WithApprovalAnswerer enables accepting an elicited answer to a parked
+// approval (ADR-0029 decision 6). It takes effect together with
+// WithApprovalElicitation.
 //
-// Absent, `approve_request` is not registered at all and the Relay behaves
-// exactly as it did before: parked dispatches are answered only on the
-// authenticated /api/v1 decision endpoint. That makes the in-band rung opt-in at
-// the composition root rather than something a deployment gets by upgrading.
-func WithApprovalDecider(d ApprovalDecider) Option {
-	return func(o *serverOptions) { o.approvals = d }
+// Absent, a parked dispatch is answered only on the authenticated /api/v1
+// decision endpoint. That makes the in-band rung opt-in at the composition
+// root rather than something a deployment gets by upgrading.
+func WithApprovalAnswerer(a ApprovalAnswerer) Option {
+	return func(o *serverOptions) { o.approvals = a }
 }
 
-// approveRequestInput is the tool's argument shape.
-//
-// There is deliberately no `channel` field. See the file header: the surface
-// that receives a decision sets its strength, never the caller.
-type approveRequestInput struct {
-	RequestID string `json:"request_id" jsonschema:"The parked approval request to answer, exactly as reported in a pending_approval result's request_id."`
-	PlanHash  string `json:"plan_hash" jsonschema:"The plan_hash from the same pending_approval result. A decision binds to the Plan it was shown; if the fleet changed since, this is refused rather than silently approving a different set of Nodes."`
-	Approve   bool   `json:"approve" jsonschema:"true approves, false denies. A denial is terminal — it cannot be reversed by approving afterwards."`
-	Approver  string `json:"approver" jsonschema:"Who actually made this decision — the human you asked, not you. Recorded as an ASSERTED identity: Relay cannot verify it, and the audit trail marks it as a claim rather than as a verified approver. Required: an in-band approval with nobody named is a machine approving its own request. At most 256 bytes, no control characters; a longer or malformed value is refused, never truncated."`
-	Reason    string `json:"reason,omitempty" jsonschema:"Optional note from the decider, recorded in the audit trail."`
+// approvalAnswererAdapter narrows an ApprovalAnswerer to its one method, so no
+// value in this package has a dynamic type wider than the seam.
+type approvalAnswererAdapter struct{ r ApprovalAnswerer }
+
+func (a approvalAnswererAdapter) AnswerElicited(ctx context.Context, p capability.Principal, requestID, planHash string, approve bool) (approval.Request, error) {
+	return a.r.AnswerElicited(ctx, p, requestID, planHash, approve)
 }
 
-// noNamedApproverError is the "no named human" refusal shared, byte-for-byte,
-// by approve_request (an empty or whitespace-only `approver`) and
-// acceptElicitedAnswer (a machine self-decision on the answered retry) —
-// AP-64: "refused exactly as an approve_request carrying no approver is
-// refused (AP-48)". Sharing one type, rather than two error literals with the
-// same string, is what keeps the message identical by construction as either
-// side is edited.
+// noNamedApproverError is the "no named human" refusal acceptElicitedAnswer
+// returns for a machine self-decision on the answered retry (AP-64).
 //
-// Unwrap returns approval.ErrMachineSelfDecision so a caller — and the
-// domain's own eligibility rule, see Decision.relaysAnAssertedHuman — can
-// recognise this refusal with errors.Is regardless of which surface produced
-// it.
+// Unwrap returns approval.ErrMachineSelfDecision so a caller, and the domain's
+// own eligibility rule (see Decision.relaysAnAssertedHuman), can recognise this
+// refusal with errors.Is.
 type noNamedApproverError struct{}
 
 func (noNamedApproverError) Error() string {
@@ -143,9 +107,8 @@ func (noNamedApproverError) Unwrap() error { return approval.ErrMachineSelfDecis
 
 var errNoNamedApprover error = noNamedApproverError{}
 
-// assertedApprover validates and trims a caller-asserted approver identity —
-// the bound shared by approve_request's `approver` argument and the answered
-// retry's responder username (owner decision 2).
+// assertedApprover validates and trims a caller-asserted approver identity,
+// the answered retry's responder username (ADR-0029 decision 2).
 //
 // Order is load-bearing:
 //
@@ -163,8 +126,7 @@ var errNoNamedApprover error = noNamedApproverError{}
 //     exceeds the bound is refused even if trimming would bring it under.
 //  3. The value RETURNED is trimmed: surrounding ASCII spaces (not control
 //     characters) still pass validation and are trimmed from what gets
-//     recorded, preserving approve_request's existing "  alice  " -> "alice"
-//     behaviour.
+//     recorded ("  alice  " -> "alice").
 func assertedApprover(raw string) (string, error) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
@@ -177,9 +139,8 @@ func assertedApprover(raw string) (string, error) {
 	return trimmed, nil
 }
 
-// withAssertedApprover attaches approver to ctx's asserted attribution —
-// the same lane approve_request has always used — without discarding
-// whatever else the caller already asserted (a traceparent or session_ref
+// withAssertedApprover attaches approver to ctx's asserted attribution
+// without discarding whatever else the caller already asserted (a traceparent or session_ref
 // already on ctx survives).
 func withAssertedApprover(ctx context.Context, approver string) context.Context {
 	asserted := capability.AssertionsFromContext(ctx)
@@ -187,84 +148,19 @@ func withAssertedApprover(ctx context.Context, approver string) context.Context 
 	return capability.WithAssertions(ctx, asserted)
 }
 
-// ApprovalDecisionOutput is what the tool returns. It is also reused,
-// unchanged, as the decision block an answered retry's response carries
-// (RunOrPlanOutput.Decision) — the Channel and State descriptions below
-// are written to be true of both.
+// ApprovalDecisionOutput is the decision block an answered retry's response
+// carries (RunOrPlanOutput.Decision).
 type ApprovalDecisionOutput struct {
 	RequestID  string `json:"request_id" jsonschema:"The request that was answered."`
-	State      string `json:"state" jsonschema:"The request's state: after this decision on approve_request, or at the moment this answer was evaluated on an answered retry's decision block — the dispatch that follows may have moved the request on further (for example a concurrent approval completing the quorum). One of pending (more approvals still required), approved, denied, or expired."`
+	State      string `json:"state" jsonschema:"The request's state at the moment this answer was evaluated — the dispatch that follows may have moved it on further (for example a concurrent approval completing the quorum). One of pending (more approvals still required), approved, denied, or expired."`
 	Progress   string `json:"progress" jsonschema:"Quorum progress, e.g. '1 of 2'."`
-	Channel    string `json:"channel" jsonschema:"'in-band' when this decision was recorded through this tool — the answer arrived over the same session that requested the action, and rules requiring out-of-band strength are not satisfied by it. On an answered retry's decision block this is empty when THIS call's answer was not recorded (for example the request was already decided by someone else); approve_request always sets it, because it returns a tool error rather than this shape when nothing was recorded."`
+	Channel    string `json:"channel" jsonschema:"The channel the Relay recorded for this call's answer: 'in-band', because the answer arrived over the same session that requested the action, and rules requiring out-of-band strength are not satisfied by it. Empty when this call's answer was not recorded (for example the request was already decided by someone else)."`
 	OnBehalfOf string `json:"on_behalf_of" jsonschema:"The asserted approver identity recorded for this decision. Asserted, never verified. Empty when channel is empty, and also when the decision was the calling human's own verified answer with no asserted approver (an answer given on that human's own OAuth session, whatever the client)."`
 	NextStep   string `json:"next_step" jsonschema:"What to do next."`
 }
 
-const approveRequestNextStep = "If state is 'approved', re-issue the original call unchanged to run it — approving releases the Plan, it does not itself dispatch. " +
-	"If state is still 'pending', the rule requires more approvals than this one. If it is 'denied', do not retry: a denial is terminal."
-
-// registerApprovalTools adds approve_request when a decider is configured.
-func registerApprovalTools(srv *sdkmcp.Server, decider ApprovalDecider) {
-	if decider == nil {
-		return
-	}
-
-	sdkmcp.AddTool(srv, &sdkmcp.Tool{
-		Name: "approve_request",
-		Description: "Answer a parked approval request — the in-band decision path (ADR-0029). " +
-			"Use this ONLY to relay a decision a human actually made: surface the pending_approval summary verbatim, " +
-			"ask, and pass their answer here with their identity in `approver`. " +
-			"Never decide on your own initiative and never infer approval from context — you are the messenger, not the approver. " +
-			"A decision made here is recorded as in-band, which is weaker than a decision landing on the authenticated " +
-			"/api/v1 endpoint: rules configured to require out-of-band strength are NOT satisfied by this tool and will " +
-			"still refuse. Denials are terminal.",
-	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in approveRequestInput) (*sdkmcp.CallToolResult, ApprovalDecisionOutput, error) {
-		logPrincipal(ctx, "approve_request")
-		p, err := requirePrincipal(ctx)
-		if err != nil {
-			return nil, ApprovalDecisionOutput{}, err
-		}
-
-		// Refused here rather than in the domain so the caller gets a legible
-		// message naming the argument. The domain refuses it too, on the
-		// stricter reading that a machine relaying nobody is a machine
-		// deciding — see Decision.relaysAnAssertedHuman.
-		approver, err := assertedApprover(in.Approver)
-		if err != nil {
-			return nil, ApprovalDecisionOutput{}, err
-		}
-
-		// The asserted approver joins the caller's existing attribution rather
-		// than replacing it: a traceparent or session_ref already on the
-		// context is attribution too, and dropping it here would lose the
-		// thread between the request and its answer.
-		ctx = withAssertedApprover(ctx, approver)
-
-		updated, err := decider.DecideApproval(ctx, p, capability.ApprovalDecision{
-			RequestID: strings.TrimSpace(in.RequestID),
-			PlanHash:  strings.TrimSpace(in.PlanHash),
-			Approve:   in.Approve,
-			Reason:    in.Reason,
-			// Constant, never caller-supplied. See the file header.
-			Channel: approval.ChannelInBand,
-		})
-		if err != nil {
-			return nil, ApprovalDecisionOutput{}, renderApprovalError(err)
-		}
-
-		return nil, ApprovalDecisionOutput{
-			RequestID:  updated.ID,
-			State:      updated.State.String(),
-			Progress:   updated.Progress(),
-			Channel:    approval.ChannelInBand.String(),
-			OnBehalfOf: approver,
-			NextStep:   approveRequestNextStep,
-		}, nil
-	})
-}
-
-// renderApprovalError maps a decision refusal to a message that tells the AI-agent
-// what to do about it.
+// renderApprovalError maps a refusal of an elicited answer to an actionable
+// Reason for the AI-agent.
 //
 // The domain's errors are deliberately not collapsed into one "refused": an
 // AI-agent that reads "already decided" should stop, one that reads "plan changed"
@@ -273,22 +169,23 @@ func registerApprovalTools(srv *sdkmcp.Server, decider ApprovalDecider) {
 func renderApprovalError(err error) error {
 	switch {
 	case errors.Is(err, approval.ErrNotFound):
-		return fmt.Errorf("no such approval request — check request_id, or it may have expired and been swept: %w", err)
+		return fmt.Errorf("no such approval request — it may have expired and been swept. Re-issue the original call to be asked afresh: %w", err)
 	case errors.Is(err, approval.ErrWeakChannel):
-		return fmt.Errorf("this request requires an out-of-band decision and cannot be approved through this tool. "+
+		return fmt.Errorf("this request requires an out-of-band decision and cannot be answered in-band. "+
 			"A human must answer it on the Control API decision endpoint with their own credential: %w", err)
 	case errors.Is(err, approval.ErrRequesterExcluded):
 		return fmt.Errorf("this request requires a second person: the Account that asked for it may not answer it, "+
 			"whoever is relaying the answer. A different human must decide it out-of-band: %w", err)
-	case errors.Is(err, approval.ErrMachineSelfDecision):
-		return fmt.Errorf("refused: an in-band answer must name the human who gave it. Pass their identity in `approver`: %w", err)
+	// refusalOutput intercepts ErrMachineSelfDecision before it reaches here; a
+	// stray one falls to the generic default.
 	case errors.Is(err, approval.ErrNotInAudience):
 		return fmt.Errorf("this request names a specific audience, and this Account is not in it: %w", err)
 	case errors.Is(err, approval.ErrDuplicateDecider):
 		return fmt.Errorf("this Account has already decided this request; a second answer from the same Account is not a second approval: %w", err)
 	case errors.Is(err, approval.ErrPlanChanged):
-		return fmt.Errorf("the Plan moved since this request was shown — re-read the pending approval and answer the current plan_hash "+
-			"rather than approving something different from what was reviewed: %w", err)
+		return fmt.Errorf("the Plan moved since this request was shown, so this answer was not applied "+
+			"rather than approving something different from what was reviewed. Re-issue the original call to be asked afresh, "+
+			"or decide the request on the Control API's decision endpoint: %w", err)
 	case errors.Is(err, approval.ErrNotPending):
 		return fmt.Errorf("this request is no longer open (already decided, or expired): %w", err)
 	case errors.Is(err, capability.ErrApprovalUnavailable):
@@ -298,8 +195,7 @@ func renderApprovalError(err error) error {
 }
 
 // -----------------------------------------------------------------------
-// The answered retry (ADR-0029 decision 6). See the file header, "The
-// second envelope", for why this lives here rather than in tools_execution.go.
+// The answered retry (ADR-0029 decision 6).
 // -----------------------------------------------------------------------
 
 // responderMetaKey is the one recognised form of a responder assertion
@@ -373,8 +269,7 @@ func recognisedResponder(meta sdkmcp.Meta) (responderAssertion, bool) {
 	return responderAssertion{Gate: gate, Username: username}, true
 }
 
-// elicitedOutcome classifies what acceptElicitedAnswer's caller (S4a-2)
-// should do about an answered retry, without it having to re-decide
+// elicitedOutcome classifies what acceptElicitedAnswer's caller should do about an answered retry, without it having to re-decide
 // anything itself.
 type elicitedOutcome int
 
@@ -404,9 +299,10 @@ const (
 //
 // It holds NO approval.Request and NO approval.Decision, deliberately: a
 // refused decision's Request can carry OTHER approvers' identities and
-// reasons (capability.DecideApproval returns it whatever the caller's
-// eligibility turned out to be — see requestOnRefusal), so from a refusal
-// only State, JobID and ExpiresAt are copied here, and nothing that renders
+// reasons (DecideApproval, which AnswerElicited delegates to, returns it
+// whatever the caller's eligibility turned out to be — see requestOnRefusal),
+// so from a refusal only State, JobID and ExpiresAt are copied here, and
+// nothing that renders
 // this type can reach Decisions, RequestedBy, Summary or Require.
 //
 // Err nil means this answer was recorded AND audited. A non-nil Err does NOT
@@ -415,8 +311,8 @@ const (
 // recorded decision. Such an Err is still classified elicitedRefused with no
 // state copied, and a caller rendering it must not claim the answer was
 // ignored; it must say the decision may have been recorded and point at
-// approve_request or the Control API to confirm. Every refusal THIS FILE
-// makes before the decider is even called (an unbound state, a malformed
+// the Control API's approval read to confirm. Every refusal THIS FILE
+// makes before the answerer is even called (an unbound state, a malformed
 // responder, a machine self-decision) records nothing, full stop.
 //
 // A decline never yields elicitedApproved. A human's "no" that capability
@@ -465,29 +361,32 @@ type elicitedAnswerResult struct {
 	// branch, and its ErrNotPending/ErrDuplicateDecider branch when req.ID !=
 	// "". approval.StatePending is the zero value, so a zero State does not
 	// by itself mean "unknown" — without this flag, a refusal made before the
-	// decider was even called (an unbound state, a malformed responder), or a
+	// answerer was even called (an unbound state, a malformed responder), or a
 	// non-domain failure, would render as state "pending", which may be
 	// untrue. A caller rendering a refusal (refusalOutput) must copy
 	// State/JobID/ExpiresAt only when this is true.
 	stateReported bool
 	// Progress is set only when Err is nil; empty on every refusal.
 	Progress string
+	// Channel is the recorded Decision's channel, copied as a string, set only
+	// when Err is nil. One string copied from one Decision is not the Decisions.
+	Channel string
 	// OnBehalfOf is the asserted approver value (a responder's username)
-	// handed to the decider. EMPTY on an AP-79 verified decision — nothing is
+	// handed to the answerer. EMPTY on an AP-79 verified decision — nothing is
 	// written to the asserted lane for an answer on its own human's OAuth
-	// session — and on every refusal before the decider was
-	// reached. See deciderReached for whether the decider was actually
+	// session — and on every refusal before the answerer was
+	// reached. See answererReached for whether the answerer was actually
 	// called; that, not this field, is the was-it-recorded signal.
 	OnBehalfOf string
-	// deciderReached is true once acceptElicitedAnswer has called the
-	// decider (whatever it returned) — set right alongside OnBehalfOf. It
-	// is the was-the-decider-called signal, not "OnBehalfOf is empty":
-	// under AP-79 the decider is reached with OnBehalfOf left empty, so that
+	// answererReached is true once acceptElicitedAnswer has called the
+	// answerer (whatever it returned) — set right alongside OnBehalfOf. It
+	// is the was-the-answerer-called signal, not "OnBehalfOf is empty":
+	// under AP-79 the answerer is reached with OnBehalfOf left empty, so that
 	// signal would mis-render a post-record failure (an audit write that
 	// failed after a real decision) as "this call left the request
 	// unchanged" — a false-safe reading.
-	deciderReached bool
-	Err            error
+	answererReached bool
+	Err             error
 }
 
 // elicitedAnswer is what a retried tool call carries into acceptElicitedAnswer.
@@ -538,15 +437,12 @@ type elicitedAnswer struct {
 // wires this function into run_operation/raw_exec's retry path.
 //
 // The machine-self-decision refusal (errNoNamedApprover) must be rendered
-// AS-IS by the caller, never through renderApprovalError: AP-64 requires the
-// identical message an approve_request carrying no approver returns (AP-48),
-// and renderApprovalError's ErrMachineSelfDecision text tells the caller to
-// pass an "approver" argument that an MRTR client does not have.
+// AS-IS by the caller, never through renderApprovalError (AP-64).
 //
-// Every failure before step 6 (calling the decider) returns elicitedRefused
-// with Err set and the decider NOT called — nothing is recorded.
-func acceptElicitedAnswer(ctx context.Context, decider ApprovalDecider, open stateOpener, now time.Time, p capability.Principal, in elicitedAnswer) elicitedAnswerResult {
-	if decider == nil {
+// Every failure before the answerer is called returns elicitedRefused with Err
+// set and the answerer NOT called — nothing is recorded.
+func acceptElicitedAnswer(ctx context.Context, answerer ApprovalAnswerer, open stateOpener, now time.Time, p capability.Principal, in elicitedAnswer) elicitedAnswerResult {
+	if answerer == nil {
 		return elicitedAnswerResult{Outcome: elicitedRefused, Err: capability.ErrApprovalUnavailable}
 	}
 	if p.AccountID == "" {
@@ -601,8 +497,8 @@ func acceptElicitedAnswer(ctx context.Context, decider ApprovalDecider, open sta
 		return refused(errAnswerShape)
 	}
 
-	// Machine self-decision: any of these collapses into the same refusal as
-	// approve_request with no approver (AP-64).
+	// Machine self-decision: any of these collapses into the one refusal
+	// (AP-64).
 	if result.Action != "accept" && result.Action != "decline" {
 		return refused(errNoNamedApprover)
 	}
@@ -646,28 +542,40 @@ func acceptElicitedAnswer(ctx context.Context, decider ApprovalDecider, open sta
 	}
 
 	approve := result.Action == "accept"
-	updated, err := decider.DecideApproval(ctx, p, capability.ApprovalDecision{
-		RequestID: st.RequestID,
-		PlanHash:  st.PlanHash,
-		Approve:   approve,
-		// Reason is empty: nothing on the answered-retry envelope carries a
-		// free-text note today.
-		Channel: approval.ChannelInBand,
-	})
+	updated, err := answerer.AnswerElicited(ctx, p, st.RequestID, st.PlanHash, approve)
 
 	out := classifyElicitedDecision(updated, err, approve, now)
 	out.RequestID = st.RequestID
 	out.PlanHash = st.PlanHash
 	out.OnBehalfOf = username
-	out.deciderReached = true
+	out.answererReached = true
+	if out.Err == nil {
+		out.Channel = recordedChannel(updated, p.AccountID)
+	}
 	return out
 }
 
-// classifyElicitedDecision turns what capability.Approvals.DecideApproval
+// recordedChannel returns the channel of the last Decision accountID recorded
+// on req, as the capability layer stored it, or "" when accountID is empty or
+// recorded none. Reading the record rather than assuming a channel keeps this
+// package from naming one.
+func recordedChannel(req approval.Request, accountID string) string {
+	if accountID == "" {
+		return ""
+	}
+	for i := len(req.Decisions) - 1; i >= 0; i-- {
+		if req.Decisions[i].AccountID == accountID {
+			return req.Decisions[i].Channel.String()
+		}
+	}
+	return ""
+}
+
+// classifyElicitedDecision turns what capability.Approvals.AnswerElicited
 // returned into an elicitedOutcome, deciding nothing itself: it only reads
 // the state the domain already decided.
 //
-// req is the Request DecideApproval returned; err is its error, or nil. On
+// req is the Request AnswerElicited returned; err is its error, or nil. On
 // ErrNotPending or ErrDuplicateDecider capability returns the Request as it
 // now stands (requestOnRefusal); on every other domain refusal, and on a
 // non-domain (store/audit) failure, req is the zero value. approve is the
@@ -767,8 +675,8 @@ func classifyElicitedDecision(req approval.Request, err error, approve bool, now
 	// ErrMachineSelfDecision, ErrWeakChannel, ErrPlanChanged, ErrNotFound),
 	// capability.ErrApprovalUnavailable, and any non-domain error (including
 	// the audit-write failure, where capability still returns the updated
-	// Request — see capability.DecideApproval) all land here: refused, no
-	// state copied.
+	// Request — see DecideApproval, which AnswerElicited delegates to) all
+	// land here: refused, no state copied.
 	return elicitedAnswerResult{Outcome: elicitedRefused, Err: err}
 }
 
@@ -778,7 +686,7 @@ var (
 	// arguments.
 	errAnswerStateRefused = errors.New("mcp: the retried call's request state is not valid for this caller, request and call — " +
 		"it may be tampered, expired, sealed for another request or call, or the elicitation response is keyed to a different request than the one sealed; " +
-		"the request can still be answered with approve_request or on the Control API")
+		"the request is unchanged and can still be decided on the Control API's decision endpoint")
 
 	// errAnswerShape is returned when the retry does not carry exactly one
 	// elicitation response keyed by the sealed request ID.
@@ -798,13 +706,13 @@ var (
 // -----------------------------------------------------------------------
 // Rendering an answered retry's outcome. tools_execution.go calls
 // only these methods and answerStateRefusedOutput — it never builds a
-// decision or a refusal message of its own. See the file header, "The
-// second envelope", for why the rendering lives here.
+// decision or a refusal message of its own, which is why the rendering lives
+// beside acceptElicitedAnswer.
 // -----------------------------------------------------------------------
 
 // The four "what happened to the call" texts decisionOutput's NextStep opens
 // with, chosen from (Outcome, what the dispatch actually returned) rather
-// than from Outcome alone (plan review suggestion 3): a partial quorum
+// than from Outcome alone: a partial quorum
 // completing concurrently, a rule changing mid-retry, or a re-park can each
 // make the Outcome alone contradict what this response actually carries.
 const (
@@ -816,8 +724,8 @@ const (
 )
 
 // The two "what became of the answer" texts decisionOutput's NextStep ends
-// with. Chosen by r.Err rather than collapsed into one "not recorded" string
-// (plan review cycle 2, suggestion 2): ErrDuplicateDecider means THIS
+// with. Chosen by r.Err rather than collapsed into one "not recorded" string:
+// ErrDuplicateDecider means THIS
 // Account already decided — the request need not be decided at all, quorum
 // may still be open — while every other non-nil r.Err reaching this function
 // (only ErrNotPending) means the request had already reached a resolution
@@ -849,13 +757,13 @@ func (r elicitedAnswerResult) decisionOutput(after RunOrPlanOutput) *ApprovalDec
 		Progress:  r.Progress,
 	}
 	if r.Err == nil {
-		// Channel names an IN-BAND DECISION; it stays empty whenever r.Err is
-		// non-nil, because an answer that was not recorded made no in-band
-		// decision at all (plan review suggestion 4). OnBehalfOf is r's own
+		// Channel is the channel the capability layer recorded for this answer;
+		// it stays empty whenever r.Err is non-nil, because an answer that was
+		// not recorded made no decision at all. OnBehalfOf is r's own
 		// asserted-approver value as-is: empty here means AP-79's verified
 		// decision wrote nothing to the asserted lane, never that the
 		// decision itself was not recorded.
-		out.Channel = approval.ChannelInBand.String()
+		out.Channel = r.Channel
 		out.OnBehalfOf = r.OnBehalfOf
 	}
 
@@ -913,46 +821,45 @@ func isKnownApprovalRefusal(err error) bool {
 }
 
 // answerRefusalNextStepUnchanged is refusalOutput's NextStep for a refusal
-// made before the decider was ever reached (!r.deciderReached), and for
+// made before the answerer was ever reached (!r.answererReached), and for
 // approval.ErrPlanChanged: in both cases the request, if one exists, is
-// still open and still answerable exactly as this text says — re-reading the
-// queue for the current plan_hash is what ErrPlanChanged itself asks for.
+// still open and still answerable exactly as this text says — on the Control
+// API's decision endpoint, which reads the current plan_hash itself.
 const answerRefusalNextStepUnchanged = "this call left the request (if any) unchanged. " +
-	"It can still be answered with approve_request or on the Control API endpoint."
+	"It can still be decided on the Control API's decision endpoint."
 
 // answerRefusalNextStepCannotAnswerHere is refusalOutput's NextStep for
 // approval.ErrWeakChannel: the rule requires an out-of-band decision, so —
 // unlike every other refusal isKnownApprovalRefusal recognises — no in-band
-// tool, approve_request included, can ever satisfy it. Sharing
-// answerRefusalNextStepUnchanged's "it can still be answered with
-// approve_request" here would contradict this refusal's own Reason.
-const answerRefusalNextStepCannotAnswerHere = "no in-band tool — approve_request included — can decide this one. " +
+// answer can ever satisfy it. Sharing answerRefusalNextStepUnchanged's "it can
+// still be decided" here would contradict this refusal's own Reason.
+const answerRefusalNextStepCannotAnswerHere = "no in-band answer can decide this one. " +
 	"A human must decide it on the Control API's decision endpoint, with their own out-of-band credential."
 
 // answerRefusalNextStepIneligibleAccount is refusalOutput's NextStep for
 // approval.ErrNotInAudience: THIS Account is not in the request's named
 // audience, so saying "it can still be answered" without naming who by would
 // read as an invitation to retry with the same Account — but a different,
-// eligible Account can still answer it in-band, so approve_request stays
-// on the table (unlike approval.ErrRequesterExcluded, which never can: see
+// eligible Account can still decide it on the Control API (unlike
+// approval.ErrRequesterExcluded, which this session can never resolve: see
 // answerRefusalNextStepRequesterExcluded).
 const answerRefusalNextStepIneligibleAccount = "this Account is not in the request's audience. An Account in the " +
-	"audience must decide it, with approve_request from that Account's own session or on the Control API."
+	"audience must decide it, on the Control API's decision endpoint."
 
 // answerRefusalNextStepRequesterExcluded is refusalOutput's NextStep for
 // approval.ErrRequesterExcluded: this call runs in the requesting Account's
-// own MCP session, and approve_request is the in-band channel — so unlike
-// answerRefusalNextStepIneligibleAccount, no Account reachable from this
-// session can ever decide the request. Only the Control API's decision
-// endpoint, exercised by a different human with their own credential, can.
+// own MCP session — so unlike answerRefusalNextStepIneligibleAccount, no
+// Account reachable from this session can ever decide the request. Only the
+// Control API's decision endpoint, exercised by a different human with their
+// own credential, can.
 const answerRefusalNextStepRequesterExcluded = "the Account that asked cannot decide it. A different human must " +
 	"decide it out-of-band, on the Control API's decision endpoint with their own credential."
 
 // answerRefusalNextStepNoSuchRequest is refusalOutput's NextStep for
 // approval.ErrNotFound: there is no request at this id to answer at all, so
 // nothing is "still answerable" until the caller finds the right one.
-const answerRefusalNextStepNoSuchRequest = "there is no request to answer at this request_id — it may never have " +
-	"existed, or have expired and been swept. Check request_id."
+const answerRefusalNextStepNoSuchRequest = "there is no request to answer here — it may never have " +
+	"existed, or have expired and been swept. Re-issue the original call to be asked afresh."
 
 // answerRefusalNextStepRequestClosed is refusalOutput's NextStep for
 // approval.ErrNotPending outside the approved-with-no-Job decline (which gets
@@ -968,10 +875,10 @@ const answerRefusalNextStepRequestClosed = "this request is no longer open (alre
 // approvals from someone else.
 const answerRefusalNextStepAlreadyDecidedByThisAccount = "this Account already decided this request; answering again " +
 	"from the same Account changes nothing. If the rule still needs more approvals, a different Account must supply " +
-	"them, with approve_request or the Control API."
+	"them, on the Control API's decision endpoint."
 
 // answerRefusalNextStepApprovalsUnavailable is refusalOutput's NextStep for
-// capability.ErrApprovalUnavailable: no decider is configured on this Relay
+// capability.ErrApprovalUnavailable: no answerer is configured on this Relay
 // at all, so there is no endpoint — in-band or on the Control API — that can
 // decide the request.
 const answerRefusalNextStepApprovalsUnavailable = "approvals are not configured on this Relay: there is no endpoint, " +
@@ -992,7 +899,7 @@ const answerRefusalNextStepDeclineRecordedButNotHonoured = "the decline was reco
 	"as an approval of this call. This call dispatched nothing."
 
 // answerRefusalNextStepMayAlreadyReflectAnswer is refusalOutput's NextStep
-// for the default arm below: the decider WAS reached (r.deciderReached) and
+// for the default arm below: the answerer WAS reached (r.answererReached) and
 // something non-domain failed afterwards, so — unlike
 // answerRefusalNextStepUnchanged — this must never say the request is
 // unchanged or safe to answer again outright; the decision may already be
@@ -1002,7 +909,7 @@ const answerRefusalNextStepMayAlreadyReflectAnswer = "the request may already re
 
 // knownRefusalNextStep picks refusalOutput's NextStep for a refusal
 // isKnownApprovalRefusal recognises. Chosen per sentinel rather than one
-// generic "can still be answered with approve_request" text: that text is
+// generic "can still be decided" text: that text is
 // true of exactly one of these (approval.ErrPlanChanged) and false, in a
 // different way, of the rest — see each NextStep constant's own doc for
 // which way. Called only once r.Err is known to satisfy
@@ -1071,15 +978,12 @@ func (r elicitedAnswerResult) refusalOutput() *AnswerRefusalOutput {
 	out.NextStep = answerRefusalNextStepUnchanged
 	switch {
 	case errors.Is(r.Err, approval.ErrMachineSelfDecision):
-		// AP-64: byte-for-byte the same message approve_request gives a
-		// caller who names no approver, never renderApprovalError's "pass
-		// their identity in `approver`" wording, which an MRTR client has no
-		// argument to act on. This arm must come before the
-		// isKnownApprovalRefusal arm below, which would otherwise also match
-		// ErrMachineSelfDecision with renderApprovalError's text instead.
+		// AP-64: the one machine-self-decision message. This arm must come
+		// before the isKnownApprovalRefusal arm below, which would otherwise
+		// also match ErrMachineSelfDecision and render it generically.
 		out.Reason = errNoNamedApprover.Error()
 	case errors.Is(r.Err, errAnswerStateRefused), errors.Is(r.Err, errAnswerShape):
-		// Both messages already point at approve_request and the Control API.
+		// Both messages already point at the Control API's decision endpoint.
 		out.Reason = r.Err.Error()
 	case errors.Is(r.Err, audit.ErrAssertedFieldTooLong), errors.Is(r.Err, audit.ErrAssertedFieldInvalid):
 		// assertedApprover's malformed-responder refusal: never truncated,
@@ -1101,23 +1005,23 @@ func (r elicitedAnswerResult) refusalOutput() *AnswerRefusalOutput {
 	case isKnownApprovalRefusal(r.Err):
 		out.Reason = renderApprovalError(r.Err).Error()
 		out.NextStep = r.knownRefusalNextStep()
-	case !r.deciderReached:
-		// The decider was never reached (see elicitedAnswerResult's doc on
-		// deciderReached) — nothing could have been recorded, whatever the
+	case !r.answererReached:
+		// The answerer was never reached (see elicitedAnswerResult's doc on
+		// answererReached) — nothing could have been recorded, whatever the
 		// error.
-		out.Reason = fmt.Sprintf("this answer was not recorded: %v. The request, if any, can still be answered "+
-			"with approve_request or on the Control API.", r.Err)
+		out.Reason = fmt.Sprintf("this answer was not recorded: %v. The request, if any, can still be decided "+
+			"on the Control API's decision endpoint.", r.Err)
 	default:
-		// A non-domain failure reaching us AFTER the decider was called: the
+		// A non-domain failure reaching us AFTER the answerer was called: the
 		// decision may already be durable (e.g. an audit write that failed
-		// afterwards — capability.DecideApproval's own doc). This must never
-		// claim the answer was ignored, and the NextStep must not say the
-		// request is unchanged either.
+		// afterwards — see DecideApproval, which AnswerElicited delegates to).
+		// This must never claim the answer was ignored, and the NextStep must
+		// not say the request is unchanged either.
 		//
 		// One case in this arm never actually recorded anything: an
-		// ApprovalAuthorizer refusal (capability.DecideApproval's
-		// AuthorizeApprovalDecision step, e.g. authz.RoleGate) fires before
-		// any decision is attempted. This file has no capability-level
+		// ApprovalAuthorizer refusal (the AuthorizeApprovalDecision step of
+		// DecideApproval, which AnswerElicited delegates to, e.g.
+		// authz.RoleGate) fires before any decision is attempted. This file has no capability-level
 		// sentinel to distinguish that from a post-recording failure without
 		// coupling to a specific ApprovalAuthorizer implementation, so the
 		// text stays the safe over-approximation: telling a caller who was
@@ -1125,7 +1029,7 @@ func (r elicitedAnswerResult) refusalOutput() *AnswerRefusalOutput {
 		// wrong — unlike the reverse.
 		out.Reason = fmt.Sprintf("the answer may have been recorded, but recording or auditing it failed: %v. "+
 			"Confirm the request's state by reading it back — GET /api/v1/approvals/{id} on the Control API — "+
-			"before acting; approve_request records a new decision, it does not read one back.", r.Err)
+			"before acting.", r.Err)
 		out.NextStep = answerRefusalNextStepMayAlreadyReflectAnswer
 	}
 
@@ -1133,7 +1037,7 @@ func (r elicitedAnswerResult) refusalOutput() *AnswerRefusalOutput {
 }
 
 // dispatchError wraps an error dispatch() returned AFTER this answer was
-// already taken (BLOCKING 2, plan review cycle 1). It is deliberately
+// already taken. It is deliberately
 // neutral about whether anything ran: Execution.Run can return per-Node
 // results together with an error (a failed dispatch audit write, or a
 // failed BindJob), and dispatch() also returns an error when renderJob fails

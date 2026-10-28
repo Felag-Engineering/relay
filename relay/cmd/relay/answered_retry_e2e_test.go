@@ -359,8 +359,8 @@ func TestAnsweredRetry_PartialQuorumStaysPending(t *testing.T) {
 
 // TestAnsweredRetry_RefusedStateStaysDecidableByTheRescue (suggestion 8): a
 // tampered state is refused fail-closed, leaving the request undecided and
-// still answerable — first by approve_request, then by a second human on the
-// Control API — proving both rescues on one request.
+// still decidable — first by one human, then by a second, each on the Control
+// API's decision endpoint — proving the rescue on one request.
 func TestAnsweredRetry_RefusedStateStaysDecidableByTheRescue(t *testing.T) {
 	f := startGatedRelay(t, gateCountTwoInBandAskable, WithMCPServerOptions(mcp.WithApprovalElicitation()))
 	session := relaytest.ConnectWithOptions(t, f.ControlBase, f.Client(), relaytest.ConnectOptions{Client: relaytest.ElicitingClientOptions(), ClientName: relaytest.GleipnirClientName})
@@ -390,18 +390,21 @@ func TestAnsweredRetry_RefusedStateStaysDecidableByTheRescue(t *testing.T) {
 		t.Fatalf("approval = %+v, want pending with no decision recorded", stillPending)
 	}
 
-	// Rescue 1: approve_request on the SAME MCP session records 1 of 2.
-	approveRes := relaytest.CallTool(t, session, "approve_request", map[string]any{
-		"request_id": requestID,
-		"plan_hash":  planHash,
-		"approve":    true,
-		"approver":   "alice",
-	})
-	if approveRes.IsError {
-		t.Fatalf("approve_request: IsError, content=%+v", approveRes.Content)
+	// Rescue 1: a human decides on the Control API's decision endpoint and
+	// records 1 of 2.
+	first := mintAccount(t, f, "ana", accounts.KindHuman, accounts.RoleOperator)
+	decideFirst := controlAPIRequest(t, f.ClientFor(first), http.MethodPost,
+		f.ControlBase+"/api/v1/approvals/"+requestID+"/decision", first,
+		map[string]any{"approve": true, "plan_hash": planHash})
+	defer decideFirst.Body.Close()
+	if decideFirst.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(decideFirst.Body)
+		t.Fatalf("first decision status = %d; body = %s", decideFirst.StatusCode, body)
 	}
-	var decision1 mcp.ApprovalDecisionOutput
-	relaytest.DecodeToolJSON(t, approveRes, &decision1)
+	var decision1 approvalBody
+	if err := json.NewDecoder(decideFirst.Body).Decode(&decision1); err != nil {
+		t.Fatalf("decode first decision: %v", err)
+	}
 	if decision1.Progress != "1 of 2" {
 		t.Errorf("progress after the first rescue = %q, want 1 of 2", decision1.Progress)
 	}

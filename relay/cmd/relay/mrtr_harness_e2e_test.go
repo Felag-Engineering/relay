@@ -24,7 +24,7 @@ import (
 // gateAllMutatesInBand is gateAllMutates (approval_e2e_test.go) with its
 // channel switched to "in-band" (internal/approval/config.go's parseChannel)
 // — the channel the MRTR answer path (#730) delivers a decision over, and
-// the one #391/ADR-0029 already makes reachable via mcp.WithApprovalDecider
+// the one #391/ADR-0029 already makes reachable via mcp.WithApprovalAnswerer
 // (control_surfaces.go). requester_allowed stays false and ttl stays "1h",
 // exactly as gateAllMutates.
 const gateAllMutatesInBand = `{

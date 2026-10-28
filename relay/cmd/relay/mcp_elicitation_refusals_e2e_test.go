@@ -45,37 +45,31 @@ import (
 // -----------------------------------------------------------------------
 
 const (
-	// refusedStateReason mirrors errAnswerStateRefused (tools_approval.go:708).
+	// refusedStateReason mirrors errAnswerStateRefused (tools_approval.go).
 	// An AP-65 Reason is exactly this + ": " + one of the requeststate causes
 	// below.
 	refusedStateReason = "mcp: the retried call's request state is not valid for this caller, request and call — " +
 		"it may be tampered, expired, sealed for another request or call, or the elicitation response is keyed to a different request than the one sealed; " +
-		"the request can still be answered with approve_request or on the Control API"
+		"the request is unchanged and can still be decided on the Control API's decision endpoint"
 
-	// nextStepUnchanged mirrors answerRefusalNextStepUnchanged (tools_approval.go:846).
+	// nextStepUnchanged mirrors answerRefusalNextStepUnchanged (tools_approval.go).
 	nextStepUnchanged = "this call left the request (if any) unchanged. " +
-		"It can still be answered with approve_request or on the Control API endpoint."
+		"It can still be decided on the Control API's decision endpoint."
 
-	// noNamedApprover mirrors noNamedApproverError.Error (tools_approval.go:119-122):
-	// approve_request's refusal for a blank approver, and AP-64's machine
-	// self-decision refusal, share this text byte for byte.
+	// noNamedApprover mirrors noNamedApproverError.Error (tools_approval.go):
+	// AP-64's machine self-decision refusal.
 	noNamedApprover = "approver is required: an in-band approval must name the human who made the decision, " +
 		"because this call is authenticated as the requesting session and cannot prove one was asked"
 
 	// nextStepRanAndRecorded mirrors nextStepRanThePipeline + " " +
-	// nextStepAnswerRecorded (tools_approval.go:739,758,812).
+	// nextStepAnswerRecorded (tools_approval.go).
 	nextStepRanAndRecorded = "the call was re-entered through the full dispatch pipeline once in this response, and the Job shown ran. Do not re-issue it. " +
 		"the answer was recorded (progress shown when the rule needs more)."
 
 	// nextStepReattachedNotRecorded mirrors nextStepReattachedExistingJob + " " +
-	// nextStepAnswerNotRecordedAlreadyDecided (tools_approval.go:741, 760-761).
+	// nextStepAnswerNotRecordedAlreadyDecided (tools_approval.go).
 	nextStepReattachedNotRecorded = "the results shown are the Job this approval already released, re-attached. Nothing new was dispatched. " +
 		"your answer was NOT recorded: the request had already reached a resolution (decided, or lapsed) before this call arrived (state shown)."
-
-	// The approve_request refusal prefixes (renderApprovalError, tools_approval.go:255-285).
-	weakChannelPrefix       = "this request requires an out-of-band decision and cannot be approved through this tool. A human must answer it on the Control API decision endpoint with their own credential: "
-	requesterExcludedPrefix = "this request requires a second person: the Account that asked for it may not answer it, whoever is relaying the answer. A different human must decide it out-of-band: "
-	notInAudiencePrefix     = "this request names a specific audience, and this Account is not in it: "
 )
 
 // metaKeyReplayedFrom mirrors elicit's own unexported replayedFromMetaKey —
@@ -498,7 +492,7 @@ func TestMCPElicitation_ExpiredStateIsRefused(t *testing.T) {
 // TestMCPElicitation_AnswerWithoutAResponderIsAMachineSelfDecision is AP-64's
 // e2e proof: an accept with no responder assertion, with gate "information",
 // carrying io.gleipnir/replayed-from (on the answer or on the call), or
-// action "cancel" is refused exactly as approve_request with no approver —
+// action "cancel" is refused as a machine self-decision —
 // the full table of forms lives at the mcp handler seam
 // (tools_approval_test.go); this proves one representative row per form end
 // to end and that the SAME state stays valid across all five refusals
@@ -506,7 +500,7 @@ func TestMCPElicitation_ExpiredStateIsRefused(t *testing.T) {
 func TestMCPElicitation_AnswerWithoutAResponderIsAMachineSelfDecision(t *testing.T) {
 	f, token, _ := startElicitingRelay(t)
 	session := connectEliciting(t, f, token)
-	q, qid, rid, ph := askApproval(t, session, restartNginxArgs())
+	q, qid, rid, _ := askApproval(t, session, restartNginxArgs())
 
 	retry := func(t *testing.T, r *sdkmcp.ElicitResult) *sdkmcp.CallToolResult {
 		t.Helper()
@@ -578,17 +572,6 @@ func TestMCPElicitation_AnswerWithoutAResponderIsAMachineSelfDecision(t *testing
 		assertMachineSelfDecisionRefused(t, f, res, rid, before)
 	})
 
-	// Side by side: approve_request carrying no approver is refused with the
-	// SAME text, byte for byte.
-	approveRes := relaytest.CallTool(t, session, "approve_request", map[string]any{
-		"request_id": rid, "plan_hash": ph, "approve": true, "approver": "",
-	})
-	if !approveRes.IsError {
-		t.Fatalf("approve_request with no approver: IsError = false, want true")
-	}
-	if got := relaytest.ToolErrorText(t, approveRes); got != noNamedApprover {
-		t.Errorf("approve_request error = %q, want %q", got, noNamedApprover)
-	}
 	pending := fetchApproval(t, f, rid)
 	if pending.State != "pending" || len(pending.Decisions) != 0 {
 		t.Errorf("approval = %+v, want still pending with no decisions after five refusals", pending)
@@ -614,9 +597,7 @@ func TestMCPElicitation_AnswerWithoutAResponderIsAMachineSelfDecision(t *testing
 // TestMCPElicitation_OutOfBandRuleNeverAsks is AP-69's e2e proof: an
 // out-of-band rule's FIRST park — a created park, so AP-62's "already
 // observed" reason cannot explain the absence of a question — never renders
-// one, on an MRTR-capable, elicitation-advertising client. The armed control
-// (approve_request's own refusal) proves the question would genuinely have
-// been unanswerable, not merely unrendered.
+// one, on an MRTR-capable, elicitation-advertising client.
 func TestMCPElicitation_OutOfBandRuleNeverAsks(t *testing.T) {
 	f, token, _ := startElicitingRelayWith(t, gateAllMutatesOutOfBandAskable)
 	session := connectEliciting(t, f, token)
@@ -645,16 +626,6 @@ func TestMCPElicitation_OutOfBandRuleNeverAsks(t *testing.T) {
 	rid := out.PendingApproval.RequestID
 	parkRecordFor(t, f, rid) // a KindApprovalRequested record means a CREATED park
 
-	approveRes := relaytest.CallTool(t, session, "approve_request", map[string]any{
-		"request_id": rid, "plan_hash": out.PendingApproval.PlanHash, "approve": true, "approver": elicitResponderUsername,
-	})
-	if !approveRes.IsError {
-		t.Fatal("approve_request: IsError = false, want true — an out-of-band rule cannot be satisfied in-band")
-	}
-	if got := relaytest.ToolErrorText(t, approveRes); !strings.HasPrefix(got, weakChannelPrefix) {
-		t.Errorf("approve_request error = %q, want prefix %q", got, weakChannelPrefix)
-	}
-
 	pending := fetchApproval(t, f, rid)
 	if pending.State != "pending" || len(pending.Decisions) != 0 {
 		t.Errorf("approval = %+v, want pending with no decisions", pending)
@@ -666,17 +637,14 @@ func TestMCPElicitation_OutOfBandRuleNeverAsks(t *testing.T) {
 
 // TestMCPElicitation_RequesterExcludedAndAudienceRestrictedNeverAsk is AP-61's
 // e2e proof: a requester-excluded rule, and a rule naming an audience that
-// omits the caller, each render no question on the FIRST (created) park —
-// and the armed control shows the question would have been unanswerable for
-// a rule-specific reason in each row, not a shared coincidence.
+// omits the caller, each render no question on the FIRST (created) park.
 func TestMCPElicitation_RequesterExcludedAndAudienceRestrictedNeverAsk(t *testing.T) {
 	cases := []struct {
-		name       string
-		gate       string
-		wantPrefix string
+		name string
+		gate string
 	}{
-		{"requester excluded", gateAllMutatesInBand, requesterExcludedPrefix},
-		{"audience omits the caller", gateInBandAudienceOmitsCaller, notInAudiencePrefix},
+		{"requester excluded", gateAllMutatesInBand},
+		{"audience omits the caller", gateInBandAudienceOmitsCaller},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -694,16 +662,6 @@ func TestMCPElicitation_RequesterExcludedAndAudienceRestrictedNeverAsk(t *testin
 			}
 			rid := out.PendingApproval.RequestID
 			parkRecordFor(t, f, rid)
-
-			approveRes := relaytest.CallTool(t, session, "approve_request", map[string]any{
-				"request_id": rid, "plan_hash": out.PendingApproval.PlanHash, "approve": true, "approver": elicitResponderUsername,
-			})
-			if !approveRes.IsError {
-				t.Fatal("approve_request: IsError = false, want true")
-			}
-			if got := relaytest.ToolErrorText(t, approveRes); !strings.HasPrefix(got, tc.wantPrefix) {
-				t.Errorf("approve_request error = %q, want prefix %q", got, tc.wantPrefix)
-			}
 
 			pending := fetchApproval(t, f, rid)
 			if pending.State != "pending" || len(pending.Decisions) != 0 {

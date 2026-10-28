@@ -355,14 +355,10 @@ multi-step reading (ADR-0049).
 _Avoid_: job hash, checksum, fingerprint (reserved for the Policy, template-set and CA fingerprints)
 
 **Shape key**:
-The content address of *what* an approval is for, as opposed to *how much of it*: a hash
-over the Operation, its risk class, its **shape arguments**, and the **normalised
-Selector**, never the resolved fan-out or an argument declared to be scale. For **Raw Exec** every argv element is
-shape: nothing is declared for the arbitrary-command path, and "scale" is never guessed. It exists so "the last approved action of the same shape" is a lookup, which the
-approval object's anti-fatigue diff needs (ADR-0027, D10). It is a grouping key and never a release
-lookup: a dispatch proceeds only on a matching **Plan hash**, never on a shape key. Which arguments are shape and which are scale is
-**declared per Operation** in the Relay's Operation-vocabulary mirror, never inferred from
-a value.
+A content address of *what* an approval was for, leaving out the resolved fan-out. **Relay has
+none**: ADR-0047 decision 8 removed it, so no approval request records one and a request is
+addressed only by its ID and its **Plan hash** (`docs/specs/approval.md` AP-92). Requests
+written earlier keep their stored key, which nothing reads.
 _Avoid_: plan hash (that is the fan-out-bearing one), fingerprint, similarity hash, group key
 
 **Approval**:
@@ -373,8 +369,8 @@ and a Job is minted only if a decision releases one (ADR-0027 decision 1 as amen
 the Gate rule's requirement is satisfied or its TTL expires. Relay authors what the approver
 sees, so the requesting AI-agent can neither truncate nor spin it. The decision arrives
 **out-of-band**, on the Control API's authenticated decision endpoint, where the approver is
-verified (the Admin Console has no approval surface, ADR-0044); or **in-band**, through the
-requesting client's MCP session (`approve_request`, or an MRTR answer), where the approver is
+verified (the Admin Console has no approval surface, ADR-0044); or **in-band**, as an MRTR answer on the
+requesting client's retried call, where the approver is
 asserted and only as honest as the client (ADR-0027, ADR-0029). An Approval **narrows**: it
 permits one already-Policy-legal dispatch to run, and can never widen what a Node's Policy allows.
 _Avoid_: authorization, permission, sign-off, confirmation (unqualified — name the rung)
@@ -485,23 +481,10 @@ _Avoid_: match, filter, selector (reserved for Node targeting)
 
 **MCP task handle**:
 MCP's own async primitive (SEP-2663): a handle returned in place of a result for one
-outstanding `tools/call`, which the client polls via `tasks/get`. It is a *delivery
-envelope* for an Approval, never an execution unit. Always written in full; "task" alone
-means a Relay **Task**.
-
-Relay mints **at most one handle per parked dispatch**, never per Job (a parked dispatch
-creates no Job). *At most*, because a park that emits an answerable **MRTR elicitation**
-question emits no task envelope: elicitation wins (ADR-0028 §Amendment 2026-09-24). A handle is
-owner-only and expires; one that is not yours reads exactly like one that never existed.
-
-A handle is not a decision channel: no `tasks/*` method accepts an approval, and
-`tasks/cancel` ends the *client's* interest while leaving a parked Approval pending and
-decidable; an in-band Decision arrives only through `approve_request` or an MRTR answer
-(ADR-0028, ADR-0029). Nor is it required: a client that knows nothing about Tasks drives the
-same gated dispatch to completion on the universal path.
-
-Relay serves the extension itself, as a shim, because its SDK does not implement it
-(ADR-0028). The shim is temporary by design and has a written removal condition.
+outstanding `tools/call`, which the client polls. **Relay returns none**: ADR-0047 decision 8
+removed its shim, so a park is never rendered as a task handle and a park that asks nobody is
+answered `pending_approval` (`docs/specs/approval.md` AP-85). Always written in full; "task"
+alone means a Relay **Task**.
 _Avoid_: task (unqualified), MCP task, job handle, task id (when a Relay **Task** is also in
 play)
 
@@ -510,8 +493,8 @@ MCP's stateless pattern (SEP-2322, protocol 2026-07-28) for a server that needs 
 mid-call: the server answers `tools/call` with an input-required result and ends the
 request; the client obtains the input and retries the call carrying it. Relay's use is
 **MRTR elicitation** — a Relay-authored approval question on a gated call, answered in-band
-with an asserted approver, through the same decision path as `approve_request` (ADR-0029
-decision 6). Replaces server-initiated `elicitation/create`, which 2026-07-28 removed.
+with an asserted approver, through the capability layer's single in-band entry point
+(ADR-0029 decision 6, ADR-0047 decision 4). Replaces server-initiated `elicitation/create`, which 2026-07-28 removed.
 _Avoid_: elicitation (unqualified — say which form), held elicitation
 
 **Relay-side authorization**:

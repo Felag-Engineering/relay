@@ -389,7 +389,7 @@ func TestCompositionRoot_EnablesElicitation(t *testing.T) {
 // turns it on. A client advertising no elicitation capability, and one on a
 // legacy protocol version whose ElicitationHandler must never be called,
 // both still park exactly as before, and both requests are still decidable
-// by approve_request and by the Control API's decision endpoint.
+// on the Control API's decision endpoint.
 func TestCompositionRoot_ClientThatCannotBeAskedSeesNoChange(t *testing.T) {
 	f := startGatedRelay(t, gateAllMutatesInBandAskable) // NO WithMCPServerOptions hook
 	token := mintAccount(t, f, elicitRequesterName, accounts.KindMachine, accounts.RoleAdmin)
@@ -474,20 +474,16 @@ func TestCompositionRoot_ClientThatCannotBeAskedSeesNoChange(t *testing.T) {
 		t.Errorf("Jobs before any rescue = %d, want 0", got)
 	}
 
-	// Rescue A with approve_request, on A's own session.
-	approveRes := relaytest.CallTool(t, clientA, "approve_request", map[string]any{
-		"request_id": requestIDA,
-		"plan_hash":  planHashA,
-		"approve":    true,
-		"approver":   elicitResponderUsername,
-	})
-	if approveRes.IsError {
-		t.Fatalf("approve_request: IsError, content=%+v", approveRes.Content)
-	}
-	var decisionA mcp.ApprovalDecisionOutput
-	relaytest.DecodeToolJSON(t, approveRes, &decisionA)
-	if decisionA.State != "approved" || decisionA.Channel != "in-band" {
-		t.Errorf("A's decision = %+v, want approved/in-band", decisionA)
+	// Rescue A through the Control API's decision endpoint, decided by a
+	// human operator.
+	ana := mintAccount(t, f, "ana", accounts.KindHuman, accounts.RoleOperator)
+	decideA := controlAPIRequest(t, f.ClientFor(ana), http.MethodPost,
+		f.ControlBase+"/api/v1/approvals/"+requestIDA+"/decision", ana,
+		map[string]any{"approve": true, "plan_hash": planHashA})
+	defer decideA.Body.Close()
+	if decideA.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(decideA.Body)
+		t.Fatalf("A's decision status = %d, want 200; body = %s", decideA.StatusCode, body)
 	}
 
 	rerunA := relaytest.CallTool(t, clientA, "run_operation", sshdRestartArgs())
@@ -526,5 +522,31 @@ func TestCompositionRoot_ClientThatCannotBeAskedSeesNoChange(t *testing.T) {
 	gotApprovalIDs := map[string]bool{jobList[0].ApprovalID: true, jobList[1].ApprovalID: true}
 	if !gotApprovalIDs[requestIDA] || !gotApprovalIDs[requestIDB] {
 		t.Errorf("Job ApprovalIDs = %v, want exactly {%q, %q}", gotApprovalIDs, requestIDA, requestIDB)
+	}
+}
+
+// TestCompositionRoot_RegistersNoDecisionTool: the real composition root, with
+// elicitation on, registers no MCP tool that records a decision. The test
+// passes no option hook because the production option list already turns
+// elicitation on.
+//
+// Proves AP-83.
+func TestCompositionRoot_RegistersNoDecisionTool(t *testing.T) {
+	f := startGatedRelay(t, gateAllMutatesInBandAskable) // NO WithMCPServerOptions hook
+	token := mintAccount(t, f, elicitRequesterName, accounts.KindMachine, accounts.RoleAdmin)
+	session := relaytest.Connect(t, f.ControlBase, f.ClientFor(token))
+
+	tools, err := session.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	if len(tools.Tools) == 0 {
+		t.Fatal("ListTools returned no tools; the check would pass vacuously")
+	}
+	for _, tool := range tools.Tools {
+		lower := strings.ToLower(tool.Name)
+		if tool.Name == "approve_request" || strings.Contains(lower, "approve") || strings.Contains(lower, "decide") {
+			t.Errorf("tool %q is registered: no MCP tool records a decision", tool.Name)
+		}
 	}
 }

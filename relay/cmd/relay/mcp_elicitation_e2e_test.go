@@ -17,7 +17,7 @@
 // This file adds what that one does not: the Gleipnir contract end to end,
 // the verified/asserted attribution split, the Job/Task store state, the
 // Control API decision view, terminality against a later decision, the
-// side-by-side with approve_request, the permission-ask question shape, and
+// permission-ask question shape, and
 // the non-askable legs (AP-85).
 package main
 
@@ -401,8 +401,7 @@ func TestMCPElicitation_ApproveRunsTheJobAndReturnsResults(t *testing.T) {
 // TestMCPElicitation_DecisionIsInBandVerifiedRequesterAssertedApprover is
 // AP-63's e2e proof of the two attribution lanes: the verified lane is the
 // calling machine Account, the asserted lane is alice, the responder's
-// user_id never appears in either, and the SAME Decision shape is what
-// approve_request records for the same Account.
+// user_id never appears in either.
 func TestMCPElicitation_DecisionIsInBandVerifiedRequesterAssertedApprover(t *testing.T) {
 	f, token, accountID := startElicitingRelay(t)
 	session := connectEliciting(t, f, token)
@@ -475,49 +474,6 @@ func TestMCPElicitation_DecisionIsInBandVerifiedRequesterAssertedApprover(t *tes
 	}
 	if cd.Human {
 		t.Error("Control API decision Human = true, want false — the verified lane is a machine, the person is only asserted")
-	}
-
-	// The SAME Decision approve_request records, on the same Account, over a
-	// second (distinct) Plan so the two requests coexist.
-	plain := relaytest.Connect(t, f.ControlBase, f.ClientFor(token))
-	plainRes := relaytest.CallTool(t, plain, "run_operation", sshdRestartArgs())
-	var plainOut mcp.RunOrPlanOutput
-	relaytest.DecodeToolJSON(t, plainRes, &plainOut)
-	if plainOut.PendingApproval == nil {
-		t.Fatalf("second plan did not park: %+v", plainOut)
-	}
-	requestID2 := plainOut.PendingApproval.RequestID
-	planHash2 := plainOut.PendingApproval.PlanHash
-
-	approveRes := relaytest.CallTool(t, plain, "approve_request", map[string]any{
-		"request_id": requestID2,
-		"plan_hash":  planHash2,
-		"approve":    true,
-		"approver":   elicitResponderUsername,
-	})
-	if approveRes.IsError {
-		t.Fatalf("approve_request: IsError, content=%+v", approveRes.Content)
-	}
-	var decision2 mcp.ApprovalDecisionOutput
-	relaytest.DecodeToolJSON(t, approveRes, &decision2)
-	if decision2.State != "approved" || decision2.Channel != "in-band" || decision2.OnBehalfOf != elicitResponderUsername {
-		t.Errorf("approve_request decision = %+v, want approved/in-band/%s", decision2, elicitResponderUsername)
-	}
-
-	decisions2 := decisionRecordsFor(t, f, requestID2)
-	if len(decisions2) != 1 {
-		t.Fatalf("decision records for the second request = %d, want exactly 1: %+v", len(decisions2), decisions2)
-	}
-	d2 := decisions2[0]
-	if d.DecisionChannel != d2.DecisionChannel ||
-		d.ApprovalAnswer != d2.ApprovalAnswer ||
-		d.Attribution.Verified.AccountID != d2.Attribution.Verified.AccountID ||
-		d.Attribution.Verified.AccountName != d2.Attribution.Verified.AccountName ||
-		d.Attribution.Verified.Role != d2.Attribution.Verified.Role ||
-		d.Attribution.Asserted.OnBehalfOf != d2.Attribution.Asserted.OnBehalfOf {
-		t.Errorf("the two Decisions disagree — an MRTR answer and approve_request by the same Account should record "+
-			"the same shape (ADR-0029's relay exception, approval.go's relaysAnAssertedHuman):\n  MRTR answer:     %+v\n  approve_request: %+v",
-			d, d2)
 	}
 }
 
@@ -646,8 +602,8 @@ func TestMCPElicitation_DeclineIsTerminalAndAudited(t *testing.T) {
 // proof: with the option ON and against the same askable-in-band gate, a
 // client that cannot be asked — one advertising no elicitation capability,
 // and one on a legacy protocol version — sees today's pending_approval
-// unchanged, and both requests are still decidable by approve_request and by
-// the Control API's decision endpoint.
+// unchanged, and both requests are still decidable on the Control API's
+// decision endpoint.
 func TestMCPElicitation_ClientThatCannotBeAskedSeesNoChange(t *testing.T) {
 	f, token, _ := startElicitingRelay(t)
 
@@ -738,20 +694,22 @@ func TestMCPElicitation_ClientThatCannotBeAskedSeesNoChange(t *testing.T) {
 		t.Errorf("Jobs before any rescue = %d, want 0", got)
 	}
 
-	// approve_request still decides A's request, on A's own session.
-	approveRes := relaytest.CallTool(t, clientA, "approve_request", map[string]any{
-		"request_id": requestIDA,
-		"plan_hash":  planHashA,
-		"approve":    true,
-		"approver":   elicitResponderUsername,
-	})
-	if approveRes.IsError {
-		t.Fatalf("approve_request: IsError, content=%+v", approveRes.Content)
+	// The Control API decision endpoint decides A's request, by a human.
+	ana := mintAccount(t, f, "ana", accounts.KindHuman, accounts.RoleOperator)
+	decideRespA := controlAPIRequest(t, f.ClientFor(ana), http.MethodPost,
+		f.ControlBase+"/api/v1/approvals/"+requestIDA+"/decision", ana,
+		map[string]any{"approve": true, "plan_hash": planHashA})
+	defer decideRespA.Body.Close()
+	if decideRespA.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(decideRespA.Body)
+		t.Fatalf("A's decision status = %d, want 200; body = %s", decideRespA.StatusCode, body)
 	}
-	var decisionA mcp.ApprovalDecisionOutput
-	relaytest.DecodeToolJSON(t, approveRes, &decisionA)
-	if decisionA.State != "approved" || decisionA.Channel != "in-band" {
-		t.Errorf("A's decision = %+v, want approved/in-band", decisionA)
+	var decidedA approvalBody
+	if err := json.NewDecoder(decideRespA.Body).Decode(&decidedA); err != nil {
+		t.Fatalf("decode A's decision: %v", err)
+	}
+	if decidedA.State != "approved" {
+		t.Errorf("A's approval state = %q, want approved", decidedA.State)
 	}
 
 	rerunA := relaytest.CallTool(t, clientA, "run_operation", sshdRestartArgs())
@@ -767,7 +725,7 @@ func TestMCPElicitation_ClientThatCannotBeAskedSeesNoChange(t *testing.T) {
 		t.Errorf("A's re-drive Decision = %+v, want nil — this call carried no answer", rerunAOut.Decision)
 	}
 
-	// The Control API decision endpoint still decides B's request.
+	// The Control API decision endpoint decides B's request too.
 	bianca := mintAccount(t, f, "bianca", accounts.KindHuman, accounts.RoleOperator)
 	decideResp := controlAPIRequest(t, f.ClientFor(bianca), http.MethodPost,
 		f.ControlBase+"/api/v1/approvals/"+requestIDB+"/decision", bianca,

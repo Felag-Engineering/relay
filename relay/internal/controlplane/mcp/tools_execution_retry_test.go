@@ -23,13 +23,13 @@ import (
 // tools_execution_retry_test.go is #727's proof: run_operation and raw_exec's
 // answered-retry path (isAnsweredRetry, answerThenDispatch), driven at the
 // mcp handler seam — real HTTP, real SDK client, real requeststate seal, real
-// clientCanBeAsked gate — against a scripted Executor/ApprovalDecider. Package
+// clientCanBeAsked gate — against a scripted Executor/ApprovalAnswerer. Package
 // mcp (not mcp_test) because the tests reach unexported identifiers
 // (answerRequestID and friends from tools_approval_test.go, isAnsweredRetry,
 // answerThenDispatch's field names on the decoded RunOrPlanOutput).
 //
 // These tests exercise the handler seam directly, against a scripted
-// Executor/ApprovalDecider, independent of whether the composition root
+// Executor/ApprovalAnswerer, independent of whether the composition root
 // wires mcp.WithApprovalElicitation() in. See
 // cmd/relay/answered_retry_e2e_test.go for the same claims through the real
 // composition root, where #730 turns this path on in production.
@@ -40,7 +40,7 @@ import (
 
 // scriptedRetryExecutor's first Run call always parks askably as answerRequestID
 // / answerPlanHash — the SAME identifiers tools_approval_test.go's fixtures
-// use, so a scriptedDecider (also from that file) answering "apr-1" lines up
+// use, so a scriptedAnswerer (also from that file) answering "apr-1" lines up
 // with what this Executor parked. second is what every SUBSEQUENT call
 // returns — the retry's own re-entry into dispatch().
 type scriptedRetryExecutor struct {
@@ -178,13 +178,12 @@ func retryRawExecArgs() map[string]any {
 	return map[string]any{"argv": []string{"systemctl", "restart", "nginx"}}
 }
 
-// retryServer mounts the real handler with elicitation on, exactly like
-// approveRequestServer but also wiring reads/results, so the answered-retry
-// path is fully reachable.
-func retryServer(t *testing.T, exec Executor, reads ReadAuditor, results JobResultReader, dec ApprovalDecider) *httptest.Server {
+// retryServer mounts the real handler with elicitation on, wiring
+// reads/results, so the answered-retry path is fully reachable.
+func retryServer(t *testing.T, exec Executor, reads ReadAuditor, results JobResultReader, dec ApprovalAnswerer) *httptest.Server {
 	t.Helper()
 	handler := New(nil, stubOpsLister{}, exec, results, reads,
-		WithApprovalDecider(dec), WithApprovalElicitation(), WithClock(func() time.Time { return fixedNow }))
+		WithApprovalAnswerer(dec), WithApprovalElicitation(), WithClock(func() time.Time { return fixedNow }))
 	mux := http.NewServeMux()
 	mux.Handle("/mcp", handler)
 	srv := httptest.NewServer(controlplane.NewAuthenticator(answerTestVerifier{}).Middleware(mux))
@@ -243,7 +242,7 @@ func TestAnsweredRetry_LapsedRequestReParks(t *testing.T) {
 	log := &retryEventLog{}
 	reads := &scriptedReadAuditor{log: log}
 	results := &scriptedJobResultReader{log: log}
-	dec := scriptedDecider{
+	dec := scriptedAnswerer{
 		resp: approval.Request{ID: answerRequestID, State: approval.StateExpired, ExpiresAt: fixedNow.Add(-time.Hour)},
 		err:  approval.ErrNotPending,
 	}
@@ -269,7 +268,7 @@ func TestAnsweredRetry_LapsedRequestReParks(t *testing.T) {
 // -----------------------------------------------------------------------
 
 func TestAnsweredRetry_DomainRefusalsAreResultsNotErrors(t *testing.T) {
-	wantMachineText := machineSelfDecisionErrorText(t)
+	wantMachineText := errNoNamedApprover.Error()
 
 	cases := []struct {
 		name       string
@@ -293,7 +292,7 @@ func TestAnsweredRetry_DomainRefusalsAreResultsNotErrors(t *testing.T) {
 			log := &retryEventLog{}
 			reads := &scriptedReadAuditor{log: log}
 			results := &scriptedJobResultReader{log: log}
-			dec := scriptedDecider{err: tc.deciderErr}
+			dec := scriptedAnswerer{err: tc.deciderErr}
 			srv := retryServer(t, exec, reads, results, dec)
 			session := retrySession(t, srv)
 
@@ -340,7 +339,7 @@ func TestAnsweredRetry_AuditWriteFailureIsNotRenderedAsNothingRecorded(t *testin
 	log := &retryEventLog{}
 	reads := &scriptedReadAuditor{log: log}
 	results := &scriptedJobResultReader{log: log}
-	dec := scriptedDecider{
+	dec := scriptedAnswerer{
 		resp: approval.Request{ID: answerRequestID, State: approval.StateApproved, PlanHash: answerPlanHash},
 		err:  errors.New("capability: record audit entry: disk full"),
 	}
@@ -402,7 +401,7 @@ func TestAnsweredRetry_RefusedDecisionRendersOnlyStateJobAndDeadline(t *testing.
 	log := &retryEventLog{}
 	reads := &scriptedReadAuditor{log: log}
 	results := &scriptedJobResultReader{log: log}
-	dec := scriptedDecider{resp: leaky, err: approval.ErrNotPending}
+	dec := scriptedAnswerer{resp: leaky, err: approval.ErrNotPending}
 	srv := retryServer(t, exec, reads, results, dec)
 	session := retrySession(t, srv)
 
@@ -447,7 +446,7 @@ func TestAnsweredRetry_RefusedDecisionRendersOnlyStateJobAndDeadline(t *testing.
 
 // -----------------------------------------------------------------------
 // A tampered/unbound state is refused, fail closed, and the rescue still
-// works: approve_request on the same server still reaches the decider.
+// leaves the request undecided.
 // -----------------------------------------------------------------------
 
 func TestAnsweredRetry_StateRefusedLeavesTheRequestUndecided(t *testing.T) {
@@ -455,7 +454,7 @@ func TestAnsweredRetry_StateRefusedLeavesTheRequestUndecided(t *testing.T) {
 	log := &retryEventLog{}
 	reads := &scriptedReadAuditor{log: log}
 	results := &scriptedJobResultReader{log: log}
-	dec := &recordingDecider{resp: approval.Request{ID: answerRequestID, State: approval.StateApproved, PlanHash: answerPlanHash}}
+	dec := &recordingAnswerer{resp: approval.Request{ID: answerRequestID, State: approval.StateApproved, PlanHash: answerPlanHash}}
 	srv := retryServer(t, exec, reads, results, dec)
 	session := retrySession(t, srv)
 
@@ -480,20 +479,8 @@ func TestAnsweredRetry_StateRefusedLeavesTheRequestUndecided(t *testing.T) {
 	if n := exec.runCount(); n != 1 {
 		t.Errorf("Run called %d times, want 1 (no dispatch on a state-refused retry)", n)
 	}
-
-	// The rescue: approve_request on the same server still reaches the
-	// decider — a refused state leaves the request pending and decidable.
-	approveRes := relaytest.CallTool(t, session, "approve_request", map[string]any{
-		"request_id": answerRequestID,
-		"plan_hash":  answerPlanHash,
-		"approve":    true,
-		"approver":   "alice",
-	})
-	if approveRes.IsError {
-		t.Fatalf("approve_request: IsError, content=%+v", approveRes.Content)
-	}
-	if calls := dec.calls(); len(calls) != 1 {
-		t.Fatalf("decider called %d times after approve_request, want 1", len(calls))
+	if !strings.Contains(out.AnswerRefused.Reason, "Control API") || strings.Contains(out.AnswerRefused.Reason, "approve_request") {
+		t.Errorf("Reason = %q, want it to name the Control API and never approve_request", out.AnswerRefused.Reason)
 	}
 }
 
@@ -508,7 +495,7 @@ func TestAnsweredRetry_ApproveAtTheHandlerSeamRunsOnceAndCarriesTheDecision(t *t
 	log := &retryEventLog{}
 	reads := &scriptedReadAuditor{log: log}
 	results := &scriptedJobResultReader{log: log}
-	dec := scriptedDecider{resp: approval.Request{ID: answerRequestID, State: approval.StateApproved, PlanHash: answerPlanHash}}
+	dec := scriptedAnswerer{resp: inBandDecisionBy(approval.Request{ID: answerRequestID, State: approval.StateApproved, PlanHash: answerPlanHash}, answerAccountID, true)}
 	srv := retryServer(t, exec, reads, results, dec)
 	session := retrySession(t, srv)
 
@@ -529,8 +516,8 @@ func TestAnsweredRetry_ApproveAtTheHandlerSeamRunsOnceAndCarriesTheDecision(t *t
 	if out.Decision.State != approval.StateApproved.String() {
 		t.Errorf("State = %q, want approved", out.Decision.State)
 	}
-	if out.Decision.Channel != approval.ChannelInBand.String() {
-		t.Errorf("Channel = %q, want in-band", out.Decision.Channel)
+	if out.Decision.Channel != wantInBand {
+		t.Errorf("Channel = %q, want %q", out.Decision.Channel, wantInBand)
 	}
 	if out.Decision.OnBehalfOf != "alice" {
 		t.Errorf("OnBehalfOf = %q, want alice", out.Decision.OnBehalfOf)
@@ -552,7 +539,7 @@ func TestAnsweredRetry_ApproveAtTheHandlerSeamRunsOnceAndCarriesTheDecision(t *t
 func TestAnsweredRetry_NextStepFollowsWhatTheDispatchReturned(t *testing.T) {
 	cases := []struct {
 		name           string
-		dec            scriptedDecider
+		dec            scriptedAnswerer
 		second         func(*scriptedRetryExecutor)
 		wantJobID      string
 		wantPending    bool
@@ -562,21 +549,21 @@ func TestAnsweredRetry_NextStepFollowsWhatTheDispatchReturned(t *testing.T) {
 	}{
 		{
 			name: "quorum completed concurrently: still pending, but the re-entered dispatch ran",
-			dec: scriptedDecider{resp: approval.Request{
+			dec: scriptedAnswerer{resp: inBandDecisionBy(approval.Request{
 				ID: answerRequestID, State: approval.StatePending, PlanHash: answerPlanHash,
-				Require: approval.Requirement{Count: 2}, Decisions: []approval.Decision{{Approve: true}},
-			}},
+				Require: approval.Requirement{Count: 3}, Decisions: []approval.Decision{{Approve: true}},
+			}, answerAccountID, true)},
 			second: func(e *scriptedRetryExecutor) {
 				e.second.results = []capability.NodeResult{{NodeID: "node-a", Outcome: jobs.OutcomeUnreachable, JobID: "job-1"}}
 			},
 			wantJobID:      "job-1",
 			wantNextStep:   nextStepRanThePipeline + " " + nextStepAnswerRecorded,
-			wantChannel:    approval.ChannelInBand.String(),
+			wantChannel:    wantInBand,
 			wantOnBehalfOf: "alice",
 		},
 		{
 			name: "the rule changed: approved and recorded, but the re-entered dispatch re-parks non-askable",
-			dec:  scriptedDecider{resp: approval.Request{ID: answerRequestID, State: approval.StateApproved, PlanHash: answerPlanHash}},
+			dec:  scriptedAnswerer{resp: inBandDecisionBy(approval.Request{ID: answerRequestID, State: approval.StateApproved, PlanHash: answerPlanHash}, answerAccountID, true)},
 			second: func(e *scriptedRetryExecutor) {
 				e.second.err = &capability.ParkedError{
 					RequestID: "apr-3", PlanHash: "hash-3", Summary: "a different rule now applies",
@@ -585,12 +572,12 @@ func TestAnsweredRetry_NextStepFollowsWhatTheDispatchReturned(t *testing.T) {
 			},
 			wantPending:    true,
 			wantNextStep:   nextStepReParkedOnApproval + " " + nextStepAnswerRecorded,
-			wantChannel:    approval.ChannelInBand.String(),
+			wantChannel:    wantInBand,
 			wantOnBehalfOf: "alice",
 		},
 		{
 			name: "already decided elsewhere: approved but NOT recorded, dispatch still ran",
-			dec: scriptedDecider{
+			dec: scriptedAnswerer{
 				resp: approval.Request{ID: answerRequestID, State: approval.StateApproved, PlanHash: answerPlanHash},
 				err:  approval.ErrNotPending,
 			},
@@ -678,7 +665,7 @@ func TestAnsweredRetry_DispatchErrorAfterTheAnswerNeverClaimsNothingRan(t *testi
 			reads := &scriptedReadAuditor{log: log}
 			results := &scriptedJobResultReader{log: log}
 			tc.second(exec, results)
-			dec := scriptedDecider{resp: approval.Request{ID: answerRequestID, State: approval.StateApproved, PlanHash: answerPlanHash}}
+			dec := scriptedAnswerer{resp: approval.Request{ID: answerRequestID, State: approval.StateApproved, PlanHash: answerPlanHash}}
 			srv := retryServer(t, exec, reads, results, dec)
 			session := retrySession(t, srv)
 
@@ -719,7 +706,7 @@ func TestAnsweredRetry_BoundJobReAttachesAtTheHandlerSeam(t *testing.T) {
 	log := &retryEventLog{}
 	reads := &scriptedReadAuditor{log: log}
 	results := &scriptedJobResultReader{log: log}
-	dec := scriptedDecider{
+	dec := scriptedAnswerer{
 		resp: approval.Request{ID: answerRequestID, State: approval.StateApproved, PlanHash: answerPlanHash, JobID: "job-1"},
 		err:  approval.ErrNotPending,
 	}
@@ -766,7 +753,7 @@ func TestAnsweredRetry_BoundJobReAttachFailsClosedWhenTheReadCannotBeAudited(t *
 	log := &retryEventLog{}
 	reads := &scriptedReadAuditor{log: log, err: errors.New("audit store: disk full")}
 	results := &scriptedJobResultReader{log: log}
-	dec := scriptedDecider{
+	dec := scriptedAnswerer{
 		resp: approval.Request{ID: answerRequestID, State: approval.StateApproved, PlanHash: answerPlanHash, JobID: "job-1"},
 		err:  approval.ErrNotPending,
 	}
@@ -812,7 +799,7 @@ func TestAnsweredRetry_RawExecIsWiredToo(t *testing.T) {
 		log := &retryEventLog{}
 		reads := &scriptedReadAuditor{log: log}
 		results := &scriptedJobResultReader{log: log}
-		dec := scriptedDecider{resp: approval.Request{ID: answerRequestID, State: approval.StateApproved, PlanHash: answerPlanHash}}
+		dec := scriptedAnswerer{resp: approval.Request{ID: answerRequestID, State: approval.StateApproved, PlanHash: answerPlanHash}}
 		srv := retryServer(t, exec, reads, results, dec)
 		session := retrySession(t, srv)
 
@@ -836,7 +823,7 @@ func TestAnsweredRetry_RawExecIsWiredToo(t *testing.T) {
 		log := &retryEventLog{}
 		reads := &scriptedReadAuditor{log: log}
 		results := &scriptedJobResultReader{log: log}
-		dec := scriptedDecider{resp: approval.Request{ID: answerRequestID, State: approval.StateDenied, PlanHash: answerPlanHash}}
+		dec := scriptedAnswerer{resp: approval.Request{ID: answerRequestID, State: approval.StateDenied, PlanHash: answerPlanHash}}
 		srv := retryServer(t, exec, reads, results, dec)
 		session := retrySession(t, srv)
 
@@ -876,8 +863,8 @@ func TestAnsweredRetry_OptionOffIgnoresRetryFields(t *testing.T) {
 		log := &retryEventLog{}
 		reads := &scriptedReadAuditor{log: log}
 		results := &scriptedJobResultReader{log: log}
-		dec := &recordingDecider{}
-		handler := New(nil, stubOpsLister{}, exec, results, reads, WithApprovalDecider(dec), WithClock(func() time.Time { return fixedNow }))
+		dec := &recordingAnswerer{}
+		handler := New(nil, stubOpsLister{}, exec, results, reads, WithApprovalAnswerer(dec), WithClock(func() time.Time { return fixedNow }))
 		mux := http.NewServeMux()
 		mux.Handle("/mcp", handler)
 		srv := httptest.NewServer(controlplane.NewAuthenticator(answerTestVerifier{}).Middleware(mux))
@@ -918,7 +905,7 @@ func TestAnsweredRetry_OptionOffIgnoresRetryFields(t *testing.T) {
 		log := &retryEventLog{}
 		reads := &scriptedReadAuditor{log: log}
 		results := &scriptedJobResultReader{log: log}
-		dec := &recordingDecider{}
+		dec := &recordingAnswerer{}
 		srv := retryServer(t, exec, reads, results, dec)
 		session := retrySession(t, srv)
 
@@ -950,7 +937,7 @@ func TestAnsweredRetry_OptionOffIgnoresRetryFields(t *testing.T) {
 		log := &retryEventLog{}
 		reads := &scriptedReadAuditor{log: log}
 		results := &scriptedJobResultReader{log: log}
-		dec := &recordingDecider{}
+		dec := &recordingAnswerer{}
 		srv := retryServer(t, exec, reads, results, dec)
 		// A PLAIN session — no ElicitingClientOptions — so clientCanBeAsked's
 		// condition 3 (an elicitation capability) is never satisfied.

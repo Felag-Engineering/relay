@@ -1075,3 +1075,82 @@ func TestDecideApproval_OtherRefusalsAreUnchanged(t *testing.T) {
 		})
 	}
 }
+
+// TestAnswerElicited_RecordsAnInBandDecision: the in-band entry point takes no
+// channel and still records one, in the Decision and in the audit entry.
+//
+// Proves AP-12, AP-63.
+func TestAnswerElicited_RecordsAnInBandDecision(t *testing.T) {
+	req := approval.Requirement{Count: 1, RequesterAllowed: true, Channel: approval.ChannelInBand, TTL: time.Hour}
+	store := newMemApprovals()
+	s, auditSink := decideFixtureWithRequirement(t, req, store, &spyApprovalAuthorizer{}, func() time.Time { return apNow })
+	parked := park(t, s, machineRequester)
+
+	ctx := WithAssertions(context.Background(), Assertions{OnBehalfOf: "alice"})
+	got, err := s.AnswerElicited(ctx, humanApprover("acct-ana", "ana"), parked.RequestID, parked.PlanHash, true)
+	if err != nil {
+		t.Fatalf("AnswerElicited: %v", err)
+	}
+	if got.State != approval.StateApproved {
+		t.Errorf("state = %v, want approved", got.State)
+	}
+	if len(got.Decisions) != 1 {
+		t.Fatalf("decisions = %d, want 1", len(got.Decisions))
+	}
+	d := got.Decisions[0]
+	if d.Channel != approval.ChannelInBand {
+		t.Errorf("recorded channel = %v, want in-band", d.Channel)
+	}
+	if d.OnBehalfOf != "alice" {
+		t.Errorf("recorded on-behalf-of = %q, want alice", d.OnBehalfOf)
+	}
+
+	var entry *AuditEntry
+	for i := range auditSink.entries {
+		if auditSink.entries[i].Kind == AuditKindApprovalDecided {
+			entry = &auditSink.entries[i]
+		}
+	}
+	if entry == nil {
+		t.Fatal("no approval-decided audit entry")
+	}
+	if entry.DecisionChannel != approval.ChannelInBand {
+		t.Errorf("audit channel = %v, want in-band", entry.DecisionChannel)
+	}
+	if entry.ApprovalAnswer != ApprovalAnswerApproved {
+		t.Errorf("audit answer = %v, want approved", entry.ApprovalAnswer)
+	}
+}
+
+// TestAnswerElicited_RefusesExactlyAsDecideApproval: the entry point adds no
+// refusal of its own and drops none of DecideApproval's.
+func TestAnswerElicited_RefusesExactlyAsDecideApproval(t *testing.T) {
+	cases := []struct {
+		name     string
+		requires approval.Channel
+		planHash func(parked *ParkedError) string
+		wantErr  error
+	}{
+		{"plan hash mismatch", approval.ChannelInBand, func(*ParkedError) string { return "some-other-plan" }, approval.ErrPlanChanged},
+		{"out-of-band rule", approval.ChannelOutOfBand, func(p *ParkedError) string { return p.PlanHash }, approval.ErrWeakChannel},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := approval.Requirement{Count: 1, RequesterAllowed: true, Channel: tc.requires, TTL: time.Hour}
+			store := newMemApprovals()
+			s, auditSink := decideFixtureWithRequirement(t, req, store, &spyApprovalAuthorizer{}, func() time.Time { return apNow })
+			parked := park(t, s, machineRequester)
+
+			_, err := s.AnswerElicited(context.Background(), humanApprover("acct-ana", "ana"), parked.RequestID, tc.planHash(parked), true)
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("err = %v, want errors.Is(_, %v)", err, tc.wantErr)
+			}
+			if got := store.byID[parked.RequestID]; len(got.Decisions) != 0 || got.State != approval.StatePending {
+				t.Errorf("stored record changed: %+v", got)
+			}
+			if n := countApprovalDecided(auditSink); n != 0 {
+				t.Errorf("approval-decided audit entries = %d, want 0", n)
+			}
+		})
+	}
+}

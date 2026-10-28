@@ -274,6 +274,9 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 			// Request, opening a window, closing one, spending one, and the
 			// store-level writes underneath all three.
 			"Decide", "Revoke", "Request", "Claim", "Create", "Bind",
+			// Answer: AnswerElicited, the in-band entry point on the
+			// *capability.Approvals wired to Deps.Approvals.
+			"Answer",
 			// The capability layer's dispatch and control-action verbs
 			// (#595): Run and Plan dispatch; Engage/Release and Cancel are
 			// ControlActions; Resolve is the removed ResolveTask, kept listed so it
@@ -758,6 +761,22 @@ func f(a any) {
 }
 `,
 			wantSubstr: "DecideApproval",
+		},
+		{
+			name: "anonymous interface recovering AnswerElicited from the approval seam",
+			src: `package console
+import (
+	"context"
+	` + capImport + `
+	"github.com/Felag-Engineering/relay/relay/internal/approval"
+)
+func f(a any) {
+	_, _ = a.(interface {
+		AnswerElicited(context.Context, capability.Principal, string, string, bool) (approval.Request, error)
+	})
+}
+`,
+			wantSubstr: "AnswerElicited",
 		},
 		{
 			name: "anonymous interface recovering RevokeGrant from the approval seam",

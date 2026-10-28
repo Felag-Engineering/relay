@@ -88,24 +88,24 @@ func (p countingAskableParker) CancelJob(ctx context.Context, principal capabili
 	return p.askableParker.CancelJob(ctx, principal, jobID)
 }
 
-// stubDecider implements mcp.ApprovalDecider and fails the test if ever
-// called: this step renders a question, it never decides one (ADR-0029
-// decision 5 is tools_approval.go's alone). It reports the failure with
-// t.Error rather than t.Fatal: the SDK invokes DecideApproval from its own
-// handler goroutine, and t.Fatal there would only stop that goroutine —
-// silently, since t.Fatal is documented to require running on the test's own
-// goroutine — rather than the test itself.
-type stubDecider struct{ t *testing.T }
+// stubAnswerer implements mcp.ApprovalAnswerer and fails the test if ever
+// called: this step renders a question, it never accepts an answer
+// (acceptance is tools_approval.go's). It reports the failure with t.Error
+// rather than t.Fatal: the SDK invokes AnswerElicited from its own handler
+// goroutine, and t.Fatal there would only stop that goroutine — silently,
+// since t.Fatal is documented to require running on the test's own goroutine
+// — rather than the test itself.
+type stubAnswerer struct{ t *testing.T }
 
-func (d stubDecider) DecideApproval(context.Context, capability.Principal, capability.ApprovalDecision) (approval.Request, error) {
+func (d stubAnswerer) AnswerElicited(context.Context, capability.Principal, string, string, bool) (approval.Request, error) {
 	d.t.Helper()
-	d.t.Error("stubDecider.DecideApproval was called — S2b never decides, it only renders a question")
+	d.t.Error("stubAnswerer.AnswerElicited was called — emitting a question never accepts an answer")
 	return approval.Request{}, nil
 }
 
 // elicitServer mounts the real handler behind the real authenticator, exactly
 // like golden_test.go's goldenServerWithExec, with opts appended after
-// the fixed clock so a test can turn the option (and a decider) on.
+// the fixed clock so a test can turn the option (and an answerer) on.
 func elicitServer(t *testing.T, exec mcp.Executor, opts ...mcp.Option) *httptest.Server {
 	t.Helper()
 	allOpts := append([]mcp.Option{mcp.WithClock(func() time.Time { return goldenNow })}, opts...)
@@ -184,13 +184,13 @@ func isEmptyJSON(raw json.RawMessage) bool {
 
 // TestElicit_QuestionCarriesNoContent is the headline shape proof (AP-60):
 // an askable park, from an MRTR-capable, elicitation-advertising client,
-// with the option on and a decider wired, renders an input-required result
+// with the option on and an answerer wired, renders an input-required result
 // carrying exactly one input request keyed by the request ID, a sealed
 // requestState, and the request ID/plan hash in `_meta` — never Content,
 // never structuredContent, never the pending_approval string anywhere.
 func TestElicit_QuestionCarriesNoContent(t *testing.T) {
 	srv := elicitServer(t, askableParker{askable: true},
-		mcp.WithApprovalElicitation(), mcp.WithApprovalDecider(stubDecider{t: t}))
+		mcp.WithApprovalElicitation(), mcp.WithApprovalAnswerer(stubAnswerer{t: t}))
 
 	status, body, _ := postJSONRPC(t, srv, "tools/call", "run_operation", elicitRunOperationRequest(elicitCaps))
 	if status != 200 {
@@ -282,7 +282,7 @@ const (
 // TestElicit_NonAskableParkRendersPendingApproval is AP-61/AP-62: a park the
 // capability layer marked NOT askable renders byte-for-byte the same
 // pending_approval result as a server with no elicitation option at all,
-// even with the option on, a decider wired, and an MRTR/elicitation-capable
+// even with the option on, an answerer wired, and an MRTR/elicitation-capable
 // client — Askable is read, never recomputed (invariant 10).
 func TestElicit_NonAskableParkRendersPendingApproval(t *testing.T) {
 	req := elicitRunOperationRequest(elicitCaps)
@@ -294,7 +294,7 @@ func TestElicit_NonAskableParkRendersPendingApproval(t *testing.T) {
 	}
 
 	withElicit := elicitServer(t, askableParker{askable: false},
-		mcp.WithApprovalElicitation(), mcp.WithApprovalDecider(stubDecider{t: t}))
+		mcp.WithApprovalElicitation(), mcp.WithApprovalAnswerer(stubAnswerer{t: t}))
 	_, gotBody, _ := postJSONRPC(t, withElicit, "tools/call", "run_operation", req)
 
 	assertGoldenJSON(t, gotBody, wantBody)
@@ -314,7 +314,7 @@ func TestElicit_NonAskableParkRendersPendingApproval(t *testing.T) {
 // either style of check is still caught.
 func TestElicit_OutOfBandParkNeverAsks_HandlerSeam(t *testing.T) {
 	srv := elicitServer(t, askableParker{askable: false},
-		mcp.WithApprovalElicitation(), mcp.WithApprovalDecider(stubDecider{t: t}))
+		mcp.WithApprovalElicitation(), mcp.WithApprovalAnswerer(stubAnswerer{t: t}))
 
 	_, body, _ := postJSONRPC(t, srv, "tools/call", "run_operation", elicitRunOperationRequest(elicitCaps))
 	res := decodeElicitResult(t, body)
@@ -328,7 +328,7 @@ func TestElicit_OutOfBandParkNeverAsks_HandlerSeam(t *testing.T) {
 
 // TestElicit_OptionOffChangesNothing is the AP-85 option-off guard at the mcp
 // handler seam: an askable park from an MRTR/elicitation-capable client
-// renders identically to today whenever the option is off, or a decider is
+// renders identically to today whenever the option is off, or an answerer is
 // unwired — three servers, one canonical body.
 func TestElicit_OptionOffChangesNothing(t *testing.T) {
 	req := elicitRunOperationRequest(elicitCaps)
@@ -339,12 +339,12 @@ func TestElicit_OptionOffChangesNothing(t *testing.T) {
 		t.Fatalf("baseline body has no pending_approval, the golden itself is broken: %s", wantBody)
 	}
 
-	optionOnlyNoDecider := elicitServer(t, askableParker{askable: true}, mcp.WithApprovalElicitation())
-	_, body2, _ := postJSONRPC(t, optionOnlyNoDecider, "tools/call", "run_operation", req)
+	optionOnlyNoAnswerer := elicitServer(t, askableParker{askable: true}, mcp.WithApprovalElicitation())
+	_, body2, _ := postJSONRPC(t, optionOnlyNoAnswerer, "tools/call", "run_operation", req)
 	assertGoldenJSON(t, body2, wantBody)
 
-	deciderOnlyNoOption := elicitServer(t, askableParker{askable: true}, mcp.WithApprovalDecider(stubDecider{t: t}))
-	_, body3, _ := postJSONRPC(t, deciderOnlyNoOption, "tools/call", "run_operation", req)
+	answererOnlyNoOption := elicitServer(t, askableParker{askable: true}, mcp.WithApprovalAnswerer(stubAnswerer{t: t}))
+	_, body3, _ := postJSONRPC(t, answererOnlyNoOption, "tools/call", "run_operation", req)
 	assertGoldenJSON(t, body3, wantBody)
 }
 
@@ -354,7 +354,7 @@ func TestElicit_OptionOffChangesNothing(t *testing.T) {
 // inputRequests.
 func TestElicit_NoElicitationCapabilityDoesNotAsk(t *testing.T) {
 	srv := elicitServer(t, askableParker{askable: true},
-		mcp.WithApprovalElicitation(), mcp.WithApprovalDecider(stubDecider{t: t}))
+		mcp.WithApprovalElicitation(), mcp.WithApprovalAnswerer(stubAnswerer{t: t}))
 
 	_, body, _ := postJSONRPC(t, srv, "tools/call", "run_operation", elicitRunOperationRequest(noElicitCaps))
 	res := decodeElicitResult(t, body)
@@ -373,7 +373,7 @@ func TestElicit_NoElicitationCapabilityDoesNotAsk(t *testing.T) {
 // task fields.
 func TestElicit_ElicitedParkEmitsNoTaskEnvelope(t *testing.T) {
 	srv := elicitServer(t, askableParker{askable: true},
-		mcp.WithApprovalElicitation(), mcp.WithApprovalDecider(stubDecider{t: t}))
+		mcp.WithApprovalElicitation(), mcp.WithApprovalAnswerer(stubAnswerer{t: t}))
 
 	_, bothBody, _ := postJSONRPC(t, srv, "tools/call", "run_operation", elicitRunOperationRequest(tasksAndElicitCaps))
 	res := decodeElicitResult(t, bothBody)
@@ -434,7 +434,7 @@ func TestElicit_ElicitedParkEmitsNoTaskEnvelope(t *testing.T) {
 // name, not some other difference in the fixture.
 func TestElicit_UnrecognisedMRTRClientGetsPendingApproval(t *testing.T) {
 	srv := elicitServer(t, askableParker{askable: true},
-		mcp.WithApprovalElicitation(), mcp.WithApprovalDecider(stubDecider{t: t}))
+		mcp.WithApprovalElicitation(), mcp.WithApprovalAnswerer(stubAnswerer{t: t}))
 
 	_, body, _ := postJSONRPC(t, srv, "tools/call", "run_operation", elicitRunOperationRequestAs("elicit-client", elicitCaps))
 	res := decodeElicitResult(t, body)
@@ -470,7 +470,7 @@ func TestElicit_UnrecognisedMRTRClientGetsPendingApproval(t *testing.T) {
 // Token human is not enough, and this still gets today's pending_approval.
 func TestElicit_ClaudeCodeOnAnAPITokenSessionIsNotAsked(t *testing.T) {
 	srv := elicitServer(t, askableParker{askable: true},
-		mcp.WithApprovalElicitation(), mcp.WithApprovalDecider(stubDecider{t: t}))
+		mcp.WithApprovalElicitation(), mcp.WithApprovalAnswerer(stubAnswerer{t: t}))
 
 	const claudeCodeCaps = `{"roots":{"listChanged":true},"elicitation":{"form":{},"url":{}}}`
 	_, body, _ := postJSONRPC(t, srv, "tools/call", "run_operation", elicitRunOperationRequestAs("claude-code", claudeCodeCaps))
@@ -498,11 +498,11 @@ func TestElicit_ClaudeCodeOnAnAPITokenSessionIsNotAsked(t *testing.T) {
 // it parks again rather than being decided. Sealing the state for real (rather
 // than a garbage string) means the only thing that can explain the park below
 // is condition 5 (the declared name), never the seal failing to open on its
-// own. stubDecider fails the test if it is ever called, which is this test's
-// proof that the decider was never reached.
+// own. stubAnswerer fails the test if it is ever called, which is this test's
+// proof that the answerer was never reached.
 func TestElicit_UnrecognisedClientsRetryFieldsAreIgnored(t *testing.T) {
 	srv := elicitServer(t, askableParker{askable: true},
-		mcp.WithApprovalElicitation(), mcp.WithApprovalDecider(stubDecider{t: t}))
+		mcp.WithApprovalElicitation(), mcp.WithApprovalAnswerer(stubAnswerer{t: t}))
 
 	_, firstBody, _ := postJSONRPC(t, srv, "tools/call", "run_operation", elicitRunOperationRequest(elicitCaps))
 	first := decodeElicitResult(t, firstBody)
@@ -547,10 +547,10 @@ func TestElicit_UnrecognisedClientsRetryFieldsAreIgnored(t *testing.T) {
 // declaring "claude-code" on the RETRY — clientCanBeAsked is false for the
 // retry (claude-code off an OAuth human session), so isAnsweredRetry treats
 // it as an ordinary call (AP-85) rather than an answer, and it parks again
-// instead of being decided. stubDecider fails the test if it is ever called.
+// instead of being decided. stubAnswerer fails the test if it is ever called.
 func TestElicit_ClaudeCodeRetryOnAnAPITokenSessionIsAnOrdinaryCall(t *testing.T) {
 	srv := elicitServer(t, askableParker{askable: true},
-		mcp.WithApprovalElicitation(), mcp.WithApprovalDecider(stubDecider{t: t}))
+		mcp.WithApprovalElicitation(), mcp.WithApprovalAnswerer(stubAnswerer{t: t}))
 
 	_, firstBody, _ := postJSONRPC(t, srv, "tools/call", "run_operation", elicitRunOperationRequest(elicitCaps))
 	first := decodeElicitResult(t, firstBody)
@@ -588,7 +588,7 @@ func TestElicit_ClaudeCodeRetryOnAnAPITokenSessionIsAnOrdinaryCall(t *testing.T)
 // TestPlanPreflightNeverEmitsAQuestion is PF-23's guard at the mcp seam,
 // where the question path is actually wired: a plan=true call against an
 // askable park — even one carrying a stray requestState/inputResponses —
-// never reaches the question (or the decider) at all. run_operation and
+// never reaches the question (or the answerer) at all. run_operation and
 // raw_exec both return from their plan=true branch (planAndRender, calling
 // exec.Plan) before isAnsweredRetry is ever consulted (tools_execution.go),
 // which is why a plan call's stray answer fields change nothing: a plan
@@ -599,7 +599,7 @@ func TestPlanPreflightNeverEmitsAQuestion(t *testing.T) {
 	var runs, plans atomic.Int32
 	parker := countingAskableParker{askableParker: askableParker{askable: true}, runs: &runs, plans: &plans}
 	srv := elicitServer(t, parker,
-		mcp.WithApprovalElicitation(), mcp.WithApprovalDecider(stubDecider{t: t}))
+		mcp.WithApprovalElicitation(), mcp.WithApprovalAnswerer(stubAnswerer{t: t}))
 
 	runOpPlanBody := `{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"_meta":{` +
 		`"io.modelcontextprotocol/protocolVersion":"2026-07-28",` +
@@ -690,9 +690,9 @@ func TestElicit_SealKeyIsPerProcessAndNotConfiguration(t *testing.T) {
 	req := elicitRunOperationRequest(elicitCaps)
 
 	srv1 := elicitServer(t, askableParker{askable: true},
-		mcp.WithApprovalElicitation(), mcp.WithApprovalDecider(stubDecider{t: t}))
+		mcp.WithApprovalElicitation(), mcp.WithApprovalAnswerer(stubAnswerer{t: t}))
 	srv2 := elicitServer(t, askableParker{askable: true},
-		mcp.WithApprovalElicitation(), mcp.WithApprovalDecider(stubDecider{t: t}))
+		mcp.WithApprovalElicitation(), mcp.WithApprovalAnswerer(stubAnswerer{t: t}))
 
 	_, body1, _ := postJSONRPC(t, srv1, "tools/call", "run_operation", req)
 	_, body2, _ := postJSONRPC(t, srv2, "tools/call", "run_operation", req)
@@ -811,7 +811,7 @@ func isRequestStateSealerPointer(expr ast.Expr) bool {
 
 // returnsOption reports whether fn's sole return value is exactly Option —
 // i.e. fn is one of the package's Option constructors (WithClock,
-// WithApprovalDecider, WithApprovalElicitation, WithToolCallObserver, and any
+// WithApprovalAnswerer, WithApprovalElicitation, WithToolCallObserver, and any
 // future WithXxx). These are THE configuration surface a caller passes into
 // mcp.New, which is why the []byte/*requeststate.Sealer parameter rule below
 // is scoped to them rather than to every top-level function: a plain helper

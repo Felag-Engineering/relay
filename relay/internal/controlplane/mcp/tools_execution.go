@@ -33,12 +33,11 @@ import (
 // against a test-wired execution capability (mcp_test.go/mcp_exec_test.go).
 //
 // ADR-0029 decision 6: run_operation and raw_exec are the answered
-// retry's only callers. This file reaches exactly ONE decision-side function
-// in tools_approval.go, the one file ADR-0029 decision 5 exempts —
-// acceptElicitedAnswer — and renders whatever it returns through that same
+// retry's only callers. This file reaches acceptElicitedAnswer in
+// tools_approval.go and renders whatever it returns through that same
 // file's methods (decisionOutput, refusalOutput, dispatchError,
-// reattachError, answerStateRefusedOutput); it never names DecideApproval,
-// ApprovalDecision, Channel* or RecordDecision. The Job-bound branch
+// reattachError, answerStateRefusedOutput); like every file in the package
+// it names no decision identifier (no_decision_test.go). The Job-bound branch
 // (elicitedApprovedJobBound) is an AUDITED read (ADR-0025), exactly like
 // get_job's own read-back: a bound Job's captured output may belong to
 // another Account's dispatch, so it is read only after auditRead succeeds,
@@ -531,14 +530,14 @@ func isAnsweredRetry(ask *questioner, req *sdkmcp.CallToolRequest, p capability.
 // dispatch/ask.question, so the digest acceptElicitedAnswer checks can never
 // drift from what emission sealed (there is no second digest function).
 //
-// From the decision side this names ONLY acceptElicitedAnswer, its result
+// From the answer side this names ONLY acceptElicitedAnswer, its result
 // type, the elicitedOutcome constants, answerStateRefusedOutput and the
 // result's own rendering methods (decisionOutput, refusalOutput,
-// dispatchError, reattachError) — never DecideApproval, ApprovalDecision,
-// Channel* or RecordDecision (ADR-0029 decision 5; no_decision_test.go).
+// dispatchError, reattachError) and, like every file in the package, no
+// decision identifier (no_decision_test.go).
 func answerThenDispatch(
 	ctx context.Context, req *sdkmcp.CallToolRequest, p capability.Principal,
-	exec Executor, results JobResultReader, reads ReadAuditor, decider ApprovalDecider,
+	exec Executor, results JobResultReader, reads ReadAuditor, answerer ApprovalAnswerer,
 	ask *questioner, now func() time.Time, tool string, in any, sel capability.Selector, act jobs.Action, o dispatchOpts,
 ) (*sdkmcp.CallToolResult, RunOrPlanOutput, error) {
 	digest, err := callArgsDigest(in)
@@ -546,7 +545,7 @@ func answerThenDispatch(
 		return nil, RunOrPlanOutput{Results: []PerNodeResult{}, AnswerRefused: answerStateRefusedOutput()}, nil //nolint:nilerr // the refusal is the tool result; a protocol error would hide it from the AI-agent
 	}
 
-	r := acceptElicitedAnswer(ctx, decider, ask.opener(), now(), p, elicitedAnswer{
+	r := acceptElicitedAnswer(ctx, answerer, ask.opener(), now(), p, elicitedAnswer{
 		RequestState:   req.Params.RequestState,
 		InputResponses: req.Params.InputResponses,
 		CallMeta:       req.Params.GetMeta(),
@@ -635,9 +634,9 @@ func answerThenDispatch(
 //
 // reads is used only by the Job-bound re-attach branch (auditRead, ADR-0025:
 // the re-attached Job's captured output may belong to another Account's
-// dispatch, exactly get_job's case); decider and now are acceptElicitedAnswer's
+// dispatch, exactly get_job's case); answerer and now are acceptElicitedAnswer's
 // own parameters, threaded straight through from mcp.New's cfg.
-func registerExecutionTools(srv *sdkmcp.Server, exec Executor, results JobResultReader, ops OperationLister, ask *questioner, reads ReadAuditor, decider ApprovalDecider, now func() time.Time) {
+func registerExecutionTools(srv *sdkmcp.Server, exec Executor, results JobResultReader, ops OperationLister, ask *questioner, reads ReadAuditor, answerer ApprovalAnswerer, now func() time.Time) {
 	sdkmcp.AddTool(srv, &sdkmcp.Tool{
 		Name: "run_operation", // keep in sync with toolRunOperation (PF-1, see the const doc above)
 		Description: "The default way to act on Nodes. Run a structured Operation (ADR-0001's typed, " +
@@ -692,7 +691,7 @@ func registerExecutionTools(srv *sdkmcp.Server, exec Executor, results JobResult
 		// plan=true is handled exactly like today's call regardless of this
 		// check (a plan is not a park).
 		if isAnsweredRetry(ask, req, p) {
-			return answerThenDispatch(ctx, req, p, exec, results, reads, decider, ask, now, toolRunOperation, in, sel, act, o)
+			return answerThenDispatch(ctx, req, p, exec, results, reads, answerer, ask, now, toolRunOperation, in, sel, act, o)
 		}
 
 		out, parked, err := dispatch(ctx, exec, results, p, sel, act, o)
@@ -765,7 +764,7 @@ func registerExecutionTools(srv *sdkmcp.Server, exec Executor, results JobResult
 
 		// See run_operation's identical branch above.
 		if isAnsweredRetry(ask, req, p) {
-			return answerThenDispatch(ctx, req, p, exec, results, reads, decider, ask, now, toolRawExec, in, sel, act, o)
+			return answerThenDispatch(ctx, req, p, exec, results, reads, answerer, ask, now, toolRawExec, in, sel, act, o)
 		}
 
 		out, parked, err := dispatch(ctx, exec, results, p, sel, act, o)

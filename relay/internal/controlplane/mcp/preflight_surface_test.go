@@ -84,10 +84,9 @@ func toolNameFromAddToolArg(arg ast.Expr) (string, bool) {
 // custom method (sdkmcp.AddReceivingCustomMethod), regardless of whether
 // mcp.New's own wiring would register it conditionally at runtime — the
 // reason this is an AST walk rather than a live ListTools call against
-// newTestServer: mcp.New registers approve_request only when
-// WithApprovalDecider is passed, so a live-server check sees only a subset of
-// the package's real registration sites. The AST walk sees every one,
-// regardless of how it is wired at runtime.
+// newTestServer: registration can be conditional at runtime, so a live-server
+// check sees only a subset of the package's real registration sites. The AST
+// walk sees every one, regardless of how it is wired at runtime.
 //
 // FAIL CLOSED (security review, cycle 2, SR1): a registration whose name
 // cannot be resolved to a string literal is a t.Errorf naming the file and
@@ -193,13 +192,12 @@ func TestNoPreflightToolOrMethodIsRegistered(t *testing.T) {
 		names[f.name] = true
 	}
 
-	// The eight entry points registered today. Any addition must be named
+	// The seven entry points registered today. Any addition must be named
 	// here and reviewed against PF-1 before it passes.
 	want := []string{
 		"list_nodes", "describe_node", "list_operations",
 		"run_operation", "raw_exec",
 		"cancel_job", "get_job",
-		"approve_request",
 	}
 	wantSet := make(map[string]bool, len(want))
 	for _, w := range want {
@@ -244,7 +242,7 @@ func TestNoPreflightToolOrMethodIsRegistered(t *testing.T) {
 	}
 }
 
-// noopExecutor and noopApprovalDecider satisfy Executor/ApprovalDecider well
+// noopExecutor and noopApprovalAnswerer satisfy Executor/ApprovalAnswerer well
 // enough to be wired into a real server for liveRegisteredToolNames below —
 // every conditionally-registered tool needs a non-nil collaborator to be
 // MOUNTED, but none of them is ever CALLED (this test only lists tools, it
@@ -261,16 +259,16 @@ func (noopExecutor) Plan(ctx context.Context, p capability.Principal, sel capabi
 	return capability.PlanResult{}, nil
 }
 
-type noopApprovalDecider struct{}
+type noopApprovalAnswerer struct{}
 
-func (noopApprovalDecider) DecideApproval(ctx context.Context, p capability.Principal, in capability.ApprovalDecision) (approval.Request, error) {
+func (noopApprovalAnswerer) AnswerElicited(ctx context.Context, p capability.Principal, requestID, planHash string, approve bool) (approval.Request, error) {
 	return approval.Request{}, nil
 }
 
 // liveRegisteredToolNames builds a real mcp.New server with every
-// conditionally-registered tool switched on (an ApprovalDecider, alongside the
-// always-registered ones), serves it over a
-// plain httptest server (New returns a bare http.Handler; the
+// conditionally-registered tool switched on (an ApprovalAnswerer and
+// elicitation, alongside the always-registered ones), serves it over a plain
+// httptest server (New returns a bare http.Handler; the
 // Authenticator.Middleware that wraps it in production is orthogonal to
 // tool registration), and returns the set of tool names a real MCP client's
 // ListTools call reports. This is the live half of
@@ -280,7 +278,7 @@ func (noopApprovalDecider) DecideApproval(ctx context.Context, p capability.Prin
 // alone would miss any tool the fixture below fails to switch on).
 func liveRegisteredToolNames(t *testing.T) map[string]bool {
 	t.Helper()
-	handler := New(nil, stubOpsLister{}, noopExecutor{}, nil, nil, WithApprovalDecider(noopApprovalDecider{}))
+	handler := New(nil, stubOpsLister{}, noopExecutor{}, nil, nil, WithApprovalAnswerer(noopApprovalAnswerer{}), WithApprovalElicitation())
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 
@@ -307,6 +305,24 @@ func liveRegisteredToolNames(t *testing.T) map[string]bool {
 		names[tool.Name] = true
 	}
 	return names
+}
+
+// Proves AP-83.
+func TestApproveRequestIsNotRegistered(t *testing.T) {
+	isDecisionTool := func(name string) bool {
+		lower := strings.ToLower(name)
+		return name == "approve_request" || strings.Contains(lower, "approve") || strings.Contains(lower, "decide")
+	}
+	for live := range liveRegisteredToolNames(t) {
+		if isDecisionTool(live) {
+			t.Errorf("live ListTools() returns %q: no MCP tool records a decision", live)
+		}
+	}
+	for _, f := range collectMCPEntryPoints(t) {
+		if isDecisionTool(f.name) {
+			t.Errorf("%s:%d registers %q: no MCP tool records a decision", f.file, f.line, f.name)
+		}
+	}
 }
 
 // TestBuildOperationAction_IllFormedArgValueIsNotRefused is the surface-side
