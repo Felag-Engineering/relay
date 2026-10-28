@@ -8,7 +8,8 @@ package console
 // A successful act returns to the screen it was made from, with a fixed
 // one-line result chosen by a closed done= key. The destination is built here
 // from an Account ID read through the registry, never from anything the request
-// names.
+// names. Two writes do not redirect: the mint and a temporary password (a human
+// Account's create, and a re-issue), which reveal a secret once (ADR-0045).
 //
 // # What this file decides: nothing
 //
@@ -79,11 +80,11 @@ package console
 // mintedView.Token is that field, and the moment accounts.Plaintext.Reveal()
 // runs, every redaction that type provides is GONE — Token is a plain string,
 // and so is each block of the harnessView mintedView carries, which embeds it
-// too. mintedView and harnessView are the only view types a secret can occupy.
-// That is why mintedView carries its own LogValue, why mint is the ONE write
-// route here that does not post-redirect-get, and why both the success and the
-// audit-failure branch set Cache-Control: no-store explicitly. See mintedView
-// and handleMintAPIToken.
+// too. mintedView, harnessView and temporaryPasswordView (temporarypassword.go)
+// are the only view types a secret can occupy. That is why mintedView carries
+// its own LogValue, why a reveal never post-redirect-gets, and why both the
+// success and the audit-failure branch set Cache-Control: no-store explicitly.
+// See mintedView and handleMintAPIToken.
 //
 // # Import-scope
 //
@@ -466,7 +467,17 @@ func writeFailedWith(w http.ResponseWriter, pg Page, err error, route, ident, un
 		status, res = http.StatusConflict, accountsWriteResultView{Heading: "This Relay would not mint a credential for that Account. Enable the Account " +
 			"before minting one for it. " + undone,
 		}
-	case errors.Is(err, capability.ErrAccountsUnavailable):
+	case errors.Is(err, accounts.ErrPasswordOwned):
+		status, res = http.StatusConflict, accountsWriteResultView{
+			Heading: "This Account's human has set their own password, and no control sets it again. " + undone,
+			Href:    accountsScreenPath,
+			Label:   "Back to Accounts.",
+		}
+	case errors.Is(err, accounts.ErrMachinePassword):
+		status, res = http.StatusBadRequest, accountsWriteResultView{
+			Heading: "A machine Account never holds a password. " + undone,
+		}
+	case errors.Is(err, capability.ErrAccountsUnavailable), errors.Is(err, capability.ErrTemporaryPasswordsUnavailable):
 		unavailable(w, "Account administration")
 		return
 	default:
@@ -492,7 +503,7 @@ func writeFailed(w http.ResponseWriter, pg Page, err error, route, ident, undone
 	writeFailedWith(w, pg, err, route, ident, undone, subject, renderWriteResult)
 }
 
-// writePrelude is the opening every one of the five handlers shares:
+// writePrelude is the opening every one of the Account write handlers shares:
 // principal, nil-seam check, ParseForm, page. It returns ok=false having
 // already written the response.
 //
@@ -604,6 +615,11 @@ func handleCreateAccount(d Deps) http.HandlerFunc {
 		// The caller has just proved the password or is inside the window.
 		// Presentation only; the next act re-decides.
 		form.StepUpFresh = true
+
+		if kind == accounts.KindHuman {
+			createHuman(d, w, r, pg, caller, form, accounts.Account{Name: name, Kind: kind, Role: role, Enabled: true})
+			return
+		}
 
 		_, err := d.AccountAdmin.CreateAccount(r.Context(), caller, accounts.Account{
 			Name: name, Kind: kind, Role: role, Enabled: true,
@@ -923,9 +939,10 @@ func handleMintAPIToken(d Deps) http.HandlerFunc {
 			kind = target.Kind
 		}
 
-		// The single Reveal() call in this package, and the third in the whole
-		// Relay — enumerated on Plaintext.Reveal's own doc comment and checked
-		// by TestPlaintext_RevealCallSitesAreEnumerated.
+		// One of the Reveal() calls in this package (the other is the temporary
+		// password's, in temporarypassword.go) — the sites are enumerated on
+		// Plaintext.Reveal's own doc comment and checked by
+		// TestPlaintext_RevealCallSitesAreEnumerated.
 		credential := plaintext.Reveal()
 
 		w.Header().Set("Cache-Control", "no-store")

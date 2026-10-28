@@ -794,14 +794,15 @@ var (
 	ariaLabelAttr = regexp.MustCompile(`\baria-label="([^"]*)"`)
 
 	// pinnedPostActions are the only POST targets any screen draws: sign in
-	// and out, Cancel, the five Account writes, the two tag writes and the Policy
+	// and out, Cancel, the Account writes, the password change, the two tag writes and the Policy
 	// alias write. A future route that writes a label fails here until it is
 	// named.
 	pinnedPostActions = regexp.MustCompile(`^(` + strings.Join([]string{
 		regexp.QuoteMeta(LoginPath), regexp.QuoteMeta(LogoutPath),
 		`/console/jobs/[^/]+/cancel`,
 		`/console/new-account/create`,
-		`/console/accounts/[^/]+/(role|enabled|tokens)`,
+		`/console/accounts/[^/]+/(role|enabled|tokens|temporary-password)`,
+		`/console/account/password`,
 		`/console/api-tokens/[^/]+/revoke`,
 		`/console/nodes/[^/]+/tags`,
 		`/console/tags`,
@@ -870,6 +871,8 @@ func TestConsole_NoScreenOffersAnEditForANodeRelayOrStateLabel(t *testing.T) {
 		"POST /console/accounts/{account_id}/role",
 		"POST /console/accounts/{account_id}/enabled",
 		"POST /console/accounts/{account_id}/tokens",
+		"POST /console/accounts/{account_id}/temporary-password",
+		"POST " + changePasswordPath,
 		"POST /console/api-tokens/{token_id}/revoke",
 		nodeTagsPattern, bulkTagsPattern, policyAliasesPattern,
 	}

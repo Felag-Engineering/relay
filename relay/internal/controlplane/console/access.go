@@ -73,8 +73,8 @@ var accessKindOrder = []accessKind{accessSignIn, accessStepUp, accessAccount, ac
 // other audit kind — Activity's home, or (for a kind neither package names)
 // its `other` family.
 //
-// This is the explicit switch over the 15 kinds spec 20's Row kinds table
-// names (4 sign-in + 3 step-up + 6 account + 2 api-token; audit.go's
+// This is the explicit switch over the 17 kinds spec 20's Row kinds table
+// names (4 sign-in + 3 step-up + 8 account + 2 api-token; audit.go's
 // declaration order), and it is the ONE place this package names them: every
 // derived list below comes from walking audit.Kinds() through this function,
 // so Access and Activity (kindOf's own first case) partition the audit
@@ -93,7 +93,7 @@ func accessKindOf(k string) (accessKind, bool) {
 	case audit.KindStepUp, audit.KindStepUpFailed, audit.KindStepUpThrottled:
 		return accessStepUp, true
 	case audit.KindAccountCreate, audit.KindAccountRole, audit.KindAccountEnable, audit.KindAccountDisable,
-		audit.KindPasswordSet, audit.KindPasswordClear:
+		audit.KindPasswordSet, audit.KindPasswordClear, audit.KindPasswordTemporarySet, audit.KindPasswordChange:
 		return accessAccount, true
 	case audit.KindAPITokenMint, audit.KindAPITokenRevoke:
 		return accessAPIToken, true
@@ -132,7 +132,7 @@ func buildAccessKindsByFamily() map[accessKind][]string {
 }
 
 // accessAllKinds is the union accessKindOf admits, in audit.Kinds() order —
-// 15 kinds today, under the read lane's 32-kind cap. What ?kind= with no
+// 17 kinds today, under the read lane's 32-kind cap. What ?kind= with no
 // value asks the trail for.
 var accessAllKinds = buildAccessAllKinds()
 
@@ -157,9 +157,13 @@ func buildAccessAllKinds() []string {
 // screen asks only the first.
 var accessFailureKinds = []string{audit.KindLoginFailed, audit.KindStepUpFailed}
 
-// accessSummary renders the per-kind sentence for one of the 15 Access
+// accessSummary renders the per-kind sentence for one of the 17 Access
 // kinds. MOVED, unchanged, from activity.go's summarize — this is the one
 // place either screen spells these sentences.
+//
+// forced= is read only on a password_change record: its Reason has forced=
+// right after the Relay-minted account_id and before anything free-text, and a
+// password_temporary_set Reason carries a user-chosen name.
 func accessSummary(f trailFacts) string {
 	switch f.Kind {
 	case audit.KindLoginSucceeded:
@@ -193,6 +197,13 @@ func accessSummary(f trailFacts) string {
 			return "cleared a Console password (none was set)"
 		}
 		return "removed a Console password"
+	case audit.KindPasswordTemporarySet:
+		return "issued a temporary password"
+	case audit.KindPasswordChange:
+		if strings.Contains(f.Reason, "forced=true") {
+			return "set their own password, redeeming a temporary one"
+		}
+		return "changed their own password"
 	case audit.KindAPITokenMint:
 		return "minted an API Token"
 	case audit.KindAPITokenRevoke:
@@ -342,7 +353,7 @@ func accessRowFrom(f trailFacts) accessRow {
 		row.Asserted = f.OnBehalfOf
 	}
 	row.NotAnAccount = (f.Kind == audit.KindLoginFailed || f.Kind == audit.KindLoginThrottled) && f.OnBehalfOf == ""
-	if family == accessSignIn {
+	if family == accessSignIn || f.Kind == audit.KindPasswordTemporarySet || f.Kind == audit.KindPasswordChange {
 		row.Source = f.Source
 	}
 	return row

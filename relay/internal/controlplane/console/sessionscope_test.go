@@ -123,9 +123,11 @@ func TestSessionScope_ARealSessionIsRefusedOnTheControlAPI(t *testing.T) {
 	boundary := controlplane.NewAuthenticator(
 		roleVerifier{role: accounts.RoleAdmin},
 		controlplane.WithConsoleSessions(f.svc, controlplane.ConsoleSessionOptions{
-			Public:       Unauthenticated,
-			Scope:        SessionScope,
-			Unauthorized: UnauthorizedHandler(),
+			Public:                 Unauthenticated,
+			Scope:                  SessionScope,
+			Unauthorized:           UnauthorizedHandler(),
+			PasswordChangeOnly:     PasswordChangeOnly,
+			PasswordChangeRequired: PasswordChangeRequiredHandler(),
 		}),
 	).Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		reached = true

@@ -32,9 +32,10 @@ package console
 // configuration, OAuthConfigured, mirrors a startup value the composition root
 // sets. This package cannot read it from anywhere.
 //
-// There are FOUR write seams on Deps — JobCanceller (cancel.go),
-// AccountAdministrator (accounts_write.go), TagWriter (tags.go) and
-// PolicyAliasWriter (policyaliases.go) — and none lives in this file, on
+// There are FIVE write seams on Deps — JobCanceller (cancel.go),
+// AccountAdministrator (accounts_write.go), TagWriter (tags.go),
+// PolicyAliasWriter (policyaliases.go) and TemporaryPasswordIssuer
+// (temporarypassword.go) — and none lives in this file, on
 // purpose: each gets its own file so this file's "every seam here is read-only"
 // claim stays true of seams.go without qualification.
 //

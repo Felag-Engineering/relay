@@ -110,8 +110,9 @@ Sign in with:
 | password | `admin1234567` |
 
 Override either with `CONSOLE_ADMIN_NAME` / `CONSOLE_ADMIN_PASSWORD` before the first
-`docker compose -f deploy/test/docker-compose.yml up`. `relay init` sets the password once, when it
-creates the admin, so changing it later needs a fresh volume. With `RELAY_PUBLISH_ADDR` beyond
+`docker compose -f deploy/test/docker-compose.yml up`. `relay init` applies them only once, when it
+creates the admin; afterwards the admin changes the password under "Your account" in the
+Console. With `RELAY_PUBLISH_ADDR` beyond
 loopback, `init` refuses the committed default password and the fleet does not start.
 To reach the fleet by a DNS name, or on port 443, set `FLEET_HOSTNAME` and
 `RELAY_PUBLISH_PORT` ([deploy/README.md](../deploy/README.md)).

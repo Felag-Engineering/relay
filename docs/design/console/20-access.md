@@ -53,7 +53,7 @@ or asserted chip. A `password_clear` on an Account that had no password is still
 says `removed=false` and the screen says none was set, so the trail never claims a removal that did
 not happen.
 
-**A Console password act is a row here** (ADR-0045; designed, not built). An `admin` issuing a
+**A Console password act is a row here** (ADR-0045). An `admin` issuing a
 temporary password — at a human Account's create, or by re-issue while its human has never set
 one — writes `password_temporary_set`: the admin is the verified actor, the new Account the
 subject. A human changing their own password writes `password_change`, actor and subject the same
@@ -144,6 +144,6 @@ docs.
 - [ ] The sign-in response is still byte- and time-indistinguishable across every failure.
 - [ ] A throttled attempt is drawn as throttled and is not counted as a failure.
 - [ ] A password set, and a token minted, with `relay init` is a row here attributed to `local-host`.
-- [ ] A temporary password issued in the Console, and a human's change of their own password, are
+- [x] A temporary password issued in the Console, and a human's change of their own password, are
       each an `account` row naming the verified actor, the subject Account and the source address,
-      and carrying no password or hash. **Designed, not built** (ADR-0045).
+      and carrying no password or hash (ADR-0045).

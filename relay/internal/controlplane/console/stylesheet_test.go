@@ -646,12 +646,13 @@ func identifierCaseFindings(css string, sources map[string]string, allow map[str
 // asking whether an operator could type or compare it, and an entry that no
 // longer matches anything fails the test.
 var identifierCaseAllowlist = map[string]string{
-	"accounts.go .kind .Kind":       "Account kind vocabulary (human|machine); the Kind label is an upper-cased eyebrow by design (00-foundations, \"Kind label\")",
-	"accounts_page.go .kind .Kind":  "Account kind vocabulary (human|machine); the Kind label is an upper-cased eyebrow by design (00-foundations, \"Kind label\")",
-	"components.go .kind .":         "the kind-label component; guarded by eq \"human\"/\"machine\" in the template itself",
-	"layout.go .navsec .Group":      "NavGroup constants (nav.go), fixed vocabulary",
-	"compare.go .tcap len .Columns": "a count; numbers have no case",
-	"fleet.go .ftitle .Title":       "facet names (State, Daemon version, Policy fingerprint, Template set); the label-key title takes the LabelKey code branch, pinned by TestFleet_RoleFacetTitleRendersAsCode",
+	"accounts.go .kind .Kind":                 "Account kind vocabulary (human|machine); the Kind label is an upper-cased eyebrow by design (00-foundations, \"Kind label\")",
+	"accounts_page.go .kind .Kind":            "Account kind vocabulary (human|machine); the Kind label is an upper-cased eyebrow by design (00-foundations, \"Kind label\")",
+	"components.go .kind .":                   "the kind-label component; guarded by eq \"human\"/\"machine\" in the template itself",
+	"layout.go .navsec .Group":                "NavGroup constants (nav.go), fixed vocabulary",
+	"temporarypassword.go .panel h3 .Heading": "the two fixed headings of the reveal (Account created, Temporary password issued); the Account name beside it is wrapped as an identifier",
+	"compare.go .tcap len .Columns":           "a count; numbers have no case",
+	"fleet.go .ftitle .Title":                 "facet names (State, Daemon version, Policy fingerprint, Template set); the label-key title takes the LabelKey code branch, pinned by TestFleet_RoleFacetTitleRendersAsCode",
 }
 
 // TestConsole_IdentifiersAreNeverCaseTransformed: Node ids, token ids,

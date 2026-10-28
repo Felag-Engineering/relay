@@ -56,6 +56,10 @@ type fakeSessionResolver struct {
 	acct  accounts.Account
 	valid string
 	seen  []string
+
+	// restricted makes the resolved Session one opened with a temporary
+	// password.
+	restricted bool
 }
 
 func (f *fakeSessionResolver) Resolve(_ context.Context, id consoleauth.SessionID) (consoleauth.Session, accounts.Account, error) {
@@ -70,6 +74,7 @@ func (f *fakeSessionResolver) Resolve(_ context.Context, id consoleauth.SessionI
 		AccountID:       f.acct.ID,
 		Method:          consoleauth.MethodPassword,
 		AuthenticatedAt: testSessionAuthenticatedAt,
+		Restricted:      f.restricted,
 	}, f.acct, nil
 }
 
@@ -109,6 +114,13 @@ func testConsoleSessionOptions() ConsoleSessionOptions {
 		},
 		Unauthorized: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Location", "/console/login")
+			w.WriteHeader(http.StatusSeeOther)
+		}),
+		PasswordChangeOnly: func(r *http.Request) bool {
+			return r.URL.Path == "/console/account" || r.URL.Path == "/console/logout"
+		},
+		PasswordChangeRequired: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Location", "/console/account")
 			w.WriteHeader(http.StatusSeeOther)
 		}),
 	}
@@ -527,6 +539,10 @@ func TestConsoleSession_CarriesNoIdentitySnapshot(t *testing.T) {
 		// target (consoleauth.Store.CSRFToken
 		// keeps no table of these — see that method's doc).
 		"CSRFToken": true,
+		// Restricted is the narrow, non-identity fact that the session was
+		// opened with a temporary password (ADR-0045), refreshed from the
+		// session store on every resolution.
+		"Restricted": true,
 	}
 
 	typ := reflect.TypeOf(ConsoleSession{})
@@ -591,5 +607,105 @@ func TestConsoleSession_NeverPrintsItsCSRFToken(t *testing.T) {
 	// And the one legitimate way out still works, or the type is unusable.
 	if cs.CSRFToken.Reveal() != testSessionCSRFSecret {
 		t.Errorf("Reveal() = %q, want %q", cs.CSRFToken.Reveal(), testSessionCSRFSecret)
+	}
+}
+
+// A session opened with a temporary password reaches only what
+// PasswordChangeOnly names: every other request is answered by
+// PasswordChangeRequired, and the handler is never reached.
+func TestConsoleSession_RestrictedSessionReachesOnlyThePasswordChange(t *testing.T) {
+	a, resolver := testConsoleAuthenticator()
+	resolver.restricted = true
+
+	for _, tc := range []struct {
+		method, target string
+		reaches        bool
+	}{
+		{http.MethodGet, "/console/", false},
+		{http.MethodGet, "/console/accounts", false},
+		{http.MethodPost, "/console/new-account/create", false},
+		{http.MethodGet, "/console/account", true},
+		{http.MethodPost, "/console/logout", true},
+	} {
+		t.Run(tc.method+" "+tc.target, func(t *testing.T) {
+			status, _, reached := consoleRequest(t, a, tc.method, tc.target)
+			if reached != tc.reaches {
+				t.Fatalf("reached = %v, want %v (status %d)", reached, tc.reaches, status)
+			}
+			if !tc.reaches && status != http.StatusSeeOther {
+				t.Errorf("status = %d, want the PasswordChangeRequired answer (303)", status)
+			}
+		})
+	}
+
+	// The restriction is carried, refreshed on each resolution, not assumed.
+	status, cs, ok, reached := consoleSessionRequest(t, a, http.MethodGet, "/console/account",
+		&http.Cookie{Name: consoleauth.SessionCookieName, Value: testSessionID})
+	if !reached || !ok || !cs.Restricted {
+		t.Fatalf("restricted session: reached=%v ok=%v Restricted=%v (status %d), want all true", reached, ok, cs.Restricted, status)
+	}
+
+	// An ordinary session reaches everything.
+	resolver.restricted = false
+	if _, _, reached := consoleRequest(t, a, http.MethodGet, "/console/accounts"); !reached {
+		t.Error("an unrestricted session was refused")
+	}
+}
+
+// The sign-in page is public, but a restricted session that reaches it is
+// still held to the password change: the public branch injects a session and
+// must apply the same gate. An unrestricted session and an unauthenticated
+// request keep reaching it.
+func TestConsoleSession_RestrictedSessionIsGatedOnAPublicRoute(t *testing.T) {
+	a, resolver := testConsoleAuthenticator()
+	resolver.restricted = true
+
+	for _, method := range []string{http.MethodGet, http.MethodPost} {
+		status, _, reached := consoleRequest(t, a, method, "/console/login")
+		if reached || status != http.StatusSeeOther {
+			t.Errorf("%s /console/login as a restricted session: reached=%v status=%d, want the PasswordChangeRequired answer", method, reached, status)
+		}
+	}
+
+	resolver.restricted = false
+	if _, _, reached := consoleRequest(t, a, http.MethodGet, "/console/login"); !reached {
+		t.Error("an unrestricted session was refused on the public route")
+	}
+
+	h := a.Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/console/login", nil))
+	if rec.Code != http.StatusOK {
+		t.Errorf("an unauthenticated request to the public route = %d, want 200", rec.Code)
+	}
+}
+
+// A nil predicate would leave a restricted session unbounded, so each of the
+// two options is required, like Scope.
+func TestWithConsoleSessions_RequiresThePasswordChangeOptions(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*ConsoleSessionOptions)
+	}{
+		{"PasswordChangeOnly", func(o *ConsoleSessionOptions) { o.PasswordChangeOnly = nil }},
+		{"PasswordChangeRequired", func(o *ConsoleSessionOptions) { o.PasswordChangeRequired = nil }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			defer func() {
+				r := recover()
+				if r == nil {
+					t.Fatalf("WithConsoleSessions accepted a nil %s", tc.name)
+				}
+				if !strings.Contains(r.(string), tc.name) {
+					t.Errorf("panic = %v, want it to name %s", r, tc.name)
+				}
+			}()
+			opts := testConsoleSessionOptions()
+			tc.mutate(&opts)
+			NewAuthenticator(
+				&fakeVerifier{acct: storedFirstAdmin(), valid: testToken},
+				WithConsoleSessions(&fakeSessionResolver{}, opts),
+			)
+		})
 	}
 }

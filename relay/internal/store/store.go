@@ -382,6 +382,13 @@ func (s *Store) Passwords() accounts.PasswordRepository {
 	return &sqlitePasswords{db: s.db, now: time.Now}
 }
 
+// PasswordStatuses returns the SQLite-backed accounts.PasswordStatusReader: a
+// read of whether an Account has set its own password, which structurally
+// cannot return a hash.
+func (s *Store) PasswordStatuses() accounts.PasswordStatusReader {
+	return &sqlitePasswordStatus{db: s.db}
+}
+
 // APITokens returns the SQLite-backed accounts.TokenRepository — the control
 // plane's credentials (ADR-0010). Distinct from Tokens() below, which is the
 // Enrollment Token store: an Enrollment Token joins a Node to the fleet and

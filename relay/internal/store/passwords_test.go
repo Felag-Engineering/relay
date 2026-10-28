@@ -38,7 +38,7 @@ func TestPasswords_SetGetClear(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetPassword: %v", err)
 	}
-	if !got.Verify(accounts.NewPassword("a first console password")) {
+	if !got.Hash.Verify(accounts.NewPassword("a first console password")) {
 		t.Error("the stored hash does not verify the password it was set from")
 	}
 
@@ -54,10 +54,10 @@ func TestPasswords_SetGetClear(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetPassword after replace: %v", err)
 	}
-	if got.Verify(accounts.NewPassword("a first console password")) {
+	if got.Hash.Verify(accounts.NewPassword("a first console password")) {
 		t.Error("the replaced password still verifies")
 	}
-	if !got.Verify(accounts.NewPassword("a second console password")) {
+	if !got.Hash.Verify(accounts.NewPassword("a second console password")) {
 		t.Error("the replacement password does not verify")
 	}
 

@@ -60,7 +60,7 @@ func passwordInputRequired(t *testing.T, body string) bool {
 func TestStepUp_AnAccountActInsideTheWindowProceedsWithoutAPassword(t *testing.T) {
 	x := newRealWriteFix(t)
 
-	if rec := x.post(t, createAccountAction(), createForm("first", realWritePassword)); rec.Code != http.StatusSeeOther {
+	if rec := x.post(t, createAccountAction(), createForm("first", realWritePassword)); rec.Code != http.StatusOK {
 		t.Fatalf("first create = %d; body %s", rec.Code, contentOf(rec.Body.String()))
 	}
 
@@ -78,7 +78,7 @@ func TestStepUp_AnAccountActInsideTheWindowProceedsWithoutAPassword(t *testing.T
 	}
 
 	x.clk.advance(time.Minute)
-	if rec := x.post(t, createAccountAction(), createForm("second", "")); rec.Code != http.StatusSeeOther {
+	if rec := x.post(t, createAccountAction(), createForm("second", "")); rec.Code != http.StatusOK {
 		t.Fatalf("a password-less create inside the window = %d; body %s", rec.Code, contentOf(rec.Body.String()))
 	}
 	if !accountExists(t, x, "second") {
@@ -91,7 +91,7 @@ func TestStepUp_AnAccountActInsideTheWindowProceedsWithoutAPassword(t *testing.T
 
 func TestStepUp_AnAccountActAfterTheWindowPrompts(t *testing.T) {
 	x := newRealWriteFix(t)
-	if rec := x.post(t, createAccountAction(), createForm("first", realWritePassword)); rec.Code != http.StatusSeeOther {
+	if rec := x.post(t, createAccountAction(), createForm("first", realWritePassword)); rec.Code != http.StatusOK {
 		t.Fatalf("first create = %d; body %s", rec.Code, contentOf(rec.Body.String()))
 	}
 
@@ -137,7 +137,7 @@ func TestStepUp_AStampFromOneSessionDoesNotSatisfyAnother(t *testing.T) {
 		csrf:    x.sessions.CSRFToken(otherID).Reveal(),
 	}
 
-	if rec := x.post(t, createAccountAction(), createForm("first", realWritePassword)); rec.Code != http.StatusSeeOther {
+	if rec := x.post(t, createAccountAction(), createForm("first", realWritePassword)); rec.Code != http.StatusOK {
 		t.Fatalf("step-up on the first session = %d; body %s", rec.Code, contentOf(rec.Body.String()))
 	}
 	rec := other.post(t, createAccountAction(), createForm("second", ""))
@@ -154,7 +154,7 @@ func TestStepUp_TheSessionIDDiffersAfterStepUp(t *testing.T) {
 	oldSession, oldCSRF := x.session, x.csrf
 
 	rec := x.post(t, createAccountAction(), createForm("first", realWritePassword))
-	if rec.Code != http.StatusSeeOther {
+	if rec.Code != http.StatusOK {
 		t.Fatalf("create = %d; body %s", rec.Code, contentOf(rec.Body.String()))
 	}
 	var set *http.Cookie
@@ -231,7 +231,7 @@ func TestStepUp_ARefusalAfterAStepUpRendersTheRotatedCSRFToken(t *testing.T) {
 
 func TestStepUp_AWrongPasswordInsideTheWindowIsStillRefused(t *testing.T) {
 	x := newRealWriteFix(t)
-	if rec := x.post(t, createAccountAction(), createForm("first", realWritePassword)); rec.Code != http.StatusSeeOther {
+	if rec := x.post(t, createAccountAction(), createForm("first", realWritePassword)); rec.Code != http.StatusOK {
 		t.Fatalf("first create = %d; body %s", rec.Code, contentOf(rec.Body.String()))
 	}
 
@@ -265,8 +265,8 @@ func TestStepUp_TheWindowIsReadFromConsoleauth(t *testing.T) {
 		x.auth.fresh = true
 
 		rec := x.post(t, createAccountAction(), createForm("first", ""))
-		if rec.Code != http.StatusSeeOther {
-			t.Fatalf("status = %d, want 303; body %s", rec.Code, contentOf(rec.Body.String()))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200; body %s", rec.Code, contentOf(rec.Body.String()))
 		}
 		if len(x.auth.stepUpCalls) != 0 {
 			t.Errorf("StepUp was called %d times with no password submitted", len(x.auth.stepUpCalls))
@@ -317,9 +317,11 @@ func TestStepUp_APerActAskRefusesAnEmptyPasswordInsideTheWindow(t *testing.T) {
 	boundary := controlplane.NewAuthenticator(
 		roleVerifier{role: accounts.RoleAdmin},
 		controlplane.WithConsoleSessions(x.f.svc, controlplane.ConsoleSessionOptions{
-			Public:       Unauthenticated,
-			Scope:        SessionScope,
-			Unauthorized: UnauthorizedHandler(),
+			Public:                 Unauthenticated,
+			Scope:                  SessionScope,
+			Unauthorized:           UnauthorizedHandler(),
+			PasswordChangeOnly:     PasswordChangeOnly,
+			PasswordChangeRequired: PasswordChangeRequiredHandler(),
 		}),
 	).Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		pg := Page{CSRFToken: x.csrf}

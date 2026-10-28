@@ -214,6 +214,12 @@ type Session struct {
 	// refreshed by activity, which is the difference between it and
 	// LastSeenAt.
 	AuthenticatedAt time.Time
+
+	// Restricted marks a session opened with a temporary password. It reaches
+	// only the password change and sign-out (ADR-0045 decision 5); the
+	// authentication boundary enforces it, and CompletePasswordChange clears
+	// it. Only Login sets it.
+	Restricted bool
 }
 
 // StepUpFresh reports whether the session's proof of human presence is newer
@@ -228,6 +234,13 @@ func (s Session) StepUpFresh(now time.Time, window time.Duration) bool {
 type Store struct {
 	mu       sync.Mutex
 	sessions map[string]*Session
+
+	// epochs counts, per Account, the events that end its sessions and so
+	// invalidate a credential check already in flight: a completed password
+	// change or EndAllFor. IssueAt refuses a session whose check began before
+	// the Account's epoch moved, under the same lock that ends the sessions, so
+	// a sign-in racing the change cannot outlive it.
+	epochs map[string]uint64
 
 	absoluteLifetime time.Duration
 	idleTimeout      time.Duration
@@ -302,6 +315,7 @@ func NewStore(opts ...StoreOption) *Store {
 
 	s := &Store{
 		sessions:         make(map[string]*Session),
+		epochs:           make(map[string]uint64),
 		absoluteLifetime: DefaultAbsoluteLifetime,
 		idleTimeout:      DefaultIdleTimeout,
 		now:              func() time.Time { return time.Now().UTC() },
@@ -332,6 +346,30 @@ func (s *Store) Now() time.Time { return s.now() }
 // whoever is asking for one. AuthenticatedAt is explicitly zeroed, so a
 // caller-supplied Session can never arrive pre-stamped; only StepUp sets it.
 func (s *Store) Issue(sess Session) (SessionID, error) {
+	return s.issue(sess, nil)
+}
+
+// CredentialEpoch returns accountID's current epoch. A sign-in reads it before
+// it checks the credential and hands it to IssueAt.
+func (s *Store) CredentialEpoch(accountID string) uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.epochs[accountID]
+}
+
+// ErrCredentialChanged means the Account's sessions were ended (a password
+// change completed) after the credential being redeemed was read, so the
+// credential may no longer be the current one.
+var ErrCredentialChanged = errors.New("consoleauth: the Account's credential changed during sign-in")
+
+// IssueAt is Issue for a sign-in whose credential check began when the
+// Account's epoch was epoch. It refuses with ErrCredentialChanged, issuing
+// nothing, if the epoch has moved since.
+func (s *Store) IssueAt(sess Session, epoch uint64) (SessionID, error) {
+	return s.issue(sess, &epoch)
+}
+
+func (s *Store) issue(sess Session, epoch *uint64) (SessionID, error) {
 	id, err := newSessionID()
 	if err != nil {
 		return SessionID{}, err
@@ -344,6 +382,9 @@ func (s *Store) Issue(sess Session) (SessionID, error) {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if epoch != nil && s.epochs[sess.AccountID] != *epoch {
+		return SessionID{}, ErrCredentialChanged
+	}
 	s.evictExpiredLocked(now)
 	s.enforceCeilingLocked()
 	s.sessions[hashID(id)] = &sess
@@ -566,6 +607,62 @@ func (s *Store) StepUp(old SessionID) (SessionID, error) {
 	return newID, nil
 }
 
+// CountOthers returns how many live sessions belong to accountID other than
+// keep.
+func (s *Store) CountOthers(accountID string, keep SessionID) int {
+	keepKey := hashID(keep)
+	now := s.now()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	n := 0
+	for key, sess := range s.sessions {
+		if sess.AccountID == accountID && key != keepKey && !s.expiredLocked(sess, now) {
+			n++
+		}
+	}
+	return n
+}
+
+// CompletePasswordChange finishes a password change on the session old: it
+// rotates the identifier, clears Restricted, stamps AuthenticatedAt (the proof
+// of the current password was a step-up, and every step-up stamps), and ends
+// every OTHER session of the same Account, all in one critical section so no
+// interleaving observes a half-changed set. It returns the new identifier and
+// how many sessions it ended; ErrNoSession if old is gone or expired.
+func (s *Store) CompletePasswordChange(old SessionID) (SessionID, int, error) {
+	newID, err := newSessionID()
+	if err != nil {
+		return SessionID{}, 0, err
+	}
+	now := s.now()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	sess, err := s.rotateLocked(hashID(old), newID, now)
+	if err != nil {
+		return SessionID{}, 0, err
+	}
+	sess.Restricted = false
+	sess.AuthenticatedAt = now
+	s.epochs[sess.AccountID]++
+
+	// Expired sessions are already dead; drop them first so the count is of
+	// sessions this change ended.
+	s.evictExpiredLocked(now)
+	keepKey := hashID(newID)
+	ended := 0
+	for key, other := range s.sessions {
+		if other.AccountID == sess.AccountID && key != keepKey {
+			delete(s.sessions, key)
+			ended++
+		}
+	}
+	return newID, ended, nil
+}
+
 // End retires a session. Ending one that is already gone is not an error: the
 // postcondition holds either way, and a sign-out that could fail is a sign-out
 // people learn to ignore.
@@ -585,6 +682,7 @@ func (s *Store) EndAllFor(accountID string) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	s.epochs[accountID]++
 	ended := 0
 	for key, sess := range s.sessions {
 		if sess.AccountID == accountID {

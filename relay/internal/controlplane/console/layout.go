@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/Felag-Engineering/relay/relay/internal/accounts"
+	"github.com/Felag-Engineering/relay/relay/internal/controlplane"
 	"github.com/Felag-Engineering/relay/relay/internal/logctx"
 )
 
@@ -58,6 +59,11 @@ type Page struct {
 
 	Nav    []NavSection
 	Banner *Banner
+
+	// Restricted is true in a session opened with a temporary password: the
+	// shell draws no nav and no banner, only the page, the signed-in block and
+	// sign-out (ADR-0045 decision 5).
+	Restricted bool
 
 	// CSRFToken is rendered into the body's hx-headers attribute so every HTMX
 	// request carries it without a line of inline script. An ATTRIBUTE is not
@@ -123,16 +129,17 @@ var layoutTmpl = template.Must(template.New("layout").Funcs(template.FuncMap{"se
     <div class="navtop"><div class="brand"><picture><source media="(prefers-color-scheme: light)" srcset="{{asset "brand/relay-wordmark-light.svg"}}"><img src="{{asset "brand/relay-wordmark-dark.svg"}}" alt="Relay"></picture> <span>console</span></div><label for="navtoggle" class="navbtn">Menu</label></div>
     <div class="navbody">
     <nav class="navgroups" aria-label="Console">
-    {{range .Nav}}
+    {{if not .Restricted}}{{range .Nav}}
     <h2 class="navsec" id="navsec-{{.Slug}}">{{.Group}}</h2>
     <ul class="navlist" aria-labelledby="navsec-{{.Slug}}">
       {{range .Items}}<li><a class="navitem{{if .Current}} on{{end}}" href="{{.Path}}"{{if .Current}} aria-current="page"{{end}}>{{.Label}}</a></li>{{end}}
     </ul>
-    {{end}}
+    {{end}}{{end}}
     </nav>
     <div class="navfoot">
       <div>signed in as <b>{{.Account}}</b></div>
       <div>role <b>{{.Role}}</b></div>
+      <div><a href="/console/account">Your account</a></div>
       <form method="post" action="/console/logout">
         <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
         <button type="submit" class="linkbtn">Sign out</button>
@@ -141,7 +148,7 @@ var layoutTmpl = template.Must(template.New("layout").Funcs(template.FuncMap{"se
     </div>
   </aside>
   <div class="col">
-    {{with .Banner}}<div class="banner" data-kind="{{.Kind}}"><b>{{.Text}}</b> <span>{{.Detail}}</span></div>{{end}}
+    {{if not .Restricted}}{{with .Banner}}<div class="banner" data-kind="{{.Kind}}"><b>{{.Text}}</b> <span>{{.Detail}}</span></div>{{end}}{{end}}
     <header class="topbar"><h1>{{if .TitleSelfReported}}<span class="selfrep" title="{{selfReportedTitle}}">{{.Title}}</span> <span class="selfreptag">self-reported</span>{{else}}{{.Title}}{{end}}</h1></header>
     <main id="content">{{.Content}}</main>
   </div>
@@ -179,14 +186,21 @@ func page(d Deps, w http.ResponseWriter, r *http.Request, title string) (Page, b
 	// would remove the need for this fallback) is a separate, larger change.
 	token, _ := sessionCSRFToken(r)
 	role := accounts.Role(p.Role)
-	return Page{
+	pg := Page{
 		Title:     title,
 		Account:   p.Account,
 		Role:      role,
 		Nav:       Nav(d, role, r.URL.Path),
 		CSRFToken: token,
 		log:       d.logger().With(logctx.Attrs(r.Context())...),
-	}, true
+	}
+	// A session opened with a temporary password draws no nav and no banner:
+	// the change-password form and sign-out are all it reaches.
+	if cs, ok := controlplane.ConsoleSessionFromContext(r.Context()); ok && cs.Restricted {
+		pg.Restricted = true
+		pg.Nav = nil
+	}
+	return pg, true
 }
 
 func (p Page) logger() *slog.Logger { return logctx.Or(p.log) }

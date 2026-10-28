@@ -667,6 +667,12 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 	// shares its Authorizer and trail.
 	accountAdmin := capability.NewAccountAdmin(freezeControl, st.Accounts(), apiTokenSvc)
 
+	// The admin acts of ADR-0045: a human Account's temporary password at its
+	// creation, and its re-issue. Handed to the Console only; the Control API
+	// creates humans with no password and MCP has no Account administration
+	// (ADR-0045 decision 11).
+	temporaryPasswords := capability.NewTemporaryPasswords(freezeControl, st.PasswordStatuses())
+
 	// The tag write (ADR-0050): the one writer of tag: labels, over the same
 	// Control and so the same Recorder, RoleGate and trail. The Control API and
 	// the Console hold it for tag writes, and the Enrollment service for a
@@ -812,7 +818,11 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 				consoleauth.NewThrottle(), loginAuditCounter{next: auditSink, metrics: appMetrics},
 				consoleauth.WithStepUpWindow(cfg.ConsoleStepUpWindow),
 				consoleauth.WithLogger(logger),
+				consoleauth.WithPasswordChanges(auditSink),
 			)
+			// A re-issued temporary password ends the Account's Console
+			// sessions, so the credential it replaced leaves none behind.
+			temporaryPasswords.EndSessionsWith(consoleSessions)
 			authOpts = append(authOpts, controlplane.WithConsoleSessions(
 				consoleAuthSvc,
 				controlplane.ConsoleSessionOptions{
@@ -829,6 +839,11 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 					// them under this prefix.
 					Scope:        console.SessionScope,
 					Unauthorized: console.UnauthorizedHandler(),
+					// A session opened with a temporary password reaches only
+					// the password change and sign-out (ADR-0045 decision 5),
+					// bounded here at the one boundary.
+					PasswordChangeOnly:     console.PasswordChangeOnly,
+					PasswordChangeRequired: console.PasswordChangeRequiredHandler(),
 				},
 			))
 			slog.Info("admin console enabled",
@@ -881,17 +896,18 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 			// surfaceDeps. A field forgotten here is a nil pointer behind a
 			// non-nil interface, so the Console's account routes and the
 			// read-lane routes are exercised end to end by the e2e tests.
-			freezeControl:    freezeControl,
-			readLane:         readLane,
-			accountAdmin:     accountAdmin,
-			tagWriter:        tagWriter,
-			policyAliasAdmin: policyAliasAdmin,
-			approvals:        approvals,
-			jobs:             st.Jobs(),
-			tasks:            st.Tasks(),
-			enrollmentMinter: enrollmentMinter,
-			revocation:       revocationSvc,
-			audit:            st.Audit(),
+			freezeControl:      freezeControl,
+			readLane:           readLane,
+			accountAdmin:       accountAdmin,
+			tagWriter:          tagWriter,
+			temporaryPasswords: temporaryPasswords,
+			policyAliasAdmin:   policyAliasAdmin,
+			approvals:          approvals,
+			jobs:               st.Jobs(),
+			tasks:              st.Tasks(),
+			enrollmentMinter:   enrollmentMinter,
+			revocation:         revocationSvc,
+			audit:              st.Audit(),
 			// The read-access sink (ADR-0025), for the MCP read tools and the
 			// Control API's Job-read route. Left nil, readAuditor's defensive
 			// `sink == nil` skip would silently disable every read-access

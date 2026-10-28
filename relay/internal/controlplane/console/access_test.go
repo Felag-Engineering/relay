@@ -87,7 +87,7 @@ func accessStoreDeps(t *testing.T) (Deps, *auditsink.Sink, *store.Store, capabil
 	return d, sink, st, actor
 }
 
-// seedAccessTrail writes the 15 Access records plus the two Enrollment Token
+// seedAccessTrail writes the 17 Access records plus the two Enrollment Token
 // records Activity keeps, through the REAL writers: sink.RecordLogin for the
 // seven login/step-up kinds, shaped exactly as consoleauth/service.go emits
 // them, sink.RecordAccountAdmin for the six account/api-token kinds
@@ -165,7 +165,28 @@ func seedAccessTrail(t *testing.T, sink *auditsink.Sink, st *store.Store, actor 
 	if err != nil {
 		t.Fatalf("HostPasswordClearRecord: %v", err)
 	}
-	for _, rec := range []audit.Record{set, clr} {
+	// The two Console password records, shaped as auditsink/passwords.go writes
+	// them: Principal "name:role", the verified lane, and a Reason that opens
+	// with account_id= (the change's forced= follows it).
+	issue := audit.Record{
+		ID: "fixture-password-temporary-set", Timestamp: testNow, Kind: audit.KindPasswordTemporarySet,
+		Principal: actor.Account + ":" + actor.Role,
+		Attribution: audit.Attribution{Verified: audit.Verified{
+			AccountID: actor.AccountID, AccountName: actor.Account, Role: actor.Role,
+			Method: "console_session", Source: accessFixtureSource,
+		}},
+		Reason: "account_id=" + accessFixtureSubject + " expires_at=2026-10-28T00:00:00Z",
+	}
+	change := audit.Record{
+		ID: "fixture-password-change", Timestamp: testNow, Kind: audit.KindPasswordChange,
+		Principal: actor.Account + ":" + actor.Role,
+		Attribution: audit.Attribution{Verified: audit.Verified{
+			AccountID: actor.AccountID, AccountName: actor.Account, Role: actor.Role,
+			Method: consoleauth.MethodPassword, Source: accessFixtureSource,
+		}},
+		Reason: "account_id=" + actor.AccountID + " forced=true other_sessions_ended=0",
+	}
+	for _, rec := range []audit.Record{set, clr, issue, change} {
 		if err := st.Audit().Append(ctx, rec); err != nil {
 			t.Fatalf("Append(%s): %v", rec.Kind, err)
 		}
@@ -308,8 +329,8 @@ func TestAccess_AnAdminAnswersWhoSignedInFailedAndChangedAnAccount(t *testing.T)
 	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/access").Body.String()
 	content := contentOf(body)
 
-	if n := strings.Count(content, `<article class="ev"`); n != 15 {
-		t.Fatalf("the page rendered %d articles, want exactly 15 — the 15 Access records, none of "+
+	if n := strings.Count(content, `<article class="ev"`); n != 17 {
+		t.Fatalf("the page rendered %d articles, want exactly 17 — the 17 Access records, none of "+
 			"the 2 Enrollment Token records seeded alongside them:\n%s", n, content)
 	}
 	for _, kind := range accessKindOrder {
@@ -326,10 +347,19 @@ func TestAccess_AnAdminAnswersWhoSignedInFailedAndChangedAnAccount(t *testing.T)
 	if !strings.Contains(content, "from <code>"+accessFixtureSource+"</code>") {
 		t.Error("no row carries the sign-in Source")
 	}
+	// Source is reserved for sign-in rows and the two Console password
+	// records (spec 20, Row kinds): a temporary-password issue and a change
+	// each carry the address they came from.
 	for _, kind := range []accessKind{accessStepUp, accessAccount, accessAPIToken} {
 		for _, a := range accessArticlesOfKind(content, kind) {
-			if strings.Contains(a, "from <code>") {
-				t.Errorf("a %s article carries a Source, which spec 20 reserves for sign-in rows:\n%s", kind, a)
+			hasSource := strings.Contains(a, "from <code>")
+			wantsSource := strings.Contains(a, `<span class="evkind">`+audit.KindPasswordTemporarySet+`<`) ||
+				strings.Contains(a, `<span class="evkind">`+audit.KindPasswordChange+`<`)
+			if hasSource && !wantsSource {
+				t.Errorf("a %s article carries a Source, which spec 20 reserves for sign-in rows and the password records:\n%s", kind, a)
+			}
+			if wantsSource && !hasSource {
+				t.Errorf("a password record carries no Source:\n%s", a)
 			}
 		}
 	}
@@ -912,14 +942,14 @@ func TestAccess_AThrottledAttemptIsDrawnAsThrottledNotFailed(t *testing.T) {
 	}
 }
 
-// TestAccess_VocabularyIsExactlySpec20s hand-pins the 15 kinds by family,
-// spec 20's Row kinds table: 4 sign-in, 3 step-up, 6 account, 2 api-token.
+// TestAccess_VocabularyIsExactlySpec20s hand-pins the 17 kinds by family,
+// spec 20's Row kinds table: 4 sign-in, 3 step-up, 8 account, 2 api-token.
 func TestAccess_VocabularyIsExactlySpec20s(t *testing.T) {
 	want := map[accessKind][]string{
 		accessSignIn: {audit.KindLoginSucceeded, audit.KindLoginFailed, audit.KindLoginThrottled, audit.KindLogout},
 		accessStepUp: {audit.KindStepUp, audit.KindStepUpFailed, audit.KindStepUpThrottled},
 		accessAccount: {audit.KindAccountCreate, audit.KindAccountRole, audit.KindAccountEnable, audit.KindAccountDisable,
-			audit.KindPasswordSet, audit.KindPasswordClear},
+			audit.KindPasswordSet, audit.KindPasswordClear, audit.KindPasswordTemporarySet, audit.KindPasswordChange},
 		accessAPIToken: {audit.KindAPITokenMint, audit.KindAPITokenRevoke},
 	}
 	for family, kinds := range want {
@@ -935,8 +965,8 @@ func TestAccess_VocabularyIsExactlySpec20s(t *testing.T) {
 		}
 	}
 
-	if len(accessAllKinds) != 15 {
-		t.Errorf("accessAllKinds has %d kinds, want exactly 15", len(accessAllKinds))
+	if len(accessAllKinds) != 17 {
+		t.Errorf("accessAllKinds has %d kinds, want exactly 17", len(accessAllKinds))
 	}
 	if containsString(accessAllKinds, audit.KindTokenMint) || containsString(accessAllKinds, audit.KindTokenRevoke) {
 		t.Error("accessAllKinds contains an Enrollment Token kind — it joins a Node and is not an Access kind")

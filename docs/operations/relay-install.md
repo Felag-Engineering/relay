@@ -111,8 +111,9 @@ Subcommands, checked before the configuration is read:
   ADR-0030). Run it as the Relay's own account (`sudo -u relay relay init …`): it reads the
   configuration through the same start-time check, so it refuses root. On a Relay that already
   has a human Account it creates nothing, prints no credential, and says what is there. The
-  password it sets is the only Console password any surface sets, and nothing resets it: a
-  forgotten one cannot be recovered.
+  password it sets is the first admin's. Every other human gets a temporary password from an
+  admin in the Console and changes it at first sign-in; no surface resets a password a human has
+  set, so a forgotten one is replaced by disabling the Account and creating a new one.
 - `relay init [--config <path>] [--ttl <duration>] --recover <name>`: mint a new API Token for
   an enabled human `admin` who has lost theirs, audited. It never touches the Console password,
   refuses a disabled, non-admin or machine Account, and is safe while the Relay runs.
@@ -419,10 +420,13 @@ $ docker compose -f deploy/production/docker-compose.yml cp \
     relay:/var/lib/relay/ca/ca-cert.pem ./relay-ca-cert.pem
 ```
 
-**5. Reach the Console** (if enabled in step 2) as the admin from step 4. That password is the
-only Console password any surface sets, and a forgotten one cannot be recovered. Other people
-get their own Account (`POST /api/v1/accounts`) and an API Token; no surface sets a Console
-password for them, so they reach the Console only through OAuth, where configured
+**5. Reach the Console** (if enabled in step 2) as the admin from step 4. Other people get their
+own Account from an admin in the Console: creating a human Account issues it a temporary
+password, shown once and valid for 72 hours, which the person changes at first sign-in. Any
+signed-in human changes their own password under "Your account"; no surface resets one a human
+has set, so a forgotten password is replaced by disabling the Account and creating a new one.
+`POST /api/v1/accounts` creates a human with no password, so that Account has none until an
+admin issues one from its Account page in the Console
 ([control-plane-credential.md](control-plane-credential.md)).
 
 To make the control plane reachable beyond this host, set `RELAY_PUBLISH_ADDR` to the host's

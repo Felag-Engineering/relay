@@ -12,6 +12,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/Felag-Engineering/relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 	"github.com/Felag-Engineering/relay/relay/internal/policyalias"
 	"github.com/Felag-Engineering/relay/relay/internal/registry"
@@ -182,6 +183,18 @@ const (
 	KindPasswordSet   = "password_set"
 	KindPasswordClear = "password_clear"
 
+	// KindPasswordTemporarySet and KindPasswordChange record the Console
+	// password acts of ADR-0045, in addition to the host-lever password_set
+	// above. password_temporary_set: an admin issued a temporary password, at
+	// an Account's creation or by re-issue; actor is the admin, subject the
+	// Account named by account_id. password_change: a human set their own
+	// password; actor and subject are the same Account, and Reason says
+	// whether it redeemed a temporary password (forced) and how many other
+	// sessions it ended. Neither ever carries a password or a hash. A wrong
+	// current password is a step_up_failed row, never one of these.
+	KindPasswordTemporarySet = "password_temporary_set"
+	KindPasswordChange       = "password_change"
+
 	// KindConfigReload records a host-initiated reload of the Relay's
 	// configuration file that changed the running configuration (RC-21). It is
 	// attributed to PrincipalLocalHost and names the changed settings by key,
@@ -322,6 +335,8 @@ var allKinds = []string{
 	KindAccountDisable,
 	KindPasswordSet,
 	KindPasswordClear,
+	KindPasswordTemporarySet,
+	KindPasswordChange,
 	KindConfigReload,
 	KindConfigReloadRefused,
 	KindLoginSucceeded,
@@ -410,6 +425,8 @@ var notAnAuthFailureKinds = []string{
 	KindAccountDisable,
 	KindPasswordSet,
 	KindPasswordClear,
+	KindPasswordTemporarySet,
+	KindPasswordChange,
 	KindConfigReload,
 	KindConfigReloadRefused,
 	KindLoginSucceeded,
@@ -622,4 +639,30 @@ type PolicyAliasAppender interface {
 // registry.MaxTagsPerNode, and registry.ErrNotFound for an unknown Node.
 type TagWriteAppender interface {
 	AppendWithTagWrite(ctx context.Context, rs []Record, changes []registry.TagChange) error
+}
+
+// PasswordAppender writes the Console password acts of ADR-0045, each with its
+// audit records in ONE transaction: nil means the change and every record
+// landed, an error means none did, so an issuance or a change that cannot be
+// recorded is not made. It is kept off Repository, as TagWriteAppender is, so a
+// Repository that cannot make the two atomic simply does not offer it. No
+// method takes a plaintext: the store receives only a hash.
+type PasswordAppender interface {
+	// AppendWithTemporaryAccount creates the human Account a, gives it the
+	// temporary password h until until, and chains the records recs returns for
+	// the created Account: exactly an account_create then a
+	// password_temporary_set. It returns accounts.ErrMachinePassword for a
+	// machine Account and accounts.ErrNameTaken for a name in use.
+	AppendWithTemporaryAccount(ctx context.Context, a accounts.Account, h accounts.PasswordHash, until time.Time, recs func(created accounts.Account) ([]Record, error)) (accounts.Account, error)
+
+	// AppendWithTemporaryPassword issues accountID a temporary password,
+	// replacing any previous one. It returns accounts.ErrPasswordOwned once the
+	// Account's human has set their own, accounts.ErrMachinePassword for a
+	// machine Account and accounts.ErrNotFound for an unknown one.
+	AppendWithTemporaryPassword(ctx context.Context, accountID string, h accounts.PasswordHash, until time.Time, r Record) error
+
+	// AppendWithPasswordChange replaces accountID's password hash with h only
+	// if it still is expect, and clears any temporary state. It returns
+	// accounts.ErrPasswordChanged when it is not.
+	AppendWithPasswordChange(ctx context.Context, accountID string, expect, h accounts.PasswordHash, r Record) error
 }

@@ -890,6 +890,7 @@ func newWriteFix(t *testing.T, mutate func(*Deps)) *writeFix {
 	f := newLoginFixtureWith(t, func(d *Deps) {
 		d.Accounts = sweepAccounts()
 		d.AccountAdmin = admin
+		d.TemporaryPasswords = &fakeTemporaryPasswords{admin: admin}
 		d.Auth = auth
 		if mutate != nil {
 			mutate(d)
@@ -986,6 +987,13 @@ func grantingActs() []grantingAct {
 			path:    func() string { return mintAPITokenAction(targetOperatorID) },
 			form:    url.Values{"name": {"ci-deploy"}, "ttl": {"90d"}},
 			called:  func(a *fakeAccountAdmin) int { return len(a.mints) },
+		},
+		{
+			name:    "issue a temporary password",
+			pattern: issueTemporaryPasswordPattern,
+			path:    func() string { return issueTemporaryPasswordAction(targetViewerID) },
+			form:    url.Values{},
+			called:  func(a *fakeAccountAdmin) int { return len(a.issues) },
 		},
 	}
 }
@@ -1186,9 +1194,9 @@ func TestAccountsWrite_EveryGrantingActRefusesWithoutACorrectPassword(t *testing
 	// TestAccountsWrite_EveryWriteRouteIsClassifiedAsGrantingOrReducing is
 	// what proves the table covers every write route Routes mounts.
 	acts := grantingActs()
-	if len(acts) != 4 {
-		t.Fatalf("the granting-act table has %d entries, want 4 — four acts cost a password "+
-			"(create, raise a role, re-enable, mint) and this sweep is only as wide as the table",
+	if len(acts) != 5 {
+		t.Fatalf("the granting-act table has %d entries, want 5 — five acts cost a password "+
+			"(create, raise a role, re-enable, mint, issue a temporary password) and this sweep is only as wide as the table",
 			len(acts))
 	}
 
@@ -1870,6 +1878,7 @@ func accountsWriteRoutes() []struct {
 		{setAccountEnabledPattern, setAccountEnabledAction(targetViewerID), http.MethodPost},
 		{mintAPITokenPattern, mintAPITokenAction(targetOperatorID), http.MethodPost},
 		{revokeAPITokenPattern, revokeAPITokenAction(targetLiveToken), http.MethodPost},
+		{issueTemporaryPasswordPattern, issueTemporaryPasswordAction(targetViewerID), http.MethodPost},
 	}
 }
 
@@ -2480,14 +2489,17 @@ func newRealWriteFix(t *testing.T, opts ...func(*Deps)) *realWriteFix {
 	clk := &testClock{t: time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)}
 	sessions := consoleauth.NewStore(consoleauth.WithClock(clk.now))
 	svc := consoleauth.NewService(st.Accounts(), st.Passwords(), sessions,
-		consoleauth.NewThrottle(consoleauth.WithThrottleClock(clk.now)), sink)
+		consoleauth.NewThrottle(consoleauth.WithThrottleClock(clk.now)), sink,
+		consoleauth.WithPasswordChanges(sink))
 
 	authn := controlplane.NewAuthenticator(
 		tokenSvc,
 		controlplane.WithConsoleSessions(svc, controlplane.ConsoleSessionOptions{
-			Public:       Unauthenticated,
-			Scope:        SessionScope,
-			Unauthorized: UnauthorizedHandler(),
+			Public:                 Unauthenticated,
+			Scope:                  SessionScope,
+			Unauthorized:           UnauthorizedHandler(),
+			PasswordChangeOnly:     PasswordChangeOnly,
+			PasswordChangeRequired: PasswordChangeRequiredHandler(),
 		}),
 	)
 	mux := http.NewServeMux()
@@ -2495,6 +2507,9 @@ func newRealWriteFix(t *testing.T, opts ...func(*Deps)) *realWriteFix {
 	d.Auth = svc
 	d.Accounts = capSvc.AccountAdmin
 	d.AccountAdmin = capSvc.AccountAdmin
+	temporaryPasswords := capability.NewTemporaryPasswords(capSvc.Control, st.PasswordStatuses())
+	temporaryPasswords.EndSessionsWith(sessions)
+	d.TemporaryPasswords = temporaryPasswords
 	for _, opt := range opts {
 		opt(&d)
 	}
@@ -2792,16 +2807,16 @@ func containsKind(kinds []string, want string) bool {
 // CONDITIONAL claim — step_up on a raise but not a lower, on an enable but not
 // a disable — and a conditional claim half-asserted is a claim about nothing.
 func TestAccountsWrite_AGrantingActAlsoWritesAStepUpEvent(t *testing.T) {
-	t.Run("a create writes both account_create and step_up", func(t *testing.T) {
+	t.Run("a create writes account_create, password_temporary_set and step_up", func(t *testing.T) {
 		x := newRealWriteFix(t)
 		rec := x.post(t, createAccountAction(), url.Values{
 			"name": {"newbie"}, "kind": {"human"}, "role": {"viewer"}, "password": {realWritePassword},
 		})
-		if rec.Code != http.StatusSeeOther {
-			t.Fatalf("status = %d, want 303; body %s", rec.Code, contentOf(rec.Body.String()))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (the temporary password is revealed, not redirected); body %s", rec.Code, contentOf(rec.Body.String()))
 		}
 		got := x.kinds(t)
-		for _, want := range []string{audit.KindAccountCreate, audit.KindStepUp} {
+		for _, want := range []string{audit.KindAccountCreate, audit.KindPasswordTemporarySet, audit.KindStepUp} {
 			if !containsKind(got, want) {
 				t.Errorf("the trail carries no %s record; got %v", want, got)
 			}

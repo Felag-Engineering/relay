@@ -34,8 +34,8 @@ password hashes).
 
 ## Temporary password
 
-**Designed** ([ADR-0045](../../adr/0045-console-passwords-temporary-at-creation-and-self-service-change.md),
-owner decision `2026-10-22`, #1107); not built. A human Account created in the Console is issued a
+**Built** ([ADR-0045](../../adr/0045-console-passwords-temporary-at-creation-and-self-service-change.md),
+owner decision `2026-10-22`, #1107). A human Account created in the Console is issued a
 temporary password by the `admin` who creates it ([15](15-accounts-and-tokens.md), "New account").
 
 - **It is entered here like any password.** The sign-in form does not change, and every refusal —
@@ -112,6 +112,6 @@ link in the chain `ui-advisory.md` requires end-to-end: **login → action → a
 - [ ] A successful OIDC login for an unknown subject is refused, not auto-provisioned.
       **Not implemented.** The human OIDC browser flow is unbuilt, so this is untested rather
       than met. ADR-0024's resource-server half (machine callers) exists.
-- [ ] A sign-in with a temporary password reaches only the change-password form and sign-out, and
-      an expired one is refused like any other failure. **Designed, not built** (ADR-0045).
+- [x] A sign-in with a temporary password reaches only the change-password form and sign-out, and
+      an expired one is refused like any other failure (ADR-0045).
 - [x] Repeated failures slow an Account down and never lock it out; the delay is visible and audited.

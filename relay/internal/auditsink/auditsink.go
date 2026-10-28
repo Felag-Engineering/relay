@@ -86,6 +86,9 @@ var (
 
 	_ capability.PolicyAliasRecorder = (*Sink)(nil)
 	_ capability.TagWriteRecorder    = (*Sink)(nil)
+
+	_ capability.TemporaryPasswordRecorder = (*Sink)(nil)
+	_ consoleauth.PasswordChangeRecorder   = (*Sink)(nil)
 )
 
 // Option configures a Sink built by New.

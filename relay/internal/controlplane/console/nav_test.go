@@ -113,6 +113,9 @@ func TestNav_EveryMountedScreenMarksExactlyOneItemCurrent(t *testing.T) {
 		"/console/accounts/{account_id}/tokens/{token_id}/revoke": "Accounts",
 		"/console/access":                                         "Access",
 		"/console/tags/confirm":                                   "Fleet",
+		// Your account is reached from the signed-in block, not the nav, so
+		// no nav item is current on it.
+		"/console/account": "",
 	}
 	d := sweepFixture()
 	walked := map[string]bool{}
@@ -134,14 +137,17 @@ func TestNav_EveryMountedScreenMarksExactlyOneItemCurrent(t *testing.T) {
 			}
 			walked[r.Path] = true
 			nav := navOf(rec.Body.String())
-			if n := strings.Count(nav, `aria-current="page"`); n != 1 {
-				t.Errorf("%s as %s: %d aria-current items, want 1", paths[0], role, n)
+			wantItems := 1
+			if want == "" {
+				wantItems = 0
 			}
-			if n := strings.Count(nav, `navitem on"`); n != 1 {
-				t.Errorf("%s as %s: %d navitem on items, want 1", paths[0], role, n)
+			if n := strings.Count(nav, `aria-current="page"`); n != wantItems {
+				t.Errorf("%s as %s: %d aria-current items, want %d", paths[0], role, n, wantItems)
 			}
-			m := currentNavItem.FindStringSubmatch(nav)
-			if m == nil || m[1] != want {
+			if n := strings.Count(nav, `navitem on"`); n != wantItems {
+				t.Errorf("%s as %s: %d navitem on items, want %d", paths[0], role, n, wantItems)
+			}
+			if m := currentNavItem.FindStringSubmatch(nav); wantItems == 1 && (m == nil || m[1] != want) {
 				t.Errorf("%s as %s: current = %v, want %s", paths[0], role, m, want)
 			}
 		}

@@ -54,7 +54,7 @@ func TestSetPasswordRecorded_WritesTheCredentialAndTheRecordTogether(t *testing.
 	}
 
 	h, err := st.Passwords().GetPassword(ctx, admin.ID)
-	if err != nil || !h.Verify(accounts.NewPassword("a strong console passphrase")) {
+	if err != nil || !h.Hash.Verify(accounts.NewPassword("a strong console passphrase")) {
 		t.Fatalf("the password was not stored (err %v)", err)
 	}
 	got, err := st.Audit().List(ctx)
@@ -86,7 +86,7 @@ func TestSetPasswordRecorded_AnUnwritableRecordLeavesThePasswordUnchanged(t *tes
 	if err != nil {
 		t.Fatalf("GetPassword: %v", err)
 	}
-	if !h.Verify(accounts.NewPassword("passphrase number one")) || h.Verify(accounts.NewPassword("passphrase number two")) {
+	if !h.Hash.Verify(accounts.NewPassword("passphrase number one")) || h.Hash.Verify(accounts.NewPassword("passphrase number two")) {
 		t.Error("a password change whose record could not be written was not rolled back")
 	}
 	if got, _ := st.Audit().List(ctx); len(got) != 1 {
@@ -111,7 +111,7 @@ func TestClearPasswordRecorded_AnUnwritableRecordKeepsThePassword(t *testing.T) 
 		t.Fatal("ClearPasswordRecorded with a colliding record id returned nil")
 	}
 	h, err := st.Passwords().GetPassword(ctx, admin.ID)
-	if err != nil || !h.Verify(accounts.NewPassword("passphrase number one")) {
+	if err != nil || !h.Hash.Verify(accounts.NewPassword("passphrase number one")) {
 		t.Errorf("the password did not survive an unrecordable clear (err %v)", err)
 	}
 }

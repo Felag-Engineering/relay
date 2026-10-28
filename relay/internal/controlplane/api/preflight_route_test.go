@@ -191,6 +191,13 @@ func TestConsoleServesNoSeparatePreflightRoute(t *testing.T) {
 		"POST /console/accounts/{account_id}/enabled": true,
 		"POST /console/accounts/{account_id}/tokens":  true,
 		"POST /console/api-tokens/{token_id}/revoke":  true,
+		// Your account and a temporary password's re-issue (ADR-0045): a
+		// human's own password change, and an admin's issue of a temporary
+		// one. Credential acts; they evaluate no Policy and dispatch or
+		// preview nothing. Reviewed against PF-1.
+		"GET /console/account":                                   true,
+		"POST /console/account/password":                         true,
+		"POST /console/accounts/{account_id}/temporary-password": true,
 		// The confirmation steps for the three acts that reduce authority: a
 		// named GET page in front of an unchanged Account write. They are
 		// confirmation steps, not previews. They evaluate no Policy, dispatch

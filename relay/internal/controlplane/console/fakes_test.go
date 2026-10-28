@@ -635,6 +635,11 @@ type fakeAccountAdmin struct {
 	roleErr   error
 	enableErr error
 
+	// issues records each temporary-password re-issue (fakeTemporaryPasswords
+	// delegates its bookkeeping here so one recorder sees every act, in order).
+	issues   []string
+	issueErr error
+
 	// mintErr is returned TOGETHER WITH a live token and a live plaintext,
 	// deliberately, because that is the only shape that actually occurs:
 	// capability.MintAPIToken returns `tok, plaintext, fmt.Errorf(...)` when
@@ -693,6 +698,50 @@ func (f *fakeAccountAdmin) RevokeAPIToken(_ context.Context, p capability.Princi
 	return f.revokeErr
 }
 
+// fakeTemporaryPasswords is the TemporaryPasswordIssuer write seam. It decides
+// nothing: a human create delegates to the fakeAccountAdmin so the create
+// bookkeeping every existing test reads (creates, createErr, order) keeps
+// working, and a re-issue records into the same fake.
+type fakeTemporaryPasswords struct {
+	admin *fakeAccountAdmin
+
+	status    accounts.PasswordStatus
+	statusErr error
+	statusFor []string
+}
+
+// fakeTemporaryPassword is the value the fake issues. It is distinctive so a
+// substring search for it cannot match the rest of the Console by accident.
+const fakeTemporaryPassword = "temporary-password-must-appear-once-9c3e" // test fixture, not a real credential
+
+func (f *fakeTemporaryPasswords) CreateHumanAccount(ctx context.Context, p capability.Principal, a accounts.Account) (accounts.Account, accounts.TemporaryPassword, error) {
+	created, err := f.admin.CreateAccount(ctx, p, a)
+	if err != nil {
+		return accounts.Account{}, accounts.TemporaryPassword{}, err
+	}
+	return created, accounts.TemporaryPassword{
+		Password:  accounts.NewPassword(fakeTemporaryPassword),
+		ExpiresAt: testNow.Add(accounts.TemporaryPasswordLifetime),
+	}, nil
+}
+
+func (f *fakeTemporaryPasswords) IssueTemporaryPassword(_ context.Context, _ capability.Principal, accountID string) (accounts.TemporaryPassword, error) {
+	f.admin.issues = append(f.admin.issues, accountID)
+	f.admin.record("IssueTemporaryPassword")
+	if f.admin.issueErr != nil {
+		return accounts.TemporaryPassword{}, f.admin.issueErr
+	}
+	return accounts.TemporaryPassword{
+		Password:  accounts.NewPassword(fakeTemporaryPassword),
+		ExpiresAt: testNow.Add(accounts.TemporaryPasswordLifetime),
+	}, nil
+}
+
+func (f *fakeTemporaryPasswords) PasswordStatus(_ context.Context, _ capability.Principal, accountID string) (accounts.PasswordStatus, error) {
+	f.statusFor = append(f.statusFor, accountID)
+	return f.status, f.statusErr
+}
+
 func (f *fakeAccountAdmin) record(verb string) {
 	if f.order != nil {
 		*f.order = append(*f.order, verb)
@@ -729,6 +778,17 @@ type fakeAuth struct {
 	}
 	window time.Duration
 	order  *[]string
+
+	// changeErr is what ChangePassword returns when set; changeID is the
+	// rotated identifier it returns on success; changeCalls records each call.
+	changeErr   error
+	changeID    consoleauth.SessionID
+	changeCalls []consoleauth.PasswordChange
+}
+
+func (f *fakeAuth) ChangePassword(_ context.Context, _ consoleauth.SessionID, c consoleauth.PasswordChange) (consoleauth.SessionID, error) {
+	f.changeCalls = append(f.changeCalls, c)
+	return f.changeID, f.changeErr
 }
 
 func (f *fakeAuth) Login(context.Context, consoleauth.Attempt) (consoleauth.SessionID, consoleauth.Session, error) {
