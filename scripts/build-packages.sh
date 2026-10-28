@@ -58,6 +58,13 @@ mkdir -p "$out"
 out="$(cd "$out" && pwd -P)"
 mtime="$(date -u -d "@${SOURCE_DATE_EPOCH}" +%Y-%m-%dT%H:%M:%SZ)"
 
+# The module proxy sometimes drops a stream mid-download, so nfpm's modules are fetched with a
+# few retries before the build. Each module is still checked against go.sum, and one that never
+# downloads fails the build below.
+for attempt in 1 2 3; do
+  GOWORK=off go -C "$root/tools/nfpm" mod download && break
+  [ "$attempt" = 3 ] || { echo "build-packages: module download failed, retrying" >&2; sleep $((attempt * 10)); }
+done
 nfpm="$(GOWORK=off go -C "$root/tools/nfpm" tool -n nfpm)"
 [ -x "$nfpm" ] || { echo "build-packages: cannot build the pinned nfpm" >&2; exit 1; }
 
