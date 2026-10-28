@@ -439,7 +439,7 @@ most conspicuously fan-out, where the in-flight limit and the 10,000-Node read c
 - **Sequencing several dispatches** — the harness's job, not Relay's (ADR-0049). Each step it
   takes is an ordinary Job created by this dispatch path, with its own cap check, at-most-once
   Tasks and audit identity.
-- **Approval decisions, grants and scope** — `approval.md`. This spec covers only the gate's
+- **Approval decisions** — `approval.md`. This spec covers only the gate's
   position and the park.
 - **Engaging and releasing the Freeze** — `freeze.md`; this spec covers only the Freeze gate as
   a refusal. Job cancellation *is* in scope: it acts on a Job this capability created.

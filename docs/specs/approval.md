@@ -18,7 +18,7 @@ never lowers a Node's own Policy or the fleet's blast-radius cap.
 | Surface | How it is reached |
 |---|---|
 | **MCP** | **MRTR elicitation.** A gated `tools/call` answers with an input-required result carrying a Relay-written question; the client puts it to a person and retries the call carrying the answer (*Answering*). **`approve_request`**, the tool by which an AI-agent records a decision itself (AP-15), goes with AP-83. A park rendered as an MCP task handle (AP-71, AP-91) goes with AP-85. |
-| **Control API** | `GET /api/v1/approvals`, `GET /api/v1/approvals/{id}`, `POST /api/v1/approvals/{id}/decision`: the rescue, for a client that cannot be asked or a question a restart stranded (AP-80). Specified here, and not featured in getting-started material. The approval-grant routes under `/api/v1/approval-grants` (AP-29 … AP-37) go with AP-84. |
+| **Control API** | `GET /api/v1/approvals`, `GET /api/v1/approvals/{id}`, `POST /api/v1/approvals/{id}/decision`: the rescue, for a client that cannot be asked or a question a restart stranded (AP-80). Specified here, and not featured in getting-started material. |
 | **Admin Console** | None (AP-80): no queue, no request screen, no decision. It renders what an approval left on other records. |
 
 Server-initiated elicitation is not a surface: MCP's 2026-07-28 revision removed it, and MRTR is
@@ -131,8 +131,6 @@ retires when the row lands.
 - **AP-25** A parked request expires after an operator-set time, 4 hours by default, and is
   swept; the work must be requested again.
 
-**Approval grants**
-
 - **AP-84** No surface requests, issues or claims an approval grant.
 
 **Notification and record**
@@ -191,8 +189,7 @@ where it replaces any.
 - **Holding a gated call open until it is released:** #643.
 - **What ADR-0047 cuts, and where each waits:** ADR-0047, *What changes* and its amendment.
 - **Residual risk:** the threat model's register, R18 (overlapping rules union their audiences),
-  R21 (an answer is only as honest as the client), R23 (a fresh install gates nothing), R24, R25
-  (a grant can cover Raw Exec), R26, R27, R43 and R45 (an answer on a token session proves only
+  R21 (an answer is only as honest as the client), R23 (a fresh install gates nothing), R24, R26, R27, R43 and R45 (an answer on a token session proves only
   the session).
 - **The Freeze:** a global stop, not a per-request judgement (`freeze.md`).
 

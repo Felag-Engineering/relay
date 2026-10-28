@@ -358,12 +358,9 @@ _Avoid_: job hash, checksum, fingerprint (reserved for the Policy, template-set 
 The content address of *what* an approval is for, as opposed to *how much of it*: a hash
 over the Operation, its risk class, its **shape arguments**, and the **normalised
 Selector**, never the resolved fan-out or an argument declared to be scale. For **Raw Exec** every argv element is
-shape: nothing is declared for the arbitrary-command path, and "scale" is never guessed. For an
-**Approval grant** it hashes the **Scope** minus the window, the use limit and the fan-out
-ceiling. It exists so "the last approved action of the same shape" is a lookup, which the
+shape: nothing is declared for the arbitrary-command path, and "scale" is never guessed. It exists so "the last approved action of the same shape" is a lookup, which the
 approval object's anti-fatigue diff needs (ADR-0027, D10). It is a grouping key and never a release
-lookup: a dispatch proceeds only on a matching **Plan hash** or a claimed **Approval
-grant**, never on a shape key. Which arguments are shape and which are scale is
+lookup: a dispatch proceeds only on a matching **Plan hash**, never on a shape key. Which arguments are shape and which are scale is
 **declared per Operation** in the Relay's Operation-vocabulary mirror, never inferred from
 a value.
 _Avoid_: plan hash (that is the fan-out-bearing one), fingerprint, similarity hash, group key
@@ -473,35 +470,17 @@ _Avoid_: approval policy (collides with **Policy**), approval rule, gate config 
 single rule)
 
 **Approval grant**:
-One human Approval covering a **described, bounded set of future dispatches**. It is decision 12's
-time-boxed narrowing grant (ADR-0027). Always written in full: an unqualified **Grant** is the
-authorization rule below, an unrelated mechanism.
-
-Where an Approval binds to a **Plan hash**, an Approval grant binds to a **Scope** (the
-requesting Account, risk class, an Operation allow-list, a fan-out *ceiling*, and today an
-explicit **Raw Exec opt-in**; no Selector namespace since 2026-09-16, ADR-0027) plus a
-**window** and a **use limit**. Today the opt-in is accepted and priced at the `admin` role
-floor and the window's hard maximum is 24 hours. ADR-0047 cuts approval grants altogether
-(`docs/specs/approval.md`). Those walls are its entire
-security argument, so every one of them is mandatory and an unbounded Scope cannot be
-stored. It exists because fatigue is a security property: forty elicitations produce forty
-rubber stamps, and a rubber-stamped Approval is worse than none.
-
-Requesting one is *not* being granted one — it creates an ordinary Approval whose subject
-is a Scope. Today it is answered on the same channel with the same quorum, audience, requester
-exclusion and channel floor as any other request. What it costs to approve is derived from the Gate rules at
-the Scope's widest admissible dispatch, so it is never a cheaper path than the work it
-replaces. Every dispatch it releases audits to the same approval ID. **The ask is its own
-audit record**, separate from a single dispatch parking for approval: the two are answered the
-same way but their blast radii are not comparable.
+One human Approval that covered a bounded set of future dispatches. **Relay has none**: ADR-0047
+removed them (`docs/specs/approval.md` AP-84), so every gated dispatch parks and is answered on
+its own. Audit records written while grants existed keep their grant ID and their kind, and
+still read back. Always written in full: an unqualified **Grant** is the authorization rule
+below, an unrelated mechanism.
 _Avoid_: Grant (unqualified), batch approval / blanket approval (a grant is neither
 blanket nor unbounded), standing approval, pre-authorization
 
 **Scope** (of an Approval grant):
-The wall around an Approval grant. The **dual** of a Gate rule's match: on a match an
-omitted field gates *more* dispatches (the safe direction) and `min_fan_out` is a floor; on
-a Scope an omitted field would cover *more* (the unsafe direction) and `max_fan_out` is a
-**ceiling**. Never build one from the other.
+The wall around an Approval grant, which Relay no longer has (AP-84). Never build one from a
+Gate rule's match.
 _Avoid_: match, filter, selector (reserved for Node targeting)
 
 **MCP task handle**:
