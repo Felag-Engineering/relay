@@ -430,6 +430,12 @@ type jobDecider struct {
 	// its own dashed chip, never folded into Account's lane.
 	OnBehalfOf string
 
+	// IdentifiedBy is how the Relay identified this decider, as a label read
+	// from the Decision's own record (AP-88) and never inferred from the
+	// Account or the channel. Empty for an out-of-band decision and for one
+	// recorded before the Relay kept it.
+	IdentifiedBy string
+
 	Channel string
 	At      string
 	Reason  string
@@ -509,6 +515,22 @@ func countApprovals(req approval.Request) int {
 	return n
 }
 
+// identifiedByLabel is the words for how a Decision's decider was identified
+// (AP-88). A value this function does not know renders nothing rather than a
+// guess.
+func identifiedByLabel(id approval.IdentifiedBy) string {
+	switch id {
+	case approval.IdentifiedByOAuthSession:
+		return "identified by OAuth session"
+	case approval.IdentifiedByAPITokenSession:
+		return "identified by API Token session"
+	case approval.IdentifiedByResponderAssertion:
+		return "identified by responder assertion"
+	default:
+		return ""
+	}
+}
+
 // newJobApproval projects one approval.Request onto the Job screen's
 // attribution section. jobRequesterID and jobRequesterName are the Job's own
 // requester, verified-lane-first, used only to decide ParkedByDiffers.
@@ -531,13 +553,14 @@ func newJobApproval(req approval.Request, viaGrant bool, jobRequesterID, jobRequ
 			continue
 		}
 		a.Deciders = append(a.Deciders, jobDecider{
-			Account:    dec.Account,
-			Verified:   dec.AccountID != "",
-			Kind:       verifiedKind(dec.AccountID != "", deciderKind(dec.DeciderHuman)),
-			OnBehalfOf: dec.OnBehalfOf,
-			Channel:    dec.Channel.String(),
-			At:         stampOrAbsent(dec.At),
-			Reason:     dec.Reason,
+			Account:      dec.Account,
+			Verified:     dec.AccountID != "",
+			Kind:         verifiedKind(dec.AccountID != "", deciderKind(dec.DeciderHuman)),
+			OnBehalfOf:   dec.OnBehalfOf,
+			IdentifiedBy: identifiedByLabel(dec.IdentifiedBy),
+			Channel:      dec.Channel.String(),
+			At:           stampOrAbsent(dec.At),
+			Reason:       dec.Reason,
 		})
 	}
 
@@ -1162,6 +1185,7 @@ var jobTmpl = newScreen("job", `
   <div class="decider">
     {{template "trust-chip" (trust .Account .Verified)}}{{template "kind-label" .Kind}}
     <span>{{if eq .At "not recorded"}}approved, time not recorded{{else}}approved {{.At}}{{end}}</span> <code>{{.Channel}}</code>
+    {{with .IdentifiedBy}}<span class="dim">{{.}}</span>{{end}}
     {{with .OnBehalfOf}}{{template "trust-chip" (trust . false)}}<span class="dim">answering for (claimed by the deciding client, not checked)</span>{{end}}
     {{with .Reason}}<span class="dim">{{.}}</span>{{end}}
   </div>

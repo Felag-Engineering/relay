@@ -273,7 +273,7 @@ func TestEmitCredential_AFailedWriteFailsAndNamesTheToken(t *testing.T) {
 	}
 }
 
-// --ttl sets the lifetime of the token either path mints; without it the token
+// --ttl sets the lifetime of the token either path mints; an explicit 0 means the token
 // does not expire.
 // Proves RC-28.
 func TestInit_TTLAppliesToTheFirstAndTheRecoveredToken(t *testing.T) {
@@ -314,7 +314,7 @@ func TestInit_TTLAppliesToTheFirstAndTheRecoveredToken(t *testing.T) {
 	}
 	out, _ = io.read(t)
 	if exp := expiry(out); !exp.IsZero() {
-		t.Errorf("a token minted without --ttl expires at %v, want never", exp)
+		t.Errorf("a token minted with --ttl 0 expires at %v, want never", exp)
 	}
 }
 

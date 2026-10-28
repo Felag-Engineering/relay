@@ -90,11 +90,12 @@ type listAPITokensResponse struct {
 
 // mintAPITokenRequest is the POST .../tokens body.
 //
-// TTLSeconds is a *pointer* so "absent" and "0" are distinguishable. 0 is
-// legitimate — it means a token that never expires, which is what a long-lived
-// CI credential wants — but it must be *asked for*. A plain int64 would make a
-// forgotten field silently mint an immortal credential; requiring the field
-// turns that into a deliberate, auditable choice.
+// TTLSeconds is a *pointer* so "absent" and "0" are distinguishable. Absent
+// means the capability layer's default: seven days for a human Account, and a
+// refusal for a machine Account. 0 is legitimate — it means a token that never
+// expires, which is what a long-lived CI credential wants — but it must be
+// *asked for*. A plain int64 would make a forgotten field silently mint an
+// immortal credential.
 type mintAPITokenRequest struct {
 	Name       string `json:"name"`
 	TTLSeconds *int64 `json:"ttl_seconds"`
@@ -387,15 +388,14 @@ func handleMintAPIToken(d Deps) http.HandlerFunc {
 		if !readJSONBody(w, r, &req) {
 			return
 		}
-		if req.TTLSeconds == nil {
-			writeProblem(w, http.StatusBadRequest, "invalid api token request",
-				"ttl_seconds is required; pass 0 for a token that never expires")
-			return
-		}
-		if *req.TTLSeconds < 0 || *req.TTLSeconds > maxTTLSeconds {
-			writeProblem(w, http.StatusBadRequest, "invalid api token request",
-				fmt.Sprintf("ttl_seconds must be >= 0 and <= %d", maxTTLSeconds))
-			return
+		lifetime := capability.DefaultAPITokenLifetime()
+		if req.TTLSeconds != nil {
+			if *req.TTLSeconds < 0 || *req.TTLSeconds > maxTTLSeconds {
+				writeProblem(w, http.StatusBadRequest, "invalid api token request",
+					fmt.Sprintf("ttl_seconds must be >= 0 and <= %d", maxTTLSeconds))
+				return
+			}
+			lifetime = capability.ExplicitAPITokenLifetime(time.Duration(*req.TTLSeconds) * time.Second)
 		}
 		if len(req.Name) > maxAPITokenNameLen {
 			writeProblem(w, http.StatusBadRequest, "invalid api token request",
@@ -403,8 +403,7 @@ func handleMintAPIToken(d Deps) http.HandlerFunc {
 			return
 		}
 
-		tok, plaintext, err := d.AccountAdmin.MintAPIToken(r.Context(), p, accountID, req.Name,
-			time.Duration(*req.TTLSeconds)*time.Second)
+		tok, plaintext, err := d.AccountAdmin.MintAPIToken(r.Context(), p, accountID, req.Name, lifetime)
 		if err != nil {
 			switch {
 			case errors.Is(err, authz.ErrUnauthorized):
@@ -413,6 +412,9 @@ func handleMintAPIToken(d Deps) http.HandlerFunc {
 				writeProblem(w, http.StatusNotFound, "account not found", "")
 			case errors.Is(err, accounts.ErrInvalidTTL):
 				writeProblem(w, http.StatusBadRequest, "invalid api token request", err.Error())
+			case errors.Is(err, capability.ErrAPITokenTTLRequired):
+				writeProblem(w, http.StatusBadRequest, "invalid api token request",
+					"ttl_seconds is required for a machine Account's token; pass 0 for a token that never expires")
 			case accounts.IsInvalidToken(err):
 				// Minting for a disabled Account. Safe to state plainly: the
 				// caller is an authenticated admin who can list Accounts and

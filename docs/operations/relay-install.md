@@ -117,8 +117,8 @@ Subcommands, checked before the configuration is read:
 - `relay init [--config <path>] [--ttl <duration>] --recover <name>`: mint a new API Token for
   an enabled human `admin` who has lost theirs, audited. It never touches the Console password,
   refuses a disabled, non-admin or machine Account, and is safe while the Relay runs.
-- `--ttl` sets the lifetime of the token either form mints, e.g. `24h`; the default is no
-  expiry.
+- `--ttl` sets the lifetime of the token either form mints, e.g. `24h`; the default is seven
+  days (`168h`), and `--ttl 0` means no expiry.
 
 ## 3. First start
 

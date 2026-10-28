@@ -285,7 +285,7 @@ func TestAccountAdmin_EveryActRecordsItsPrincipal(t *testing.T) {
 	if err := svc.SetAccountEnabled(ctx, p, "acct-1", true); err != nil {
 		t.Fatalf("SetAccountEnabled(true): %v", err)
 	}
-	if _, _, err := svc.MintAPIToken(ctx, p, "acct-1", "ci", time.Hour); err != nil {
+	if _, _, err := svc.MintAPIToken(ctx, p, "acct-1", "ci", ExplicitAPITokenLifetime(time.Hour)); err != nil {
 		t.Fatalf("MintAPIToken: %v", err)
 	}
 	if err := svc.RevokeAPIToken(ctx, p, "tok-1"); err != nil {
@@ -330,10 +330,11 @@ func TestAccountAdmin_MintAuditRowCarriesNoSecret(t *testing.T) {
 		mintPlaintext: accounts.NewPlaintext(secret),
 	}
 	authz := &permissiveControlAuthorizer{}
-	svc, audit := newAccountAdminFixture(t, authz, &fakeAccountStore{}, tokenStore)
+	accountStore := &fakeAccountStore{accountsByID: map[string]accounts.Account{"acct-1": {ID: "acct-1", Kind: accounts.KindMachine}}}
+	svc, audit := newAccountAdminFixture(t, authz, accountStore, tokenStore)
 
 	p := Principal{AccountID: "acct-admin", Account: "admin", Role: "admin"}
-	tok, plaintext, err := svc.MintAPIToken(context.Background(), p, "acct-1", "ci", time.Hour)
+	tok, plaintext, err := svc.MintAPIToken(context.Background(), p, "acct-1", "ci", ExplicitAPITokenLifetime(time.Hour))
 	if err != nil {
 		t.Fatalf("MintAPIToken: %v", err)
 	}

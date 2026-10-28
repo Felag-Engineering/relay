@@ -45,8 +45,7 @@ type echoNameOutput struct {
 
 // echoNameServer is a bare go-sdk HTTP server (no Relay auth or composition
 // root) whose one tool reports the declared client name it observed in the
-// per-request `_meta` clientInfo — the exact reading AP-78
-// (internal/controlplane/mcp) uses, so this test proves ConnectOptions is the
+// per-request `_meta` clientInfo, so this test proves ConnectOptions is the
 // wire-level source of that value rather than trusting mcpclient.go's own
 // reading of it.
 func echoNameServer(t *testing.T) *httptest.Server {
@@ -73,7 +72,7 @@ func echoNameServer(t *testing.T) *httptest.Server {
 
 // TestConnectOptions_ClientNameTravelsInClientInfo proves ConnectOptions.ClientName
 // is what lands in every request's `_meta` clientInfo.name, and that its zero
-// value is defaultClientName — a name AP-78 deliberately does not recognise.
+// value is defaultClientName.
 func TestConnectOptions_ClientNameTravelsInClientInfo(t *testing.T) {
 	srv := echoNameServer(t)
 

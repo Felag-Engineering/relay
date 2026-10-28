@@ -621,9 +621,9 @@ func TestDecideApprovalAuditEntryCarriesTheAnswerAndChannel(t *testing.T) {
 // human Account with nothing in the asserted lane as that Account's own
 // self-confirmation, with no change to package approval or this file's
 // DecideApproval — approval.Request.Decide's own carve-out
-// (relaysAnAssertedHuman) already reads `!d.DeciderHuman && ...`, so a human
-// decider never needs the asserted branch at all. The MCP acceptor
-// (tools_approval.go's oauthHumanSession) is what restricts WHICH
+// (inBandSelfConfirmation) already reads `!d.DeciderHuman && ...`, so a human
+// decider never needs the asserted branch at all. The capability layer's
+// session rule (ElicitedResponderRule) is what restricts WHICH
 // sessions may reach this path; this test is the domain's side of "and once
 // there, it is treated exactly as a human's in-band self-confirmation always
 // has been".
@@ -1141,7 +1141,11 @@ func TestAnswerElicited_RefusesExactlyAsDecideApproval(t *testing.T) {
 			s, auditSink := decideFixtureWithRequirement(t, req, store, &spyApprovalAuthorizer{}, func() time.Time { return apNow })
 			parked := park(t, s, machineRequester)
 
-			_, err := s.AnswerElicited(context.Background(), humanApprover("acct-ana", "ana"), parked.RequestID, tc.planHash(parked), true)
+			// An API-token principal, so the session rule (AP-87) does not refuse
+			// first and this test still isolates DecideApproval's refusals.
+			p := humanApprover("acct-ana", "ana")
+			p.AuthMethod = AuthMethodAPIToken
+			_, err := s.AnswerElicited(context.Background(), p, parked.RequestID, tc.planHash(parked), true)
 			if !errors.Is(err, tc.wantErr) {
 				t.Fatalf("err = %v, want errors.Is(_, %v)", err, tc.wantErr)
 			}

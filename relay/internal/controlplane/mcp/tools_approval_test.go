@@ -276,7 +276,7 @@ func capturedPrincipal(t *testing.T) capability.Principal {
 // admits for the verified form, whatever the client name: an OAuth session
 // of a human Account. It keeps the real AccountID capturedPrincipal captured
 // (so sealing still works exactly as it does for every other answer-path
-// test) and only overrides the two fields oauthHumanSession reads.
+// test) and only overrides the two fields the session rule reads.
 func oauthHumanPrincipal(t *testing.T) capability.Principal {
 	t.Helper()
 	return principalAs(capturedPrincipal(t), capability.AuthMethodOAuth, capability.PrincipalKindHuman)
@@ -774,25 +774,22 @@ func TestElicitedAnswer_RefusesUpFrontWithoutADeciderOrAStoredAccount(t *testing
 }
 
 // -----------------------------------------------------------------------
-// AP-64: no permission responder is a machine self-decision
+// AP-87: an answer on an API-token session counts; on any other session it
+// needs a permission responder
 // -----------------------------------------------------------------------
 
-func TestElicitedAnswer_WithoutAPermissionResponderIsAMachineSelfDecision(t *testing.T) {
-	p := capturedPrincipal(t)
-	sealer, err := requeststate.Mint()
-	if err != nil {
-		t.Fatalf("Mint: %v", err)
-	}
-	base := sealState(t, p.AccountID)
-	sealed := sealWith(t, sealer, base, nil)
-	wantText := errNoNamedApprover.Error()
-
-	cases := []struct {
+// unusableAnswerRows are the answers the Relay cannot read, shared by the two
+// session kinds that refuse them differently.
+func unusableAnswerRows() []struct {
+	name   string
+	action string
+	meta   sdkmcp.Meta
+} {
+	return []struct {
 		name   string
 		action string
 		meta   sdkmcp.Meta
 	}{
-		{name: "no responder at all", action: "accept", meta: nil},
 		{name: `gate "information"`, action: "accept", meta: sdkmcp.Meta{responderMetaKey: map[string]any{"gate": "information", "username": "alice"}}},
 		{name: "gate missing", action: "accept", meta: sdkmcp.Meta{responderMetaKey: map[string]any{"username": "alice"}}},
 		{name: "gate a non-string", action: "accept", meta: sdkmcp.Meta{responderMetaKey: map[string]any{"gate": true, "username": "alice"}}},
@@ -812,8 +809,31 @@ func TestElicitedAnswer_WithoutAPermissionResponderIsAMachineSelfDecision(t *tes
 		{name: `username ""`, action: "accept", meta: permissionResponder("")},
 		{name: "username of spaces only", action: "accept", meta: permissionResponder("   ")},
 	}
+}
 
-	for _, tc := range cases {
+// TestElicitedAnswer_OnAnotherSessionAnUnusableAnswerIsAMachineSelfDecision:
+// off an API-token session and off a human's OAuth session, a responder that
+// is not a permission answer naming a user, and no responder at all, are each
+// refused as a machine self-decision with the one message.
+//
+// Proves AP-87, AP-48.
+func TestElicitedAnswer_OnAnotherSessionAnUnusableAnswerIsAMachineSelfDecision(t *testing.T) {
+	p := principalAs(capturedPrincipal(t), capability.AuthMethodOAuth, "machine")
+	sealer, err := requeststate.Mint()
+	if err != nil {
+		t.Fatalf("Mint: %v", err)
+	}
+	base := sealState(t, p.AccountID)
+	sealed := sealWith(t, sealer, base, nil)
+	wantText := errNoNamedApprover.Error()
+
+	rows := append(unusableAnswerRows(), struct {
+		name   string
+		action string
+		meta   sdkmcp.Meta
+	}{name: "no responder at all", action: "accept", meta: nil})
+
+	for _, tc := range rows {
 		t.Run(tc.name, func(t *testing.T) {
 			rec := &recordingAnswerer{}
 			result := acceptElicitedAnswer(context.Background(), rec, openerOf(sealer), fixedNow, p, elicitedAnswer{
@@ -829,7 +849,7 @@ func TestElicitedAnswer_WithoutAPermissionResponderIsAMachineSelfDecision(t *tes
 				t.Errorf("Err = %v, want errors.Is(_, approval.ErrMachineSelfDecision)", result.Err)
 			}
 			if result.Err == nil || result.Err.Error() != wantText {
-				t.Errorf("Err.Error() = %q, want %q (AP-64: the one machine-self-decision message)", result.Err, wantText)
+				t.Errorf("Err.Error() = %q, want %q (AP-87: the one machine-self-decision message)", result.Err, wantText)
 			}
 			if calls := rec.calls(); len(calls) != 0 {
 				t.Errorf("decider called %d times, want 0", len(calls))
@@ -855,6 +875,69 @@ func TestElicitedAnswer_WithoutAPermissionResponderIsAMachineSelfDecision(t *tes
 		if calls := rec.calls(); len(calls) != 0 {
 			t.Errorf("decider called %d times, want 0", len(calls))
 		}
+	})
+}
+
+// TestElicitedAnswer_OnATokenSessionAnUnusableAnswerIsRefusedAccurately: on an
+// API-token session, of either Account kind, an answer the Relay cannot read
+// is refused with text that is true there. It is not a machine
+// self-decision, because a token session's self-decision is accepted.
+//
+// Proves AP-87.
+func TestElicitedAnswer_OnATokenSessionAnUnusableAnswerIsRefusedAccurately(t *testing.T) {
+	human := principalAs(capturedPrincipal(t), capability.AuthMethodAPIToken, capability.PrincipalKindHuman)
+	machine := principalAs(capturedPrincipal(t), capability.AuthMethodAPIToken, "machine")
+	sealer, err := requeststate.Mint()
+	if err != nil {
+		t.Fatalf("Mint: %v", err)
+	}
+	base := sealState(t, human.AccountID)
+	sealed := sealWith(t, sealer, base, nil)
+	wantText := errUnusableAnswer.Error()
+
+	check := func(t *testing.T, p capability.Principal, in elicitedAnswer) {
+		t.Helper()
+		rec := &recordingAnswerer{}
+		in.RequestState, in.Tool, in.ArgsDigest = sealed, answerTool, base.ArgsDigest
+		result := acceptElicitedAnswer(context.Background(), rec, openerOf(sealer), fixedNow, p, in)
+		if result.Outcome != elicitedRefused {
+			t.Errorf("Outcome = %v, want elicitedRefused", result.Outcome)
+		}
+		if errors.Is(result.Err, approval.ErrMachineSelfDecision) {
+			t.Errorf("Err = %v: a token session's unusable answer is not a machine self-decision", result.Err)
+		}
+		if result.Err == nil || result.Err.Error() != wantText {
+			t.Errorf("Err.Error() = %q, want %q", result.Err, wantText)
+		}
+		if calls := rec.calls(); len(calls) != 0 {
+			t.Errorf("decider called %d times, want 0", len(calls))
+		}
+	}
+
+	for _, tc := range unusableAnswerRows() {
+		t.Run(tc.name, func(t *testing.T) {
+			check(t, human, elicitedAnswer{InputResponses: elicit(tc.action, tc.meta)})
+		})
+	}
+	t.Run("a valid permission responder with replayed-from in CallMeta only", func(t *testing.T) {
+		check(t, human, elicitedAnswer{
+			InputResponses: elicit("accept", permissionResponder("alice")),
+			CallMeta:       sdkmcp.Meta{replayedFromMetaKey: "req-earlier"},
+		})
+	})
+	t.Run("machine token: action cancel", func(t *testing.T) {
+		check(t, machine, elicitedAnswer{InputResponses: elicit("cancel", nil)})
+	})
+	t.Run("machine token: replayed", func(t *testing.T) {
+		check(t, machine, elicitedAnswer{
+			InputResponses: elicit("accept", nil),
+			CallMeta:       sdkmcp.Meta{replayedFromMetaKey: "req-earlier"},
+		})
+	})
+	t.Run("machine token: gate information", func(t *testing.T) {
+		check(t, machine, elicitedAnswer{InputResponses: elicit("accept", sdkmcp.Meta{
+			responderMetaKey: map[string]any{"gate": "information", "username": "alice"},
+		})})
 	})
 }
 
@@ -950,12 +1033,12 @@ func TestElicitedAnswer_RefusesRatherThanTruncatesAMalformedResponder(t *testing
 // own verified decision, whatever the declared client name
 // -----------------------------------------------------------------------
 
-// claudeCodeCallMeta is a retried call's `_meta` declaring the recognised
-// client name "claude-code" (AP-78), shaped after the probe evidence (spec
-// Known limits): clientInfo, clientCapabilities, and the vendor keys Claude
-// Code's own retry actually carries. acceptElicitedAnswer never reads the
-// declared name at all (AP-78); the rest is here to prove the name and the
-// extra keys are simply ignored.
+// claudeCodeCallMeta is a retried call's `_meta` declaring the client name
+// "claude-code", shaped after the probe evidence (spec Known limits):
+// clientInfo, clientCapabilities, and the vendor keys Claude Code's own retry
+// actually carries. acceptElicitedAnswer never reads the declared name at all
+// (AP-86); the rest is here to prove the name and the extra keys are simply
+// ignored.
 func claudeCodeCallMeta() sdkmcp.Meta {
 	return sdkmcp.Meta{
 		sdkmcp.MetaKeyClientInfo: map[string]any{
@@ -970,19 +1053,18 @@ func claudeCodeCallMeta() sdkmcp.Meta {
 	}
 }
 
-// gleipnirCallMeta is a retried call's `_meta` declaring the recognised
-// client name "gleipnir" — used alongside claudeCodeCallMeta to prove that
-// acceptance turns on the session (oauthHumanSession), never on which
-// recognised name the retry declares (AP-78).
+// gleipnirCallMeta is a retried call's `_meta` declaring the client name
+// "gleipnir" — used alongside claudeCodeCallMeta to prove that acceptance
+// turns on the session, never on which name the retry declares (AP-86).
 func gleipnirCallMeta() sdkmcp.Meta {
-	return callMetaNamed(clientNameGleipnir)
+	return callMetaNamed("gleipnir")
 }
 
 // callMetaNamed builds a retried call's `_meta` declaring an arbitrary
 // client name, varying nothing else — the shape
 // TestElicitedAnswer_VerifiedFormIgnoresTheDeclaredName and
-// TestElicitedAnswer_OffAnOAuthHumanSessionOnlyTheNamedFormCounts use to vary
-// only the name.
+// TestElicitedAnswer_TheSessionDecidesWhatAResponderIsFor use to vary only the
+// name.
 func callMetaNamed(name string) sdkmcp.Meta {
 	return sdkmcp.Meta{sdkmcp.MetaKeyClientInfo: map[string]any{"name": name, "version": "1"}}
 }
@@ -994,8 +1076,8 @@ func callMetaNamed(name string) sdkmcp.Meta {
 // asserted lane, and any OTHER assertion already on ctx (a stray
 // X-Relay-On-Behalf-Of, a traceparent) is handled exactly as AP-79 requires:
 // the asserted approver is explicitly cleared, everything else survives. Run
-// once per recognised client name (claude-code, gleipnir): the session,
-// never the name, decides this (AP-78).
+// once per client name (claude-code, gleipnir): the session,
+// never the name, decides this (AP-86).
 func TestElicitedAnswer_OAuthHumanSessionAnswerIsTheHumansVerifiedDecision(t *testing.T) {
 	p := oauthHumanPrincipal(t)
 	sealer, err := requeststate.Mint()
@@ -1154,7 +1236,7 @@ func TestElicitedAnswer_OAuthHumanSessionCancelIsRefusedAsToday(t *testing.T) {
 // signed-in human session, a present io.gleipnir/responder — well-formed or
 // not — is ignored completely (AP-79): it is never parsed, and the answer is
 // still recorded as the human's own verified decision. Run against both
-// recognised client names, because acceptance never reads the name (AP-78).
+// client names, because acceptance never reads the name (AP-86).
 func TestElicitedAnswer_ResponderOnAnOAuthHumanSessionIsIgnored(t *testing.T) {
 	p := oauthHumanPrincipal(t)
 	sealer, err := requeststate.Mint()
@@ -1219,7 +1301,7 @@ func TestElicitedAnswer_ResponderOnAnOAuthHumanSessionIsIgnored(t *testing.T) {
 }
 
 // TestElicitedAnswer_VerifiedFormIgnoresTheDeclaredName pins that AP-79's
-// verified form never reads the declared client name (AP-78): on a
+// verified form never reads the declared client name (AP-86): on a
 // signed-in human session, an answer is that human's own verified decision
 // whatever the retried call's CallMeta says — absent, a near-miss name, or a
 // name present only in the ElicitResult's own `_meta`. The Principal is an
@@ -1336,35 +1418,39 @@ func TestElicitedAnswer_VerifiedFormIgnoresTheDeclaredName(t *testing.T) {
 	})
 }
 
-// TestElicitedAnswer_OffAnOAuthHumanSessionOnlyTheNamedFormCounts is
-// AP-79/AP-64's acceptance-seam proof that off a signed-in human session
-// only the named form counts, whatever the CallMeta says; the acceptor no
-// longer reads the declared name at all. The name gate that keeps a
-// claude-code retry off an OAuth human session from ever reaching
-// acceptElicitedAnswer lives in isAnsweredRetry (via clientCanBeAsked), and
-// its proof is TestElicit_ClaudeCodeRetryOnAnAPITokenSessionIsAnOrdinaryCall
-// (elicit_test.go, the handler seam, stubDecider fails if called) — with
-// TestMCPElicitation_SpoofedClaudeCodeOnANonOAuthSessionEarnsNothing as its
-// e2e counterpart. This test deliberately calls acceptElicitedAnswer
-// directly, bypassing that gate.
-func TestElicitedAnswer_OffAnOAuthHumanSessionOnlyTheNamedFormCounts(t *testing.T) {
+// TestElicitedAnswer_TheSessionDecidesWhatAResponderIsFor is the acceptance
+// seam's proof that the session, never the CallMeta's declared name, decides
+// what a responder is for: optional on an API-token session, required on any
+// other session that is not a human's OAuth session. This test deliberately
+// calls acceptElicitedAnswer directly, bypassing isAnsweredRetry's gate.
+//
+// Proves AP-87, AP-79, AP-86.
+func TestElicitedAnswer_TheSessionDecidesWhatAResponderIsFor(t *testing.T) {
 	base0 := capturedPrincipal(t)
 	sealer, err := requeststate.Mint()
 	if err != nil {
 		t.Fatalf("Mint: %v", err)
 	}
+	infoGate := sdkmcp.Meta{responderMetaKey: map[string]any{"gate": "information", "username": "alice"}}
 
-	principalCases := []struct {
-		name string
-		p    capability.Principal
+	cases := []struct {
+		name         string
+		p            capability.Principal
+		meta         sdkmcp.Meta
+		wantReached  bool
+		wantErr      error
+		wantAsserted string
 	}{
-		{"API Token + human", principalAs(base0, capability.AuthMethodAPIToken, capability.PrincipalKindHuman)},
-		{"API Token + machine", principalAs(base0, capability.AuthMethodAPIToken, "machine")},
-		{"OAuth + machine", principalAs(base0, capability.AuthMethodOAuth, "machine")},
-		{`OAuth + "" (unset kind)`, principalAs(base0, capability.AuthMethodOAuth, "")},
-		{`OAuth + "Human" (wrong case)`, principalAs(base0, capability.AuthMethodOAuth, "Human")},
-		{"Console session + human", principalAs(base0, capability.AuthMethodConsoleSession, capability.PrincipalKindHuman)},
-		{"Unspecified + human", principalAs(base0, capability.AuthMethodUnspecified, capability.PrincipalKindHuman)},
+		{"human token, no responder", principalAs(base0, capability.AuthMethodAPIToken, capability.PrincipalKindHuman), nil, true, nil, ""},
+		{"human token, with a responder", principalAs(base0, capability.AuthMethodAPIToken, capability.PrincipalKindHuman), permissionResponder("alice"), true, nil, "alice"},
+		{"machine token, no responder", principalAs(base0, capability.AuthMethodAPIToken, "machine"), nil, true, nil, ""},
+		{"machine token, information gate", principalAs(base0, capability.AuthMethodAPIToken, "machine"), infoGate, false, errUnusableAnswer, ""},
+		{"OAuth machine, no responder", principalAs(base0, capability.AuthMethodOAuth, "machine"), nil, false, errNoNamedApprover, ""},
+		{"OAuth machine, with a responder", principalAs(base0, capability.AuthMethodOAuth, "machine"), permissionResponder("alice"), true, nil, "alice"},
+		{`OAuth + "" (unset kind), no responder`, principalAs(base0, capability.AuthMethodOAuth, ""), nil, false, errNoNamedApprover, ""},
+		{`OAuth + "Human" (wrong case), no responder`, principalAs(base0, capability.AuthMethodOAuth, "Human"), nil, false, errNoNamedApprover, ""},
+		{"Console session + human, no responder", principalAs(base0, capability.AuthMethodConsoleSession, capability.PrincipalKindHuman), nil, false, errNoNamedApprover, ""},
+		{"Unspecified + human, no responder", principalAs(base0, capability.AuthMethodUnspecified, capability.PrincipalKindHuman), nil, false, errNoNamedApprover, ""},
 	}
 	callMetaCases := []struct {
 		name     string
@@ -1375,68 +1461,82 @@ func TestElicitedAnswer_OffAnOAuthHumanSessionOnlyTheNamedFormCounts(t *testing.
 		{"no CallMeta", nil},
 	}
 
-	for _, pc := range principalCases {
+	for _, tc := range cases {
 		for _, cm := range callMetaCases {
-			t.Run(pc.name+", "+cm.name+", no responder", func(t *testing.T) {
-				base := sealState(t, base0.AccountID)
-				sealed := sealWith(t, sealer, base, nil)
-
-				rec := &recordingAnswerer{}
-				result := acceptElicitedAnswer(context.Background(), rec, openerOf(sealer), fixedNow, pc.p, elicitedAnswer{
-					RequestState:   sealed,
-					InputResponses: elicit("accept", nil),
-					CallMeta:       cm.callMeta,
-					Tool:           answerTool,
-					ArgsDigest:     base.ArgsDigest,
-				})
-				if result.Outcome != elicitedRefused {
-					t.Errorf("Outcome = %v, want elicitedRefused", result.Outcome)
-				}
-				if !errors.Is(result.Err, approval.ErrMachineSelfDecision) {
-					t.Errorf("Err = %v, want errors.Is(_, approval.ErrMachineSelfDecision)", result.Err)
-				}
-				if calls := rec.calls(); len(calls) != 0 {
-					t.Errorf("decider called %d times, want 0", len(calls))
-				}
-				if result.answererReached {
-					t.Error("answererReached = true, want false")
-				}
-				wantReason := errNoNamedApprover.Error()
-				if got := result.refusalOutput().Reason; got != wantReason {
-					t.Errorf("refusalOutput().Reason = %q, want %q", got, wantReason)
-				}
-			})
-
-			// The named path still counts on a disqualified session (AP-64):
-			// this inverts the old fold-in row, because AP-78 says acceptance
-			// never turns on the name.
-			t.Run(pc.name+", "+cm.name+", with a valid responder", func(t *testing.T) {
+			t.Run(tc.name+", "+cm.name, func(t *testing.T) {
 				base := sealState(t, base0.AccountID)
 				sealed := sealWith(t, sealer, base, nil)
 
 				rec := &recordingAnswerer{resp: approval.Request{ID: answerRequestID, State: approval.StateApproved, PlanHash: answerPlanHash}}
-				result := acceptElicitedAnswer(context.Background(), rec, openerOf(sealer), fixedNow, pc.p, elicitedAnswer{
+				result := acceptElicitedAnswer(context.Background(), rec, openerOf(sealer), fixedNow, tc.p, elicitedAnswer{
 					RequestState:   sealed,
-					InputResponses: elicit("accept", permissionResponder("alice")),
+					InputResponses: elicit("accept", tc.meta),
 					CallMeta:       cm.callMeta,
 					Tool:           answerTool,
 					ArgsDigest:     base.ArgsDigest,
 				})
+				calls := rec.calls()
+				if tc.wantErr != nil {
+					if !errors.Is(result.Err, tc.wantErr) {
+						t.Fatalf("Err = %v, want %v", result.Err, tc.wantErr)
+					}
+					if len(calls) != 0 || result.answererReached {
+						t.Errorf("the answerer was reached (%d calls) on a refusal", len(calls))
+					}
+					return
+				}
 				if result.Err != nil {
 					t.Fatalf("Err = %v, want nil", result.Err)
 				}
-				calls := rec.calls()
 				if len(calls) != 1 {
 					t.Fatalf("decider called %d times, want 1", len(calls))
 				}
-				if calls[0].Assertions.OnBehalfOf != "alice" {
-					t.Errorf("Assertions.OnBehalfOf = %q, want %q — the named path (AP-64)", calls[0].Assertions.OnBehalfOf, "alice")
+				if got := calls[0].Assertions.OnBehalfOf; got != tc.wantAsserted {
+					t.Errorf("Assertions.OnBehalfOf = %q, want %q", got, tc.wantAsserted)
 				}
-				if result.OnBehalfOf != "alice" {
-					t.Errorf("OnBehalfOf = %q, want %q", result.OnBehalfOf, "alice")
+				if result.OnBehalfOf != tc.wantAsserted {
+					t.Errorf("OnBehalfOf = %q, want %q", result.OnBehalfOf, tc.wantAsserted)
 				}
 			})
 		}
+	}
+}
+
+// TestElicitedAnswer_AStrayOnBehalfOfHeaderNeverReachesTheAssertedLane: the
+// X-Relay-On-Behalf-Of header lands in ctx for every authenticated route
+// including /mcp, so on a token session with no responder the adapter clears
+// it rather than letting it ride into the asserted lane.
+//
+// Proves AP-87.
+func TestElicitedAnswer_AStrayOnBehalfOfHeaderNeverReachesTheAssertedLane(t *testing.T) {
+	p := principalAs(capturedPrincipal(t), capability.AuthMethodAPIToken, capability.PrincipalKindHuman)
+	sealer, err := requeststate.Mint()
+	if err != nil {
+		t.Fatalf("Mint: %v", err)
+	}
+	base := sealState(t, p.AccountID)
+	sealed := sealWith(t, sealer, base, nil)
+
+	rec := &recordingAnswerer{resp: approval.Request{ID: answerRequestID, State: approval.StateApproved, PlanHash: answerPlanHash}}
+	ctx := capability.WithAssertions(context.Background(), capability.Assertions{OnBehalfOf: "mallory", SessionRef: "keep"})
+	result := acceptElicitedAnswer(ctx, rec, openerOf(sealer), fixedNow, p, elicitedAnswer{
+		RequestState:   sealed,
+		InputResponses: elicit("accept", nil),
+		Tool:           answerTool,
+		ArgsDigest:     base.ArgsDigest,
+	})
+	if result.Err != nil {
+		t.Fatalf("Err = %v, want nil", result.Err)
+	}
+	calls := rec.calls()
+	if len(calls) != 1 {
+		t.Fatalf("decider called %d times, want 1", len(calls))
+	}
+	if got := calls[0].Assertions.OnBehalfOf; got != "" {
+		t.Errorf("Assertions.OnBehalfOf = %q, want empty: a stray header never reaches the asserted lane", got)
+	}
+	if got := calls[0].Assertions.SessionRef; got != "keep" {
+		t.Errorf("Assertions.SessionRef = %q, want the ctx's other assertions preserved", got)
 	}
 }
 
@@ -1444,7 +1544,7 @@ func TestElicitedAnswer_OffAnOAuthHumanSessionOnlyTheNamedFormCounts(t *testing.
 // refusals" claim, at the ADAPTER seam: acceptElicitedAnswer classifies a
 // verified answer's domain refusal identically to how it classifies a named
 // one — run against both recognised client names, because acceptance never
-// reads the name (AP-78). recordingAnswerer is scripted here, so this proves
+// reads the name (AP-86). recordingAnswerer is scripted here, so this proves
 // the adapter's classification only; the real domain's side (requester
 // exclusion, machine self-decision) is item 7's capability-seam proof
 // (TestDecideApproval_InBandHumanWithNoAssertedApproverIsVerified). Its
@@ -1569,34 +1669,6 @@ func TestElicitedAnswer_FailureAfterAVerifiedDecisionMayHaveBeenRecorded(t *test
 	}
 	if !strings.HasPrefix(out.Reason, "the answer may have been recorded") {
 		t.Errorf("Reason = %q, want it to start with %q", out.Reason, "the answer may have been recorded")
-	}
-}
-
-// TestOAuthHumanSession_ChecksTheAccountKindNotTheAuthMethod is a direct
-// table on oauthHumanSession, using the same principal rows
-// TestElicit_WhoIsAskedByNameAndSession's session table uses: only an OAuth
-// session of a human Account returns true. The check is on the Account's
-// stored Kind, never inferred from AuthMethod alone.
-func TestOAuthHumanSession_ChecksTheAccountKindNotTheAuthMethod(t *testing.T) {
-	cases := []struct {
-		name string
-		p    capability.Principal
-		want bool
-	}{
-		{"OAuth + human", capability.Principal{AuthMethod: capability.AuthMethodOAuth, Kind: capability.PrincipalKindHuman}, true},
-		{"API Token + human", capability.Principal{AuthMethod: capability.AuthMethodAPIToken, Kind: capability.PrincipalKindHuman}, false},
-		{"API Token + machine", capability.Principal{AuthMethod: capability.AuthMethodAPIToken, Kind: "machine"}, false},
-		{"OAuth + machine", capability.Principal{AuthMethod: capability.AuthMethodOAuth, Kind: "machine"}, false},
-		{"OAuth + unset kind", capability.Principal{AuthMethod: capability.AuthMethodOAuth}, false},
-		{"Console session + human", capability.Principal{AuthMethod: capability.AuthMethodConsoleSession, Kind: capability.PrincipalKindHuman}, false},
-		{"Unspecified + human", capability.Principal{Kind: capability.PrincipalKindHuman}, false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := oauthHumanSession(tc.p); got != tc.want {
-				t.Errorf("oauthHumanSession(%+v) = %v, want %v", tc.p, got, tc.want)
-			}
-		})
 	}
 }
 
@@ -1976,7 +2048,7 @@ func TestElicitedAnswer_ARefusedDecisionExposesOnlyStateJobAndDeadline(t *testin
 // -----------------------------------------------------------------------
 // #727: decisionOutput's NextStep is chosen from Outcome AND what dispatch
 // actually returned, never Outcome alone; refusalOutput's Reason is chosen
-// by r.Err, in the fixed arm order AP-64 requires.
+// by r.Err, in the fixed arm order AP-87 requires.
 // -----------------------------------------------------------------------
 
 func TestDecisionOutput_ChoosesNextStepFromOutcomeAndDispatchResult(t *testing.T) {
@@ -2074,7 +2146,7 @@ func TestRefusalOutput_ReasonArmsAndOrdering(t *testing.T) {
 		wantNextStep string
 	}{
 		{
-			name:         "arm 1: ErrMachineSelfDecision renders AP-64's text, never renderApprovalError's",
+			name:         "arm 1: ErrMachineSelfDecision renders AP-87's text, never renderApprovalError's",
 			result:       elicitedAnswerResult{Err: approval.ErrMachineSelfDecision, OnBehalfOf: "someone"},
 			wantReason:   wantMachineText,
 			wantNextStep: answerRefusalNextStepUnchanged,
@@ -2095,6 +2167,12 @@ func TestRefusalOutput_ReasonArmsAndOrdering(t *testing.T) {
 			name:         "arm 2: errAnswerShape",
 			result:       elicitedAnswerResult{Err: errAnswerShape},
 			wantReason:   errAnswerShape.Error(),
+			wantNextStep: answerRefusalNextStepUnchanged,
+		},
+		{
+			name:         "arm 2: errUnusableAnswer on an API-token session",
+			result:       elicitedAnswerResult{Err: errUnusableAnswer},
+			wantReason:   errUnusableAnswer.Error(),
 			wantNextStep: answerRefusalNextStepUnchanged,
 		},
 		{
@@ -2305,7 +2383,7 @@ func TestRefusalOutput_NextStepNeverContradictsReason(t *testing.T) {
 			forbid: []string{stillAnswerable, "can still be decided"},
 		},
 		{
-			name:   "ErrMachineSelfDecision: AP-64's own text, not renderApprovalError's — a later call CAN still name an approver",
+			name:   "ErrMachineSelfDecision: AP-87's own text, not renderApprovalError's — a later call CAN still name an approver",
 			result: elicitedAnswerResult{Err: approval.ErrMachineSelfDecision, OnBehalfOf: "someone"},
 			// This one legitimately keeps the generic text: nothing about
 			// this Account or channel is refused, only THIS call named no
@@ -2346,6 +2424,13 @@ func TestRefusalOutput_NextStepNeverContradictsReason(t *testing.T) {
 			// by the sealed request ID — nothing was recorded.
 			name:    "errAnswerShape: the retry's InputResponses do not match the sealed request",
 			result:  elicitedAnswerResult{Err: errAnswerShape},
+			require: []string{"can still be decided"},
+		},
+		{
+			// The adapter refused an answer it cannot read on an API-token
+			// session: nothing was recorded, the answerer was never reached.
+			name:    "errUnusableAnswer: the answer was unusable on an API-token session",
+			result:  elicitedAnswerResult{Err: errUnusableAnswer},
 			require: []string{"can still be decided"},
 		},
 		{
@@ -2471,6 +2556,50 @@ func TestElicitedAnswer_RendersTheChannelTheCapabilityLayerRecorded(t *testing.T
 				t.Errorf("decisionOutput.Channel = %q, want %q", out.Channel, tc.want)
 			}
 		})
+	}
+}
+
+// TestElicitedAnswer_DecisionOutputNamesHowTheDeciderWasIdentified: the decision
+// block carries the identification the capability layer recorded, and only
+// when the answer was recorded.
+//
+// Proves AP-88.
+func TestElicitedAnswer_DecisionOutputNamesHowTheDeciderWasIdentified(t *testing.T) {
+	p := capturedPrincipal(t)
+	sealer, err := requeststate.Mint()
+	if err != nil {
+		t.Fatalf("Mint: %v", err)
+	}
+	base := sealState(t, p.AccountID)
+	sealed := sealWith(t, sealer, base, nil)
+
+	for _, by := range []approval.IdentifiedBy{
+		approval.IdentifiedByOAuthSession, approval.IdentifiedByAPITokenSession,
+		approval.IdentifiedByResponderAssertion, approval.IdentifiedByUnrecorded,
+	} {
+		t.Run(by.String(), func(t *testing.T) {
+			rec := &recordingAnswerer{resp: approval.Request{
+				ID: answerRequestID, State: approval.StateApproved, PlanHash: answerPlanHash,
+				Decisions: []approval.Decision{{AccountID: p.AccountID, Approve: true, Channel: approval.ChannelInBand, IdentifiedBy: by}},
+			}}
+			result := acceptElicitedAnswer(context.Background(), rec, openerOf(sealer), fixedNow, p, elicitedAnswer{
+				RequestState:   sealed,
+				InputResponses: elicit("accept", nil),
+				Tool:           answerTool,
+				ArgsDigest:     base.ArgsDigest,
+			})
+			if result.Err != nil {
+				t.Fatalf("Err = %v, want nil", result.Err)
+			}
+			if out := result.decisionOutput(RunOrPlanOutput{}); out.IdentifiedBy != by.String() {
+				t.Errorf("decisionOutput.IdentifiedBy = %q, want %q", out.IdentifiedBy, by.String())
+			}
+		})
+	}
+
+	refused := elicitedAnswerResult{Outcome: elicitedRefused, IdentifiedBy: "oauth_session", Err: errUnusableAnswer}
+	if out := refused.decisionOutput(RunOrPlanOutput{}); out.IdentifiedBy != "" {
+		t.Errorf("a refused answer renders identified_by %q, want none", out.IdentifiedBy)
 	}
 }
 

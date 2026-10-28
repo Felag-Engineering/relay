@@ -132,6 +132,8 @@ func TestMCP_ResultShapeSemanticsAdvertisedInOutputSchema(t *testing.T) {
 			"an absent job_id always means nothing was dispatched",
 			"running while any Task is unresolved",
 			"true when this call dispatched nothing",
+			"identified_by",
+			"api_token_session",
 		}},
 		{"raw_exec", []string{
 			"exit_code",
@@ -140,6 +142,8 @@ func TestMCP_ResultShapeSemanticsAdvertisedInOutputSchema(t *testing.T) {
 			"an absent job_id always means nothing was dispatched",
 			"running while any Task is unresolved",
 			"true when this call dispatched nothing",
+			"identified_by",
+			"api_token_session",
 		}},
 		{"get_job", []string{
 			"exit_code",

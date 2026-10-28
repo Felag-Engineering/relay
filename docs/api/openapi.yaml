@@ -1767,7 +1767,9 @@ components:
         ttl_seconds:
           type: integer
           format: int64
-          description: Omitted or null means no expiry.
+          description: |
+            Omitted or null: a human Account's token lives seven days, and a
+            machine Account's mint is refused with 400. 0 means no expiry.
 
     MintedAPIToken:
       type: object
@@ -1843,6 +1845,14 @@ components:
           description: |
             Whether a human Account answered. The second approver of a `count: 2`
             request is entitled to know what kind of signature is already on it.
+        identified_by:
+          type: string
+          enum: [oauth_session, api_token_session, responder_assertion]
+          description: |
+            How the Relay identified the decider of an in-band answer: a human
+            Account's OAuth session, the API Token session's own Account, or a
+            responder the client asserted. Absent on an out-of-band decision and
+            on one recorded before the Relay kept it.
         at: { type: string, format: date-time }
 
     Approval:

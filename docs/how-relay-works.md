@@ -43,8 +43,8 @@ are in [`AGENTS.md`](../AGENTS.md).
 5. **A human may have to say yes.** Approval rules make chosen dispatches wait for a human.
    Relay writes the question, the AI-agent's harness is expected to put it to a person and never
    to the model, and the answer binds to exactly what that person was shown. Routing the
-   question honestly is the harness's job, and the record says which approvals Relay verified
-   and which a client asserted.
+   question honestly is the harness's job, and the record says which approvals Relay verified,
+   which an API-token session answered, and which a client asserted.
 6. **Each Node decides for itself.** The daemon receives a Task for exactly this Operation and
    these arguments, checks its own Policy, and refuses or runs. Policy is deny by default, a
    deny always beats an allow, and it can be as specific as a single argument value.

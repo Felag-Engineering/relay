@@ -121,7 +121,7 @@ func elicitServer(t *testing.T, exec mcp.Executor, opts ...mcp.Option) *httptest
 // elicitRunOperationRequestAs is runOperationRequest (golden_test.go)
 // generalized to an arbitrary declared client name and clientCapabilities
 // JSON value, so a test can drive every combination the emission predicate
-// cares about — including AP-78's declared-name condition.
+// cares about — including that the declared name decides nothing (AP-86).
 func elicitRunOperationRequestAs(name, caps string) string {
 	return `{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"_meta":{` +
 		`"io.modelcontextprotocol/protocolVersion":"2026-07-28",` +
@@ -130,16 +130,13 @@ func elicitRunOperationRequestAs(name, caps string) string {
 		`"name":"run_operation","arguments":{"operation":"service.restart","args":{"unit":"nginx"}}}}`
 }
 
-// mcpClientNameGleipnir mirrors elicit.go's own unexported clientNameGleipnir
-// — duplicated here for the same reason mcpMetaKeyRequestID/mcpMetaKeyPlanHash
-// are (below): this test file is package mcp_test and cannot reach elicit.go's
-// unexported constant, and a drift between the two literals would fail every
-// test in this file that expects a question.
+// mcpClientNameGleipnir is the client name this file's requests declare. It
+// decides nothing about whether Relay asks (AP-86).
 const mcpClientNameGleipnir = "gleipnir"
 
-// elicitRunOperationRequest is elicitRunOperationRequestAs declaring the
-// recognised client name "gleipnir" (AP-78) — every test in this file that
-// is not itself about the declared name uses this wrapper.
+// elicitRunOperationRequest is elicitRunOperationRequestAs declaring
+// "gleipnir" — every test in this file that is not itself about the declared
+// name uses this wrapper.
 func elicitRunOperationRequest(caps string) string {
 	return elicitRunOperationRequestAs(mcpClientNameGleipnir, caps)
 }
@@ -423,84 +420,64 @@ func TestElicit_ElicitedParkEmitsNoTaskEnvelope(t *testing.T) {
 	}
 }
 
-// TestElicit_UnrecognisedMRTRClientGetsPendingApproval is AP-78's mcp-handler
-// seam proof: an MRTR-capable, elicitation-advertising client that declares a
-// name Relay does not recognise still gets today's pending_approval — no
-// inputRequests, an empty requestState — exactly the shape
-// TestElicit_NoElicitationCapabilityDoesNotAsk asserts for a missing
-// capability, now because of an unrecognised name instead. The armed control,
-// on the SAME server and fixture, only changes the declared name to a
-// recognised one and really does ask — proving the refusal above is about the
-// name, not some other difference in the fixture.
-func TestElicit_UnrecognisedMRTRClientGetsPendingApproval(t *testing.T) {
+// TestElicit_AnyElicitingClientIsAsked is AP-86's mcp-handler seam proof: an
+// MRTR-capable, elicitation-advertising client is asked whatever name it
+// declares, and a client that advertises no elicitation is not, on the SAME
+// server and fixture.
+//
+// Proves AP-86.
+func TestElicit_AnyElicitingClientIsAsked(t *testing.T) {
 	srv := elicitServer(t, askableParker{askable: true},
 		mcp.WithApprovalElicitation(), mcp.WithApprovalAnswerer(stubAnswerer{t: t}))
 
-	_, body, _ := postJSONRPC(t, srv, "tools/call", "run_operation", elicitRunOperationRequestAs("elicit-client", elicitCaps))
-	res := decodeElicitResult(t, body)
-	if res.ResultType == "input_required" {
-		t.Fatalf("resultType = input_required, want pending_approval (unrecognised client name): %s", body)
-	}
-	if len(res.InputRequests) != 0 {
-		t.Fatalf("inputRequests present for an unrecognised client name: %s", body)
-	}
-	if res.RequestState != "" {
-		t.Errorf("requestState = %q, want empty", res.RequestState)
-	}
-	if !strings.Contains(body, "pending_approval") {
-		t.Fatalf("body has no pending_approval: %s", body)
+	for _, name := range []string{"elicit-client", "gleipnir", "claude-code", "", "Gleipnir"} {
+		_, body, _ := postJSONRPC(t, srv, "tools/call", "run_operation", elicitRunOperationRequestAs(name, elicitCaps))
+		res := decodeElicitResult(t, body)
+		if res.ResultType != "input_required" {
+			t.Errorf("client %q: resultType = %q, want input_required: %s", name, res.ResultType, body)
+		}
+		if len(res.InputRequests) == 0 || res.RequestState == "" {
+			t.Errorf("client %q: no question or no requestState: %s", name, body)
+		}
 	}
 
-	// Armed control: the SAME server and fixture, only the declared client
-	// name changed to a recognised one ("gleipnir").
-	_, controlBody, _ := postJSONRPC(t, srv, "tools/call", "run_operation", elicitRunOperationRequest(elicitCaps))
-	controlRes := decodeElicitResult(t, controlBody)
-	if controlRes.ResultType != "input_required" {
-		t.Errorf("armed control: resultType = %q, want input_required", controlRes.ResultType)
+	_, body, _ := postJSONRPC(t, srv, "tools/call", "run_operation", elicitRunOperationRequestAs("gleipnir", noElicitCaps))
+	if res := decodeElicitResult(t, body); res.ResultType == "input_required" || !strings.Contains(body, "pending_approval") {
+		t.Errorf("a client advertising no elicitation was asked: %s", body)
 	}
 }
 
-// TestElicit_ClaudeCodeOnAnAPITokenSessionIsNotAsked is AP-78's other
-// recognised name, with Claude Code's OWN observed capability shape (roots
-// listChanged, elicitation advertising both form and url) rather than the
-// minimal elicitCaps fixture — so this also proves the Form-capable branch of
-// the predicate still holds when url is ALSO advertised. goldenVerifier's
-// Account is a HUMAN one, but its session is an API Token, not OAuth: AP-78
-// asks claude-code only on an OAuth session of a human Account, so an API
-// Token human is not enough, and this still gets today's pending_approval.
-func TestElicit_ClaudeCodeOnAnAPITokenSessionIsNotAsked(t *testing.T) {
+// TestElicit_ClaudeCodeOnAnAPITokenSessionIsAsked: Claude Code's OWN observed
+// capability shape (roots listChanged, elicitation advertising both form and
+// url) on an API-token session gets a question, because Form is advertised.
+//
+// Proves AP-86.
+func TestElicit_ClaudeCodeOnAnAPITokenSessionIsAsked(t *testing.T) {
 	srv := elicitServer(t, askableParker{askable: true},
 		mcp.WithApprovalElicitation(), mcp.WithApprovalAnswerer(stubAnswerer{t: t}))
 
 	const claudeCodeCaps = `{"roots":{"listChanged":true},"elicitation":{"form":{},"url":{}}}`
 	_, body, _ := postJSONRPC(t, srv, "tools/call", "run_operation", elicitRunOperationRequestAs("claude-code", claudeCodeCaps))
 	res := decodeElicitResult(t, body)
-	if res.ResultType == "input_required" {
-		t.Fatalf("resultType = input_required, want pending_approval (claude-code off an OAuth human session, AP-78): %s", body)
+	if res.ResultType != "input_required" {
+		t.Fatalf("resultType = %q, want input_required: %s", res.ResultType, body)
 	}
-	if len(res.InputRequests) != 0 {
-		t.Errorf("inputRequests present for claude-code on an API Token session: %s", body)
-	}
-	if res.RequestState != "" {
-		t.Errorf("requestState = %q, want empty", res.RequestState)
-	}
-	if !strings.Contains(body, "pending_approval") {
-		t.Fatalf("body has no pending_approval: %s", body)
+	if len(res.InputRequests) == 0 || res.RequestState == "" {
+		t.Errorf("no question or no requestState: %s", body)
 	}
 }
 
-// TestElicit_UnrecognisedClientsRetryFieldsAreIgnored is AP-85 applied to an
-// unrecognised name: a call carrying a VALIDLY SEALED requestState — from a
-// real first call, asked while declaring "gleipnir" — and a well-formed
-// accept carrying a real responder assertion, but declaring a name Relay does
-// not recognise on the RETRY, is treated as an ordinary call — its retry
-// fields are never even read (clientCanBeAsked gates isAnsweredRetry too), so
-// it parks again rather than being decided. Sealing the state for real (rather
-// than a garbage string) means the only thing that can explain the park below
-// is condition 5 (the declared name), never the seal failing to open on its
-// own. stubAnswerer fails the test if it is ever called, which is this test's
-// proof that the answerer was never reached.
-func TestElicit_UnrecognisedClientsRetryFieldsAreIgnored(t *testing.T) {
+// TestElicit_NonElicitingClientsRetryFieldsAreIgnored is AP-85: a call
+// carrying a VALIDLY SEALED requestState — from a real first call, asked on an
+// eliciting session — and a well-formed accept, but sent by a client that
+// advertises no elicitation on the RETRY, is treated as an ordinary call: its
+// retry fields are never even read (clientCanBeAsked gates isAnsweredRetry
+// too), so it parks again rather than being decided. stubAnswerer fails the
+// test if it is ever called, which is this test's proof that the answerer was
+// never reached.
+//
+// Proves AP-85.
+func TestElicit_NonElicitingClientsRetryFieldsAreIgnored(t *testing.T) {
 	srv := elicitServer(t, askableParker{askable: true},
 		mcp.WithApprovalElicitation(), mcp.WithApprovalAnswerer(stubAnswerer{t: t}))
 
@@ -515,8 +492,8 @@ func TestElicit_UnrecognisedClientsRetryFieldsAreIgnored(t *testing.T) {
 
 	retryBody := `{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"_meta":{` +
 		`"io.modelcontextprotocol/protocolVersion":"2026-07-28",` +
-		`"io.modelcontextprotocol/clientInfo":{"name":"some-other-client","version":"0.0.1"},` +
-		`"io.modelcontextprotocol/clientCapabilities":` + elicitCaps + `},` +
+		`"io.modelcontextprotocol/clientInfo":{"name":"gleipnir","version":"0.0.1"},` +
+		`"io.modelcontextprotocol/clientCapabilities":` + noElicitCaps + `},` +
 		`"name":"run_operation","arguments":{"operation":"service.restart","args":{"unit":"nginx"}},` +
 		`"requestState":"` + first.RequestState + `",` +
 		`"inputResponses":{"` + askableElicitRequestID + `":{"action":"accept","_meta":{"io.gleipnir/responder":{"gate":"permission","username":"alice"}}}}}}`
@@ -527,7 +504,7 @@ func TestElicit_UnrecognisedClientsRetryFieldsAreIgnored(t *testing.T) {
 	}
 	res := decodeElicitResult(t, respBody)
 	if res.ResultType == "input_required" {
-		t.Fatalf("resultType = input_required, want pending_approval (an unrecognised name's retry fields are ignored): %s", respBody)
+		t.Fatalf("resultType = input_required, want pending_approval (a non-eliciting client's retry fields are ignored): %s", respBody)
 	}
 	if !strings.Contains(respBody, "pending_approval") {
 		t.Fatalf("body has no pending_approval: %s", respBody)
@@ -540,25 +517,29 @@ func TestElicit_UnrecognisedClientsRetryFieldsAreIgnored(t *testing.T) {
 	}
 }
 
-// TestElicit_ClaudeCodeRetryOnAnAPITokenSessionIsAnOrdinaryCall is the
-// handler-seam "spoofed name earns nothing" proof: a call asked while
-// declaring "gleipnir" (a real sealed state, on goldenVerifier's API Token
-// human session), retried with the echoed requestState and a real accept but
-// declaring "claude-code" on the RETRY — clientCanBeAsked is false for the
-// retry (claude-code off an OAuth human session), so isAnsweredRetry treats
-// it as an ordinary call (AP-85) rather than an answer, and it parks again
-// instead of being decided. stubAnswerer fails the test if it is ever called.
-func TestElicit_ClaudeCodeRetryOnAnAPITokenSessionIsAnOrdinaryCall(t *testing.T) {
+// countingAnswerer counts the calls that reach the answerer.
+type countingAnswerer struct{ calls *atomic.Int32 }
+
+func (c countingAnswerer) AnswerElicited(context.Context, capability.Principal, string, string, bool) (approval.Request, error) {
+	c.calls.Add(1)
+	return approval.Request{}, nil
+}
+
+// TestElicit_RetryDeclaringAnotherNameIsStillAnAnswer: the declared name is
+// not read when accepting either. A retry declaring a different name from the
+// call that was asked, with a real sealed state and an accept, reaches the
+// answerer exactly once.
+//
+// Proves AP-86.
+func TestElicit_RetryDeclaringAnotherNameIsStillAnAnswer(t *testing.T) {
+	var calls atomic.Int32
 	srv := elicitServer(t, askableParker{askable: true},
-		mcp.WithApprovalElicitation(), mcp.WithApprovalAnswerer(stubAnswerer{t: t}))
+		mcp.WithApprovalElicitation(), mcp.WithApprovalAnswerer(countingAnswerer{calls: &calls}))
 
 	_, firstBody, _ := postJSONRPC(t, srv, "tools/call", "run_operation", elicitRunOperationRequest(elicitCaps))
 	first := decodeElicitResult(t, firstBody)
-	if first.ResultType != "input_required" {
-		t.Fatalf("first call: resultType = %q, want input_required: %s", first.ResultType, firstBody)
-	}
-	if first.RequestState == "" {
-		t.Fatalf("first call: requestState is empty")
+	if first.ResultType != "input_required" || first.RequestState == "" {
+		t.Fatalf("first call: not a question: %s", firstBody)
 	}
 
 	retryBody := `{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"_meta":{` +
@@ -569,19 +550,11 @@ func TestElicit_ClaudeCodeRetryOnAnAPITokenSessionIsAnOrdinaryCall(t *testing.T)
 		`"requestState":"` + first.RequestState + `",` +
 		`"inputResponses":{"` + askableElicitRequestID + `":{"action":"accept"}}}}`
 
-	status, retryBodyResp, _ := postJSONRPC(t, srv, "tools/call", "run_operation", retryBody)
-	if status != 200 {
-		t.Fatalf("status = %d; body = %s", status, retryBodyResp)
+	if status, body, _ := postJSONRPC(t, srv, "tools/call", "run_operation", retryBody); status != 200 {
+		t.Fatalf("status = %d; body = %s", status, body)
 	}
-	res := decodeElicitResult(t, retryBodyResp)
-	if res.ResultType == "input_required" {
-		t.Fatalf("retry: resultType = input_required, want an ordinary call's own park: %s", retryBodyResp)
-	}
-	if !strings.Contains(retryBodyResp, "pending_approval") {
-		t.Fatalf("retry body has no pending_approval — want the ordinary call's own park, not an answer outcome: %s", retryBodyResp)
-	}
-	if strings.Contains(retryBodyResp, "answer_refused") || strings.Contains(retryBodyResp, `"decision"`) {
-		t.Errorf("retry body carries an answered-retry block, want none (the retry must be treated as an ordinary call): %s", retryBodyResp)
+	if got := calls.Load(); got != 1 {
+		t.Errorf("the answerer was reached %d times, want exactly 1", got)
 	}
 }
 

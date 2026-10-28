@@ -58,8 +58,9 @@ When stdin is not a terminal, the password is its first line; no flag takes it.
   fresh credential would silently reverse the decision to disable it. Re-enable it explicitly
   (as another admin) if that is what you want.
 - **Token lifetime.** `--ttl <duration>` (e.g. `24h`) sets the lifetime of the token either
-  form mints. Without it the token does not expire: use it to create the Accounts your callers
-  need, then mint yourself a token with a lifetime and revoke this one, as below.
+  form mints. Without it the token lives seven days (`168h`); `--ttl 0` means no expiry. Use the
+  token to create the Accounts your callers need, then mint yourself a longer-lived token if you
+  want one and revoke this one, as below.
 - **A Console password is never reset.** `--recover` never touches one, and no surface sets a
   password a human has set. The password `--admin` sets is the first admin's; the admin changes
   it under "Your account" in the Console, proving the current one. A forgotten Console
@@ -81,7 +82,8 @@ $ curl -sS --cacert ca.pem -H "Authorization: Bearer $BOOTSTRAP" \
     -d '{"name":"gleipnir","kind":"machine","role":"operator"}' \
     https://relay.example:9443/api/v1/accounts
 
-# 2. Mint it a credential. ttl_seconds is required; 0 means no expiry.
+# 2. Mint it a credential. ttl_seconds may be omitted for a human Account (seven days)
+#    and is required for a machine Account; 0 means no expiry.
 $ curl -sS --cacert ca.pem -H "Authorization: Bearer $BOOTSTRAP" \
     -H 'Content-Type: application/json' \
     -d '{"name":"gleipnir-prod","ttl_seconds":2592000}' \

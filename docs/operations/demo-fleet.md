@@ -86,14 +86,15 @@ and gets a machine Account of that name, so its own name is the **verified** act
 audit row it causes, rather than a shared `gleipnir` Account. A second AI-agent gets its own
 Account and token: re-run the block below with another name in `AGENT=`.
 
-**The Account name is not the client name.** The MCP client must still **declare its client
-name as `gleipnir`** in `clientInfo`, because the Relay asks the approval question in-band only
-of a client name it recognises (AP-78): `gleipnir` on any session, `claude-code` only on a human
-Account's OAuth session; anything else gets `pending_approval` and asks nobody. On an API Token
-session, which this is, the answered retry must carry the responder assertion
-`io.gleipnir/responder`, with `gate` `permission` and a `username` (AP-64), or the answer is
-refused. The demo's approver there is `test_user`: **asserted**, recorded beside the verified
-`auto-incident-response`, never verified (see `kind: "machine"` below).
+**The Account name is not the client name.** The client's declared name is irrelevant to
+being asked: the Relay asks the approval question in-band of any client that advertises
+elicitation (AP-86), on any session, and a client that advertises no elicitation gets
+`pending_approval` and asks nobody. On
+an API Token session, which this is, an answer counts as that Account's own decision and
+the responder assertion `io.gleipnir/responder` is optional (AP-87); when the retry carries one,
+with `gate` `permission` and a `username`, it is recorded as **asserted**. The demo's approver there
+is `test_user`: **asserted**, recorded beside the verified `auto-incident-response`, never
+verified (see `kind: "machine"` below).
 
 Observed on 2026-09-29, with the block below run as written: a client declaring `gleipnir` on
 the `auto-incident-response` token was asked in-band for `service.restart` of `nginx` on
@@ -284,8 +285,8 @@ call unchanged (on the asked-in-band path, the client's retry is that re-issue).
    question instead of `pending_approval`; its retry with an answer and a responder records
    the decision and runs the Job. Putting the question to a human is the client's job, and
    Relay does not verify it. Observed on a live fleet with a `gleipnir` client on the
-   `auto-incident-response` token. `claude-code` is asked only on a human Account's OAuth
-   session; every other client, `scripts/dev-fleet-mcp.sh` included, gets `pending_approval`.
+   `auto-incident-response` token. Any client that advertises elicitation is asked, on any session
+   (AP-86); a client that does not, `scripts/dev-fleet-mcp.sh` included, gets `pending_approval`.
 2. **Out-of-band**, as on the test fleet: the Control API as `dev-approver` *(predicted
    under this gate)*:
 
@@ -462,7 +463,7 @@ turned on (ADR-0024;
 Code then signs in through a browser and reaches `/mcp` as the human Account `demo-user` (kind
 `human`, role `operator`) instead of on a shared API Token. On that session, an answer to an
 approval question given in Claude Code's UI is recorded as that human's **verified** decision
-([approval.md](../specs/approval.md), AP-78 and AP-79). The plain targets bring up the plain
+([approval.md](../specs/approval.md), AP-86 and AP-79). The plain targets bring up the plain
 fleet, but `make demo-down`, `make demo-logs` and every reset's wipe also name
 `deploy/demo/oauth.yml`, so a leftover IdP goes down too; even the plain targets therefore
 need that file to parse, and a recent enough Compose (see Bring-up). Read
@@ -678,7 +679,8 @@ to container loopback), so it stays open, and this is why the overlay is DEV-ONL
   that decision has no `on_behalf_of` (AP-79: nothing in the asserted lane). Answering
   `decline` instead, on `node:role=web, node:env=staging`, left the request `denied`, with no
   Job and no dispatch. The same call declaring `claude-code` on the founding admin's API Token
-  was not asked: `pending_approval` (AP-78).
+  was `pending_approval` when this was observed, under the rule since replaced by AP-86, which
+  asks any client that advertises elicitation.
 
   **Real Claude Code, headless** (observed, Claude Code 2.1.284, driven through its SDK control
   protocol with no model turn): it receives the question, hands it to its host as an

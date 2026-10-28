@@ -95,6 +95,8 @@ type approvalBody struct {
 		Approve bool   `json:"approve"`
 		Channel string `json:"channel"`
 		Human   bool   `json:"human"`
+		// IdentifiedBy is how the Relay identified an in-band decider (AP-88).
+		IdentifiedBy string `json:"identified_by"`
 	} `json:"decisions"`
 }
 

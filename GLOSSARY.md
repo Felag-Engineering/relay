@@ -415,6 +415,12 @@ rung rather than numbering it; ADR-0027 decision 5 numbers them and ADR-0028, AD
 `docs/operations/approval-gates.md` cite "rung 2", and that numbering stands wherever it is
 already written or quoted.
 
+**Token-session answer**:
+An elicited approval answer given on an **API Token** session, recorded as that Account's
+decision and marked as such, distinct from an OAuth session's verified decision
+(`docs/specs/approval.md` AP-87, AP-88; threat model R45).
+_Avoid_: verified answer (that is the OAuth session's)
+
 **Responder assertion**:
 The claim a client attaches to an **MRTR elicitation** answer that a *human*, and not the
 model, produced it — the thing that distinguishes an answered question from a machine-composed
@@ -424,7 +430,8 @@ an in-band answer is accepted: any answer on a human Account's **OAuth session**
 is that human's verified decision whatever the client calls itself; on such a session a responder
 assertion, if sent, is ignored and not recorded (`docs/specs/approval.md` AP-79). From the MVP
 an answer on an **API Token** session needs none either, and counts as that session's Account's
-decision (ADR-0047, amended 2026-10-23; threat model R45); the assertion, if sent, is recorded.
+decision, recorded as a **token-session answer** (ADR-0047, amended 2026-10-23; threat model R45);
+the assertion, if sent, is recorded.
 Recorded in the **asserted** lane, never the verified one (see *Attribution*): "a client told
 us a human answered", never "a human authenticated to Relay". The in-band honesty residual
 rests on it (`docs/specs/approval.md`; threat model R21).

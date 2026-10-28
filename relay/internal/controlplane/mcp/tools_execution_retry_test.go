@@ -275,15 +275,20 @@ func TestAnsweredRetry_DomainRefusalsAreResultsNotErrors(t *testing.T) {
 		action     string
 		meta       sdkmcp.Meta
 		deciderErr error
+		// adapterRefusal marks a refusal the MCP adapter makes before the
+		// answerer is reached.
+		adapterRefusal bool
 	}{
 		{name: "ErrRequesterExcluded", action: "accept", meta: permissionResponder("alice"), deciderErr: approval.ErrRequesterExcluded},
 		{name: "ErrNotInAudience", action: "accept", meta: permissionResponder("alice"), deciderErr: approval.ErrNotInAudience},
 		{name: "ErrWeakChannel", action: "accept", meta: permissionResponder("alice"), deciderErr: approval.ErrWeakChannel},
 		{name: "ErrPlanChanged", action: "accept", meta: permissionResponder("alice"), deciderErr: approval.ErrPlanChanged},
 		{name: "the decider itself returns ErrMachineSelfDecision", action: "accept", meta: permissionResponder("alice"), deciderErr: approval.ErrMachineSelfDecision},
-		{name: "adapter: no responder at all", action: "accept", meta: nil},
-		{name: `adapter: gate "information"`, action: "accept", meta: sdkmcp.Meta{responderMetaKey: map[string]any{"gate": "information", "username": "alice"}}},
-		{name: `adapter: action "cancel"`, action: "cancel", meta: permissionResponder("alice")},
+		// This session is an API-token one (AP-87), so an answer with no
+		// responder at all is accepted and is not in this table; the adapter's
+		// own refusals carry errUnusableAnswer's accurate text.
+		{name: `adapter: gate "information"`, action: "accept", meta: sdkmcp.Meta{responderMetaKey: map[string]any{"gate": "information", "username": "alice"}}, adapterRefusal: true},
+		{name: `adapter: action "cancel"`, action: "cancel", meta: permissionResponder("alice"), adapterRefusal: true},
 	}
 
 	for _, tc := range cases {
@@ -313,6 +318,9 @@ func TestAnsweredRetry_DomainRefusalsAreResultsNotErrors(t *testing.T) {
 			}
 
 			wantReason := wantMachineText
+			if tc.adapterRefusal {
+				wantReason = errUnusableAnswer.Error()
+			}
 			if tc.deciderErr != nil && tc.deciderErr != approval.ErrMachineSelfDecision {
 				wantReason = renderApprovalError(tc.deciderErr).Error()
 			}

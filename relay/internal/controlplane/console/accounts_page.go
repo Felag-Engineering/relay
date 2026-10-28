@@ -212,7 +212,7 @@ func handleAccount(d Deps) http.HandlerFunc {
 			v.Write = &accountsWriteControls{
 				CSRFToken:   p.CSRFToken,
 				StepUpFresh: stepUpFresh(d, r),
-				TTLs:        ttlOptions(),
+				TTLs:        ttlOptions(a.Kind),
 			}
 			v.MintAction = mintAPITokenAction(a.ID)
 			v.LowerHint = lowerRoleHint
@@ -465,7 +465,7 @@ var accountPageTmpl = newScreen("account", `
     <div class="fld">
       <label class="fldlabel" for="mint-ttl">Lifetime</label>
       <select id="mint-ttl" name="ttl">
-        {{range .Write.TTLs}}<option value="{{.Value}}">{{.Label}}</option>{{end}}
+        {{range .Write.TTLs}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}
       </select>
     </div>
     <div class="fld">

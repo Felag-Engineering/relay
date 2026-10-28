@@ -1,6 +1,6 @@
 // Package main: mcp_elicitation_refusals_e2e_test.go is S6 of #646 (v0.7.0):
-// proof for docs/specs/approval.md AP-61, AP-62, AP-64, AP-65, AP-66, AP-67,
-// AP-69, AP-85 (and AP-17 kept proven for an MCP-originated request), plus
+// proof for docs/specs/approval.md AP-61, AP-62, AP-65, AP-66, AP-67,
+// AP-69, AP-85, AP-87 (and AP-17 kept proven for an MCP-originated request), plus
 // the ADR-0040-as-amended rescue: the Control API keeps deciding any parked
 // request, including one an MCP client parked, unchanged.
 //
@@ -57,9 +57,16 @@ const (
 		"It can still be decided on the Control API's decision endpoint."
 
 	// noNamedApprover mirrors noNamedApproverError.Error (tools_approval.go):
-	// AP-64's machine self-decision refusal.
+	// AP-87's machine self-decision refusal on a session that needs a responder.
 	noNamedApprover = "approver is required: an in-band approval must name the human who made the decision, " +
 		"because this call is authenticated as the requesting session and cannot prove one was asked"
+
+	// unusableAnswer mirrors errUnusableAnswer (tools_approval.go): AP-87's
+	// refusal of an answer the Relay cannot read on an API-token session.
+	unusableAnswer = "mcp: the elicited answer is refused: it was cancelled or " +
+		"empty, replayed from an earlier question, or carried an io.gleipnir/responder that is " +
+		"not a permission answer naming a user; nothing was recorded, and the request can " +
+		"still be decided by answering again or on the Control API's decision endpoint"
 
 	// nextStepRanAndRecorded mirrors nextStepRanThePipeline + " " +
 	// nextStepAnswerRecorded (tools_approval.go).
@@ -195,10 +202,23 @@ func assertStateRefusedNothingRecorded(t *testing.T, f *relayFixture, res *sdkmc
 	}
 }
 
-// assertMachineSelfDecisionRefused asserts res is an AP-64 machine
-// self-decision refusal — refused AFTER the seal opened, so RequestID is
-// known and equals requestID — recording nothing.
+// assertMachineSelfDecisionRefused asserts res is an AP-87 machine
+// self-decision refusal, as a session that needs a responder returns it —
+// refused AFTER the seal opened, so RequestID is known and equals requestID —
+// recording nothing.
 func assertMachineSelfDecisionRefused(t *testing.T, f *relayFixture, res *sdkmcp.CallToolResult, requestID string, auditBefore int) {
+	t.Helper()
+	assertAnswerRefusedNothingRecorded(t, f, res, requestID, auditBefore, noNamedApprover)
+}
+
+// assertUnusableAnswerRefused asserts res is AP-87's refusal of an answer the
+// Relay cannot read on an API-token session, recording nothing.
+func assertUnusableAnswerRefused(t *testing.T, f *relayFixture, res *sdkmcp.CallToolResult, requestID string, auditBefore int) {
+	t.Helper()
+	assertAnswerRefusedNothingRecorded(t, f, res, requestID, auditBefore, unusableAnswer)
+}
+
+func assertAnswerRefusedNothingRecorded(t *testing.T, f *relayFixture, res *sdkmcp.CallToolResult, requestID string, auditBefore int, wantReason string) {
 	t.Helper()
 	if res.IsError {
 		t.Fatalf("IsError = true, want false: content=%+v", res.Content)
@@ -211,8 +231,8 @@ func assertMachineSelfDecisionRefused(t *testing.T, f *relayFixture, res *sdkmcp
 	if out.AnswerRefused == nil {
 		t.Fatalf("AnswerRefused is nil, want a refusal: %+v", out)
 	}
-	if out.AnswerRefused.Reason != noNamedApprover {
-		t.Errorf("Reason = %q, want %q", out.AnswerRefused.Reason, noNamedApprover)
+	if out.AnswerRefused.Reason != wantReason {
+		t.Errorf("Reason = %q, want %q", out.AnswerRefused.Reason, wantReason)
 	}
 	if out.AnswerRefused.RequestID != requestID {
 		t.Errorf("RequestID = %q, want %q", out.AnswerRefused.RequestID, requestID)
@@ -486,18 +506,21 @@ func TestMCPElicitation_ExpiredStateIsRefused(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------
-// AP-64: responder refusals
+// AP-87: unusable answers
 // -----------------------------------------------------------------------
 
-// TestMCPElicitation_AnswerWithoutAResponderIsAMachineSelfDecision is AP-64's
-// e2e proof: an accept with no responder assertion, with gate "information",
+// TestMCPElicitation_AnUnusableAnswerIsRefusedAndRecordsNothing is AP-87's
+// e2e proof on an API-token session: an accept with gate "information",
 // carrying io.gleipnir/replayed-from (on the answer or on the call), or
-// action "cancel" is refused as a machine self-decision —
-// the full table of forms lives at the mcp handler seam
+// action "cancel" is refused with text that is true on a token session, and
+// records nothing — the full table of forms lives at the mcp handler seam
 // (tools_approval_test.go); this proves one representative row per form end
-// to end and that the SAME state stays valid across all five refusals
-// (refusals record nothing).
-func TestMCPElicitation_AnswerWithoutAResponderIsAMachineSelfDecision(t *testing.T) {
+// to end and that the SAME state stays valid across all four refusals. An
+// accept with no responder at all is accepted here
+// (TestMCPElicitation_MachineAPITokenAnswerIsMachineSelfConfirmation).
+//
+// Proves AP-87.
+func TestMCPElicitation_AnUnusableAnswerIsRefusedAndRecordsNothing(t *testing.T) {
 	f, token, _ := startElicitingRelay(t)
 	session := connectEliciting(t, f, token)
 	q, qid, rid, _ := askApproval(t, session, restartNginxArgs())
@@ -512,12 +535,6 @@ func TestMCPElicitation_AnswerWithoutAResponderIsAMachineSelfDecision(t *testing
 		})
 	}
 
-	t.Run("no responder assertion", func(t *testing.T) {
-		before := auditLen(t, f)
-		res := retry(t, &sdkmcp.ElicitResult{Action: "accept", Content: map[string]any{"confirmed": true}})
-		assertMachineSelfDecisionRefused(t, f, res, rid, before)
-	})
-
 	t.Run("information gate", func(t *testing.T) {
 		before := auditLen(t, f)
 		res := retry(t, &sdkmcp.ElicitResult{
@@ -529,7 +546,7 @@ func TestMCPElicitation_AnswerWithoutAResponderIsAMachineSelfDecision(t *testing
 				},
 			},
 		})
-		assertMachineSelfDecisionRefused(t, f, res, rid, before)
+		assertUnusableAnswerRefused(t, f, res, rid, before)
 	})
 
 	t.Run("replayed-from on the answer", func(t *testing.T) {
@@ -544,7 +561,7 @@ func TestMCPElicitation_AnswerWithoutAResponderIsAMachineSelfDecision(t *testing
 				metaKeyReplayedFrom: "01J9ZX5K8QH3M4N6P7R2S0T1VX",
 			},
 		})
-		assertMachineSelfDecisionRefused(t, f, res, rid, before)
+		assertUnusableAnswerRefused(t, f, res, rid, before)
 	})
 
 	t.Run("replayed-from on the call", func(t *testing.T) {
@@ -556,7 +573,7 @@ func TestMCPElicitation_AnswerWithoutAResponderIsAMachineSelfDecision(t *testing
 			InputResponses: sdkmcp.InputResponseMap{qid: acceptResponse()},
 			Meta:           sdkmcp.Meta{metaKeyReplayedFrom: "01J9ZX5K8QH3M4N6P7R2S0T1VX"},
 		})
-		assertMachineSelfDecisionRefused(t, f, res, rid, before)
+		assertUnusableAnswerRefused(t, f, res, rid, before)
 	})
 
 	t.Run("cancel", func(t *testing.T) {
@@ -569,12 +586,12 @@ func TestMCPElicitation_AnswerWithoutAResponderIsAMachineSelfDecision(t *testing
 				},
 			},
 		})
-		assertMachineSelfDecisionRefused(t, f, res, rid, before)
+		assertUnusableAnswerRefused(t, f, res, rid, before)
 	})
 
 	pending := fetchApproval(t, f, rid)
 	if pending.State != "pending" || len(pending.Decisions) != 0 {
-		t.Errorf("approval = %+v, want still pending with no decisions after five refusals", pending)
+		t.Errorf("approval = %+v, want still pending with no decisions after four refusals", pending)
 	}
 
 	// The request is still answerable: NextStep's "it can still be answered"
