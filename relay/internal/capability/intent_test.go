@@ -33,7 +33,7 @@ func TestEngineRecordsIntentWithTasksBeforeAnyDispatch(t *testing.T) {
 	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead}
 	sel := Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "web"}}}
 	d := newDispatch(Principal{Account: "alice"}, sel, nodes, act)
-	d.approvalID, d.grantID = "appr-1", "grant-1"
+	d.approvalID = "appr-1"
 	ctx := WithAssertions(context.Background(), Assertions{ChangeRef: "CHG-1"})
 
 	if _, err := e.run(ctx, d); err != nil {
@@ -46,7 +46,7 @@ func TestEngineRecordsIntentWithTasksBeforeAnyDispatch(t *testing.T) {
 	}
 	got := entries[0]
 	if got.Kind != AuditKindDispatchIntent || got.JobID != "job-id-1" || got.Principal.Account != "alice" ||
-		got.CapCleared != 2 || got.ApprovalID != "appr-1" || got.GrantID != "grant-1" || got.Action.OperationName != "system.facts" {
+		got.CapCleared != 2 || got.ApprovalID != "appr-1" || got.Action.OperationName != "system.facts" {
 		t.Errorf("intent entry = %+v", got)
 	}
 	if len(got.Selector.Predicates) != 1 || got.Selector.Predicates[0] != sel.Predicates[0] {
@@ -133,7 +133,7 @@ func TestNewExecutionPanicsWhenAuditSinkHasNoIntentRecorder(t *testing.T) {
 	rec := NewRecorder(&spyAuditSink{}, nil, nil)
 	ctl := NewControl(rec, &spyAuthorizer{}, &fakeFreezeStore{})
 	read := newReadLane(rec, registry.NewInMemory(), nil, nil, nil, nil, testSettings, nil)
-	appr := newApprovals(rec, noopApprovalGate{}, nil, nil, nil, nil, noopApprovalNotifier{}, nil)
+	appr := newApprovals(rec, noopApprovalGate{}, nil, nil, nil, noopApprovalNotifier{}, nil)
 	defer func() {
 		r := recover()
 		if r == nil {

@@ -49,7 +49,6 @@ func intentEntry(jobID string, class jobs.RiskClass, capCleared int) capability.
 		},
 		JobID:      jobID,
 		ApprovalID: "appr-1",
-		GrantID:    "grant-1",
 		CapCleared: capCleared,
 	}
 }
@@ -69,7 +68,7 @@ func TestRecordIntent_WritesOneIntentRecordWithItsTasks(t *testing.T) {
 	}
 	r := recs[0]
 	if r.Kind != audit.KindDispatchIntent || r.JobID != "job-1" || r.NodeID != "" ||
-		r.ApprovalID != "appr-1" || r.GrantID != "grant-1" || r.OperationName != "service.restart" || r.Args["unit"] != "nginx" {
+		r.ApprovalID != "appr-1" || r.OperationName != "service.restart" || r.Args["unit"] != "nginx" {
 		t.Errorf("record = %+v", r)
 	}
 	if !strings.Contains(r.Principal, "alice") {

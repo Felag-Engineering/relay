@@ -295,8 +295,9 @@ const readOutcomeAudited = "audited"
 //
 // Three-way, in this order:
 //
-//   - f.GrantID != "" -> "" (a revocation, not a Decision — RevokeGrant's
-//     structural discriminator; the caller renders its own "revoked").
+//   - f.GrantID != "" -> "" (a historical grant revocation, not a Decision;
+//     no current path writes one (approval.md AP-84), and the caller renders
+//     its own "revoked").
 //   - f.ApprovalAnswer set -> "approved" or "denied", verbatim (the
 //     structured answer, byte-identical to audit.ApprovalAnswer*).
 //   - otherwise -> "" (a decision recorded with no structured answer). Empty
@@ -350,9 +351,10 @@ func callOutcome(f trailFacts) (outcome, state string) {
 	case audit.KindApprovalPendingObserved:
 		return "already parked", ""
 	case audit.KindApprovalDecided:
-		// Only RevokeGrant writes a decided record carrying a GrantID
-		// (capability/approval_grant.go). DecideApproval never sets one, so
-		// this is a STRUCTURAL discriminator, not a guess. A revocation is
+		// A decided record carrying a GrantID is a historical grant
+		// revocation, written by no current path (approval.md AP-84) and
+		// still rendered. DecideApproval never sets one, so this is a
+		// STRUCTURAL discriminator, not a guess. A revocation is
 		// not a Decision at all in the glossary's sense — nobody answered a
 		// parked Job — so "decided" over it is a category error the record
 		// itself disproves.

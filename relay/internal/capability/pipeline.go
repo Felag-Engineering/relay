@@ -317,7 +317,7 @@ func (s *Execution) prepareDispatch(ctx context.Context, p Principal, sel Select
 	// An idempotency key is handled after Freeze and authorization, so a
 	// caller who may not dispatch learns nothing about keys, and before the
 	// zero-match, cap and approval stages, so a re-issue is neither refused
-	// because the fleet changed since the original call nor spends a Grant use.
+	// because the fleet changed since the original call.
 	digest := ""
 	if key != "" {
 		if err := validateIdempotencyKey(key); err != nil {
@@ -435,44 +435,25 @@ func (s *Execution) prepareDispatch(ctx context.Context, p Principal, sel Select
 	d := newDispatch(p, sel, nodes, act)
 	d.excluded = ra.excluded
 	d.nodeClass = ra.nodeClass
-	d.approvalID, d.grantID = ap.requestID, ap.grantID
+	d.approvalID = ap.requestID
 
-	// A single-Plan approval's release is now CLAIMED before dispatch, not
-	// bound after it (AP-77). The join between the approval and the Job it
+	// An approval's release is CLAIMED before dispatch, not bound after it
+	// (AP-77). The join between the approval and the Job it
 	// releases is made by this claim, before any Job or Task exists — so a
 	// client timeout, a dropped connection, or a cancelled request after
 	// dispatch starts can never leave the Job unbound: there is nothing
 	// left to lose, because the bind already committed.
 	//
-	// Grant-released dispatches (ap.grantID non-empty) are never claimed here:
-	// a Request carries one job_id, which is right when one approval releases
-	// one Job, but a batch/window Grant (ADR-0027 decision 12) releases MANY,
-	// and binding each in turn would leave the authorizing Request pointing at
-	// whichever Job happened to run last, silently losing the rest. The
-	// grant-to-Jobs join is the audit trail's GrantID, which is why that field
-	// exists; a Grant deliberately does not reuse this one-to-one column.
-	//
-	// A Grant can never reach here for a plan an approval already released:
-	// checkApproval's re-attach lookup (Satisfied && Released) runs BEFORE it
-	// ever claims a Grant, so a Grant issued to cover a plan AFTER a
-	// single-Plan approval released it does NOT authorize a second Job while
-	// that approval is still in force — the re-drive re-attaches instead, and
-	// the Grant's own uses are untouched
-	// (TestRun_ReleasedApprovalReAttachesEvenWhenAGrantCoversThePlan). Once the
-	// approval's deadline passes, Satisfied goes false, the released Request no
-	// longer shadows the Grant, and the Grant releases the dispatch normally.
-	//
 	// A keyed dispatch reserves its Job ID the same way and claims the
 	// key against it BEFORE the approval's BindJob, so neither join can be lost
-	// to a dropped stream. A keyed dispatch released by a Grant still never
-	// binds the Request: BindJob runs only under the condition above.
+	// to a dropped stream.
 	//
 	// The compensating writes below (Release, Rebind) run on a detached,
 	// bounded context: a dropped stream cancels ctx, and a key left bound for
 	// 24h to a Job that never existed is avoidable.
 	reserved := false
 	var claim *keyClaim
-	bindApproval := ap.grantID == "" && ap.requestID != ""
+	bindApproval := ap.requestID != ""
 	if key != "" || bindApproval {
 		jobID, err := s.disp.reserveJobID()
 		if err != nil {
@@ -595,11 +576,10 @@ func (s *Execution) account(ctx context.Context, p Principal, sel Selector, pr p
 	// Value() lookups, so the caller's asserted attribution (Assertions,
 	// assertions.go) is unaffected either way.
 	//
-	// Non-reserved dispatches (a Grant release, or no approval involved at
-	// all) keep using ctx unchanged: no Job was claimed ahead of them, so a
-	// cancel here can only ever abandon work that either never started or
-	// belongs to no prior commitment — the behaviour this package has always
-	// had.
+	// Non-reserved dispatches (no approval involved at all) keep using ctx
+	// unchanged: no Job was claimed ahead of them, so a cancel here can only
+	// ever abandon work that either never started or belongs to no prior
+	// commitment.
 	acctCtx := ctx
 	if reserved {
 		var cancelAcct context.CancelFunc
@@ -608,8 +588,7 @@ func (s *Execution) account(ctx context.Context, p Principal, sel Selector, pr p
 	}
 
 	// And onto the MCP task handle that was waiting for it, so a poll after the
-	// release reports `completed` rather than `working` forever. Unlike the
-	// binding above this one covers grant-released dispatches too: a handle is
+	// release reports `completed` rather than `working` forever. A handle is
 	// per parked dispatch, so there is exactly one Job to record against it.
 	s.approvals.bindTaskHandleJob(acctCtx, ap.requestID, res.jobID)
 
@@ -626,7 +605,7 @@ func (s *Execution) account(ctx context.Context, p Principal, sel Selector, pr p
 	// Residual risk (execution.md, Accepted residual risk): Args/
 	// RawExecArgv below are copied verbatim from act, so a secret passed in
 	// an Operation's arguments lands in the audit trail as-is.
-	entry := AuditEntry{Kind: AuditKindDispatch, Principal: p, Selector: sel, Action: act, JobID: res.jobID, Results: res.results, ApprovalID: ap.requestID, GrantID: ap.grantID, Asserted: AssertionsFromContext(acctCtx)}
+	entry := AuditEntry{Kind: AuditKindDispatch, Principal: p, Selector: sel, Action: act, JobID: res.jobID, Results: res.results, ApprovalID: ap.requestID, Asserted: AssertionsFromContext(acctCtx)}
 	auditErr := s.recorder().audit.Record(acctCtx, entry)
 	if auditErr != nil {
 		// The dispatch itself already happened; a failed audit write must
@@ -660,7 +639,7 @@ func (s *Execution) account(ctx context.Context, p Principal, sel Selector, pr p
 	// outcomes it explains (execution.md, Halting a failing mutation).
 	var haltAuditErr error
 	if res.halt.Halted() {
-		haltEntry := AuditEntry{Kind: AuditKindJobHalt, Action: act, JobID: res.jobID, Halt: res.halt, ApprovalID: ap.requestID, GrantID: ap.grantID}
+		haltEntry := AuditEntry{Kind: AuditKindJobHalt, Action: act, JobID: res.jobID, Halt: res.halt, ApprovalID: ap.requestID}
 		if err := s.recorder().audit.Record(acctCtx, haltEntry); err != nil {
 			haltAuditErr = fmt.Errorf("capability: record job halt audit entry: %w", err)
 			if reserved || alwaysLog {

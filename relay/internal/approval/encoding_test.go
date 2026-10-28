@@ -9,8 +9,9 @@ import (
 // the exact bytes writeField and writeCount produce, rather than the output of
 // any hash function built on top of them.
 //
-// writeField and writeCount are shared by three live stored bindings —
-// HashPlan and HashScope in approval_requests.plan_hash, and the shape keys in
+// writeField and writeCount are shared by the stored bindings — HashPlan in
+// approval_requests.plan_hash (whose historical grant-request rows were hashed
+// with the same primitives), and the shape keys in
 // approval_requests.shape_key — so "someone tidies the shared primitive" would
 // otherwise be a silent re-point of every one of those stored values. This
 // test turns that into a failing test whose message names the consequence,

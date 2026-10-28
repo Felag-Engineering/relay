@@ -230,11 +230,9 @@ func Open(path string, opts ...Option) (*Store, error) {
 	// inserted outside the chain since the last boot.
 
 	// The approval shape-key backfill is Go rather than migration SQL
-	// because it must call the same approval.HashGrantShape the write path
-	// calls: two implementations of one hash is exactly the failure the
-	// property "recomputing a key yields the same key" exists to exclude. It is
-	// idempotent, so running it on every Open converges once and then costs one
-	// indexed probe.
+	// because it binds approval.LegacyShapePrefix, so the constant and the
+	// statement cannot drift apart. It is idempotent, so running it on every
+	// Open converges once and then costs one indexed probe.
 	if err := backfillShapeKeys(context.Background(), db); err != nil {
 		db.Close() //nolint:errcheck
 		return nil, fmt.Errorf("backfill approval shape keys %q: %w", path, err)
@@ -365,17 +363,6 @@ func (s *Store) PolicyAliases() policyalias.Reader {
 // and an auditor could no longer answer what was asked or what became of it.
 func (s *Store) Approvals() approval.Repository {
 	return &sqliteApprovals{db: s.db}
-}
-
-// Grants returns the SQLite-backed approval.GrantRepository — batch/window
-// approvals (ADR-0027 decision 12).
-//
-// Separate from Approvals() because the two have different risks: a Request is
-// decided once, while a Grant is CONSUMED repeatedly under concurrency, and its
-// use counter is a bound a human was shown. Keeping the accessors apart keeps
-// the claim path from being reached by anything looking for a decision path.
-func (s *Store) Grants() approval.GrantRepository {
-	return &sqliteGrants{db: s.db}
 }
 
 // MCPTasks returns the SQLite-backed mcptask.Repository — MCP task handles

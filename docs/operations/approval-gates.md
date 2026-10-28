@@ -6,8 +6,8 @@ Which dispatches must wait for a human before they run
 > **Changing for the MVP ([ADR-0047](../adr/0047-approval-is-one-in-band-answer.md)).** This
 > runbook describes the code as it stands. ADR-0047 cuts approval to one answer per request: a
 > rule names only what it matches and how long a parked request lives (no `count`, `audience`,
-> `requester_allowed` or `channel`); `approve_request` and approval grants are retired; gate
-> rules become a section of `relay.toml` rather than a separate file named by
+> `requester_allowed` or `channel`); `approve_request` is retired and approval grants are removed; gate rules
+> become a section of `relay.toml` rather than a separate file named by
 > `approval.gate_rules_path`; and the inline `webhook_url` and `webhook_secret` keys go, leaving
 > only their `_file` forms. Gate rules stay in the configuration file: the Console has no
 > approval or settings screen (roadmap: relay/settings-in-the-console). This page is rewritten
@@ -254,9 +254,7 @@ sweeper retires lapsed requests from the queue and records an `approval_expired`
 An approved request releases exactly one execution (AP-77). Re-driving the same
 call once it has been released (including while it is still running), on any surface and by
 any caller, returns the Job it already released and runs nothing, up to the approval's
-deadline. That holds even if an Approval grant covering the same plan is issued afterward: a
-re-drive finds the released request, not the grant, so the grant does not run it again. After
-the deadline the same call parks for a fresh approval.
+deadline. After the deadline the same call parks for a fresh approval.
 
 ## How an AI-agent waits: three envelopes, one decision
 

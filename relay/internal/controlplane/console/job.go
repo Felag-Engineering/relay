@@ -79,10 +79,11 @@ package console
 // requester's own chip follows RequesterAccountID above: an approval carrying a
 // name but no AccountID renders dashed, never hard-coded verified. The
 // approver's own on-behalf-of assertion (ADR-0029) stays in that same dashed
-// lane, beside the decider's chip rather than merged into it. A Grant-released
-// Job never shows a plan hash in the Job's slot: the Grant's Request.PlanHash is
-// a hash over the Grant's Scope, not over this Job's Plan, and showing it there
-// would train an operator to compare the wrong two hashes. The approval's own
+// lane, beside the decider's chip rather than merged into it. A Job released
+// by a historical approval grant (approval.md AP-84) never shows a plan hash in
+// the Job's slot: the grant Request's PlanHash is a hash over the grant's Scope,
+// not over this Job's Plan, and showing it there would train an operator to
+// compare the wrong two hashes. The approval's own
 // requester is shown, with its own trust chip, only when it differs from the
 // Job's — release happens on the plan hash alone, so the Account that parked
 // the approval need not be the Account that dispatched.
@@ -461,9 +462,10 @@ type jobApproval struct {
 	// this is every decision that mattered.
 	Deciders []jobDecider
 
-	// ViaGrant is true when this Job was released by a Grant rather than by
-	// its own Plan being approved directly. The approvers below approved a
-	// window, not this plan.
+	// ViaGrant is true when this Job was released by an approval grant, which
+	// only a historical record shows (approval.md AP-84), rather than by its
+	// own Plan being approved directly. The approvers below approved a window,
+	// not this plan.
 	ViaGrant bool
 
 	// ParkedBy/ParkedByVerified are who asked for the approval itself, and
@@ -722,8 +724,8 @@ func buildJobView(ctx context.Context, d Deps, r *http.Request, caller capabilit
 		} else if req, err := d.Approvals.Approval(ctx, v.ApprovalID); err != nil {
 			v.ApprovalError = true
 		} else {
-			// A Grant's PlanHash hashes the Grant's Scope, never this Job's
-			// Plan (capability/approval_grant.go). Showing it in the Job's
+			// A historical grant Request's PlanHash hashes the grant's Scope,
+			// never this Job's Plan (approval.md AP-84). Showing it in the Job's
 			// plan-hash slot would be a different hash presented as the one
 			// an operator is trained to compare.
 			if v.GrantID == "" && req.PlanHash != "" {

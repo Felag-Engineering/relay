@@ -40,7 +40,7 @@ const (
 // member and under RC-11 and RC-32 may never become one.
 var runtimeObjects = map[string]bool{
 	"Enrollment Token": true, "Node revocation": true, "Freeze": true, "Account": true,
-	"API Token": true, "Job": true, "approval Request": true, "Approval grant": true,
+	"API Token": true, "Job": true, "approval Request": true,
 }
 
 // toolWrites files every MCP entry point under what it writes; "" is a read.
@@ -75,6 +75,27 @@ func TestMCP_NoToolWritesATag(t *testing.T) {
 	for name, writes := range toolWrites {
 		if strings.Contains(strings.ToLower(writes), "tag") || strings.Contains(strings.ToLower(name), "tag") {
 			t.Errorf("toolWrites files %q under %q; no MCP tool writes a tag (ADR-0050)", name, writes)
+		}
+	}
+}
+
+// Proves AP-84.
+//
+// TestMCP_NoToolRequestsAnApprovalGrant: approval grants are removed, so no
+// registered tool is named for one and no tool is filed as writing one.
+func TestMCP_NoToolRequestsAnApprovalGrant(t *testing.T) {
+	live := liveRegisteredToolNames(t)
+	if len(live) == 0 {
+		t.Fatal("liveRegisteredToolNames reported no tools; the check proved nothing")
+	}
+	for name := range live {
+		if strings.Contains(strings.ToLower(name), "grant") {
+			t.Errorf("a live tool is named %q; no MCP tool requests an approval grant", name)
+		}
+	}
+	for name, writes := range toolWrites {
+		if strings.Contains(strings.ToLower(writes), "grant") || strings.Contains(strings.ToLower(name), "grant") {
+			t.Errorf("toolWrites files %q under %q; no MCP tool requests an approval grant", name, writes)
 		}
 	}
 }

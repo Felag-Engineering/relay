@@ -1,10 +1,12 @@
 package approval
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"regexp"
 	"strconv"
 	"testing"
-	"time"
 
 	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 )
@@ -340,53 +342,28 @@ func TestLegacyShapeKey(t *testing.T) {
 	}
 }
 
-// TestPlanAndGrantShapesNeverCollide: the domain tag separates the two spaces.
-func TestPlanAndGrantShapesNeverCollide(t *testing.T) {
+// TestPlanShapeNeverWritesTheGrantDomain: approval_requests.shape_key still
+// holds keys that grant requests were stamped with, in the "grant" domain. A
+// Plan shape must never collide with one, so the same-shape callout never pairs
+// a Plan with a historical grant. The preimage below is that stored grant-domain
+// layout for a Scope over one mutate Operation.
+func TestPlanShapeNeverWritesTheGrantDomain(t *testing.T) {
 	planKey := HashPlanShape(jobs.Action{
 		Kind: jobs.ActionOperation, OperationName: "service.restart", RiskClass: jobs.RiskClassMutate,
 	}, SelectorShape{Known: true})
-	grantKey := HashGrantShape(Scope{
-		Account: "", RiskClass: jobs.RiskClassMutate, Operations: []string{"service.restart"},
-	})
+
+	h := sha256.New()
+	writeField(h, "shape", ShapeKeyVersion)
+	writeField(h, "domain", "grant")
+	writeField(h, "risk", "mutate")
+	writeField(h, "account", "")
+	writeField(h, "namespace", "")
+	fmt.Fprintf(h, "raw_exec=%t\n", false)
+	writeCount(h, "ops", 1)
+	writeField(h, "op", "service.restart")
+	grantKey := hex.EncodeToString(h.Sum(nil))
+
 	if planKey == grantKey {
-		t.Error("a Plan shape and a Grant shape collided; the domain tag is not doing its job")
-	}
-}
-
-// TestGrantShapeIgnoresCeilingWindowAndUses is the half of the Grant key that
-// the anti-fatigue diff callout depends on, pinned directly rather than through
-// a consumer.
-//
-// A ceiling IS fan-out, and D10 excludes fan-out from every shape key: "same
-// scope, ceiling grew 10 -> 500" is exactly the sentence the callout exists to
-// shout, and it can only be rendered if the two Grants share a key in the first
-// place. The window and the use limit are scale for the same reason. HashScope
-// — the Grant's actual approval binding — still covers all three, so none of
-// them can move without invalidating the approval itself.
-func TestGrantShapeIgnoresCeilingWindowAndUses(t *testing.T) {
-	scope := Scope{
-		Account: "gleipnir-prod", RiskClass: jobs.RiskClassMutate,
-		MaxFanOut: 10, Operations: []string{"service.restart"},
-	}
-	wider := scope
-	wider.MaxFanOut = 500
-
-	if HashGrantShape(scope) != HashGrantShape(wider) {
-		t.Error("widening the fan-out ceiling changed the Grant shape key — the callout can no longer " +
-			"find the prior Grant, which is the one comparison it exists to make")
-	}
-
-	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
-	short := Grant{Scope: scope, StartsAt: now, ExpiresAt: now.Add(time.Hour), MaxUses: 5}
-	long := Grant{Scope: wider, StartsAt: now, ExpiresAt: now.Add(8 * time.Hour), MaxUses: 200}
-	if short.ShapeKey() != long.ShapeKey() {
-		t.Error("the window or the use limit reached the Grant shape key; both are scale, not shape")
-	}
-
-	// The other direction, so this does not pass by hashing nothing at all.
-	other := scope
-	other.Operations = []string{"pkg.install"}
-	if HashGrantShape(scope) == HashGrantShape(other) {
-		t.Error("two Grants over different Operations share a shape key")
+		t.Error("a Plan shape and a historical grant shape collided; the domain tag is not doing its job")
 	}
 }

@@ -593,7 +593,7 @@ func TestConstructorsPanicOnNilSeam(t *testing.T) {
 	gate := gateEverything(t, 1)
 	astore := newMemApprovals()
 	aauthz := &spyApprovalAuthorizer{}
-	appr := NewApprovals(rec, gate, astore, aauthz, nil, nil, nil, nil)
+	appr := NewApprovals(rec, gate, astore, aauthz, nil, nil, nil)
 
 	tests := []struct {
 		name string
@@ -612,10 +612,10 @@ func TestConstructorsPanicOnNilSeam(t *testing.T) {
 		{"NewReadLane/audit query seam", func() { NewReadLane(rec, reg, nil, jq, nil, nil, testSettings, nil) }, "NewReadLane: audit query seam"},
 		{"NewReadLane/job query seam", func() { NewReadLane(rec, reg, aq, nil, nil, nil, testSettings, nil) }, "NewReadLane: job query seam"},
 		{"NewReadLane/settings", func() { NewReadLane(rec, reg, aq, jq, nil, nil, nil, nil) }, "NewReadLane: settings"},
-		{"NewApprovals/recorder", func() { NewApprovals(nil, gate, astore, aauthz, nil, nil, nil, nil) }, "NewApprovals: recorder"},
-		{"NewApprovals/gate", func() { NewApprovals(rec, nil, astore, aauthz, nil, nil, nil, nil) }, "NewApprovals: gate"},
-		{"NewApprovals/store", func() { NewApprovals(rec, gate, nil, aauthz, nil, nil, nil, nil) }, "NewApprovals: store"},
-		{"NewApprovals/approval authorizer", func() { NewApprovals(rec, gate, astore, nil, nil, nil, nil, nil) }, "NewApprovals: approval authorizer"},
+		{"NewApprovals/recorder", func() { NewApprovals(nil, gate, astore, aauthz, nil, nil, nil) }, "NewApprovals: recorder"},
+		{"NewApprovals/gate", func() { NewApprovals(rec, nil, astore, aauthz, nil, nil, nil) }, "NewApprovals: gate"},
+		{"NewApprovals/store", func() { NewApprovals(rec, gate, nil, aauthz, nil, nil, nil) }, "NewApprovals: store"},
+		{"NewApprovals/approval authorizer", func() { NewApprovals(rec, gate, astore, nil, nil, nil, nil) }, "NewApprovals: approval authorizer"},
 		{"NewExecution/control", func() {
 			NewExecution(nil, read, appr, capc, nil, jr, tr, conduit, testSettings, nil, nil)
 		}, "capability: NewExecution: control"},
@@ -671,7 +671,7 @@ func TestNewExecution_RefusesReadLaneOverADifferentRecorder(t *testing.T) {
 	ctl := NewControl(recA, &spyAuthorizer{}, &fakeFreezeStore{})
 	other := newReadLane(recB, reg, nil, nil, nil, nil, testSettings, nil)
 	same := newReadLane(recA, reg, nil, nil, nil, nil, testSettings, nil)
-	appr := newApprovals(recA, noopApprovalGate{}, nil, nil, nil, nil, noopApprovalNotifier{}, nil)
+	appr := newApprovals(recA, noopApprovalGate{}, nil, nil, nil, noopApprovalNotifier{}, nil)
 
 	if NewExecution(ctl, same, appr, &spyCapChecker{}, nil, jr, tr, newFakeConduit(nil), testSettings, nil, nil) == nil {
 		t.Fatal("NewExecution over a read lane sharing the Control's Recorder returned nil")
@@ -700,8 +700,8 @@ func TestNewExecution_RefusesApprovalsOverADifferentRecorder(t *testing.T) {
 	reg := registry.NewInMemory()
 	ctl := NewControl(recA, &spyAuthorizer{}, &fakeFreezeStore{})
 	same := newReadLane(recA, reg, nil, nil, nil, nil, testSettings, nil)
-	apprA := newApprovals(recA, noopApprovalGate{}, nil, nil, nil, nil, noopApprovalNotifier{}, nil)
-	apprB := newApprovals(recB, noopApprovalGate{}, nil, nil, nil, nil, noopApprovalNotifier{}, nil)
+	apprA := newApprovals(recA, noopApprovalGate{}, nil, nil, nil, noopApprovalNotifier{}, nil)
+	apprB := newApprovals(recB, noopApprovalGate{}, nil, nil, nil, noopApprovalNotifier{}, nil)
 
 	if NewExecution(ctl, same, apprA, &spyCapChecker{}, nil, jr, tr, newFakeConduit(nil), testSettings, nil, nil) == nil {
 		t.Fatal("NewExecution over an Approvals sharing the Control's Recorder returned nil")
@@ -725,7 +725,7 @@ func TestNewExecution_RefusesApprovalsOverADifferentRecorder(t *testing.T) {
 // with no nil check — so NewApprovals must map nil to the no-op.
 func TestNewApprovals_NilNotifierParksWithoutNotifying(t *testing.T) {
 	rec := NewRecorder(&spyAuditSink{}, nil, nil)
-	appr := NewApprovals(rec, gateEverything(t, 1), newMemApprovals(), &spyApprovalAuthorizer{}, nil, nil, nil, nil)
+	appr := NewApprovals(rec, gateEverything(t, 1), newMemApprovals(), &spyApprovalAuthorizer{}, nil, nil, nil)
 	ctl := NewControl(rec, &spyAuthorizer{}, &fakeFreezeStore{})
 	read := newReadLane(rec, seedOneNode(t), nil, nil, nil, nil, testSettings, nil)
 	svc := newExecution(ctl, read, appr, noopCapChecker{}, nil, noopDispatcher{}, nil)

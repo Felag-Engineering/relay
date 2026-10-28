@@ -15,7 +15,7 @@ func TestHits_Flags(t *testing.T) {
 		{"InstallDaemon", []string{"install", "daemon"}},
 		{"relay.v1.Daemon/PushBinary", []string{"daemon", "binary"}},
 		{"run_operation", nil},
-		{"GET /api/v1/approval-grants/{id}", nil},
+		{"GET /api/v1/approvals/{id}", nil},
 		{"Enroll", nil},
 		{"task_cancel", nil},
 	} {

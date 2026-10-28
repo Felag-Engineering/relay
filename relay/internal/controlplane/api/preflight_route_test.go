@@ -119,12 +119,6 @@ func TestNoSeparatePreflightRouteIsServed(t *testing.T) {
 		"GET /api/v1/approvals":                true,
 		"GET /api/v1/approvals/{id}":           true,
 		"POST /api/v1/approvals/{id}/decision": true,
-
-		// Batch/window approvals (Grants).
-		"POST /api/v1/approval-grants":             true,
-		"GET /api/v1/approval-grants":              true,
-		"GET /api/v1/approval-grants/{id}":         true,
-		"POST /api/v1/approval-grants/{id}/revoke": true,
 	}
 
 	if !reflect.DeepEqual(seen, want) {

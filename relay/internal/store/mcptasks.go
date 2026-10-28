@@ -33,9 +33,9 @@ const mcpTaskSelect = `
 // Create persists a validated handle.
 //
 // Validate runs HERE as well as at the caller, on the same reasoning as
-// grants: a handle with no owner must be impossible to STORE, not merely
-// impossible to mint through today's code path. An unowned row would be one no
-// ownership check could ever fail.
+// approvals' Create: a handle with no owner must be impossible to STORE, not
+// merely impossible to mint through today's code path. An unowned row would be
+// one no ownership check could ever fail.
 func (m *sqliteMCPTasks) Create(ctx context.Context, h mcptask.Handle) error {
 	if err := h.Validate(); err != nil {
 		return err

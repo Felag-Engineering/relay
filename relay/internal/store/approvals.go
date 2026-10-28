@@ -34,10 +34,8 @@ func (a *sqliteApprovals) Create(ctx context.Context, r approval.Request) error 
 	// The comma-joined require_audience column cannot represent a lone blank
 	// entry: strings.Join([]string{""}, ",") == "", which encodes identically
 	// to an unrestricted audience. So a Request whose audience contains a
-	// blank entry must be impossible to store — the same stance Scope.Validate
-	// takes on a comma inside an Operation name (grant.go). This is the one
-	// write chokepoint for both the park path (capability.checkApproval) and
-	// the Approval-grant path (capability.RequestGrant).
+	// blank entry must be impossible to store. This is the one write chokepoint
+	// for the park path (capability.checkApproval).
 	if err := approval.ValidateAudience(r.Require.Audience); err != nil {
 		return fmt.Errorf("insert approval request %q: require_audience: %w", r.ID, err)
 	}
@@ -340,7 +338,7 @@ func (a *sqliteApprovals) RecordDecision(ctx context.Context, id string, d appro
 // approval, once claimed, stays spent.
 //
 // The whole read-check-write runs in one transaction, the same basis
-// RecordDecision and ClaimGrant stand on, plus store.Open's
+// RecordDecision stands on, plus store.Open's
 // SetMaxOpenConns(1): of two concurrent claims, exactly one commits before the
 // other's transaction can even begin, so RowsAffected == 0 below is
 // belt-and-braces rather than the load-bearing check.
@@ -455,11 +453,11 @@ func (a *sqliteApprovals) ExpirePending(ctx context.Context, now time.Time) ([]a
 }
 
 // splitList is the inverse of strings.Join for every comma-separated list
-// column (matched_rules and require_audience here, Scope.Operations in
-// grants.go). An empty column is an empty slice, never []string{""}, and it
-// must never drop an empty element from a non-empty column: callers that need
-// blank entries treated as malformed (approval.Requirement.AudienceMalformed)
-// rely on this function preserving rather than filtering them.
+// column (matched_rules and require_audience). An empty column is an empty
+// slice, never []string{""}, and it must never drop an empty element from a
+// non-empty column: callers that need blank entries treated as malformed
+// (approval.Requirement.AudienceMalformed) rely on this function preserving
+// rather than filtering them.
 func splitList(s string) []string {
 	if s == "" {
 		return nil

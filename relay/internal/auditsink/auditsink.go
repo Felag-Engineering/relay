@@ -179,7 +179,6 @@ func (s *Sink) Record(ctx context.Context, e capability.AuditEntry) error {
 	// with a smaller set, which is the worst way for an audit query to be
 	// wrong.
 	base.ApprovalID = e.ApprovalID
-	base.GrantID = e.GrantID
 	base.PlanHash = e.PlanHash
 
 	if e.Kind == capability.AuditKindRefusal {
@@ -209,19 +208,6 @@ func (s *Sink) Record(ctx context.Context, e capability.AuditEntry) error {
 		base.Reason = e.Reason
 		err := s.append(ctx, base)
 		s.logDecision(audit.KindApprovalRequested, e, 0, "")
-		return err
-	}
-
-	// A request for a batch/window Grant. Same no-Results shape as a
-	// park and handled before the same fall-through, for the same reason: it
-	// would otherwise be recorded as a Dispatch with no Results. Its own kind
-	// because a Grant is an ask for standing authority over many dispatches,
-	// which is not the act approval_requested names.
-	if e.Kind == capability.AuditKindApprovalGrantRequested {
-		base.Kind = audit.KindApprovalGrantRequested
-		base.Reason = e.Reason
-		err := s.append(ctx, base)
-		s.logDecision(audit.KindApprovalGrantRequested, e, 0, "")
 		return err
 	}
 
@@ -340,7 +326,6 @@ func (s *Sink) RecordIntent(ctx context.Context, e capability.AuditEntry, tasks 
 	rec.Kind = audit.KindDispatchIntent
 	rec.JobID = e.JobID
 	rec.ApprovalID = e.ApprovalID
-	rec.GrantID = e.GrantID
 	rec.Reason = intentReason(e, tasks)
 
 	id, err := s.newID()

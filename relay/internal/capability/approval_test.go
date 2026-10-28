@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -335,7 +336,7 @@ func (g blankAudienceGate) Evaluate(approval.Dispatch) (approval.Requirement, []
 // audience check of its own on main, and relies entirely on
 // approval.Rule.Validate to have kept a blank entry out of the gate in the
 // first place. A non-validating ApprovalGate must still be refused here,
-// before an Approval grant is claimed or a Request is created.
+// before a Request is created.
 func TestGatedDispatchRefusesABlankAudienceEntryBeforeAnyWrite(t *testing.T) {
 	store := newMemApprovals()
 	gate := blankAudienceGate{
@@ -357,33 +358,6 @@ func TestGatedDispatchRefusesABlankAudienceEntryBeforeAnyWrite(t *testing.T) {
 	if len(store.byID) != 0 {
 		t.Error("a refused dispatch must not create an approval request")
 	}
-}
-
-// namespaceVaryingAudienceGate is a fake ApprovalGate whose answer depends on
-// which namespace it is asked about: the "node" namespace's Requirement
-// carries a blank audience entry, every other namespace's is unrestricted (no
-// audience named at all).
-//
-// It exists to drive approval.RequirementForScope's namespace probing
-// (grant.go): RequirementForScope calls Evaluate once per known namespace and
-// merges the results with mergeStricter, which unions the audiences
-// (unionAudience). Before #608 cycle 2's fix, unionAudience's "either side is
-// empty means unrestricted" shortcut fired on ANY empty side, so merging the
-// "node" probe's malformed Requirement with a later unrestricted probe threw
-// the blank entry away and the merged Requirement read back unrestricted —
-// defeating RequestGrant's own ValidateAudience backstop, which only ever
-// sees the MERGED result. A single-call fake like blankAudienceGate cannot
-// exercise this: the hazard is specifically in the merge across several
-// Evaluate calls, which only RequirementForScope (and Gate.Evaluate, for a
-// real Gate merging several matching rules) ever does.
-type namespaceVaryingAudienceGate struct{}
-
-func (namespaceVaryingAudienceGate) Evaluate(d approval.Dispatch) (approval.Requirement, []string, bool) {
-	if len(d.Namespaces) > 0 && d.Namespaces[0] == "node" {
-		return approval.Requirement{Count: 1, Audience: []string{""}, Channel: approval.ChannelOutOfBand, TTL: time.Hour},
-			[]string{"node-rule"}, true
-	}
-	return approval.Requirement{Count: 1, Channel: approval.ChannelOutOfBand, TTL: time.Hour}, []string{"catch-all"}, true
 }
 
 // TestUngatedDispatchIsUntouched: an empty gate must leave the pre-approval
@@ -1021,93 +995,6 @@ func TestRun_ReserveJobIDFailureRefusesWithoutDispatching(t *testing.T) {
 	}
 }
 
-// TestRun_ReleasedApprovalReAttachesEvenWhenAGrantCoversThePlan supersedes
-// cycle-1's TestRun_GrantTakesPrecedenceOverAReleasedApproval under the
-// plan-review ESCALATE (b) disposition: conform to AP-77's literal,
-// unconditional text ("any later dispatch ... re-attaches"), not to the
-// weaker reading that a covering Grant issued afterward may run the released
-// plan a second time. checkApproval's Satisfied-and-Released lookup now runs
-// BEFORE ClaimGrant, so a Grant that starts covering this exact plan AFTER a
-// single-Plan approval already released it does NOT authorize a second Job
-// while that approval is still in force: the re-drive re-attaches to the
-// released Job instead, dispatches nothing, and the Grant's own uses are left
-// untouched — a re-attach consumes no Grant use.
-func TestRun_ReleasedApprovalReAttachesEvenWhenAGrantCoversThePlan(t *testing.T) {
-	store := newMemApprovals()
-	grants := &memGrants{}
-	reg := registry.NewInMemory()
-	for _, id := range []string{"node-a", "node-b"} {
-		if _, err := reg.Upsert(registry.Report{NodeID: id}); err != nil {
-			t.Fatalf("seed registry: %v", err)
-		}
-	}
-	disp := &spyDispatcher{jobID: "job-1"}
-	audit := &spyAuditSink{}
-	s := build(t, seams{reg: reg,
-		authz: &spyAuthorizer{}, cap: &spyCapChecker{},
-		audit: audit, freeze: &fakeFreezeStore{},
-		gate: gateEverything(t, 1), approvals: store, approvalAuthz: &spyApprovalAuthorizer{},
-		grants: grants,
-		now:    func() time.Time { return apNow },
-	})
-	s.disp = disp
-	p := Principal{AccountID: "acct-g", Account: "gleipnir-prod"}
-
-	_, err := s.Run(context.Background(), p, Selector{}, mutateAct())
-	var parked *ParkedError
-	if !errors.As(err, &parked) {
-		t.Fatalf("first Run: err = %v, want a park", err)
-	}
-	store.approve(t, parked.RequestID, "acct-ana", "ana", apNow.Add(time.Minute))
-
-	if _, err := s.Run(context.Background(), p, Selector{}, mutateAct()); err != nil {
-		t.Fatalf("release Run: %v", err)
-	}
-	if got := store.bound[parked.RequestID]; got != "job-1" {
-		t.Fatalf("release did not bind job-1: %q", got)
-	}
-
-	// A Grant covering this exact dispatch is issued AFTER the approval
-	// already released it.
-	grants.grant = coveringGrant()
-	disp.called = false
-	disp.jobID = "job-2" // would be a genuinely new Job if the Grant ran it.
-
-	res, err := s.Run(context.Background(), p, Selector{}, mutateAct())
-	if err != nil {
-		t.Fatalf("grant-covered re-drive: %v", err)
-	}
-	if disp.called {
-		t.Fatal("the covering Grant dispatched a second Job — the released approval must re-attach first")
-	}
-	for _, r := range res {
-		if r.JobID != "job-1" {
-			t.Errorf("result JobID = %q, want job-1 — a re-attach, not the Grant's job-2", r.JobID)
-		}
-	}
-	if got := store.bound[parked.RequestID]; got != "job-1" {
-		t.Errorf("the original approval's binding changed to %q", got)
-	}
-	if grants.claims != 0 {
-		t.Errorf("grant claims = %d, want 0 — a re-attach must never consume a Grant use", grants.claims)
-	}
-	if !hasAuditKind(audit.entries, AuditKindDispatch) {
-		t.Fatal("want the first release's own dispatch audit entry")
-	}
-	var dispatchEntries int
-	for _, e := range audit.entries {
-		if e.Kind == AuditKindDispatch {
-			dispatchEntries++
-		}
-	}
-	if dispatchEntries != 1 {
-		t.Errorf("dispatch audit entries = %d, want 1 — the grant-covered re-drive must not add a second", dispatchEntries)
-	}
-	if len(audit.readCalls) != 1 || audit.readCalls[0].Tool != toolApprovalReattach {
-		t.Fatalf("read calls = %+v, want exactly one approval_reattach read", audit.readCalls)
-	}
-}
-
 // errByPlanHashApprovalStore wraps an ApprovalStore and always fails
 // ByPlanHash with err, mirroring a store outage for exactly the read
 // checkApproval uses to find an already-released Request for this plan
@@ -1121,14 +1008,11 @@ func (w errByPlanHashApprovalStore) ByPlanHash(context.Context, string) (approva
 	return approval.Request{}, w.err
 }
 
-// TestRun_StoreErrorReadingForAPlanIsRefusedBeforeAGrantIsConsulted is
-// SEC-2/C2-S1: a store failure reading whether THIS plan already has a
-// released Request must fail the dispatch closed BEFORE a covering Grant is
-// ever consulted. Shadowing the failed read with a Grant would let a Request
-// the Relay cannot currently read — possibly already released — be silently
-// overridden by a Grant running the plan a second time.
-func TestRun_StoreErrorReadingForAPlanIsRefusedBeforeAGrantIsConsulted(t *testing.T) {
-	grants := &memGrants{grant: coveringGrant()}
+// TestRun_StoreErrorReadingForAPlanIsRefused: a store failure reading whether
+// THIS plan already has a released Request fails the dispatch closed.
+// A Request the Relay cannot currently read, possibly already released, must
+// never be treated as absent and run a second time.
+func TestRun_StoreErrorReadingForAPlanIsRefused(t *testing.T) {
 	failing := errByPlanHashApprovalStore{ApprovalStore: newMemApprovals(), err: errors.New("approvals store unavailable")}
 	reg := registry.NewInMemory()
 	for _, id := range []string{"node-a", "node-b"} {
@@ -1142,8 +1026,7 @@ func TestRun_StoreErrorReadingForAPlanIsRefusedBeforeAGrantIsConsulted(t *testin
 		authz: &spyAuthorizer{}, cap: &spyCapChecker{},
 		audit: audit, freeze: &fakeFreezeStore{},
 		gate: gateEverything(t, 1), approvals: failing, approvalAuthz: &spyApprovalAuthorizer{},
-		grants: grants,
-		now:    func() time.Time { return apNow },
+		now: func() time.Time { return apNow },
 	})
 	s.disp = disp
 
@@ -1153,9 +1036,6 @@ func TestRun_StoreErrorReadingForAPlanIsRefusedBeforeAGrantIsConsulted(t *testin
 	}
 	if disp.called {
 		t.Error("dispatcher ran despite a store failure reading for this plan")
-	}
-	if grants.claims != 0 {
-		t.Errorf("grant claims = %d, want 0 — a failed plan-hash read must refuse before a covering Grant is ever consulted", grants.claims)
 	}
 	if !hasAuditKind(audit.entries, AuditKindRefusal) {
 		t.Error("want a refusal audited")
@@ -1580,5 +1460,71 @@ func TestRun_ConcurrentReDrivesDispatchExactlyOneJob(t *testing.T) {
 				t.Errorf("goroutine %d: result JobID = %q, want %q", i, r.JobID, stored.JobID)
 			}
 		}
+	}
+}
+
+// Proves AP-84.
+//
+// TestApprovals_NoDispatchConsultsAGrant: the capability layer carries no
+// approval-grant surface at all. Approvals has no grant method or field, the
+// dispatch decision has no grant link, and an audit entry has no GrantID to set,
+// so no dispatch can claim or record a grant.
+func TestApprovals_NoDispatchConsultsAGrant(t *testing.T) {
+	at := reflect.TypeOf(&Approvals{})
+	for i := 0; i < at.NumMethod(); i++ {
+		if name := at.Method(i).Name; strings.Contains(name, "Grant") {
+			t.Errorf("Approvals has method %s; approval grants are removed", name)
+		}
+	}
+	for _, c := range []struct {
+		typ   reflect.Type
+		field string
+	}{
+		{reflect.TypeOf(Approvals{}), "grants"},
+		{reflect.TypeOf(approvalDecision{}), "grantID"},
+		{reflect.TypeOf(AuditEntry{}), "GrantID"},
+		{reflect.TypeOf(dispatch{}), "grantID"},
+	} {
+		if _, ok := c.typ.FieldByName(c.field); ok {
+			t.Errorf("%s has field %s; approval grants are removed", c.typ.Name(), c.field)
+		}
+	}
+}
+
+// Proves AP-84.
+//
+// TestRun_EveryGatedDispatchParksOnItsOwn: approving one dispatch releases that
+// dispatch only. A different dispatch by the same Account, of the same risk and
+// fan-out, parks as its own Request and runs nothing.
+func TestRun_EveryGatedDispatchParksOnItsOwn(t *testing.T) {
+	store := newMemApprovals()
+	s, disp := approvalFixture(t, []string{"node-a"}, gateEverything(t, 1), store, func() time.Time { return apNow })
+	p := Principal{AccountID: "acct-g", Account: "gleipnir-prod"}
+
+	var parkedA *ParkedError
+	if _, err := s.Run(context.Background(), p, Selector{}, mutateAct()); !errors.As(err, &parkedA) {
+		t.Fatalf("plan A: err = %v, want a park", err)
+	}
+	store.approve(t, parkedA.RequestID, "acct-ana", "ana", apNow.Add(time.Minute))
+
+	if _, err := s.Run(context.Background(), p, Selector{}, mutateAct()); err != nil {
+		t.Fatalf("approved plan A: %v", err)
+	}
+	if !disp.called {
+		t.Fatal("the approved plan did not dispatch")
+	}
+
+	disp.called = false
+	other := mutateAct()
+	other.OperationArgs = map[string]string{"service": "redis"}
+	var parkedB *ParkedError
+	if _, err := s.Run(context.Background(), p, Selector{}, other); !errors.As(err, &parkedB) {
+		t.Fatalf("plan B: err = %v, want its own park", err)
+	}
+	if parkedB.RequestID == parkedA.RequestID {
+		t.Error("plan B parked under plan A's Request; the approval of A covers nothing else")
+	}
+	if disp.called {
+		t.Error("plan B dispatched on plan A's approval")
 	}
 }

@@ -976,32 +976,3 @@ func TestStart_ReleasedApprovalReattachesAndRebindsTheKey(t *testing.T) {
 		t.Errorf("%d claims left live after the rebind", live)
 	}
 }
-
-// A keyed dispatch released by a Grant must never bind the Request: a Grant
-// releases many Jobs, and a Request carries one job_id.
-func TestStart_KeyedGrantReleaseDoesNotBindTheRequest(t *testing.T) {
-	grants := &memGrants{grant: coveringGrant()}
-	f, store := approvalStartFx(t, func(s *seams) { s.grants = grants })
-	p := Principal{AccountID: "acct-g", Account: "gleipnir-prod"}
-
-	sj, err := f.svc.Start(context.Background(), p, Selector{}, mutateAct(), keyed("k-1"))
-	if err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	waitClosed(t, sj.Done, "Done")
-	if len(store.bound) != 0 {
-		t.Errorf("approval bindings = %v, want none for a Grant-released dispatch", store.bound)
-	}
-	if grants.claims != 1 {
-		t.Fatalf("grant claims = %d, want 1", grants.claims)
-	}
-
-	// The sequential re-issue re-attaches and spends no further Grant use.
-	again, err := f.svc.Start(context.Background(), p, Selector{}, mutateAct(), keyed("k-1"))
-	if err != nil || !again.Reattached || again.JobID != sj.JobID {
-		t.Fatalf("re-issue = %+v, %v; want a re-attach to %s", again, err, sj.JobID)
-	}
-	if grants.claims != 1 {
-		t.Errorf("grant claims after a sequential re-issue = %d, want still 1", grants.claims)
-	}
-}
