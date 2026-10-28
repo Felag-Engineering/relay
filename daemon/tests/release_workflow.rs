@@ -1603,7 +1603,7 @@ fn the_ansible_role_restarts_the_daemon_when_a_fragment_changes_and_the_matrix_p
     );
     for needle in [
         "dest: /etc/relay-daemon/policy.d/",
-        "notify: relay_daemon : Restart relay-daemon",
+        "notify: \"relay_daemon : Restart relay-daemon\"",
         "owner: root",
         "mode: \"0644\"",
     ] {

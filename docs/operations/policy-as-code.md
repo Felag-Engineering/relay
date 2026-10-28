@@ -285,7 +285,7 @@ play that applies the role notifies `relay_daemon : Restart relay-daemon`:
     owner: root
     group: root
     mode: "0644"
-  notify: relay_daemon : Restart relay-daemon
+  notify: "relay_daemon : Restart relay-daemon"
 ```
 
 A play without the role keeps its own handler. This one is yours, not a shipped one:

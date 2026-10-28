@@ -18,4 +18,4 @@
           [[deny]]
           name = "file.read"
           args = [["/etc/relay-role-test"]]
-      notify: relay_daemon : Restart relay-daemon
+      notify: "relay_daemon : Restart relay-daemon"

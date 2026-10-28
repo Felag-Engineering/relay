@@ -53,7 +53,7 @@ Put the join string in the vault with
         owner: root
         group: root
         mode: "0644"
-      notify: relay_daemon : Restart relay-daemon
+      notify: "relay_daemon : Restart relay-daemon"
 ```
 
 ## Limits
