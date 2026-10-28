@@ -15,10 +15,9 @@ import (
 // decision against one.
 //
 // It lives in the capability layer, not in a surface, because the decision is
-// the same act however it arrives — the Control API's out-of-band endpoint
-// today, the MCP elicitation envelope ([5/6]) and the Console's approval queue
-// (v0.7.0) later. Invariant 10 is not just about dispatch: a surface that
-// recorded its own decisions would be a second control path, and the role
+// the same act however it arrives — the Control API's out-of-band endpoint,
+// or the MCP elicitation answer (AnswerElicited). Invariant 10 is not just
+// about dispatch: a surface that recorded its own decisions would be a second control path, and the role
 // floor, the machine-self-decision rule, and the audit record would each have to
 // be remembered again in every door.
 //
@@ -179,8 +178,9 @@ func (a *Approvals) DecideApproval(ctx context.Context, p Principal, in Approval
 		// The ASSERTED approver, read from the caller's attribution lane
 		// rather than from the decision body. Doing it this way means one
 		// mechanism carries "who is this really for" across every surface —
-		// the API's X-Relay-On-Behalf-Of header and a tool's approver argument
-		// land in the same field and audit identically (ADR-0029 decision 2).
+		// the API's X-Relay-On-Behalf-Of header and an elicited answer's
+		// responder assertion land in the same field and audit identically
+		// (ADR-0029 decision 2).
 		//
 		// Read from the UNMASKED ctx on purpose: withoutAssertions above hides
 		// this from the Authorizer, because an assertion must never be an
@@ -223,6 +223,22 @@ func (a *Approvals) DecideApproval(ctx context.Context, p Principal, in Approval
 		return updated, fmt.Errorf("capability: record audit entry: %w", auditErr)
 	}
 	return updated, nil
+}
+
+// AnswerElicited records an answer to a parked dispatch that arrived in-band,
+// as an MRTR elicitation answer on the requesting session's retried call.
+//
+// It is the single in-band entry point: the channel is fixed here, so the
+// surface that calls it names neither a decision input nor a channel
+// (ADR-0047 decision 4; approval.md AP-12, AP-63). Everything else, the role
+// floor, eligibility, audit and the refusal set, is DecideApproval's.
+func (a *Approvals) AnswerElicited(ctx context.Context, p Principal, requestID, planHash string, approve bool) (approval.Request, error) {
+	return a.DecideApproval(ctx, p, ApprovalDecision{
+		RequestID: requestID,
+		PlanHash:  planHash,
+		Approve:   approve,
+		Channel:   approval.ChannelInBand,
+	})
 }
 
 // isApprovalDomainError reports whether err is one of the domain's eligibility

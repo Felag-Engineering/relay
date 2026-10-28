@@ -21,14 +21,14 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/capability"
 	"github.com/Felag-Engineering/relay/relay/internal/controlplane"
 	"github.com/Felag-Engineering/relay/relay/internal/controlplane/mcp/requeststate"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 	"github.com/Felag-Engineering/relay/relay/internal/relaytest"
 )
 
 // tools_approval_test.go is #726's proof: acceptElicitedAnswer and
 // classifyElicitedDecision (both unexported — hence package mcp, not
-// mcp_test) are tested at the handler seam, exactly the way approve_request
-// is: real fixtures, a real requeststate.Sealer, and a decider double that
-// records exactly what it was handed.
+// mcp_test) are tested with real fixtures, a real requeststate.Sealer, and an
+// answerer double that records exactly what it was handed.
 //
 // Nothing here wires acceptElicitedAnswer into a tool handler — every test
 // calls it directly. See tools_execution_retry_test.go for that wiring
@@ -146,33 +146,37 @@ func permissionResponder(username string) sdkmcp.Meta {
 	}
 }
 
-// recordedDecision is one call a recordingDecider captured.
+// wantInBand is the channel a recorded in-band answer renders as.
+const wantInBand = "in-band"
+
+// recordedDecision is one call a recordingAnswerer captured.
 type recordedDecision struct {
 	Principal  capability.Principal
-	Decision   capability.ApprovalDecision
+	RequestID  string
+	PlanHash   string
+	Approve    bool
 	Assertions capability.Assertions
 }
 
-// recordingDecider is an ApprovalDecider that records every call it
+// recordingAnswerer is an ApprovalAnswerer that records every call it
 // receives — including the context's asserted attribution — and returns a
-// scripted (approval.Request, error) pair. Mutex-guarded because
-// approve_request's tool handler runs on the SDK server's own goroutine,
-// never the test goroutine.
-type recordingDecider struct {
+// scripted (approval.Request, error) pair. Mutex-guarded because a handler
+// can run on the SDK server's own goroutine, never the test goroutine.
+type recordingAnswerer struct {
 	mu   sync.Mutex
 	got  []recordedDecision
 	resp approval.Request
 	err  error
 }
 
-func (d *recordingDecider) DecideApproval(ctx context.Context, p capability.Principal, in capability.ApprovalDecision) (approval.Request, error) {
+func (d *recordingAnswerer) AnswerElicited(ctx context.Context, p capability.Principal, requestID, planHash string, approve bool) (approval.Request, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.got = append(d.got, recordedDecision{Principal: p, Decision: in, Assertions: capability.AssertionsFromContext(ctx)})
+	d.got = append(d.got, recordedDecision{Principal: p, RequestID: requestID, PlanHash: planHash, Approve: approve, Assertions: capability.AssertionsFromContext(ctx)})
 	return d.resp, d.err
 }
 
-func (d *recordingDecider) calls() []recordedDecision {
+func (d *recordingAnswerer) calls() []recordedDecision {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	out := make([]recordedDecision, len(d.got))
@@ -180,17 +184,26 @@ func (d *recordingDecider) calls() []recordedDecision {
 	return out
 }
 
-// scriptedDecider is a stateless ApprovalDecider that always returns the
+// scriptedAnswerer is a stateless ApprovalAnswerer that always returns the
 // same (approval.Request, error) pair — the fixture
 // TestElicitedAnswer_ClassifiesEveryOutcome needs, where only the SCRIPTED
 // RETURN varies from row to row.
-type scriptedDecider struct {
+type scriptedAnswerer struct {
 	resp approval.Request
 	err  error
 }
 
-func (d scriptedDecider) DecideApproval(context.Context, capability.Principal, capability.ApprovalDecision) (approval.Request, error) {
+func (d scriptedAnswerer) AnswerElicited(context.Context, capability.Principal, string, string, bool) (approval.Request, error) {
 	return d.resp, d.err
+}
+
+// inBandDecisionBy returns req with one in-band Decision by accountID
+// appended: what the capability layer's AnswerElicited really returns, so a
+// fake answerer's response carries the channel the real one records.
+func inBandDecisionBy(req approval.Request, accountID string, approve bool) approval.Request {
+	req.Decisions = append(append([]approval.Decision(nil), req.Decisions...),
+		approval.Decision{AccountID: accountID, Approve: approve, Channel: approval.ChannelInBand})
+	return req
 }
 
 // answerTestVerifier authenticates exactly one credential, as the human
@@ -206,56 +219,57 @@ func (answerTestVerifier) Verify(_ context.Context, credential string) (accounts
 	}, accounts.APIToken{ID: "tok-caller"}, nil
 }
 
-// approveRequestServer mounts the real MCP handler — with decider wired via
-// WithApprovalDecider — at /mcp behind the real Authenticator.Middleware,
-// served over plain HTTP by httptest (mirrors golden_test.go's
-// goldenServer; that file is package mcp_test, so the verifier is
-// redeclared here rather than shared).
-func approveRequestServer(t *testing.T, decider ApprovalDecider) *httptest.Server {
-	t.Helper()
-	handler := New(nil, stubOpsLister{}, noopExecutor{}, nil, nil, WithApprovalDecider(decider))
-	mux := http.NewServeMux()
-	mux.Handle("/mcp", handler)
-	srv := httptest.NewServer(controlplane.NewAuthenticator(answerTestVerifier{}).Middleware(mux))
-	t.Cleanup(srv.Close)
-	return srv
+// principalCapturingExecutor is an Executor that records the Principal
+// CancelJob was called with. Start and Plan return zero values.
+type principalCapturingExecutor struct {
+	mu  sync.Mutex
+	got []capability.Principal
 }
 
-// answerClient is an authenticated *http.Client against approveRequestServer.
+func (e *principalCapturingExecutor) Start(context.Context, capability.Principal, capability.Selector, jobs.Action, capability.StartOptions) (capability.StartedJob, error) {
+	return capability.StartedJob{}, nil
+}
+
+func (e *principalCapturingExecutor) CancelJob(_ context.Context, p capability.Principal, _ string) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.got = append(e.got, p)
+	return nil
+}
+
+func (e *principalCapturingExecutor) Plan(context.Context, capability.Principal, capability.Selector, jobs.Action) (capability.PlanResult, error) {
+	return capability.PlanResult{}, nil
+}
+
+// answerClient is an authenticated *http.Client against the answer-path
+// fixture server.
 func answerClient() *http.Client {
 	return &http.Client{Transport: relaytest.BearerRoundTripper{Base: http.DefaultTransport, Token: answerCallerCred}}
 }
 
-// callApproveRequest calls approve_request through a real server wired to
-// decider, with the given approver.
-func callApproveRequest(t *testing.T, decider ApprovalDecider, approver string) *sdkmcp.CallToolResult {
-	t.Helper()
-	srv := approveRequestServer(t, decider)
-	session := relaytest.Connect(t, srv.URL, answerClient())
-	return relaytest.CallTool(t, session, "approve_request", map[string]any{
-		"request_id": answerRequestID,
-		"plan_hash":  answerPlanHash,
-		"approve":    true,
-		"approver":   approver,
-	})
-}
-
-// capturedPrincipal drives one approve_request call through the real server
-// and returns the Principal the decider actually saw — exactly what
-// production authentication produces, rather than a hand-built value that
-// could quietly drift from it.
+// capturedPrincipal drives one cancel_job call through the real server and
+// returns the Principal the executor actually saw — exactly what production
+// authentication produces, rather than a hand-built value that could quietly
+// drift from it.
 func capturedPrincipal(t *testing.T) capability.Principal {
 	t.Helper()
-	rec := &recordingDecider{resp: approval.Request{ID: answerRequestID, State: approval.StateApproved, PlanHash: answerPlanHash}}
-	res := callApproveRequest(t, rec, "capture-principal")
+	exec := &principalCapturingExecutor{}
+	mux := http.NewServeMux()
+	mux.Handle("/mcp", New(nil, stubOpsLister{}, exec, nil, nil))
+	srv := httptest.NewServer(controlplane.NewAuthenticator(answerTestVerifier{}).Middleware(mux))
+	t.Cleanup(srv.Close)
+
+	session := relaytest.Connect(t, srv.URL, answerClient())
+	res := relaytest.CallTool(t, session, "cancel_job", map[string]any{"job_id": "j-capture"})
 	if res.IsError {
-		t.Fatalf("approve_request (capturing the principal): IsError, content=%+v", res.Content)
+		t.Fatalf("cancel_job (capturing the principal): IsError, content=%+v", res.Content)
 	}
-	calls := rec.calls()
-	if len(calls) != 1 {
-		t.Fatalf("recordingDecider recorded %d calls capturing the principal, want 1", len(calls))
+	exec.mu.Lock()
+	defer exec.mu.Unlock()
+	if len(exec.got) != 1 {
+		t.Fatalf("executor recorded %d calls capturing the principal, want 1", len(exec.got))
 	}
-	return calls[0].Principal
+	return exec.got[0]
 }
 
 // oauthHumanPrincipal is capturedPrincipal with the session shape AP-79
@@ -277,35 +291,12 @@ func principalAs(p capability.Principal, method capability.AuthMethod, kind stri
 	return p
 }
 
-// machineSelfDecisionErrorText fetches approve_request's exact no-approver
-// message through the real server, so AP-64's "identical message" claim is
-// checked against the live text rather than a copy that could drift from it.
-func machineSelfDecisionErrorText(t *testing.T) string {
-	t.Helper()
-	res := callApproveRequest(t, &recordingDecider{}, "")
-	return relaytest.ToolErrorText(t, res)
-}
-
 // -----------------------------------------------------------------------
-// AP-63: an accepted answer records the same Decision approve_request would
+// AP-63: an accepted answer is recorded against the sealed request
 // -----------------------------------------------------------------------
 
-func TestElicitedAnswer_RecordsTheSameDecisionAsApproveRequest(t *testing.T) {
-	// capability.Approvals.DecideApproval builds a Decision solely from
-	// (Principal, ApprovalDecision, the context's asserted attribution) —
-	// see internal/capability/approval_decide.go — so identical inputs
-	// produce the identical Decision. This test proves the INPUTS are
-	// identical; the audit-trail proof itself is S5's (#730).
-	recA := &recordingDecider{resp: approval.Request{ID: answerRequestID, State: approval.StateApproved, PlanHash: answerPlanHash}}
-	res := callApproveRequest(t, recA, "alice")
-	if res.IsError {
-		t.Fatalf("approve_request: IsError, content=%+v", res.Content)
-	}
-	callsA := recA.calls()
-	if len(callsA) != 1 {
-		t.Fatalf("recordingDecider A recorded %d calls, want 1", len(callsA))
-	}
-	principal := callsA[0].Principal
+func TestElicitedAnswer_RecordsTheSealedRequestAndTheAssertedResponder(t *testing.T) {
+	principal := capturedPrincipal(t)
 
 	sealer, err := requeststate.Mint()
 	if err != nil {
@@ -314,9 +305,9 @@ func TestElicitedAnswer_RecordsTheSameDecisionAsApproveRequest(t *testing.T) {
 	base := sealState(t, principal.AccountID)
 	sealed := sealWith(t, sealer, base, nil)
 
-	recB := &recordingDecider{resp: approval.Request{ID: answerRequestID, State: approval.StateApproved, PlanHash: answerPlanHash}}
+	rec := &recordingAnswerer{resp: approval.Request{ID: answerRequestID, State: approval.StateApproved, PlanHash: answerPlanHash}}
 	ctx := capability.WithAssertions(context.Background(), capability.Assertions{Traceparent: "tp-1", SessionRef: "sess-1"})
-	result := acceptElicitedAnswer(ctx, recB, openerOf(sealer), fixedNow, principal, elicitedAnswer{
+	result := acceptElicitedAnswer(ctx, rec, openerOf(sealer), fixedNow, principal, elicitedAnswer{
 		RequestState:   sealed,
 		InputResponses: elicit("accept", permissionResponder("alice")),
 		Tool:           answerTool,
@@ -325,28 +316,32 @@ func TestElicitedAnswer_RecordsTheSameDecisionAsApproveRequest(t *testing.T) {
 	if result.Err != nil {
 		t.Fatalf("acceptElicitedAnswer: Err = %v, want nil", result.Err)
 	}
-	callsB := recB.calls()
-	if len(callsB) != 1 {
-		t.Fatalf("recordingDecider B recorded %d calls, want 1", len(callsB))
+	calls := rec.calls()
+	if len(calls) != 1 {
+		t.Fatalf("recordingAnswerer recorded %d calls, want 1", len(calls))
 	}
+	got := calls[0]
 
-	if !reflect.DeepEqual(callsA[0].Principal, callsB[0].Principal) {
-		t.Errorf("Principal differs:\n A = %+v\n B = %+v", callsA[0].Principal, callsB[0].Principal)
+	if !reflect.DeepEqual(got.Principal, principal) {
+		t.Errorf("Principal = %+v, want %+v", got.Principal, principal)
 	}
-	if !reflect.DeepEqual(callsA[0].Decision, callsB[0].Decision) {
-		t.Errorf("ApprovalDecision differs:\n A = %+v\n B = %+v", callsA[0].Decision, callsB[0].Decision)
+	if got.RequestID != answerRequestID || got.PlanHash != answerPlanHash {
+		t.Errorf("answered (%q, %q), want the sealed (%q, %q)", got.RequestID, got.PlanHash, answerRequestID, answerPlanHash)
 	}
-	if callsA[0].Assertions.OnBehalfOf != "alice" || callsB[0].Assertions.OnBehalfOf != "alice" {
-		t.Errorf("OnBehalfOf = %q / %q, want alice/alice", callsA[0].Assertions.OnBehalfOf, callsB[0].Assertions.OnBehalfOf)
+	if !got.Approve {
+		t.Error("Approve = false, want true")
+	}
+	if got.Assertions.OnBehalfOf != "alice" {
+		t.Errorf("OnBehalfOf = %q, want alice", got.Assertions.OnBehalfOf)
 	}
 	// "alice" must appear in the asserted lane only, never in the Principal.
-	if strings.Contains(fmt.Sprintf("%+v", callsB[0].Principal), "alice") {
-		t.Errorf("the asserted approver leaked into the verified Principal: %+v", callsB[0].Principal)
+	if strings.Contains(fmt.Sprintf("%+v", got.Principal), "alice") {
+		t.Errorf("the asserted approver leaked into the verified Principal: %+v", got.Principal)
 	}
 	// A traceparent and session_ref already on the helper's ctx survive
 	// withAssertedApprover's rewrite of OnBehalfOf.
-	if callsB[0].Assertions.Traceparent != "tp-1" || callsB[0].Assertions.SessionRef != "sess-1" {
-		t.Errorf("Assertions = %+v, want Traceparent \"tp-1\" and SessionRef \"sess-1\" preserved", callsB[0].Assertions)
+	if got.Assertions.Traceparent != "tp-1" || got.Assertions.SessionRef != "sess-1" {
+		t.Errorf("Assertions = %+v, want Traceparent \"tp-1\" and SessionRef \"sess-1\" preserved", got.Assertions)
 	}
 }
 
@@ -359,7 +354,7 @@ func TestElicitedAnswer_DeclineRecordsADenial(t *testing.T) {
 	base := sealState(t, p.AccountID)
 	sealed := sealWith(t, sealer, base, nil)
 
-	rec := &recordingDecider{resp: approval.Request{ID: answerRequestID, State: approval.StateDenied, PlanHash: answerPlanHash}}
+	rec := &recordingAnswerer{resp: approval.Request{ID: answerRequestID, State: approval.StateDenied, PlanHash: answerPlanHash}}
 	result := acceptElicitedAnswer(context.Background(), rec, openerOf(sealer), fixedNow, p, elicitedAnswer{
 		RequestState:   sealed,
 		InputResponses: elicit("decline", permissionResponder("bob")),
@@ -376,11 +371,8 @@ func TestElicitedAnswer_DeclineRecordsADenial(t *testing.T) {
 	if len(calls) != 1 {
 		t.Fatalf("decider called %d times, want 1", len(calls))
 	}
-	if calls[0].Decision.Approve {
+	if calls[0].Approve {
 		t.Error("Decision.Approve = true, want false (this was a decline)")
-	}
-	if calls[0].Decision.Channel != approval.ChannelInBand {
-		t.Errorf("Decision.Channel = %v, want ChannelInBand", calls[0].Decision.Channel)
 	}
 	if calls[0].Assertions.OnBehalfOf != "bob" {
 		t.Errorf("OnBehalfOf = %q, want bob", calls[0].Assertions.OnBehalfOf)
@@ -501,7 +493,7 @@ func TestElicitedAnswer_RefusesAnUnboundOrTamperedState(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			state, useSealer, tool, digest, now := tc.build(t)
-			rec := &recordingDecider{resp: approval.Request{ID: answerRequestID, State: approval.StateApproved, PlanHash: answerPlanHash}}
+			rec := &recordingAnswerer{resp: approval.Request{ID: answerRequestID, State: approval.StateApproved, PlanHash: answerPlanHash}}
 			result := acceptElicitedAnswer(context.Background(), rec, openerOf(useSealer), now, p, elicitedAnswer{
 				RequestState:   state,
 				InputResponses: elicit("accept", permissionResponder("alice")),
@@ -586,7 +578,7 @@ func TestElicitedAnswer_RequiresExactlyOneResponseForTheSealedRequest(t *testing
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			rec := &recordingDecider{}
+			rec := &recordingAnswerer{}
 			result := acceptElicitedAnswer(context.Background(), rec, openerOf(sealer), fixedNow, p, elicitedAnswer{
 				RequestState:   sealed,
 				InputResponses: tc.responses,
@@ -646,7 +638,7 @@ func TestElicitedAnswer_ArgsDigestMatchesEmissionOverTheTypedInput(t *testing.T)
 			}
 			digest := mustCallArgsDigest(t, retried)
 
-			rec := &recordingDecider{resp: approval.Request{ID: answerRequestID, State: approval.StateApproved, PlanHash: answerPlanHash}}
+			rec := &recordingAnswerer{resp: approval.Request{ID: answerRequestID, State: approval.StateApproved, PlanHash: answerPlanHash}}
 			result := acceptElicitedAnswer(context.Background(), rec, openerOf(sealer), fixedNow, p, elicitedAnswer{
 				RequestState:   sealed,
 				InputResponses: elicit("accept", permissionResponder("alice")),
@@ -665,7 +657,7 @@ func TestElicitedAnswer_ArgsDigestMatchesEmissionOverTheTypedInput(t *testing.T)
 			retriedRaw := `{"operation":"service.restart","args":{"unit":"nginx"},"unexpected":"field"}`
 			digest := digestOf(t, retriedRaw) // over the raw bytes, NOT decoded/re-marshalled through the typed struct
 
-			rec := &recordingDecider{}
+			rec := &recordingAnswerer{}
 			result := acceptElicitedAnswer(context.Background(), rec, openerOf(sealer), fixedNow, p, elicitedAnswer{
 				RequestState:   sealed,
 				InputResponses: elicit("accept", permissionResponder("alice")),
@@ -709,7 +701,7 @@ func TestElicitedAnswer_ArgsDigestMatchesEmissionOverTheTypedInput(t *testing.T)
 		retriedRaw := `{"argv":["systemctl","restart","nginx"],"plan":false}`
 		digest := digestOf(t, retriedRaw)
 
-		rec := &recordingDecider{}
+		rec := &recordingAnswerer{}
 		result := acceptElicitedAnswer(context.Background(), rec, openerOf(sealer), fixedNow, p, elicitedAnswer{
 			RequestState:   sealed,
 			InputResponses: elicit("accept", permissionResponder("alice")),
@@ -762,7 +754,7 @@ func TestElicitedAnswer_RefusesUpFrontWithoutADeciderOrAStoredAccount(t *testing
 		// refused before OpenFor is even called — same as a zero ArgsDigest.
 		noAccount := p
 		noAccount.AccountID = ""
-		rec := &recordingDecider{}
+		rec := &recordingAnswerer{}
 		result := acceptElicitedAnswer(context.Background(), rec, openerOf(sealer), fixedNow, noAccount, elicitedAnswer{
 			RequestState:   sealed,
 			InputResponses: elicit("accept", permissionResponder("alice")),
@@ -793,7 +785,7 @@ func TestElicitedAnswer_WithoutAPermissionResponderIsAMachineSelfDecision(t *tes
 	}
 	base := sealState(t, p.AccountID)
 	sealed := sealWith(t, sealer, base, nil)
-	wantText := machineSelfDecisionErrorText(t)
+	wantText := errNoNamedApprover.Error()
 
 	cases := []struct {
 		name   string
@@ -823,7 +815,7 @@ func TestElicitedAnswer_WithoutAPermissionResponderIsAMachineSelfDecision(t *tes
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			rec := &recordingDecider{}
+			rec := &recordingAnswerer{}
 			result := acceptElicitedAnswer(context.Background(), rec, openerOf(sealer), fixedNow, p, elicitedAnswer{
 				RequestState:   sealed,
 				InputResponses: elicit(tc.action, tc.meta),
@@ -837,7 +829,7 @@ func TestElicitedAnswer_WithoutAPermissionResponderIsAMachineSelfDecision(t *tes
 				t.Errorf("Err = %v, want errors.Is(_, approval.ErrMachineSelfDecision)", result.Err)
 			}
 			if result.Err == nil || result.Err.Error() != wantText {
-				t.Errorf("Err.Error() = %q, want %q (AP-64: identical to approve_request's no-approver message)", result.Err, wantText)
+				t.Errorf("Err.Error() = %q, want %q (AP-64: the one machine-self-decision message)", result.Err, wantText)
 			}
 			if calls := rec.calls(); len(calls) != 0 {
 				t.Errorf("decider called %d times, want 0", len(calls))
@@ -846,7 +838,7 @@ func TestElicitedAnswer_WithoutAPermissionResponderIsAMachineSelfDecision(t *tes
 	}
 
 	t.Run("a valid permission responder with replayed-from in CallMeta only", func(t *testing.T) {
-		rec := &recordingDecider{}
+		rec := &recordingAnswerer{}
 		result := acceptElicitedAnswer(context.Background(), rec, openerOf(sealer), fixedNow, p, elicitedAnswer{
 			RequestState:   sealed,
 			InputResponses: elicit("accept", permissionResponder("alice")),
@@ -875,9 +867,9 @@ func TestElicitedAnswer_RefusesRatherThanTruncatesAMalformedResponder(t *testing
 	base := sealState(t, p.AccountID)
 	sealed := sealWith(t, sealer, base, nil)
 
-	call := func(t *testing.T, username string) (elicitedAnswerResult, *recordingDecider) {
+	call := func(t *testing.T, username string) (elicitedAnswerResult, *recordingAnswerer) {
 		t.Helper()
-		rec := &recordingDecider{resp: approval.Request{ID: answerRequestID, State: approval.StateApproved, PlanHash: answerPlanHash}}
+		rec := &recordingAnswerer{resp: approval.Request{ID: answerRequestID, State: approval.StateApproved, PlanHash: answerPlanHash}}
 		result := acceptElicitedAnswer(context.Background(), rec, openerOf(sealer), fixedNow, p, elicitedAnswer{
 			RequestState:   sealed,
 			InputResponses: elicit("accept", permissionResponder(username)),
@@ -1029,7 +1021,7 @@ func TestElicitedAnswer_OAuthHumanSessionAnswerIsTheHumansVerifiedDecision(t *te
 				Traceparent: traceparent,
 			})
 
-			rec := &recordingDecider{resp: approval.Request{ID: answerRequestID, State: approval.StateApproved, PlanHash: answerPlanHash, JobID: "job-verified-1"}}
+			rec := &recordingAnswerer{resp: inBandDecisionBy(approval.Request{ID: answerRequestID, State: approval.StateApproved, PlanHash: answerPlanHash, JobID: "job-verified-1"}, p.AccountID, true)}
 			result := acceptElicitedAnswer(ctx, rec, openerOf(sealer), fixedNow, p, elicitedAnswer{
 				RequestState:   sealed,
 				InputResponses: elicit("accept", nil),
@@ -1043,19 +1035,16 @@ func TestElicitedAnswer_OAuthHumanSessionAnswerIsTheHumansVerifiedDecision(t *te
 			if result.OnBehalfOf != "" {
 				t.Errorf("OnBehalfOf = %q, want empty — AP-79 writes nothing to the asserted lane", result.OnBehalfOf)
 			}
-			if !result.deciderReached {
-				t.Error("deciderReached = false, want true")
+			if !result.answererReached {
+				t.Error("answererReached = false, want true")
 			}
 
 			calls := rec.calls()
 			if len(calls) != 1 {
 				t.Fatalf("decider called %d times, want 1", len(calls))
 			}
-			if !calls[0].Decision.Approve {
+			if !calls[0].Approve {
 				t.Error("Decision.Approve = false, want true (this was an accept)")
-			}
-			if calls[0].Decision.Channel != approval.ChannelInBand {
-				t.Errorf("Decision.Channel = %v, want ChannelInBand", calls[0].Decision.Channel)
 			}
 			if !reflect.DeepEqual(calls[0].Principal, p) {
 				t.Errorf("Principal = %+v, want the verified caller %+v", calls[0].Principal, p)
@@ -1068,8 +1057,8 @@ func TestElicitedAnswer_OAuthHumanSessionAnswerIsTheHumansVerifiedDecision(t *te
 			}
 
 			out := result.decisionOutput(RunOrPlanOutput{JobID: "job-verified-1"})
-			if out.Channel != approval.ChannelInBand.String() {
-				t.Errorf("decisionOutput.Channel = %q, want %q", out.Channel, approval.ChannelInBand.String())
+			if out.Channel != wantInBand {
+				t.Errorf("decisionOutput.Channel = %q, want %q", out.Channel, wantInBand)
 			}
 			if out.OnBehalfOf != "" {
 				t.Errorf("decisionOutput.OnBehalfOf = %q, want empty", out.OnBehalfOf)
@@ -1101,7 +1090,7 @@ func TestElicitedAnswer_OAuthHumanSessionDeclineIsADenial(t *testing.T) {
 			base := sealState(t, p.AccountID)
 			sealed := sealWith(t, sealer, base, nil)
 
-			rec := &recordingDecider{resp: approval.Request{ID: answerRequestID, State: approval.StateDenied, PlanHash: answerPlanHash}}
+			rec := &recordingAnswerer{resp: approval.Request{ID: answerRequestID, State: approval.StateDenied, PlanHash: answerPlanHash}}
 			result := acceptElicitedAnswer(context.Background(), rec, openerOf(sealer), fixedNow, p, elicitedAnswer{
 				RequestState:   sealed,
 				InputResponses: elicit("decline", nil),
@@ -1119,7 +1108,7 @@ func TestElicitedAnswer_OAuthHumanSessionDeclineIsADenial(t *testing.T) {
 			if len(calls) != 1 {
 				t.Fatalf("decider called %d times, want 1", len(calls))
 			}
-			if calls[0].Decision.Approve {
+			if calls[0].Approve {
 				t.Error("Decision.Approve = true, want false (this was a decline)")
 			}
 			if calls[0].Assertions.OnBehalfOf != "" {
@@ -1142,7 +1131,7 @@ func TestElicitedAnswer_OAuthHumanSessionCancelIsRefusedAsToday(t *testing.T) {
 	base := sealState(t, p.AccountID)
 	sealed := sealWith(t, sealer, base, nil)
 
-	rec := &recordingDecider{}
+	rec := &recordingAnswerer{}
 	result := acceptElicitedAnswer(context.Background(), rec, openerOf(sealer), fixedNow, p, elicitedAnswer{
 		RequestState:   sealed,
 		InputResponses: elicit("cancel", nil),
@@ -1198,7 +1187,7 @@ func TestElicitedAnswer_ResponderOnAnOAuthHumanSessionIsIgnored(t *testing.T) {
 					base := sealState(t, p.AccountID)
 					sealed := sealWith(t, sealer, base, nil)
 
-					rec := &recordingDecider{resp: approval.Request{ID: answerRequestID, State: approval.StateApproved, PlanHash: answerPlanHash}}
+					rec := &recordingAnswerer{resp: approval.Request{ID: answerRequestID, State: approval.StateApproved, PlanHash: answerPlanHash}}
 					result := acceptElicitedAnswer(context.Background(), rec, openerOf(sealer), fixedNow, p, elicitedAnswer{
 						RequestState:   sealed,
 						InputResponses: elicit("accept", rs.meta),
@@ -1258,7 +1247,7 @@ func TestElicitedAnswer_VerifiedFormIgnoresTheDeclaredName(t *testing.T) {
 			base := sealState(t, p.AccountID)
 			sealed := sealWith(t, sealer, base, nil)
 
-			rec := &recordingDecider{resp: approval.Request{ID: answerRequestID, State: approval.StateApproved, PlanHash: answerPlanHash}}
+			rec := &recordingAnswerer{resp: approval.Request{ID: answerRequestID, State: approval.StateApproved, PlanHash: answerPlanHash}}
 			result := acceptElicitedAnswer(context.Background(), rec, openerOf(sealer), fixedNow, p, elicitedAnswer{
 				RequestState:   sealed,
 				InputResponses: elicit("accept", nil),
@@ -1289,7 +1278,7 @@ func TestElicitedAnswer_VerifiedFormIgnoresTheDeclaredName(t *testing.T) {
 		base := sealState(t, p.AccountID)
 		sealed := sealWith(t, sealer, base, nil)
 
-		rec := &recordingDecider{resp: approval.Request{ID: answerRequestID, State: approval.StateApproved, PlanHash: answerPlanHash}}
+		rec := &recordingAnswerer{resp: approval.Request{ID: answerRequestID, State: approval.StateApproved, PlanHash: answerPlanHash}}
 		resultMeta := sdkmcp.Meta{sdkmcp.MetaKeyClientInfo: map[string]any{"name": "claude-code", "version": "1"}}
 		result := acceptElicitedAnswer(context.Background(), rec, openerOf(sealer), fixedNow, p, elicitedAnswer{
 			RequestState:   sealed,
@@ -1323,7 +1312,7 @@ func TestElicitedAnswer_VerifiedFormIgnoresTheDeclaredName(t *testing.T) {
 		}
 		for _, tc := range cases {
 			t.Run(tc.name, func(t *testing.T) {
-				rec := &recordingDecider{}
+				rec := &recordingAnswerer{}
 				callMeta := tc.callMeta
 				callMeta[replayedFromMetaKey] = "req-earlier"
 				result := acceptElicitedAnswer(context.Background(), rec, openerOf(sealer), fixedNow, p, elicitedAnswer{
@@ -1392,7 +1381,7 @@ func TestElicitedAnswer_OffAnOAuthHumanSessionOnlyTheNamedFormCounts(t *testing.
 				base := sealState(t, base0.AccountID)
 				sealed := sealWith(t, sealer, base, nil)
 
-				rec := &recordingDecider{}
+				rec := &recordingAnswerer{}
 				result := acceptElicitedAnswer(context.Background(), rec, openerOf(sealer), fixedNow, pc.p, elicitedAnswer{
 					RequestState:   sealed,
 					InputResponses: elicit("accept", nil),
@@ -1409,8 +1398,8 @@ func TestElicitedAnswer_OffAnOAuthHumanSessionOnlyTheNamedFormCounts(t *testing.
 				if calls := rec.calls(); len(calls) != 0 {
 					t.Errorf("decider called %d times, want 0", len(calls))
 				}
-				if result.deciderReached {
-					t.Error("deciderReached = true, want false")
+				if result.answererReached {
+					t.Error("answererReached = true, want false")
 				}
 				wantReason := errNoNamedApprover.Error()
 				if got := result.refusalOutput().Reason; got != wantReason {
@@ -1425,7 +1414,7 @@ func TestElicitedAnswer_OffAnOAuthHumanSessionOnlyTheNamedFormCounts(t *testing.
 				base := sealState(t, base0.AccountID)
 				sealed := sealWith(t, sealer, base, nil)
 
-				rec := &recordingDecider{resp: approval.Request{ID: answerRequestID, State: approval.StateApproved, PlanHash: answerPlanHash}}
+				rec := &recordingAnswerer{resp: approval.Request{ID: answerRequestID, State: approval.StateApproved, PlanHash: answerPlanHash}}
 				result := acceptElicitedAnswer(context.Background(), rec, openerOf(sealer), fixedNow, pc.p, elicitedAnswer{
 					RequestState:   sealed,
 					InputResponses: elicit("accept", permissionResponder("alice")),
@@ -1455,7 +1444,7 @@ func TestElicitedAnswer_OffAnOAuthHumanSessionOnlyTheNamedFormCounts(t *testing.
 // refusals" claim, at the ADAPTER seam: acceptElicitedAnswer classifies a
 // verified answer's domain refusal identically to how it classifies a named
 // one — run against both recognised client names, because acceptance never
-// reads the name (AP-78). recordingDecider is scripted here, so this proves
+// reads the name (AP-78). recordingAnswerer is scripted here, so this proves
 // the adapter's classification only; the real domain's side (requester
 // exclusion, machine self-decision) is item 7's capability-seam proof
 // (TestDecideApproval_InBandHumanWithNoAssertedApproverIsVerified). Its
@@ -1521,7 +1510,7 @@ func TestElicitedAnswer_VerifiedFormMeetsTheSameRefusals(t *testing.T) {
 					base := sealState(t, p.AccountID)
 					sealed := sealWith(t, sealer, base, nil)
 
-					rec := &recordingDecider{resp: tc.resp, err: tc.err}
+					rec := &recordingAnswerer{resp: tc.resp, err: tc.err}
 					result := acceptElicitedAnswer(context.Background(), rec, openerOf(sealer), fixedNow, p, elicitedAnswer{
 						RequestState:   sealed,
 						InputResponses: elicit(tc.action, nil),
@@ -1548,7 +1537,7 @@ func TestElicitedAnswer_VerifiedFormMeetsTheSameRefusals(t *testing.T) {
 }
 
 // TestElicitedAnswer_FailureAfterAVerifiedDecisionMayHaveBeenRecorded guards
-// deciderReached (which replaces "OnBehalfOf is empty" as the
+// answererReached (which replaces "OnBehalfOf is empty" as the
 // was-the-decider-called signal): a plain, non-domain error after a VERIFIED
 // decision's decider call must render as "may already reflect this answer",
 // never as "this call left the request unchanged" — the false-safe reading
@@ -1563,7 +1552,7 @@ func TestElicitedAnswer_FailureAfterAVerifiedDecisionMayHaveBeenRecorded(t *test
 	base := sealState(t, p.AccountID)
 	sealed := sealWith(t, sealer, base, nil)
 
-	rec := &recordingDecider{err: errors.New("audit write failed")}
+	rec := &recordingAnswerer{err: errors.New("audit write failed")}
 	result := acceptElicitedAnswer(context.Background(), rec, openerOf(sealer), fixedNow, p, elicitedAnswer{
 		RequestState:   sealed,
 		InputResponses: elicit("accept", nil),
@@ -1571,8 +1560,8 @@ func TestElicitedAnswer_FailureAfterAVerifiedDecisionMayHaveBeenRecorded(t *test
 		Tool:           answerTool,
 		ArgsDigest:     base.ArgsDigest,
 	})
-	if !result.deciderReached {
-		t.Fatal("deciderReached = false, want true — the decider WAS called")
+	if !result.answererReached {
+		t.Fatal("answererReached = false, want true — the decider WAS called")
 	}
 	out := result.refusalOutput()
 	if out.NextStep != answerRefusalNextStepMayAlreadyReflectAnswer {
@@ -1609,86 +1598,6 @@ func TestOAuthHumanSession_ChecksTheAccountKindNotTheAuthMethod(t *testing.T) {
 			}
 		})
 	}
-}
-
-// -----------------------------------------------------------------------
-// approve_request's approver is bound the same way
-// -----------------------------------------------------------------------
-
-func TestApproveRequest_RefusesRatherThanTruncatesAMalformedApprover(t *testing.T) {
-	call := func(t *testing.T, approver string) (*sdkmcp.CallToolResult, *recordingDecider) {
-		t.Helper()
-		rec := &recordingDecider{resp: approval.Request{ID: answerRequestID, State: approval.StateApproved, PlanHash: answerPlanHash}}
-		res := callApproveRequest(t, rec, approver)
-		return res, rec
-	}
-
-	refused := []struct {
-		name     string
-		approver string
-	}{
-		{name: "a 257-byte approver", approver: strings.Repeat("a", 257)},
-		{name: `"bob" + CR LF + "FAKE RECORD"`, approver: "bob\r\nFAKE RECORD"},
-		{name: `"alice" + CR LF`, approver: "alice\r\n"},
-		{name: `"alice" + U+0085`, approver: "alice\u0085"},
-		{name: `tab + "alice"`, approver: "\talice"},
-		{name: "one space + 256 'a'", approver: " " + strings.Repeat("a", 256)},
-	}
-	for _, tc := range refused {
-		t.Run(tc.name, func(t *testing.T) {
-			res, rec := call(t, tc.approver)
-			if !res.IsError {
-				t.Fatalf("approve_request(%q): IsError = false, want true", tc.approver)
-			}
-			text := relaytest.ToolErrorText(t, res)
-			if !strings.Contains(text, "256 bytes") || !strings.Contains(text, "control character") {
-				t.Errorf("error text = %q, does not name the bound (at most 256 bytes, no control characters)", text)
-			}
-			if calls := rec.calls(); len(calls) != 0 {
-				t.Errorf("decider called %d times, want 0", len(calls))
-			}
-		})
-	}
-
-	t.Run("a 256-byte approver reaches the decider verbatim", func(t *testing.T) {
-		approver := strings.Repeat("a", 256)
-		res, rec := call(t, approver)
-		if res.IsError {
-			t.Fatalf("approve_request: IsError, content=%+v", res.Content)
-		}
-		calls := rec.calls()
-		if len(calls) != 1 {
-			t.Fatalf("decider called %d times, want 1", len(calls))
-		}
-		if calls[0].Assertions.OnBehalfOf != approver {
-			t.Errorf("OnBehalfOf = %q, want the 256-byte approver verbatim", calls[0].Assertions.OnBehalfOf)
-		}
-	})
-
-	t.Run(`approver "" still returns the unchanged message`, func(t *testing.T) {
-		res, rec := call(t, "")
-		if !res.IsError {
-			t.Fatal(`approve_request(""): IsError = false, want true`)
-		}
-		text := relaytest.ToolErrorText(t, res)
-		if text != errNoNamedApprover.Error() {
-			t.Errorf("error text = %q, want the unchanged no-approver message %q", text, errNoNamedApprover.Error())
-		}
-		if calls := rec.calls(); len(calls) != 0 {
-			t.Errorf("decider called %d times, want 0", len(calls))
-		}
-	})
-
-	t.Run(`"  alice  " still records "alice" (existing space-trimming unchanged)`, func(t *testing.T) {
-		res, rec := call(t, "  alice  ")
-		if res.IsError {
-			t.Fatalf("approve_request: IsError, content=%+v", res.Content)
-		}
-		calls := rec.calls()
-		if len(calls) != 1 || calls[0].Assertions.OnBehalfOf != "alice" {
-			t.Errorf("recorded calls = %+v, want one call asserting alice", calls)
-		}
-	})
 }
 
 // -----------------------------------------------------------------------
@@ -1929,7 +1838,7 @@ func TestElicitedAnswer_ClassifiesEveryOutcome(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			rec := scriptedDecider{resp: tc.resp, err: tc.err}
+			rec := scriptedAnswerer{resp: tc.resp, err: tc.err}
 			action := "accept"
 			if tc.decline {
 				action = "decline"
@@ -2039,7 +1948,7 @@ func TestElicitedAnswer_ARefusedDecisionExposesOnlyStateJobAndDeadline(t *testin
 				{Account: "carol", OnBehalfOf: "Carol Private", Reason: "private note", Approve: true},
 			},
 		}
-		rec := scriptedDecider{resp: leaky, err: approval.ErrNotPending}
+		rec := scriptedAnswerer{resp: leaky, err: approval.ErrNotPending}
 
 		result := acceptElicitedAnswer(context.Background(), rec, openerOf(sealer), fixedNow, p, elicitedAnswer{
 			RequestState:   sealed,
@@ -2083,9 +1992,9 @@ func TestDecisionOutput_ChoosesNextStepFromOutcomeAndDispatchResult(t *testing.T
 	}{
 		{
 			name:           "approved, recorded, dispatch ran and minted a Job",
-			result:         elicitedAnswerResult{Outcome: elicitedApproved, State: approval.StateApproved, OnBehalfOf: "alice"},
+			result:         elicitedAnswerResult{Channel: wantInBand, Outcome: elicitedApproved, State: approval.StateApproved, OnBehalfOf: "alice"},
 			after:          RunOrPlanOutput{JobID: "job-1"},
-			wantChannel:    approval.ChannelInBand.String(),
+			wantChannel:    wantInBand,
 			wantOnBehalfOf: "alice",
 			wantNextStep:   nextStepRanThePipeline + " " + nextStepAnswerRecorded,
 		},
@@ -2103,9 +2012,9 @@ func TestDecisionOutput_ChoosesNextStepFromOutcomeAndDispatchResult(t *testing.T
 		},
 		{
 			name:           "Job-bound re-attach, recorded",
-			result:         elicitedAnswerResult{Outcome: elicitedApprovedJobBound, State: approval.StateApproved, JobID: "job-1", OnBehalfOf: "alice"},
+			result:         elicitedAnswerResult{Channel: wantInBand, Outcome: elicitedApprovedJobBound, State: approval.StateApproved, JobID: "job-1", OnBehalfOf: "alice"},
 			after:          RunOrPlanOutput{JobID: "job-1"},
-			wantChannel:    approval.ChannelInBand.String(),
+			wantChannel:    wantInBand,
 			wantOnBehalfOf: "alice",
 			wantNextStep:   nextStepReattachedExistingJob + " " + nextStepAnswerRecorded,
 		},
@@ -2117,17 +2026,17 @@ func TestDecisionOutput_ChoosesNextStepFromOutcomeAndDispatchResult(t *testing.T
 		},
 		{
 			name:           "denied, terminal",
-			result:         elicitedAnswerResult{Outcome: elicitedDenied, State: approval.StateDenied, OnBehalfOf: "bob"},
+			result:         elicitedAnswerResult{Channel: wantInBand, Outcome: elicitedDenied, State: approval.StateDenied, OnBehalfOf: "bob"},
 			after:          RunOrPlanOutput{},
-			wantChannel:    approval.ChannelInBand.String(),
+			wantChannel:    wantInBand,
 			wantOnBehalfOf: "bob",
 			wantNextStep:   nextStepDenialIsTerminal + " " + nextStepAnswerRecorded,
 		},
 		{
 			name:           "lapsed, recorded, nothing dispatched",
-			result:         elicitedAnswerResult{Outcome: elicitedLapsed, State: approval.StateExpired, ExpiresAt: future, OnBehalfOf: "alice"},
+			result:         elicitedAnswerResult{Channel: wantInBand, Outcome: elicitedLapsed, State: approval.StateExpired, ExpiresAt: future, OnBehalfOf: "alice"},
 			after:          RunOrPlanOutput{},
-			wantChannel:    approval.ChannelInBand.String(),
+			wantChannel:    wantInBand,
 			wantOnBehalfOf: "alice",
 			wantNextStep:   nextStepNothingWasDispatched + " " + nextStepAnswerRecorded,
 		},
@@ -2156,7 +2065,7 @@ func TestDecisionOutput_ChoosesNextStepFromOutcomeAndDispatchResult(t *testing.T
 }
 
 func TestRefusalOutput_ReasonArmsAndOrdering(t *testing.T) {
-	wantMachineText := machineSelfDecisionErrorText(t)
+	wantMachineText := errNoNamedApprover.Error()
 
 	cases := []struct {
 		name         string
@@ -2229,13 +2138,13 @@ func TestRefusalOutput_ReasonArmsAndOrdering(t *testing.T) {
 			wantNextStep: answerRefusalNextStepApprovalsUnavailable,
 		},
 		{
-			name:         "the deciderReached-false catch-all: the decider was never reached, so nothing to say was recorded",
+			name:         "the answererReached-false catch-all: the decider was never reached, so nothing to say was recorded",
 			result:       elicitedAnswerResult{Err: errors.New("some new sentinel")},
 			wantNextStep: answerRefusalNextStepUnchanged,
 		},
 		{
 			name:         "the default catch-all: a non-domain failure AFTER the decider ran must never claim the request is unchanged",
-			result:       elicitedAnswerResult{Err: errors.New("capability: record audit entry: disk full"), OnBehalfOf: "alice", deciderReached: true},
+			result:       elicitedAnswerResult{Err: errors.New("capability: record audit entry: disk full"), OnBehalfOf: "alice", answererReached: true},
 			wantNextStep: answerRefusalNextStepMayAlreadyReflectAnswer,
 		},
 	}
@@ -2252,7 +2161,7 @@ func TestRefusalOutput_ReasonArmsAndOrdering(t *testing.T) {
 		})
 	}
 
-	t.Run("the deciderReached-false catch-all never claims the answer was recorded", func(t *testing.T) {
+	t.Run("the answererReached-false catch-all never claims the answer was recorded", func(t *testing.T) {
 		out := elicitedAnswerResult{Err: errors.New("boom")}.refusalOutput()
 		if strings.Contains(out.Reason, "may have been recorded") {
 			t.Errorf("Reason = %q, must not say the answer may have been recorded when the decider was never reached", out.Reason)
@@ -2260,7 +2169,7 @@ func TestRefusalOutput_ReasonArmsAndOrdering(t *testing.T) {
 	})
 
 	t.Run("the default catch-all never claims nothing was recorded, or that the request is unchanged", func(t *testing.T) {
-		out := elicitedAnswerResult{Err: errors.New("boom"), OnBehalfOf: "alice", deciderReached: true}.refusalOutput()
+		out := elicitedAnswerResult{Err: errors.New("boom"), OnBehalfOf: "alice", answererReached: true}.refusalOutput()
 		if !strings.Contains(out.Reason, "may have been recorded") {
 			t.Errorf("Reason = %q, must say the answer may have been recorded", out.Reason)
 		}
@@ -2274,9 +2183,9 @@ func TestRefusalOutput_ReasonArmsAndOrdering(t *testing.T) {
 	})
 
 	t.Run("the default catch-all points the caller at the Control API's approval READ, never at approve_request", func(t *testing.T) {
-		// approve_request records a NEW decision; it is not a way to read the
-		// request's current state back (PR #738 follow-up review, finding 2).
-		out := elicitedAnswerResult{Err: errors.New("boom"), OnBehalfOf: "alice", deciderReached: true}.refusalOutput()
+		// Recording a decision is not a way to read the request's current
+		// state back.
+		out := elicitedAnswerResult{Err: errors.New("boom"), OnBehalfOf: "alice", answererReached: true}.refusalOutput()
 		if !strings.Contains(out.Reason, "GET /api/v1/approvals/{id}") {
 			t.Errorf("Reason = %q, want it to name the Control API's approval-read route", out.Reason)
 		}
@@ -2304,13 +2213,12 @@ func TestRefusalOutput_ReasonArmsAndOrdering(t *testing.T) {
 // TestRefusalOutput_NextStepNeverContradictsReason is a table over EVERY
 // refusal shape refusalOutput can render (acceptElicitedAnswer's own
 // refusals and classifyElicitedDecision's Outcome == elicitedRefused
-// branches), asserting the NextStep never contradicts its own Reason (PR #738
-// follow-up review, finding 1): a single "it can still be answered with
-// approve_request or on the Control API endpoint" text used to be given to
-// every known refusal alike, which was true of exactly one of them
+// branches), asserting the NextStep never contradicts its own Reason: a single
+// "it can still be decided on the Control API's decision endpoint" text given
+// to every known refusal alike would be true of exactly one of them
 // (ErrPlanChanged) and false of the rest, in different ways.
 func TestRefusalOutput_NextStepNeverContradictsReason(t *testing.T) {
-	const stillAnswerable = "It can still be answered with approve_request or on the Control API endpoint."
+	const stillAnswerable = "It can still be decided on the Control API's decision endpoint."
 
 	cases := []struct {
 		name    string
@@ -2321,12 +2229,12 @@ func TestRefusalOutput_NextStepNeverContradictsReason(t *testing.T) {
 		{
 			name:   "ErrNotFound: there is no request to answer at all",
 			result: elicitedAnswerResult{Err: approval.ErrNotFound, OnBehalfOf: "alice"},
-			forbid: []string{stillAnswerable, "can still be answered"},
+			forbid: []string{stillAnswerable, "can still be decided"},
 		},
 		{
-			name:    "ErrWeakChannel: no in-band tool, approve_request included, can ever satisfy this rule",
+			name:    "ErrWeakChannel: no in-band answer can ever satisfy this rule",
 			result:  elicitedAnswerResult{Err: approval.ErrWeakChannel, OnBehalfOf: "alice"},
-			forbid:  []string{stillAnswerable, "can still be answered"},
+			forbid:  []string{stillAnswerable, "can still be decided"},
 			require: []string{"Control API's decision endpoint"},
 		},
 		{
@@ -2338,13 +2246,13 @@ func TestRefusalOutput_NextStepNeverContradictsReason(t *testing.T) {
 		{
 			name:    "ErrNotInAudience: this Account is not in the named audience",
 			result:  elicitedAnswerResult{Err: approval.ErrNotInAudience, OnBehalfOf: "alice"},
-			forbid:  []string{stillAnswerable, "can still be answered"},
+			forbid:  []string{stillAnswerable, "can still be decided"},
 			require: []string{"not in the request's audience"},
 		},
 		{
 			name:   "ErrNotPending, no Request read at all (stateReported false)",
 			result: elicitedAnswerResult{Err: approval.ErrNotPending, OnBehalfOf: "alice"},
-			forbid: []string{stillAnswerable, "can still be answered"},
+			forbid: []string{stillAnswerable, "can still be decided"},
 		},
 		{
 			name:   "ErrDuplicateDecider, no Request read at all (stateReported false)",
@@ -2359,7 +2267,7 @@ func TestRefusalOutput_NextStepNeverContradictsReason(t *testing.T) {
 			// refusalOutput's own branching, not a reachable outcome.
 			name:   "ErrNotPending, Request read back terminal (denied): closed to everyone",
 			result: elicitedAnswerResult{Err: approval.ErrNotPending, OnBehalfOf: "alice", stateReported: true, State: approval.StateDenied},
-			forbid: []string{stillAnswerable, "can still be answered"},
+			forbid: []string{stillAnswerable, "can still be decided"},
 		},
 		{
 			// Likewise unreachable from classifyElicitedDecision (a
@@ -2389,12 +2297,12 @@ func TestRefusalOutput_NextStepNeverContradictsReason(t *testing.T) {
 		{
 			name:    "ErrPlanChanged: re-reading the current plan_hash and answering it IS what this Reason asks for",
 			result:  elicitedAnswerResult{Err: approval.ErrPlanChanged, OnBehalfOf: "alice"},
-			require: []string{"can still be answered"},
+			require: []string{"can still be decided"},
 		},
 		{
 			name:   "capability.ErrApprovalUnavailable: no decider is configured, so no endpoint exists at all",
 			result: elicitedAnswerResult{Err: capability.ErrApprovalUnavailable},
-			forbid: []string{stillAnswerable, "can still be answered"},
+			forbid: []string{stillAnswerable, "can still be decided"},
 		},
 		{
 			name:   "ErrMachineSelfDecision: AP-64's own text, not renderApprovalError's — a later call CAN still name an approver",
@@ -2402,7 +2310,7 @@ func TestRefusalOutput_NextStepNeverContradictsReason(t *testing.T) {
 			// This one legitimately keeps the generic text: nothing about
 			// this Account or channel is refused, only THIS call named no
 			// human.
-			require: []string{"can still be answered"},
+			require: []string{"can still be decided"},
 		},
 		{
 			name:   "errDeclineNotHonoured: the decline WAS recorded, so must never say it was not",
@@ -2412,10 +2320,10 @@ func TestRefusalOutput_NextStepNeverContradictsReason(t *testing.T) {
 		{
 			// classifyElicitedDecision's own fail-closed backstop: err is nil
 			// but req.State is unrecognised, so the decision WAS recorded —
-			// "unchanged" or "can still be answered" would contradict that.
+			// "unchanged" or "can still be decided" would contradict that.
 			name:    "errUnknownRequestState: the decision was recorded, only the resulting state is unrecognised",
 			result:  elicitedAnswerResult{Err: errUnknownRequestState, OnBehalfOf: "alice", stateReported: true},
-			forbid:  []string{"unchanged", "can still be answered"},
+			forbid:  []string{"unchanged", "can still be decided"},
 			require: []string{"Control API"},
 		},
 		{
@@ -2423,7 +2331,7 @@ func TestRefusalOutput_NextStepNeverContradictsReason(t *testing.T) {
 			// decider is ever reached (OnBehalfOf empty, no decision made).
 			name:    "errAnswerStateRefused: the requestState never opened",
 			result:  elicitedAnswerResult{Err: errAnswerStateRefused},
-			require: []string{"can still be answered"},
+			require: []string{"can still be decided"},
 		},
 		{
 			// The wrapped form acceptElicitedAnswer actually returns when the
@@ -2431,14 +2339,14 @@ func TestRefusalOutput_NextStepNeverContradictsReason(t *testing.T) {
 			// still recognise it through the %w wrapping.
 			name:    "errAnswerStateRefused: wrapped, as acceptElicitedAnswer's binding-mismatch path returns it",
 			result:  elicitedAnswerResult{Err: fmt.Errorf("%w: %w", errAnswerStateRefused, requeststate.ErrBindingMismatch)},
-			require: []string{"can still be answered"},
+			require: []string{"can still be decided"},
 		},
 		{
 			// The retry did not carry exactly one elicitation response keyed
 			// by the sealed request ID — nothing was recorded.
 			name:    "errAnswerShape: the retry's InputResponses do not match the sealed request",
 			result:  elicitedAnswerResult{Err: errAnswerShape},
-			require: []string{"can still be answered"},
+			require: []string{"can still be decided"},
 		},
 		{
 			// assertedApprover's malformed-responder refusal (too long):
@@ -2446,23 +2354,23 @@ func TestRefusalOutput_NextStepNeverContradictsReason(t *testing.T) {
 			// recorded and re-answering is still on the table.
 			name:    "audit.ErrAssertedFieldTooLong: the responder assertion is malformed",
 			result:  elicitedAnswerResult{Err: fmt.Errorf("the asserted approver is refused: %w", audit.ErrAssertedFieldTooLong)},
-			require: []string{"can still be answered"},
+			require: []string{"can still be decided"},
 		},
 		{
 			// assertedApprover's malformed-responder refusal (control
 			// characters): same as above, different sentinel.
 			name:    "audit.ErrAssertedFieldInvalid: the responder assertion is malformed",
 			result:  elicitedAnswerResult{Err: fmt.Errorf("the asserted approver is refused: %w", audit.ErrAssertedFieldInvalid)},
-			require: []string{"can still be answered"},
+			require: []string{"can still be decided"},
 		},
 		{
-			name:    "the deciderReached-false catch-all: the decider was never reached, approve_request itself is still untried",
+			name:    "the answererReached-false catch-all: the answerer was never reached, so the request can still be decided",
 			result:  elicitedAnswerResult{Err: errors.New("some new sentinel")},
-			require: []string{"can still be answered"},
+			require: []string{"can still be decided"},
 		},
 		{
 			name:   "the default catch-all: a non-domain failure after the decider ran must never claim the request is unchanged",
-			result: elicitedAnswerResult{Err: errors.New("capability: record audit entry: disk full"), OnBehalfOf: "alice", deciderReached: true},
+			result: elicitedAnswerResult{Err: errors.New("capability: record audit entry: disk full"), OnBehalfOf: "alice", answererReached: true},
 			forbid: []string{"unchanged", stillAnswerable},
 		},
 	}
@@ -2493,7 +2401,6 @@ func TestNextStepConstants_CarryNoReviewerReferences(t *testing.T) {
 		"nextStepAnswerRecorded":                             nextStepAnswerRecorded,
 		"nextStepAnswerNotRecordedAlreadyDecided":            nextStepAnswerNotRecordedAlreadyDecided,
 		"nextStepAnswerNotRecordedDuplicateDecider":          nextStepAnswerNotRecordedDuplicateDecider,
-		"approveRequestNextStep":                             approveRequestNextStep,
 		"answerRefusalNextStepUnchanged":                     answerRefusalNextStepUnchanged,
 		"answerRefusalNextStepCannotAnswerHere":              answerRefusalNextStepCannotAnswerHere,
 		"answerRefusalNextStepIneligibleAccount":             answerRefusalNextStepIneligibleAccount,
@@ -2514,6 +2421,77 @@ func TestNextStepConstants_CarryNoReviewerReferences(t *testing.T) {
 		lower := strings.ToLower(text)
 		if strings.Contains(lower, "review") || strings.Contains(lower, "finding") {
 			t.Errorf("%s = %q, must not carry a reviewer reference — an AI-agent reads this back as instructions", name, text)
+		}
+	}
+}
+
+// -----------------------------------------------------------------------
+// The rendered channel is the one the capability layer recorded
+// -----------------------------------------------------------------------
+
+func TestElicitedAnswer_RendersTheChannelTheCapabilityLayerRecorded(t *testing.T) {
+	p := capturedPrincipal(t)
+	sealer, err := requeststate.Mint()
+	if err != nil {
+		t.Fatalf("Mint: %v", err)
+	}
+	base := sealState(t, p.AccountID)
+	sealed := sealWith(t, sealer, base, nil)
+
+	decisionBy := func(accountID string, ch approval.Channel) approval.Decision {
+		return approval.Decision{AccountID: accountID, Approve: true, Channel: ch}
+	}
+	cases := []struct {
+		name      string
+		decisions []approval.Decision
+		want      string
+	}{
+		{"an in-band Decision for the caller", []approval.Decision{decisionBy(p.AccountID, approval.ChannelInBand)}, "in-band"},
+		{"only another Account's Decision", []approval.Decision{decisionBy("someone-else", approval.ChannelInBand)}, ""},
+		{"a recorded out-of-band Decision is read, not assumed", []approval.Decision{decisionBy(p.AccountID, approval.ChannelOutOfBand)}, "out-of-band"},
+		{"the last of two Decisions for the same Account wins", []approval.Decision{
+			decisionBy(p.AccountID, approval.ChannelOutOfBand), decisionBy(p.AccountID, approval.ChannelInBand),
+		}, "in-band"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := &recordingAnswerer{resp: approval.Request{
+				ID: answerRequestID, State: approval.StateApproved, PlanHash: answerPlanHash, Decisions: tc.decisions,
+			}}
+			result := acceptElicitedAnswer(context.Background(), rec, openerOf(sealer), fixedNow, p, elicitedAnswer{
+				RequestState:   sealed,
+				InputResponses: elicit("accept", permissionResponder("alice")),
+				Tool:           answerTool,
+				ArgsDigest:     base.ArgsDigest,
+			})
+			if result.Err != nil {
+				t.Fatalf("Err = %v, want nil", result.Err)
+			}
+			if out := result.decisionOutput(RunOrPlanOutput{}); out.Channel != tc.want {
+				t.Errorf("decisionOutput.Channel = %q, want %q", out.Channel, tc.want)
+			}
+		})
+	}
+}
+
+func TestRecordedChannel_EmptyAccountIDRendersNothing(t *testing.T) {
+	req := approval.Request{Decisions: []approval.Decision{{AccountID: "", Channel: approval.ChannelInBand}}}
+	if got := recordedChannel(req, ""); got != "" {
+		t.Errorf("recordedChannel with an empty account id = %q, want empty", got)
+	}
+}
+
+// TestRefusalOutput_WeakChannelPointsAtTheControlAPI pins the rewritten
+// ErrWeakChannel text: a refused out-of-band rule names the Control API and
+// no tool.
+func TestRefusalOutput_WeakChannelPointsAtTheControlAPI(t *testing.T) {
+	out := elicitedAnswerResult{Err: approval.ErrWeakChannel}.refusalOutput()
+	for _, text := range []string{out.Reason, out.NextStep} {
+		if !strings.Contains(text, "Control API") || !strings.Contains(text, "out-of-band") {
+			t.Errorf("text = %q, want it to name the Control API and out-of-band", text)
+		}
+		if strings.Contains(text, "approve_request") || strings.Contains(text, "through this tool") {
+			t.Errorf("text = %q, must not point at a tool", text)
 		}
 	}
 }

@@ -126,10 +126,9 @@ The Relay refuses at startup to load a rule that can never be satisfied, for exa
    caller polls, returns the same park and audits as `approval_pending_observed`, so the
    request count stays truthful and the polling stays on the record.
 3. A human decides. An **out-of-band** decision arrives through the decision endpoint, on a
-   channel other than the requesting MCP session. An **in-band** decision (`approve_request`,
-   or an answer to an elicited approval question, ADR-0029) travels through the tool surface
-   with an *asserted* approver, and satisfies only an `in-band` rule, never an `out-of-band`
-   one.
+   channel other than the requesting MCP session. An **in-band** decision (an answer to an elicited approval
+   question, ADR-0029) travels over the requesting session with an *asserted*
+   approver, and satisfies only an `in-band` rule, never an `out-of-band` one.
 4. Once the requirement is satisfied, the same dispatch proceeds and the approval is bound to
    the Job it released, so "who approved what actually ran" is one join.
 

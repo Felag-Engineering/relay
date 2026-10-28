@@ -163,7 +163,7 @@ so what may be done, by whom, and how it is recorded is decided once.
 
 ## MCP tools
 
-The MCP surface registers eight tools. Each line is taken from the tool's own description.
+The MCP surface registers seven tools. Each line is taken from the tool's own description.
 
 | Tool | What it does |
 |---|---|
@@ -174,7 +174,6 @@ The MCP surface registers eight tools. Each line is taken from the tool's own de
 | `raw_exec` | The escape hatch, for when no structured Operation expresses the task: run an argv that each Node's Policy regex allows or refuses. |
 | `get_job` | Re-read a Job's per-Node results by id. |
 | `cancel_job` | Cancel a Job's Tasks. |
-| `approve_request` | Answer a parked approval request: the in-band decision path, relaying a decision a human actually made. |
 
 The Control API exposes the same capability layer to tooling; its reference is
 [docs/api/](docs/api/).

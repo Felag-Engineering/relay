@@ -54,7 +54,6 @@ var toolWrites = map[string]string{
 	"run_operation":   "Job",
 	"raw_exec":        "Job",
 	"cancel_job":      "Job",
-	"approve_request": "approval Request",
 }
 
 // TestMCP_NoToolWritesATag is ADR-0050 decision 2 for MCP: only a human Account

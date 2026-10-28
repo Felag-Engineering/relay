@@ -163,10 +163,10 @@ The role choice:
 - **`kind: "machine"`.** The AI-agent authenticates as a machine Account (GLOSSARY). Whatever
   `requester_allowed` says, Relay refuses a machine Account's answer to its own request
   (`approval.ErrMachineSelfDecision`) unless it arrives in-band with a non-blank asserted name
-  (the `approver` on `approve_request`, or the responder on an answered approval question),
+  (the responder on an answered approval question),
   recorded as an assertion beside the verified Account, never as verified. Relay cannot tell
-  whether a human gave that name: a prompt-injected AI-agent could call `approve_request` with
-  a made-up name and release its own request. That is the accepted client-integrity assumption
+  whether a human gave that name: a client could answer the question itself with a made-up
+  responder name and release its own request. That is the accepted client-integrity assumption
   of in-band approval ([approval.md, Channel strength](../specs/approval.md#channel-strength);
   ADR-0029), not a guarantee this fleet adds. A machine Account cannot engage the Freeze
   (human-only).
@@ -260,9 +260,8 @@ rules match exactly what the test fleet's two match:
 | `demo-fleet-wide-mutates-need-a-human` | `mutate` class, fan-out **≥ 2** | 1 approval, `in-band`, `requester_allowed: true`, no audience, `ttl` 1h |
 | `demo-raw-exec-always-needs-a-human` | every Raw Exec | 1 approval, `in-band`, `requester_allowed: true`, no audience, `ttl` 1h |
 
-They let an MCP client be **asked** the approval question in-band, or answer with
-`approve_request`. The test fleet's out-of-band gate permits neither: no question is
-emitted, and `approve_request` is refused as too weak a channel.
+They let an MCP client be **asked** the approval question in-band. The test fleet's
+out-of-band gate does not: no question is emitted.
 
 **Who may decide** ([approval-gates.md](approval-gates.md#who-may-decide)):
 
@@ -278,7 +277,7 @@ emitted, and `approve_request` is refused as too weak a channel.
 - **In-band is the floor, not the only way.** An out-of-band decision also satisfies an in-band
   rule.
 
-Three ways to answer. Approving releases the request but does not dispatch: re-issue the original
+Two ways to answer. Approving releases the request but does not dispatch: re-issue the original
 call unchanged (on the asked-in-band path, the client's retry is that re-issue).
 
 1. **Asked in-band.** A client declaring the name `gleipnir` gets a Relay-authored approval
@@ -287,17 +286,7 @@ call unchanged (on the asked-in-band path, the client's retry is that re-issue).
    Relay does not verify it. Observed on a live fleet with a `gleipnir` client on the
    `auto-incident-response` token. `claude-code` is asked only on a human Account's OAuth
    session; every other client, `scripts/dev-fleet-mcp.sh` included, gets `pending_approval`.
-2. **`approve_request`**, from a client that got `pending_approval`. Observed on a live fleet
-   for an unrecognised client: `pending_approval`, then `approve_request`, then the re-issued
-   call ran. By hand, as the founding admin *(predicted)*:
-
-   ```console
-   $ scripts/dev-fleet-mcp.sh call approve_request \
-       '{"request_id":"<request-id>","plan_hash":"<plan-hash>","approve":true,"approver":"<your name>","reason":"approved on stage"}'
-   ```
-
-   `approver` names the human who decided: required, recorded as asserted, never verified.
-3. **Out-of-band**, as on the test fleet: the Control API as `dev-approver` *(predicted
+2. **Out-of-band**, as on the test fleet: the Control API as `dev-approver` *(predicted
    under this gate)*:
 
    ```console
@@ -430,7 +419,7 @@ Three ways to clear it:
   ```
 
   Decide it by any of the ways in [The human approver](#the-human-approver) open to an `admin`
-  (for example `approve_request` as the founding admin, or the Control API as `dev-approver`)
+  (for example the Control API as `dev-approver`)
   and re-issue the call unchanged *(predicted)*. If the AI-agent asks for Raw Exec on its
   `operator` Account, the Relay refuses it on role before any gate or Node sees it.
 - **Between takes:** `make demo-reset`.

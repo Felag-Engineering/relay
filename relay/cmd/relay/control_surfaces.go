@@ -73,7 +73,7 @@ type surfaceDeps struct {
 	ops          mcp.OperationLister
 	// execution is Execution: mcp Executor; api Exec; console Cancel.
 	execution *capability.Execution
-	// approvals is the approval callout: mcp ApprovalDecider; api Approvals; console
+	// approvals is the approval callout: mcp ApprovalAnswerer; api Approvals; console
 	// Approvals (Job detail's read).
 	approvals *capability.Approvals
 	// freezeControl is the Freeze and its role floor (api.Freezer).
@@ -175,24 +175,18 @@ func (mcpSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 	// override a production one (e.g. to observe or replace
 	// WithToolCallObserver), but the production list itself is unchanged.
 	opts := []mcp.Option{
-		// The in-band approval rung (ADR-0029): the SAME
-		// *capability.Approvals the API's decision endpoint uses. One decision
-		// model, two delivery envelopes — a decision made through the tool is
-		// the same act, recorded by the same code, differing only in the
-		// channel it is stamped with and the fact that its approver is
-		// asserted rather than verified.
-		//
-		// Passing it here is what makes rules configured `channel: "in-band"`
-		// reachable at all. A deployment that wants the previous posture
-		// changes nothing in code: leave its gate rules `out-of-band` and
-		// ErrWeakChannel refuses every tool-delivered answer.
-		mcp.WithApprovalDecider(d.approvals),
+		// The MRTR answer path's seam (ADR-0029 decision 6): the SAME
+		// *capability.Approvals the API's decision endpoint uses. It records
+		// the answer through AnswerElicited, which stamps the in-band channel,
+		// so a rule configured `channel: "in-band"` is reachable here and an
+		// out-of-band rule still refuses the answer (ErrWeakChannel).
+		mcp.WithApprovalAnswerer(d.approvals),
 		// The MRTR envelope over the same decision seam (ADR-0029
 		// decision 6): an askable in-band park from a client that can be
 		// asked is answered with an approval question instead of today's
 		// pending_approval result; a client that cannot be asked still gets
 		// pending_approval (AP-85).
-		// Effective only alongside WithApprovalDecider, above. No Config
+		// Effective only alongside WithApprovalAnswerer, above. No Config
 		// field, flag or env var controls it — the seal key mcp.New mints
 		// for it comes from crypto/rand inside the call, never from
 		// configuration (invariant 11).

@@ -23,12 +23,13 @@ import (
 //
 // # What this file is not
 //
-// It NEVER records or accepts a decision. That is tools_approval.go's alone
-// (ADR-0029 decision 5) — the ONE file in this package permitted to name a
-// decision path. This file must therefore never name any of
-// no_decision_test.go's forbiddenDecisionIdents (DecideApproval,
-// ApprovalDecision, RecordDecision, ChannelInBand, ChannelOutOfBand) nor the
-// literal "tasks/update": doing either would fail the build, by design.
+// It NEVER records or accepts a decision. Acceptance is tools_approval.go's,
+// through the capability layer's single in-band entry point; no file in this
+// package names a decision identifier (no_decision_test.go). This file must
+// therefore never name any of no_decision_test.go's forbiddenDecisionIdents
+// (DecideApproval, ApprovalDecision, RecordDecision, ChannelInBand,
+// ChannelOutOfBand) nor the literals "tasks/update", "tasks/get" or
+// "tasks/cancel": doing either would fail the build, by design.
 //
 // It also never sends elicitation/create itself. The question below travels
 // as an ORDINARY tool result (InputRequests on a CallToolResult); the SDK's
@@ -47,10 +48,9 @@ const (
 	mrtrProtocolVersion = "2026-07-28"
 
 	// metaKeyRequestID and metaKeyPlanHash are the question result's `_meta`
-	// keys, named after approve_request's own argument names (tools_approval.go)
-	// so the rescue path — approve_request, or POST
-	// /api/v1/approvals/{id}/decision — is a mechanical copy rather than a
-	// second vocabulary to learn.
+	// keys, named after the pending_approval result's own request_id/plan_hash
+	// fields, so the rescue, POST /api/v1/approvals/{id}/decision, is a
+	// mechanical copy rather than a second vocabulary to learn.
 	metaKeyRequestID = "relay/request_id"
 	metaKeyPlanHash  = "relay/plan_hash"
 
@@ -71,7 +71,7 @@ const (
 // WithApprovalElicitation turns on the in-band MRTR question path for an
 // askable park (ADR-0029 decision 6).
 //
-// Off by default, and effective only together with WithApprovalDecider: Relay
+// Off by default, and effective only together with WithApprovalAnswerer: Relay
 // never asks a question it cannot accept an answer to. The answer leg is
 // tools_execution.go's answered retry (ADR-0029 decision 6), and the
 // composition root (cmd/relay/control_surfaces.go) passes both options.
@@ -119,9 +119,9 @@ func newQuestioner(log *slog.Logger) *questioner {
 // It runs requeststate's OpenFor — the seal check AND the binding to the
 // caller, request, tool and argument digest, in one call — and nothing else.
 // The unbound Open, Seal, and the Sealer itself are unreachable through it:
-// the Sealer lives only in this closure, so tools_approval.go (the one file
-// permitted to accept a decision) can verify an answer without ever holding
-// or passing the key's custodian (TestElicit_SealKeyIsPerProcessAndNotConfiguration).
+// the Sealer lives only in this closure, so tools_approval.go can verify an
+// answer without ever holding or passing the key's custodian
+// (TestElicit_SealKeyIsPerProcessAndNotConfiguration).
 type stateOpener func(state string, now time.Time, call requeststate.Call) (requeststate.State, error)
 
 // opener returns q's binding-checked stateOpener, or nil when q (or its

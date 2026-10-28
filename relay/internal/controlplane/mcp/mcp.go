@@ -205,14 +205,14 @@ const serverVersion = "0.1.0"
 // through a nil lane panics rather than failing legibly, mirroring a nil
 // ReadAuditor.
 // Option configures a server built by New — WithClock overrides the
-// clock, WithApprovalDecider wires the in-band approval tool,
+// clock, WithApprovalAnswerer wires acceptance of an elicited answer,
 // WithApprovalElicitation turns on the in-band MRTR question path, and
 // WithToolCallObserver attaches the tool-call event publisher.
 type Option func(*serverOptions)
 
 type serverOptions struct {
 	now       func() time.Time
-	approvals ApprovalDecider
+	approvals ApprovalAnswerer
 	toolCalls ToolCallObserver
 	// elicitApprovals is WithApprovalElicitation's flag (elicit.go). It has
 	// effect only when approvals is also wired: Relay never asks a question
@@ -261,6 +261,9 @@ func New(lane ReadLane, ops OperationLister, exec Executor, results JobResultRea
 	ops = operationListerAdapter{r: ops}
 	exec = execAdapter{r: exec}
 	results = jobResultReaderAdapter{r: results}
+	if cfg.approvals != nil { // wrapped only when set: a nil answerer gates ask
+		cfg.approvals = approvalAnswererAdapter{r: cfg.approvals}
+	}
 
 	srv := sdkmcp.NewServer(&sdkmcp.Implementation{Name: "relay", Version: serverVersion}, nil)
 
@@ -277,7 +280,7 @@ func New(lane ReadLane, ops OperationLister, exec Executor, results JobResultRea
 	// check that gates emission also gates the answered-retry path (isAnsweredRetry, tools_execution.go): a nil ask
 	// means no question was ever asked, so no retry could ever be answering
 	// one either. It is wired only when the caller both turned the option on
-	// AND wired a decider — an unwired decider leaves ask nil, so the
+	// AND wired an answerer — an unwired answerer leaves ask nil, so the
 	// emission path is absent rather than a disabled branch, and no question
 	// could ever be answered anyway. The seal key it mints (requeststate.Mint,
 	// crypto/rand) is process-lifetime and never configuration (invariant 11
@@ -293,11 +296,6 @@ func New(lane ReadLane, ops OperationLister, exec Executor, results JobResultRea
 	registerOperationTools(srv, ops, lane)
 	registerExecutionTools(srv, exec, results, ops, ask, reads, cfg.approvals, cfg.now)
 	registerJobTools(srv, exec, results, reads)
-	// approve_request (ADR-0029). A nil decider registers nothing, so
-	// the in-band rung is opt-in at the composition root: without it, parked
-	// dispatches are answerable only on the authenticated /api/v1 endpoint,
-	// exactly as before.
-	registerApprovalTools(srv, cfg.approvals)
 
 	// Stateless + JSON responses (MCP spec 2026-07-28): the SDK accepts
 	// the 2026-07-28 protocol only in stateless mode, and every tool here is
