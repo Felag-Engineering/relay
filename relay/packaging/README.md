@@ -28,10 +28,12 @@ against. The release builds the packages twice and refuses unless the builds are
 and `/usr/bin/relay` is the release binary. It reads each package with `dpkg-deb` and `rpm`
 and checks its whole content against `expected/` and `scripts/`.
 
-**The packages are not yet attached to a release.** They wait until the install matrix proves
-them on every supported platform. The standalone `relay.service` and `relay.toml.example` are
-release attachments, byte-equal to the copies in the packages; until the packages are, install
-by hand as below.
+**The release attaches the packages**, with an SBOM each, under the signed `SHA256SUMS`, and
+only after the install matrix has passed on exactly those bytes on every supported platform.
+Verify, then install, as in
+[release-artifacts.md](../../docs/operations/release-artifacts.md). The standalone `relay.service`
+and `relay.toml.example` are release attachments too, byte-equal to the copies in the packages;
+to install by hand, see below.
 
 The package installs `/usr/bin/relay`, the unit as `/usr/lib/systemd/system/relay.service`, a
 `sysusers.d` entry for the `relay` account, a configuration guide that carries no secret as

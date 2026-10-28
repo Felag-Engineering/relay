@@ -12,17 +12,23 @@
 # Job graph (a "dry run" is every run that is not a v* tag push: pull_request and
 # workflow_dispatch; it does all the building and guarding and publishes nothing):
 #
-#   build (arch x pass)  -> reproducible -> image -> sign-push -> github-release
-#   4 jobs, no privilege    diff + SBOMs    OCI      packages,     contents:write
-#                                           archive  id-token,     (only job that can
-#                                           + guards attestations  write a Release)
-#                                                       \-> latest (packages:write only)
+#   build (arch x pass) -> reproducible -+-> install-matrix -+-> sign-push -> github-release
+#   4 jobs, no privilege    diff, SBOMs,  |   the release's   |   packages,     contents:write
+#                           guards        |   packages and    |   id-token,     (only job that can
+#                                         |   role, on every  |   attestations   write a Release)
+#                                         |   platform        |       \-> latest (packages:write only)
+#                                         +-> image ----------+
+#                                             OCI archive + guards
 #
 # `build` also wraps each daemon binary and each Relay binary in .deb and .rpm packages, and
-# `reproducible` compares both passes' packages and guards them against the release binaries.
-# They are uploaded as the `packages` workflow artifact and are not attached to the Release (see
-# that guard's comment). The standalone relay-daemon and Relay units and example configuration
-# are attached, under SHA256SUMS.
+# `reproducible` compares both passes' packages, guards them against the release binaries,
+# writes an SBOM for each, and stages the Ansible role as a tarball. The packages, their SBOMs
+# and the role are attached to the Release under SHA256SUMS, with the standalone relay-daemon
+# and Relay units and example configuration. `install-matrix` runs the install matrix
+# (install-matrix.yml) on exactly those bytes, and `sign-push`, the first job that publishes
+# anything, needs it: a failing matrix row publishes nothing. Packages carry no signature of
+# their own before v1.0.0 (DI-24, ADR-0033); the signed SHA256SUMS and the provenance
+# attestation over its files cover them.
 #
 # The three privileged jobs never start on a dry run (job-level `if:`), so a pull request
 # or a dispatch never holds id-token, packages, attestations or contents:write. This file
@@ -64,7 +70,9 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - .github/workflows/release.yml
+      - .github/workflows/install-matrix.yml
       - docker/relay.Dockerfile
+      - docker/install-matrix/**
       - .dockerignore
       - Makefile
       - scripts/build-version.sh
@@ -74,6 +82,7 @@ on:
       - scripts/build-packages.sh
       - scripts/package-guard.sh
       - scripts/package-guard-test.sh
+      - scripts/install-matrix-*.sh
       - scripts/relay-package-scripts-test.sh
       - daemon/packaging/**
       - relay/packaging/**
@@ -397,6 +406,12 @@ jobs:
       contents: read
     outputs:
       version: ${{ steps.assemble.outputs.version }}
+      # The install matrix builds its old package set with the release's toolchain; `env` is
+      # not available to a reusable workflow's `with:`, but it is here.
+      rust_toolchain: ${{ env.RELEASE_RUST_TOOLCHAIN }}
+      # The digest of the SHA256SUMS this job uploads in release-dist; the install matrix and
+      # sign-push each refuse a downloaded SHA256SUMS that differs.
+      sums_sha256: ${{ steps.sums.outputs.sha256 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -497,15 +512,6 @@ jobs:
           cp relay/packaging/relay.service dist/relay.service
           cp relay/packaging/relay.toml.example dist/relay.toml.example
 
-      # `relay-*` does not match relay.service or relay.toml.example: they are named
-      # explicitly, or they would be attached without a SHA256SUMS line.
-      - name: Generate SHA256SUMS
-        run: |
-          set -euo pipefail
-          cd dist
-          sha256sum relay-* relay.service relay.toml.example > SHA256SUMS
-          cat SHA256SUMS
-
       - name: Install package inspection tools
         run: sudo apt-get update && sudo apt-get install -y rpm rpm2cpio cpio
 
@@ -513,7 +519,7 @@ jobs:
       #   - each relay-daemon package's /usr/bin/relay-daemon and each Relay package's
       #     /usr/bin/relay is the release binary (DI-24, RC-23);
       #   - their units and the example configuration and environment example are the attached
-      #     standalone files, and all are in SHA256SUMS (DI-32);
+      #     standalone files (DI-32);
       #   - each relay-daemon package carries the shipped catalog (DI-29), and no package
       #     declares configuration the package manager would preserve (ADR-0033);
       #   - every package's identity -- name, epoch, version and architecture, computed from
@@ -522,26 +528,23 @@ jobs:
       #     setgid or file capability, maintainer scripts, triggers, relationships and control
       #     fields, and every file carried from the repository -- equals what the repository
       #     says (`content`, against daemon/packaging/expected and daemon/packaging/scripts);
-      #   - every package is listed in SHA256SUMS.packages.
+      #   - every package is listed in the sums both passes agreed on.
       # `content` reads with dpkg-deb and rpm, never nfpm, because the two-pass comparison
       # above cannot catch a compromised or buggy packager: both passes run the same pinned
       # nfpm, so a deterministic fault produces the same wrong bytes twice. The comparison
       # proves determinism; `content` is the integrity check.
       #
-      # The packages are built, compared and guarded on every run, but they are NOT attached to
-      # the Release. They are held until the install matrix (DI-33) proves them on every
-      # supported platform, and until the unit's syscall filter is verified on a real systemd
-      # host (DI-3). The standalone units and example configuration ARE attached (DI-32), so
-      # the units already ship as hand-install artifacts before that verification. The packages
-      # travel only as the `packages` workflow artifact, with their own sums file, which stays
-      # out of the signed SHA256SUMS until they are attached: a SHA256SUMS naming files the
-      # Release does not carry would fail every `sha256sum --check` of it.
+      # A guarded package is copied into dist/, the release set, and so is attached to the
+      # Release under SHA256SUMS. It is not signed on its own: the signed SHA256SUMS covers it.
+      # `install-matrix` proves these same bytes on every supported platform (DI-33) before
+      # `sign-push`, the first job that publishes anything, may run. A prerelease version's
+      # "~" is written "." in the file name, because GitHub rewrites characters like it in an
+      # asset's name; the package's own version metadata is unchanged.
       - name: Guard - packages wrap the release binary and the attached unit
         env:
           VERSION: ${{ steps.assemble.outputs.version }}
         run: |
           set -euo pipefail
-          mkdir -p packages
           guard=scripts/package-guard.sh
           for p in x86_64:linux-amd64 aarch64:linux-arm64; do
             arch="${p%%:*}"; platform="${p##*:}"
@@ -568,31 +571,99 @@ jobs:
               bash "${guard}" no-config "${f}"
               # The digest both passes agreed on (compared above) is this package's.
               bash "${guard}" listed "bins/bin-${arch}-primary/SHA256SUMS.packages.${arch}" "${f}"
-              cp "${f}" packages/
+              asset="$(basename "${f}" | tr '~' '.')"
+              cp "${f}" "dist/${asset}"
             done
-            cat "bins/bin-${arch}-primary/SHA256SUMS.packages.${arch}" >> packages/SHA256SUMS.packages
           done
-          bash "${guard}" listed dist/SHA256SUMS dist/relay-daemon.service dist/relay-daemon.env.example \
-            dist/relay.service dist/relay.toml.example
-          cat packages/SHA256SUMS.packages
-          bash "${guard}" listed packages/SHA256SUMS.packages packages/*.deb packages/*.rpm
-          # Nothing under dist/ is a package: dist/ is the release set.
-          if find dist -name '*.deb' -o -name '*.rpm' | grep -q .; then
-            echo "::error::a package is in the release set before it may be attached"
-            exit 1
-          fi
+          n="$(find dist -maxdepth 1 -type f \( -name '*.deb' -o -name '*.rpm' \) | wc -l)"
+          [ "${n}" -eq 8 ] || { echo "::error::${n} packages staged for the release, expected 8"; exit 1; }
+
+      # The Ansible role is a release artifact (DI-45, ADR-0048). It compiles nothing and
+      # carries repository files only, so it is checked by content rather than built twice: the
+      # tarball is built from the tagged commit (sorted, owner 0, the commit's time as its
+      # mtime), and what it extracts to must equal the role in the checkout. The name stays
+      # outside the relay-* glob that the binaries' loops use.
+      - name: Stage the Ansible role
+        env:
+          VERSION: ${{ steps.assemble.outputs.version }}
+        run: |
+          set -euo pipefail
+          tarball="dist/relay_daemon-${VERSION}.tar.gz"
+          epoch="$(git log -1 --format=%ct HEAD)"
+          tar --sort=name --mtime="@${epoch}" --owner=0 --group=0 --numeric-owner \
+            --mode='u=rwX,go=rX' --format=gnu -C daemon/packaging/ansible -cf - relay_daemon \
+            | gzip -9n > "${tarball}"
+          # Every member is a regular file or a directory, inside relay_daemon/ and with no
+          # ".." component. awk reads all its input, so no pipe is cut short.
+          tar -tzf "${tarball}" | awk '
+            $0 !~ /^relay_daemon\// || $0 ~ /(^|\/)\.\.(\/|$)/ { print "::error::member outside relay_daemon/: " $0; bad = 1 }
+            END { exit bad }'
+          tar -tvzf "${tarball}" | awk '
+            { t = substr($0, 1, 1) }
+            t != "-" && t != "d" { print "::error::member that is neither a file nor a directory: " $0; bad = 1 }
+            END { exit bad }'
+          check="$(mktemp -d)"
+          tar -xzf "${tarball}" --no-same-owner -C "${check}"
+          diff -r "${check}/relay_daemon" daemon/packaging/ansible/relay_daemon
+          rm -rf "${check}"
+
+      # One SPDX SBOM per package. A package's lists the dependencies of the binary it wraps
+      # byte for byte (the content guard above proves the wrap): the Relay's from the Go build
+      # info in that binary, the daemon's from Cargo.lock, as for the binaries' own SBOMs. The
+      # rest of a package's payload is repository files with no third-party dependency.
+      - name: SBOMs for the packages
+        env:
+          SYFT: ${{ steps.syft.outputs.cmd }}
+          VERSION: ${{ steps.assemble.outputs.version }}
+        run: |
+          set -euo pipefail
+          for f in dist/*.deb dist/*.rpm; do
+            name="$(basename "${f}")"
+            case "${name}" in
+              *_amd64.deb | *.x86_64.rpm) platform=linux-amd64 ;;
+              *_arm64.deb | *.aarch64.rpm) platform=linux-arm64 ;;
+              *) echo "::error::cannot tell the architecture of ${name}"; exit 1 ;;
+            esac
+            case "${name}" in
+              relay-daemon[_-]*) src="file:daemon/Cargo.lock" ;;
+              relay_*.deb | relay-[0-9]*.rpm) src="file:dist/relay-${VERSION}-${platform}" ;;
+              *) echo "::error::unexpected package ${name}"; exit 1 ;;
+            esac
+            "${SYFT}" scan "${src}" --source-name "${name}" --source-version "${VERSION}" \
+              -o "spdx-json=${f}.spdx.json"
+          done
+
+      # The last step to touch dist/: SHA256SUMS lists everything the Release attaches. The
+      # globs name each family explicitly, because `relay-*` alone matches neither relay.service,
+      # relay.toml.example, the Relay's .deb nor the role tarball (`relay_*` does), and a file
+      # attached without a line would not be verified by anyone. The completeness check then
+      # refuses any file left unlisted. Every name must be one GitHub stores as given.
+      # The sums' digest is this job's output, so later jobs can tell the artifact they download
+      # is the one this step wrote.
+      - name: Generate SHA256SUMS
+        id: sums
+        env:
+          RELEASE_TAG_PUSH: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
+        run: |
+          set -euo pipefail
+          # A published release's names are ^[A-Za-z0-9._-]+$. A dry run's version may carry a
+          # "+" (build metadata), which a tagged release's never does, so only a dry run allows it.
+          pattern='^[A-Za-z0-9._+-]+$'
+          [ "${RELEASE_TAG_PUSH}" != "true" ] || pattern='^[A-Za-z0-9._-]+$'
+          odd="$(find dist -maxdepth 1 -type f -printf '%f\n' | { grep -vE "${pattern}" || true; })"
+          [ -z "${odd}" ] || { echo "::error::file names GitHub may rewrite: ${odd}"; exit 1; }
+          cd dist
+          sha256sum relay-* relay_* relay.service relay.toml.example > SHA256SUMS
+          cat SHA256SUMS
+          cd ..
+          mapfile -d '' -t attached < <(find dist -maxdepth 1 -type f ! -name SHA256SUMS -print0)
+          bash scripts/package-guard.sh listed dist/SHA256SUMS "${attached[@]}"
+          echo "sha256=$(sha256sum dist/SHA256SUMS | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-dist
           path: dist/
-          if-no-files-found: error
-          retention-days: 7
-
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: packages
-          path: packages/
           if-no-files-found: error
           retention-days: 7
 
@@ -705,11 +776,28 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  # The install matrix, on exactly the packages and role this release attaches: it takes them
+  # from the release-dist artifact and checks each against the SHA256SUMS that gets signed
+  # (DI-24). It holds no write privilege and has no `if:`, so a dry run rehearses it too.
+  install-matrix:
+    name: Install matrix (the release's packages and role)
+    needs: reproducible
+    permissions:
+      contents: read
+    uses: ./.github/workflows/install-matrix.yml
+    with:
+      rust-toolchain: ${{ needs.reproducible.outputs.rust_toolchain }}
+      release-dist: release-dist
+      release-version: ${{ needs.reproducible.outputs.version }}
+      release-sums-sha256: ${{ needs.reproducible.outputs.sums_sha256 }}
+
   # Signs and publishes; builds nothing. Never gets an `always()` or `!cancelled()` job
-  # condition: it runs only after every job above succeeded, on a tag push.
+  # condition: it runs only after every job above succeeded, on a tag push. It is the first job
+  # that publishes anything (a Rekor entry, then GHCR), so needing the install matrix here
+  # gates every publication: `latest` and `github-release` inherit it through their own needs.
   sign-push:
     name: Sign and push
-    needs: [reproducible, image]
+    needs: [reproducible, image, install-matrix]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -722,17 +810,20 @@ jobs:
     steps:
       # Fail closed. Signing writes to the public Rekor log from a private repository
       # (cosign sign-blob does so before attestation can fail), and attestations on a private
-      # repository need a plan that supports them. Until the owner records both decisions as
-      # repository variables this job errors; an unset variable is an error, never a skip,
-      # because a release without signatures must not look like one. `vars` also resolves
-      # organization- and environment-level variables.
+      # repository need a plan that supports them, and the release attaches packages carrying
+      # a unit whose syscall filter only a person on a real systemd host can check. Until the
+      # owner records all three decisions as repository variables this job errors; an unset
+      # variable is an error, never a skip, because a release without signatures must not look
+      # like one. `vars` also resolves organization- and environment-level variables.
       - name: Decision gate
         env:
           REKOR: ${{ vars.RELEASE_PUBLIC_REKOR_ACCEPTED }}
           ATTEST: ${{ vars.RELEASE_ATTESTATIONS_AVAILABLE }}
+          SYSCALL_FILTER: ${{ vars.RELEASE_UNIT_SYSCALL_FILTER_SIGNED_OFF }}
         run: |
           [ "${REKOR}" = "true" ] || { echo "::error::D1 unrecorded: set repository variable RELEASE_PUBLIC_REKOR_ACCEPTED=true once the owner accepts public Rekor entries for this private repository"; exit 1; }
           [ "${ATTEST}" = "true" ] || { echo "::error::D2 unrecorded: set RELEASE_ATTESTATIONS_AVAILABLE=true once the organization's plan supports artifact attestations on a private repository"; exit 1; }
+          [ "${SYSCALL_FILTER}" = "true" ] || { echo "::error::D3 unrecorded: set repository variable RELEASE_UNIT_SYSCALL_FILTER_SIGNED_OFF=true once the owner has checked the unit's syscall filter by hand on a real systemd host (the release attaches packages carrying the unit)"; exit 1; }
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -745,14 +836,30 @@ jobs:
           path: image
 
       - name: Check the artifacts are the ones that were guarded
+        env:
+          SUMS_SHA256: ${{ needs.reproducible.outputs.sums_sha256 }}
         run: |
           set -euo pipefail
+          # Before anything is appended to SHA256SUMS: the file signed is the one `reproducible`
+          # wrote and the install matrix ran against.
+          [[ "${SUMS_SHA256}" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::no SHA256SUMS digest from the reproducible job"; exit 1; }
+          actual="$(sha256sum dist/SHA256SUMS | cut -d' ' -f1)"
+          [ "${actual}" = "${SUMS_SHA256}" ] \
+            || { echo "::error::dist/SHA256SUMS is not the one the reproducible job wrote (${actual}, want ${SUMS_SHA256})"; exit 1; }
           version="${GITHUB_REF_NAME#v}"
           [ -e "dist/relay-${version}-linux-amd64" ] \
             || { echo "::error::the built artifacts are not version ${version}"; exit 1; }
           (cd image && sha256sum --check relay-image.oci.tar.sha256)
           cp image/relay-image-*.spdx.json dist/
           (cd dist && sha256sum relay-image-*.spdx.json >> SHA256SUMS && sha256sum --check SHA256SUMS)
+          # github-release attaches every file in dist/, so a file the sums do not list would
+          # be attached unsigned. The checkout is not here to run package-guard.sh, so the same
+          # completeness check is by name: --check proved every listed file's bytes, and the
+          # files present must be exactly the files listed.
+          present="$(cd dist && find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\n' | LC_ALL=C sort)"
+          listed="$(awk '{print $2}' dist/SHA256SUMS | LC_ALL=C sort)"
+          [ "${present}" = "${listed}" ] \
+            || { echo "::error::dist/ and SHA256SUMS list different files:"; diff <(echo "${present}") <(echo "${listed}") || true; exit 1; }
 
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
         with:

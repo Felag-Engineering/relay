@@ -3,10 +3,13 @@
 # proves the join string reaches no file, argument list or log on the Node
 # (docs/specs/daemon-installation.md DI-45).
 #
-#   install-matrix-ansible-role.sh <pkgdir>
+#   install-matrix-ansible-role.sh <pkgdir> [<roles-path>]
 #
 # <pkgdir> is absolute and holds old/, new/ and VERSION as the install-matrix workflow's build
-# job lays them out, the old package sorting below the new one. Needs docker, ansible-playbook,
+# job lays them out, the old package sorting below the new one. <roles-path> is an absolute
+# directory holding relay_daemon/; it defaults to the checkout's daemon/packaging/ansible. A
+# release passes the role extracted from its own tarball, so the role under test is the one it
+# attaches. The playbook is always the checkout's test/playbook.yml. Needs docker, ansible-playbook,
 # ansible-vault, jq, ssh-keygen, dpkg-deb, base64, head and grep on the runner. Nothing here runs outside CI: it starts a privileged
 # container and installs packages in it.
 #
@@ -43,12 +46,19 @@ CA_CERT=/var/lib/relay/ca/ca-cert.pem
 DAEMON_STATE=/var/lib/relay-daemon
 ROLE_DIR="$REPO/daemon/packaging/ansible"
 
-if [ "$#" -ne 1 ]; then
-  echo "usage: $0 <pkgdir>" >&2
+if [ "$#" -lt 1 ] || [ "$#" -gt 2 ]; then
+  echo "usage: $0 <pkgdir> [<roles-path>]" >&2
   exit 2
 fi
 PKGDIR=$1
+ROLES_PATH=${2:-$ROLE_DIR}
 case "$PKGDIR" in /*) ;; *) echo "install-matrix-ansible-role: pkgdir must be absolute" >&2; exit 2 ;; esac
+case "$ROLES_PATH" in /*) ;; *) echo "install-matrix-ansible-role: roles-path must be absolute" >&2; exit 2 ;; esac
+[ -f "$ROLES_PATH/relay_daemon/tasks/main.yml" ] || {
+  echo "install-matrix-ansible-role: $ROLES_PATH holds no relay_daemon role" >&2
+  exit 2
+}
+echo "role: $ROLES_PATH"
 for tool in docker ansible-playbook ansible-vault jq ssh-keygen dpkg-deb base64 head grep; do
   command -v "$tool" >/dev/null 2>&1 || { echo "install-matrix-ansible-role: $tool is required" >&2; exit 2; }
 done
@@ -323,7 +333,7 @@ daemon_identity_files() {
 }
 
 role_identity_files() {
-  sed -n 's/^relay_daemon_identity_files: \[\(.*\)\]$/\1/p' "$ROLE_DIR/relay_daemon/vars/main.yml" | tr -d ' '
+  sed -n 's/^relay_daemon_identity_files: \[\(.*\)\]$/\1/p' "$ROLES_PATH/relay_daemon/vars/main.yml" | tr -d ' '
 }
 
 identity_lists_are_equal() {
@@ -566,7 +576,7 @@ printf 'node ansible_host=%s ansible_user=ansible ansible_ssh_private_key_file=%
   "$IP" "$WORK/id" "'-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'" >"$WORK/inventory.ini"
 # Pipelining and keep_remote_files are never set here, and no -v is ever passed: the role must
 # force pipelining itself.
-export ANSIBLE_ROLES_PATH="$ROLE_DIR" ANSIBLE_NOCOLOR=1 ANSIBLE_HOME="$WORK/ansible-home" ANSIBLE_LOCAL_TEMP="$WORK/ansible-local"
+export ANSIBLE_ROLES_PATH="$ROLES_PATH" ANSIBLE_NOCOLOR=1 ANSIBLE_HOME="$WORK/ansible-home" ANSIBLE_LOCAL_TEMP="$WORK/ansible-local"
 
 # --- step 5: the tracer, before any ssh connection ----------------------------------------
 
