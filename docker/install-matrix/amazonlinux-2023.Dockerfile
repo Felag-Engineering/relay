@@ -2,7 +2,7 @@
 # PID 1 (CMD /usr/sbin/init) so the packages are installed against a running service manager.
 # Built and run only by scripts/install-matrix-host.sh in CI. It is a test fixture and is
 # never published or shipped. The base is pinned by its multi-arch index digest.
-FROM amazonlinux:2023@sha256:c04a1012acc483977f61f7f91c28624a39a621e56a59781319a75dec528be9b6
+FROM amazonlinux:2023.0.20230614.0@sha256:28004508959f548dd98278f746c577a41b8340dc295e51d309e721e4e217bb85
 
 ENV container=docker
 
