@@ -239,15 +239,15 @@ func TestElicit_OutOfBandParkNeverAsks(t *testing.T) {
 	}
 }
 
-// TestElicit_ElicitedParkEmitsNoTaskEnvelope_E2E is AP-71's e2e reinforcement:
+// TestElicit_ElicitedParkEmitsNoTaskEnvelope_E2E is AP-85's e2e reinforcement:
 // the SDK client cannot hand-advertise the Tasks extension's
 // clientCapabilities (there is no ClientOptions knob for it —
-// see mcp_tasks_e2e_test.go's rawToolCall, mirrored below), so this drives
+// see mcp_no_task_handle_e2e_test.go's rawToolCall, mirrored below), so this drives
 // raw JSON-RPC through the real composition root with a client advertising
 // BOTH elicitation and the Tasks extension: the question, and no task
 // envelope. TestElicit_ElicitedParkEmitsNoTaskEnvelope (elicit_test.go)
 // proves the same claim against a fake Executor at the mcp-handler seam;
-// this is the real gate and the real task shim together.
+// this is the real gate and the real composition root together.
 func TestElicit_ElicitedParkEmitsNoTaskEnvelope_E2E(t *testing.T) {
 	f := startGatedRelay(t, gateAllMutatesInBandAskable, WithMCPServerOptions(mcp.WithApprovalElicitation()))
 
@@ -277,7 +277,7 @@ func TestElicit_ElicitedParkEmitsNoTaskEnvelope_E2E(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
 	req.Header.Set("MCP-Protocol-Version", "2026-07-28")
-	// Required from 2026-07-28 onward (mcp_tasks_e2e_test.go's rawToolCall):
+	// Required from 2026-07-28 onward (mcp_no_task_handle_e2e_test.go's rawToolCall):
 	// the method is echoed in a header so a proxy can route without parsing
 	// the body.
 	req.Header.Set("Mcp-Method", "tools/call")
@@ -380,7 +380,7 @@ func TestCompositionRoot_EnablesElicitation(t *testing.T) {
 	}
 }
 
-// TestCompositionRoot_ClientThatCannotBeAskedSeesNoChange is AP-70's
+// TestCompositionRoot_ClientThatCannotBeAskedSeesNoChange is AP-85's
 // composition-root proof: it mirrors
 // TestMCPElicitation_ClientThatCannotBeAskedSeesNoChange
 // (mcp_elicitation_e2e_test.go, S5) with NO WithMCPServerOptions hook, so a

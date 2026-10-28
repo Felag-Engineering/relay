@@ -31,7 +31,7 @@ func (testAuthorizer) Authorize(context.Context, capability.Principal, jobs.Acti
 }
 
 // AuthorizeControl completes capability.Authorizer's administrative half
-// (#397). It is NOT unreachable: cancel_job and tasks/cancel now reach
+// (#397). It is NOT unreachable: cancel_job now reaches
 // AuthorizeControl(ControlCancelJob) through capability.Execution.CancelJob
 // (#595), and this allow-all answer is what lets this file's cancel tests
 // through without asserting on the role floor themselves. The real floor —

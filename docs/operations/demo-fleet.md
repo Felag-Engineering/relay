@@ -329,8 +329,7 @@ admin's credential, `.dev-fleet/control-credential` (the human `admin` Account,
 `CONSOLE_ADMIN_NAME`, that `relay init` created: the most powerful credential this control
 plane issues), and asks the bastion for `/etc/shadow`.
 
-Literal command (`scripts/dev-fleet-mcp.sh call` sends `tools/call` without the Tasks
-capability, so the result is a plain tool result, not a task handle):
+Literal command (`scripts/dev-fleet-mcp.sh call` sends `tools/call`, so the result is a plain tool result):
 
 ```console
 $ scripts/dev-fleet-mcp.sh call run_operation \

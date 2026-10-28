@@ -41,12 +41,12 @@ func (a *sqliteApprovals) Create(ctx context.Context, r approval.Request) error 
 	}
 	_, err := a.db.ExecContext(ctx, `
 		INSERT INTO approval_requests (
-			request_id, job_id, plan_hash, shape_key, requested_by_id, requested_by,
+			request_id, job_id, plan_hash, requested_by_id, requested_by,
 			plan_summary, matched_rules, action_kind, risk_class,
 			require_count, require_audience, requester_allowed, require_channel, require_ttl_ns,
 			state, created_at, expires_at, resolved_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		r.ID, nullIfEmpty(r.JobID), r.PlanHash, r.ShapeKey, r.RequestedByID, r.RequestedBy,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		r.ID, nullIfEmpty(r.JobID), r.PlanHash, r.RequestedByID, r.RequestedBy,
 		r.Summary, strings.Join(r.MatchedRules, ","),
 		approval.ActionKindName(r.ActionKind), jobs.RiskClassName(r.RiskClass),
 		r.Require.Count, strings.Join(r.Require.Audience, ","), boolToInt(r.Require.RequesterAllowed),
@@ -64,7 +64,7 @@ func (a *sqliteApprovals) Create(ctx context.Context, r approval.Request) error 
 // LOCKSTEP: they are two halves of one row layout, and a column added to one
 // without the other silently reads the wrong field into the wrong variable.
 const approvalSelect = `
-	SELECT request_id, job_id, plan_hash, shape_key, requested_by_id, requested_by,
+	SELECT request_id, job_id, plan_hash, requested_by_id, requested_by,
 	       plan_summary, matched_rules, action_kind, risk_class,
 	       require_count, require_audience, requester_allowed, require_channel, require_ttl_ns,
 	       state, created_at, expires_at, resolved_at
@@ -90,24 +90,6 @@ func (a *sqliteApprovals) ByPlanHash(ctx context.Context, planHash string) (appr
 	}
 	return a.getWith(ctx, a.db,
 		approvalSelect+` WHERE plan_hash = ? ORDER BY created_at DESC, request_id DESC LIMIT 1`, planHash)
-}
-
-// LastApprovedByShape returns the newest resolved approved Request carrying
-// shapeKey, other than excludeID.
-//
-// An empty or legacy key short-circuits to ErrNotFound WITHOUT querying: a
-// record whose shape was never computed has no comparable prior, and every
-// legacy row shares nothing but its own uniqueness.
-//
-// This is a read and releases nothing — release is ByPlanHash, above.
-func (a *sqliteApprovals) LastApprovedByShape(ctx context.Context, shapeKey, excludeID string) (approval.Request, error) {
-	if shapeKey == "" || approval.IsLegacyShapeKey(shapeKey) {
-		return approval.Request{}, approval.ErrNotFound
-	}
-	return a.getWith(ctx, a.db,
-		approvalSelect+` WHERE shape_key = ? AND state = ? AND request_id != ?
-		 ORDER BY resolved_at DESC, request_id DESC LIMIT 1`,
-		shapeKey, int(approval.StateApproved), excludeID)
 }
 
 // querier is the shared surface of *sql.DB and *sql.Tx this file needs, so the
@@ -153,7 +135,7 @@ func scanApproval(scan func(dest ...any) error) (approval.Request, error) {
 		resolved   sql.NullString
 	)
 	if err := scan(
-		&r.ID, &jobID, &r.PlanHash, &r.ShapeKey, &r.RequestedByID, &r.RequestedBy,
+		&r.ID, &jobID, &r.PlanHash, &r.RequestedByID, &r.RequestedBy,
 		&r.Summary, &matched, &actionKind, &riskClass,
 		&r.Require.Count, &audience, &reqAllowed, &channel, &ttlNS,
 		&state, &created, &expires, &resolved,

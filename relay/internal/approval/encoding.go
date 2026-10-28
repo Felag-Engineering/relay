@@ -5,15 +5,13 @@ import (
 	"io"
 )
 
-// encoding.go is the shared preimage encoding for every content-addressed
-// hash in this package: HashPlan (plan.go) and the shape keys (shape.go, D10).
-// Both are LIVE STORED BINDINGS — HashPlan is written into
-// approval_requests.plan_hash and consulted by capability's release lookup, and
-// the shape keys are written into approval_requests.shape_key — so editing
-// either primitive below
-// silently re-points every hash and every shape key already on disk. That is
-// exactly what TestEncodingFormatIsPinned (encoding_test.go) exists to turn
-// into a failing test instead of a silent data event.
+// encoding.go is the shared preimage encoding for the content-addressed hash
+// in this package: HashPlan (plan.go). It is a LIVE STORED BINDING — written
+// into approval_requests.plan_hash and consulted by capability's release
+// lookup — so editing either primitive below silently re-points every hash
+// already on disk. That is exactly what TestEncodingFormatIsPinned
+// (encoding_test.go) exists to turn into a failing test instead of a silent
+// data event.
 //
 // The contract every construction in this package obeys, using only these two
 // primitives:
@@ -33,12 +31,9 @@ import (
 //
 // What these primitives do NOT decide: the FIELD SEQUENCE — which fields get
 // written, in what order, and under what literal names — is each hash
-// function's own. HashPlan and the shape keys each write a different first
-// field from a closed, hash-specific vocabulary (kind=... for HashPlan,
-// shape=2:v1 for the shape keys), so sharing this format primitive never merges
-// two hash spaces into one. approval_requests still holds rows hashed under the
+// function's own. approval_requests still holds rows hashed under the
 // kind=5:grant preimage, so HashPlan must never write that kind value; see
-// TestPlanHashNeverWritesTheGrantKind and TestPlanShapeNeverWritesTheGrantDomain.
+// TestPlanHashNeverWritesTheGrantKind.
 
 // writeField writes one variable-length field as "name=<byte length>:<bytes>\n".
 func writeField(h io.Writer, field, value string) {

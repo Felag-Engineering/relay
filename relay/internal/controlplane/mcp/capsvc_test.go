@@ -81,7 +81,7 @@ func newCapService(t *testing.T, s capSeams) *capLayer {
 	if err != nil {
 		t.Fatalf("approval.NewGate: %v", err)
 	}
-	appr := capability.NewApprovals(rec, gate, unreachableApprovalStore{}, denyApprovalDecisions{}, nil, nil, nil)
+	appr := capability.NewApprovals(rec, gate, unreachableApprovalStore{}, denyApprovalDecisions{}, nil, nil)
 	exec := capability.NewExecution(ctl, read, appr, capability.NewBlastCap(settings), s.idem, s.jobsRepo, s.tasksRepo, s.conduit, settings, s.newID, nil)
 	return &capLayer{Execution: exec, ReadLane: read, Control: ctl}
 }

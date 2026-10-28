@@ -62,7 +62,7 @@ var capabilityReadAllowlist = map[string]bool{
 
 // execFiles are the files relaxed from capabilityReadAllowlist: the execution
 // tools, which spell capability.Principal/Selector/NodeResult/FrozenError/
-// CapExceededError and the like for the Executor, TaskResolver and
+// CapExceededError and the like for the Executor and
 // ApprovalDecider seams and for error rendering. Every other non-test file in
 // this package is STRICT by default, so a new file is guarded the moment it
 // exists: a new read tool needs no entry here, and a new file that needs more
@@ -73,11 +73,6 @@ var capabilityReadAllowlist = map[string]bool{
 var execFiles = map[string]bool{
 	"tools_execution.go": true,
 	"tools_jobs.go":      true,
-	// tasks.go serves tasks/get and tasks/cancel. It spells
-	// capability.Principal and capability.TaskView for the TaskResolver seam's
-	// signature. Resolving a task handle can never become a second path to a
-	// Node: it may never reach capability.Execution or newDispatch.
-	"tasks.go": true,
 	// tools_approval.go serves approve_request, the in-band approval rung
 	// (ADR-0029). It spells capability.Principal and
 	// capability.ApprovalDecision for the ApprovalDecider seam. Approving

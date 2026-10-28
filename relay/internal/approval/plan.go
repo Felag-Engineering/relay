@@ -43,7 +43,7 @@ import (
 // Two different Actions would produce the same bytes and therefore the same
 // PlanHash. Every argument is therefore written as TWO separate length-prefixed
 // fields — its key under the literal field name "arg.k" and its value under
-// the literal field name "arg.v" — matching HashPlanShape (shape.go). No
+// the literal field name "arg.v". No
 // caller-influenced byte occupies a field name anywhere in this function, so
 // the key/value boundary cannot be forged: the decoder always knows a field's
 // name ends at "=", because the name is a compile-time literal, and always

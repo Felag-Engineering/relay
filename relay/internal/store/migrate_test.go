@@ -293,10 +293,9 @@ func TestAppliedVersions_ReadsEveryRowNotJustTheMax(t *testing.T) {
 }
 
 // seedMigrations applies every embedded migration through applyMigration
-// EXCEPT those in skip, over a raw *sql.DB — the same pre-seeding pattern
-// shapekeys_test.go's TestOpen_AppliesMigration0022AndBackfills uses to
-// build a database at a known, non-current schema state. Called with no
-// skip versions, it seeds the full embedded set.
+// EXCEPT those in skip, over a raw *sql.DB, to build a database at a known,
+// non-current schema state. Called with no skip versions, it seeds the full
+// embedded set.
 func seedMigrations(t *testing.T, db *sql.DB, skip ...int) (migrations []migration, seeded int) {
 	t.Helper()
 	skipped := make(map[int]struct{}, len(skip))

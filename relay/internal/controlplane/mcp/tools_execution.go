@@ -419,17 +419,15 @@ func renderParked(parked *capability.ParkedError) *PendingApprovalOutput {
 		rules = []string{}
 	}
 	return &PendingApprovalOutput{
-		Status:        statusPendingApproval,
-		RequestID:     parked.RequestID,
-		PlanHash:      parked.PlanHash,
-		Summary:       parked.Summary,
-		MatchedRules:  rules,
-		Progress:      parked.Progress,
-		ExpiresAt:     parked.ExpiresAt.UTC().Format(time.RFC3339),
-		DecisionPath:  "/api/v1/approvals/" + parked.RequestID + "/decision",
-		NextStep:      pendingApprovalNextStep,
-		TaskID:        parked.TaskID,
-		TaskExpiresAt: controlplane.RFC3339(parked.TaskExpiresAt),
+		Status:       statusPendingApproval,
+		RequestID:    parked.RequestID,
+		PlanHash:     parked.PlanHash,
+		Summary:      parked.Summary,
+		MatchedRules: rules,
+		Progress:     parked.Progress,
+		ExpiresAt:    parked.ExpiresAt.UTC().Format(time.RFC3339),
+		DecisionPath: "/api/v1/approvals/" + parked.RequestID + "/decision",
+		NextStep:     pendingApprovalNextStep,
 	}
 }
 
@@ -502,7 +500,7 @@ const (
 //   - clientCanBeAsked(req, p) is true (elicit.go): a client that could never
 //     have been asked could never have received a question, so any
 //     requestState/inputResponses it sends are stray, and the call is
-//     treated exactly as today's call (AP-70, read literally) — its fields
+//     treated exactly as today's call (AP-85) — its fields
 //     are ignored rather than fed to the decision path. For claude-code this
 //     also means off an OAuth session of a human Account (AP-78): such a
 //     session's requestState/inputResponses are ignored exactly like an
@@ -591,11 +589,6 @@ func answerThenDispatch(
 			}
 		}
 		out.Decision = r.decisionOutput(out)
-		// If the caller advertises Tasks and this result is a
-		// pending_approval, taskshim.go's confident rewrite replaces it with
-		// a task result and the decision block above does not survive that
-		// rewrite (plan review, ADOPTED as a comment). The decision stays
-		// audited and readable on the Control API either way.
 		return nil, out, nil
 
 	case elicitedApprovedJobBound:
@@ -697,7 +690,7 @@ func registerExecutionTools(srv *sdkmcp.Server, exec Executor, results JobResult
 		// through to the plain dispatch() call that follows. A plan=true
 		// call never reaches here (it returned above), so a retry carrying
 		// plan=true is handled exactly like today's call regardless of this
-		// check (AP-70: "a call that did not park").
+		// check (a plan is not a park).
 		if isAnsweredRetry(ask, req, p) {
 			return answerThenDispatch(ctx, req, p, exec, results, reads, decider, ask, now, toolRunOperation, in, sel, act, o)
 		}
@@ -707,14 +700,8 @@ func registerExecutionTools(srv *sdkmcp.Server, exec Executor, results JobResult
 			return nil, RunOrPlanOutput{}, err
 		}
 		// A question replaces pending_approval outright: the returned
-		// CallToolResult carries InputRequests and no structuredContent, so
-		// the SEP-2663 task shim — which keys off
-		// structuredContent.pending_approval — passes it through untouched
-		// and mints no task envelope (AP-71; ADR-0028 amendment 2026-09-24).
-		// Execution.Run may still have minted an orphan task handle above
-		// (parked.TaskID) — expected and harmless, because nothing ever reads
-		// it once the question is rendered instead; do NOT add a conditional
-		// to Execution.Run to suppress it.
+		// CallToolResult carries InputRequests and no structuredContent, and
+		// nothing renders a park as an MCP task handle (AP-85).
 		if parked != nil {
 			if q, ok := ask.question(req, p, parked, toolRunOperation, in); ok {
 				return q, RunOrPlanOutput{}, nil
@@ -785,9 +772,8 @@ func registerExecutionTools(srv *sdkmcp.Server, exec Executor, results JobResult
 		if err != nil {
 			return nil, RunOrPlanOutput{}, err
 		}
-		// See run_operation's identical branch above for why this replaces
-		// pending_approval outright and emits no task envelope (AP-71;
-		// ADR-0028 amendment 2026-09-24).
+		// See run_operation's identical branch above: a question replaces
+		// pending_approval outright (AP-85).
 		if parked != nil {
 			if q, ok := ask.question(req, p, parked, toolRawExec, in); ok {
 				return q, RunOrPlanOutput{}, nil

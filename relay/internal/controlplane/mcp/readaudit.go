@@ -28,8 +28,8 @@ import (
 // list_nodes, describe_node and list_operations go through the capability
 // read lane (ReadLane, mcp.go): the record and the read are the same call,
 // made there rather than through this seam. This file's
-// ReadAuditor/auditRead serve only get_job (tools_jobs.go), the Tasks
-// read-back tools (tasks/get, tasks.go), and an answered retry's Job-bound re-attach (run_operation/raw_exec, tools_execution.go),
+// ReadAuditor/auditRead serve only get_job (tools_jobs.go) and an
+// answered retry's Job-bound re-attach (run_operation/raw_exec, tools_execution.go),
 // which reads back a previously-dispatched Job's Task rows exactly as
 // get_job does: the tools that read back a previously-dispatched Job's own
 // Task rows rather than the registry or a display-only cache.
@@ -42,7 +42,7 @@ type ReadEvent struct {
 	// Tool is the MCP tool name, e.g. "get_job". Set by auditRead.
 	Tool string
 
-	// JobID is the Job a get_job/tasks-get call read back.
+	// JobID is the Job a get_job call read back.
 	JobID string
 }
 

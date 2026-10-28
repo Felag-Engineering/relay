@@ -41,19 +41,6 @@ type Repository interface {
 	// re-ask is a fresh audited Request with the requester's name on it.
 	ByPlanHash(ctx context.Context, planHash string) (Request, error)
 
-	// LastApprovedByShape returns the most recently RESOLVED approved Request
-	// whose shape key is shapeKey, excluding excludeID (the record being
-	// rendered), or ErrNotFound. It is a lookup, not a scan, so the approval
-	// object can answer "what did I approve last time that looked like this?"
-	// on the most latency-sensitive screen there is.
-	//
-	// It is a READ. Nothing about it releases a dispatch: release is by plan
-	// hash and by plan hash only (see ByPlanHash). An empty shapeKey, or a
-	// LegacyShapeKey, returns ErrNotFound — a record whose shape was never
-	// computed has no comparable prior, and manufacturing one would be the
-	// "materially different action reads as routine" failure D10 names.
-	LastApprovedByShape(ctx context.Context, shapeKey, excludeID string) (Request, error)
-
 	// Pending returns every Request still in StatePending, oldest deadline
 	// first. This is both the approval queue's read and the expiry sweeper's
 	// scan.

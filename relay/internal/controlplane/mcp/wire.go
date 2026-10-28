@@ -459,29 +459,6 @@ type PendingApprovalOutput struct {
 
 	// NextStep is plain-language guidance for the AI-agent holding this result.
 	NextStep string `json:"next_step" jsonschema:"What to do next."`
-
-	// TaskID is the MCP task handle attached to this park (SEP-2663), or
-	// absent when the Relay has no handle store wired.
-	//
-	// It is carried in the ORDINARY result — not only in a Tasks-shaped one —
-	// because it is how a client learns the handle exists at all. Note this is
-	// not the SEP's task envelope: rewriting the response into a
-	// CreateTaskResult is gated on the client advertising the Tasks capability
-	// ([4/6]), and this field is merely a piece of Relay's own JSON. A client
-	// that cannot use it ignores it and re-drives, exactly as before.
-	//
-	// It is a POLL handle, never a decision one. Resolving it reports state; no
-	// MCP method answers an approval (ADR-0028, no_decision_test.go).
-	TaskID string `json:"task_id,omitempty" jsonschema:"An MCP task handle for this parked dispatch, if the Relay has the Tasks extension enabled. A Tasks-capable client may poll tasks/get with it instead of re-driving the call. It cannot be used to approve anything."`
-
-	// TaskExpiresAt is when that handle stops being pollable. It is NOT the
-	// same as ExpiresAt above: that one is when the approval lapses, this is
-	// when the handle does, and the handle is capped independently.
-	//
-	// It exists so the Tasks shim can render SEP-2663's ttlMs from the Relay's
-	// own answer rather than deriving one — a shim that computed a lifetime
-	// would be a second copy of the cap, drifting from the first.
-	TaskExpiresAt string `json:"task_expires_at,omitempty" jsonschema:"When the MCP task handle stops being pollable (RFC 3339). Distinct from expires_at, which is when the approval itself lapses."`
 }
 
 // pendingApprovalNextStep is the fixed guidance every parked result carries.

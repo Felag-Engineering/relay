@@ -245,9 +245,9 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 	// named. Deps.Cancel (cancel.go) is another field wired to the same
 	// object, and closing the pre-existing hole belongs in the same change
 	// that adds another way to reach it.
-	// ResolveTask (mcptask.go) writes a task handle's status — a real write,
-	// not exposed by ApprovalReader or QueryReader, so "Resolve" belongs on
-	// this list for the identical reason "Decide" and "Revoke" already are.
+	// ResolveTask, the removed task-handle write, stays listed so it cannot
+	// return: "Resolve" belongs on this list for the identical reason "Decide"
+	// and "Revoke" already are.
 	//
 	// Mint (#654) closes the SAME hole, not a new one the Accounts seam
 	// introduced. MintAPIToken now lives on *capability.AccountAdmin, which
@@ -276,7 +276,8 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 			"Decide", "Revoke", "Request", "Claim", "Create", "Bind",
 			// The capability layer's dispatch and control-action verbs
 			// (#595): Run and Plan dispatch; Engage/Release and Cancel are
-			// ControlActions; Resolve is ResolveTask, a task-handle write.
+			// ControlActions; Resolve is the removed ResolveTask, kept listed so it
+			// cannot return.
 			// Run, Plan, Cancel and Resolve are reachable from
 			// Deps.Cancel (the *capability.Execution); Deps.Approvals is the
 			// narrower *capability.Approvals and carries none of them.
@@ -302,10 +303,10 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 
 	// approvalListingMethod matches the READ methods of *capability.Approvals
 	// that ApprovalReader deliberately does not declare. Deps.Approvals is
-	// wired to *capability.Approvals, which carries PendingApprovals and
-	// LastApprovedOfSameShape beyond the one Approval read the seam declares.
-	// The Active and GrantFor prefixes stay listed as defence in depth against
-	// a grant read ever returning. The narrowing holds only if those
+	// wired to *capability.Approvals, which carries PendingApprovals beyond the
+	// one Approval read the seam declares. The LastApproved, Active and
+	// GrantFor prefixes stay listed as defence in depth against a same-shape or
+	// grant read ever returning. The narrowing holds only if those
 	// cannot be recovered by anonymous assertion — the same hole the write-verb
 	// list closes for writes. Like writeSurfaceMethod, it is consulted only for
 	// type assertions and type-switch cases, so a named seam DECLARING such a

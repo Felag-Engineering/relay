@@ -326,7 +326,7 @@ func newTestServerWithConcurrency(t *testing.T, accountID string, readCap, mutat
 	drainOnCleanup(t, capSvc.Execution)
 	results := testJobResultReader{jobsRepo: st.Jobs(), tasksRepo: st.Tasks()}
 
-	handler := mcp.New(testReadLane{svc: capSvc.ReadLane}, opsLister{}, capSvc.Execution, results, nil, nil)
+	handler := mcp.New(testReadLane{svc: capSvc.ReadLane}, opsLister{}, capSvc.Execution, results, nil)
 
 	cert := relaytest.SelfSignedServerCert(t, "mcp-test")
 	controlSrv := controlplane.New(
@@ -453,7 +453,7 @@ func newTestServerWithFailingReadSink(t *testing.T) testServer {
 	})
 	drainOnCleanup(t, capSvc.Execution)
 	results := testJobResultReader{jobsRepo: st.Jobs(), tasksRepo: st.Tasks()}
-	handler := mcp.New(testReadLane{svc: capSvc.ReadLane}, opsLister{}, capSvc.Execution, results, nil, nil)
+	handler := mcp.New(testReadLane{svc: capSvc.ReadLane}, opsLister{}, capSvc.Execution, results, nil)
 
 	cert := relaytest.SelfSignedServerCert(t, "mcp-test")
 	controlSrv := controlplane.New(

@@ -17,9 +17,9 @@ import (
 )
 
 // postdispatch_test.go proves the reserved-path fix pass on Service.Run's
-// POST-dispatch accounting (bindTaskHandleJob, the KindDispatch audit
-// record): once a Job's release claim has committed, a client that drops mid-
-// dispatch must not leave that Job's accounting stranded on a ctx the same
+// POST-dispatch accounting (the KindDispatch audit record): once a Job's
+// release claim has committed, a client that drops mid-dispatch must not
+// leave that Job's accounting stranded on a ctx the same
 // drop already cancelled — see the acctCtx block in Run (pipeline.go).
 
 // ctxSensitiveAuditSink is a minimal capability.AuditSink over a REAL
@@ -141,20 +141,14 @@ func (c *cancelOnDispatchConduit) Query(context.Context, string, jobs.Action) (j
 	return jobs.Verdict{}, nil
 }
 
-// TestRun_ReservedDispatchIsAuditedAndBoundWhenTheClientDropsMidDispatch is
-// the fix pass's central proof (#713 follow-up, Codex run 2 HIGH): a client
+// TestRun_ReservedDispatchIsAuditedWhenTheClientDropsMidDispatch: a client
 // that drops mid-dispatch on the RESERVED (approval-released) path must not
 // leave the Job it already committed to with no durable dispatch audit
-// record, and its MCP task handle must still get bound. Real SQLite for the
-// approval claim (whose atomicity is the store's contract, matching
-// TestRun_ReleasedJobStaysBoundWhenTheCallIsCancelledMidDispatch), the Job
-// engine, the MCP task handle store (st.MCPTasks(), not newMemTasks() —
-// newMemTasks ignores ctx entirely, so it cannot tell a live detached ctx
-// from the cancelled request ctx, which would let a hand-revert of only the
-// bindTaskHandleJob call to ctx pass this test undetected), and the
-// ctx-sensitive sink above for the audit write — a spy that cannot fail
-// would prove nothing about which ctx Run actually used.
-func TestRun_ReservedDispatchIsAuditedAndBoundWhenTheClientDropsMidDispatch(t *testing.T) {
+// record. Real SQLite for the approval claim (whose atomicity is the store's
+// contract, matching TestRun_ReleasedJobStaysBoundWhenTheCallIsCancelledMidDispatch)
+// and the Job engine, and the ctx-sensitive sink above for the audit write: a
+// spy that cannot fail would prove nothing about which ctx Run actually used.
+func TestRun_ReservedDispatchIsAuditedWhenTheClientDropsMidDispatch(t *testing.T) {
 	st, err := store.Open(filepath.Join(t.TempDir(), "relay.db"))
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
@@ -170,13 +164,11 @@ func TestRun_ReservedDispatchIsAuditedAndBoundWhenTheClientDropsMidDispatch(t *t
 	ctx, cancel := context.WithCancel(context.Background())
 	conduit := &cancelOnDispatchConduit{cancel: cancel, result: jobs.Result{Outcome: jobs.OutcomeSuccess}}
 	auditSink := &ctxSensitiveAuditSink{repo: st.Audit(), newID: defaultID, now: func() time.Time { return apNow }}
-	tasks := st.MCPTasks()
 
 	s := build(t, seams{reg: reg,
 		authz: &spyAuthorizer{}, cap: &spyCapChecker{},
 		audit: auditSink, freeze: &fakeFreezeStore{},
 		gate: gateEverything(t, 1), approvals: approvalsRepo, approvalAuthz: &spyApprovalAuthorizer{},
-		mcpTasks: tasks,
 		jobsRepo: st.Jobs(), tasksRepo: st.Tasks(), conduit: conduit,
 		now: func() time.Time { return apNow },
 	})
@@ -186,9 +178,6 @@ func TestRun_ReservedDispatchIsAuditedAndBoundWhenTheClientDropsMidDispatch(t *t
 	var parked *ParkedError
 	if !errors.As(err, &parked) {
 		t.Fatalf("first Run: err = %v, want a park", err)
-	}
-	if parked.TaskID == "" {
-		t.Fatal("first Run: want a minted MCP task handle (an MCP task store was wired)")
 	}
 	approveViaRecordDecision(t, approvalsRepo, parked.RequestID, parked.PlanHash, apNow.Add(time.Minute))
 
@@ -231,15 +220,6 @@ func TestRun_ReservedDispatchIsAuditedAndBoundWhenTheClientDropsMidDispatch(t *t
 	}
 	if !found {
 		t.Fatalf("no %s audit record for job %s — the client drop stranded the reserved-path dispatch accounting", audit.KindDispatch, jobID)
-	}
-
-	// (3) The MCP task handle was bound to the Job.
-	handle, err := tasks.ByApprovalRequest(context.Background(), parked.RequestID)
-	if err != nil {
-		t.Fatalf("ByApprovalRequest(%s): %v", parked.RequestID, err)
-	}
-	if handle.JobID != jobID {
-		t.Errorf("task handle JobID = %q, want %q — the client drop must not strand the task-handle binding either", handle.JobID, jobID)
 	}
 }
 

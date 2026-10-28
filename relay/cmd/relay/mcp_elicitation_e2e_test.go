@@ -1,5 +1,5 @@
 // Package main: mcp_elicitation_e2e_test.go is S5 of #646 (v0.7.0). It proves
-// AP-60, AP-63, AP-68 and AP-70 end to end through the real composition root,
+// AP-60, AP-63, AP-68 and AP-85 end to end through the real composition root,
 // using the Gleipnir client contract from #646: a machine Account, a retry
 // that re-sends the same name and arguments and echoes requestState
 // byte-identically, an inputResponses map keyed by the question's own
@@ -18,7 +18,7 @@
 // the verified/asserted attribution split, the Job/Task store state, the
 // Control API decision view, terminality against a later decision, the
 // side-by-side with approve_request, the permission-ask question shape, and
-// the non-askable legs (AP-70).
+// the non-askable legs (AP-85).
 package main
 
 import (
@@ -642,7 +642,7 @@ func TestMCPElicitation_DeclineIsTerminalAndAudited(t *testing.T) {
 	}
 }
 
-// TestMCPElicitation_ClientThatCannotBeAskedSeesNoChange is AP-70's e2e
+// TestMCPElicitation_ClientThatCannotBeAskedSeesNoChange is AP-85's e2e
 // proof: with the option ON and against the same askable-in-band gate, a
 // client that cannot be asked — one advertising no elicitation capability,
 // and one on a legacy protocol version — sees today's pending_approval

@@ -62,7 +62,7 @@ func TestAuditRead_FailsTheCallWhenTheTrailCannotBeWritten(t *testing.T) {
 // A nil auditor is the pre-#288 behaviour, kept so an unwired surface degrades
 // to "debug log only" rather than failing shut on a missing dependency.
 func TestAuditRead_NilAuditorIsANoop(t *testing.T) {
-	if err := auditRead(context.Background(), nil, "tasks/get", ReadEvent{}); err != nil {
+	if err := auditRead(context.Background(), nil, "get_job", ReadEvent{}); err != nil {
 		t.Errorf("auditRead with a nil auditor: %v, want nil", err)
 	}
 }

@@ -183,7 +183,7 @@ func retryRawExecArgs() map[string]any {
 // path is fully reachable.
 func retryServer(t *testing.T, exec Executor, reads ReadAuditor, results JobResultReader, dec ApprovalDecider) *httptest.Server {
 	t.Helper()
-	handler := New(nil, stubOpsLister{}, exec, results, reads, nil,
+	handler := New(nil, stubOpsLister{}, exec, results, reads,
 		WithApprovalDecider(dec), WithApprovalElicitation(), WithClock(func() time.Time { return fixedNow }))
 	mux := http.NewServeMux()
 	mux.Handle("/mcp", handler)
@@ -857,7 +857,7 @@ func TestAnsweredRetry_RawExecIsWiredToo(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------
-// AP-70: the option-off guard, at the handler seam
+// AP-85: the option-off guard, at the handler seam
 // -----------------------------------------------------------------------
 //
 // The composition root passes WithApprovalElicitation() in production since
@@ -877,7 +877,7 @@ func TestAnsweredRetry_OptionOffIgnoresRetryFields(t *testing.T) {
 		reads := &scriptedReadAuditor{log: log}
 		results := &scriptedJobResultReader{log: log}
 		dec := &recordingDecider{}
-		handler := New(nil, stubOpsLister{}, exec, results, reads, nil, WithApprovalDecider(dec), WithClock(func() time.Time { return fixedNow }))
+		handler := New(nil, stubOpsLister{}, exec, results, reads, WithApprovalDecider(dec), WithClock(func() time.Time { return fixedNow }))
 		mux := http.NewServeMux()
 		mux.Handle("/mcp", handler)
 		srv := httptest.NewServer(controlplane.NewAuthenticator(answerTestVerifier{}).Middleware(mux))

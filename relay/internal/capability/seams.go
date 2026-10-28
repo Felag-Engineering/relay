@@ -51,7 +51,7 @@ const (
 	ControlFreezeRelease ControlAction = "freeze_release"
 
 	// ControlCancelJob is POST /api/v1/jobs/{id}/cancel, MCP's cancel_job and
-	// tasks/cancel, and the Console's Cancel control. The ROLE floor
+	// the Console's Cancel control. The ROLE floor
 	// is operator and not human-only: an AI-agent must be able to cancel its
 	// own dispatch (execution.md §Cancellation, owner decision
 	// 2026-09-14). The SCOPE differs by Kind (owner decision

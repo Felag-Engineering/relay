@@ -18,13 +18,12 @@ import (
 //
 // The MCP surface may surface a pending approval — that is [4/6]/[5/6]'s whole
 // job — and it must never accept a decision. The reason is the one property the
-// whole mechanism rests on: elicitation and the Tasks extension travel over the
-// MCP session, which is the AI's channel and the client's responsibility. A
-// naive client can feed an approval prompt to its model and a compromised one
-// can answer it outright, and the Relay cannot tell the difference. So the
-// answer has to arrive somewhere the requesting session cannot reach: the
-// authenticated /api/v1 decision endpoint, carrying a credential that session
-// does not hold.
+// whole mechanism rests on: elicitation travels over the MCP session, which is the AI's channel and the client's
+// responsibility. A naive client can feed an approval prompt to its model and a
+// compromised one can answer it outright, and the Relay cannot tell the
+// difference. So the answer has to arrive somewhere the requesting session
+// cannot reach: the authenticated /api/v1 decision endpoint, carrying a
+// credential that session does not hold.
 //
 // "We just won't call it from here" is not that guarantee — it is a convention,
 // and conventions are what get forgotten when someone wires an approval tool to
@@ -54,11 +53,7 @@ import (
 //
 // # What #376 added
 //
-// The scan now covers internal/mcptask as well. A task handle is the Tasks
-// extension's delivery envelope, and an envelope that could record a decision
-// would be the same hole one package over.
-//
-// It also forbids the string "tasks/update" outright. That is ADR-0028's stated
+// It forbids the string "tasks/update" outright. That is ADR-0029's stated
 // boundary made structural: tasks/update is how a client answers an
 // `inputRequests` elicitation, which is an approval decision arriving over the
 // AI's own session — precisely the open rung-2 question on #272. Serving it
@@ -101,11 +96,8 @@ func TestMCPCannotAcceptAnApprovalDecision(t *testing.T) {
 	}
 	dir := filepath.Dir(thisFile)
 
-	// The Tasks extension spans two packages; both are the AI's channel.
-	for _, target := range []string{dir, filepath.Join(dir, "..", "..", "mcptask")} {
-		for _, finding := range scanForDecisionPaths(t, target) {
-			t.Error(finding)
-		}
+	for _, finding := range scanForDecisionPaths(t, dir) {
+		t.Error(finding)
 	}
 }
 
@@ -218,7 +210,7 @@ func scanForDecisionPaths(t *testing.T, dir string) []string {
 					findings = append(findings, fmt.Sprintf("%s contains the literal %q. That method answers an inputRequests "+
 						"elicitation, which is an approval decision arriving over the AI's own session — "+
 						"out of scope until #272 settles whether an in-band answer can ever count "+
-						"(ADR-0028). Serving it requires amending both that ADR and this guard, in front "+
+						"(ADR-0029). Serving it requires amending both that ADR and this guard, in front "+
 						"of a human.", name, forbiddenDecisionMethod))
 				}
 			}
@@ -282,7 +274,7 @@ func TestInBandDecisionExemptionIsExactlyOneFile(t *testing.T) {
 //
 // ADR-0029 made the in-band rung reachable through a tool call, where a client
 // with a human in front of it is the surface. It did not sanction tasks/update,
-// where an answer arrives with no human anywhere in the path (ADR-0028). The
+// where an answer arrives with no human anywhere in the path (ADR-0029). The
 // exemption above skips the whole file, so without this the one file allowed to
 // record decisions would also be the one file allowed to serve tasks/update.
 func TestInBandDecisionCannotNameTasksUpdate(t *testing.T) {
@@ -305,7 +297,7 @@ func TestInBandDecisionCannotNameTasksUpdate(t *testing.T) {
 		if v, err := strconv.Unquote(lit.Value); err == nil && v == forbiddenDecisionMethod {
 			t.Errorf("%s contains the literal %q. The in-band exemption covers a TOOL CALL, where the client "+
 				"puts a human in front of the decision. It does not extend to %s, which answers an elicitation "+
-				"over the AI's own session with nobody in the path (ADR-0028, ADR-0029).",
+				"over the AI's own session with nobody in the path (ADR-0029).",
 				inBandDecisionFile, forbiddenDecisionMethod, forbiddenDecisionMethod)
 		}
 		return true

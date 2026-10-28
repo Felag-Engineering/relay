@@ -9,7 +9,7 @@
 //     never substitutes for the Selector -> authz -> blast-cap chain in front
 //     of it. Everything here can only *add* a reason to stop.
 //   - It is not a delivery mechanism. How an approver is reached — elicitation,
-//     an MCP task handle, a webhook — is the surfaces' problem ([4/6], [5/6]).
+//     a webhook — is the surfaces' problem ([4/6], [5/6]).
 //     This package decides whether to park, what the approval is bound to, and
 //     whether the answers received are enough.
 //
@@ -383,16 +383,6 @@ type Request struct {
 	// mutate-the-world.
 	PlanHash string
 
-	// ShapeKey groups records by WHAT is being done rather than by how much of
-	// it (D10): the Action, its risk class, its SHAPE arguments, and the
-	// normalised Selector, WITHOUT the resolved fan-out (see HashPlanShape).
-	//
-	// It is a rendering and grouping key and NEVER a release lookup — only
-	// PlanHash releases a dispatch (see capability.checkApproval). Rows with no
-	// stored Selector carry a LegacyShapeKey, which is unique per record and
-	// therefore matches nothing but itself.
-	ShapeKey string
-
 	// RequestedByID and RequestedBy are the verified requester, needed here (as
 	// well as in audit) because RequesterAllowed is evaluated against it.
 	RequestedByID string
@@ -440,24 +430,17 @@ type Request struct {
 // what the role floor is computed from, and those two disagreeing is precisely
 // the approval-view fidelity gap.
 //
-// The shape key is computed here for the same reason, and from the same
-// inputs: a caller that could supply one could make two different actions
-// group together. The zero SelectorShape means "no Selector was known", which
-// is deliberately a different shape from the fleet-wide Selector — see
-// SelectorShape.
-//
 // There is deliberately no Job ID: a gated dispatch parks BEFORE the Job engine
 // runs, so no Job exists yet. Creating one at park time would leave Pending
 // Tasks in the store for work that may never be approved — rows a restart
 // reconciler could mistake for interrupted work. The Job ID is bound once, by
 // the release claim, before the Job is dispatched (AP-77) — see Release and
 // Repository.BindJob.
-func NewRequest(id, planHash, requestedByID, requestedBy string, act jobs.Action, nodeIDs []string, sel SelectorShape, rules []string, req Requirement, now time.Time) Request {
+func NewRequest(id, planHash, requestedByID, requestedBy string, act jobs.Action, nodeIDs []string, rules []string, req Requirement, now time.Time) Request {
 	req = req.normalized()
 	return Request{
 		ID:            id,
 		PlanHash:      planHash,
-		ShapeKey:      HashPlanShape(act, sel),
 		RequestedByID: requestedByID,
 		RequestedBy:   requestedBy,
 		Summary:       Summarize(act, nodeIDs).String(),

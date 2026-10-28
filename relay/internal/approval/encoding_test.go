@@ -9,10 +9,9 @@ import (
 // the exact bytes writeField and writeCount produce, rather than the output of
 // any hash function built on top of them.
 //
-// writeField and writeCount are shared by the stored bindings — HashPlan in
+// writeField and writeCount build the stored binding HashPlan writes to
 // approval_requests.plan_hash (whose historical grant-request rows were hashed
-// with the same primitives), and the shape keys in
-// approval_requests.shape_key — so "someone tidies the shared primitive" would
+// with the same primitives), so "someone tidies the shared primitive" would
 // otherwise be a silent re-point of every one of those stored values. This
 // test turns that into a failing test whose message names the consequence,
 // instead of leaving it to be discovered as a run of approvals that
@@ -39,8 +38,8 @@ func TestEncodingFormatIsPinned(t *testing.T) {
 		// len(value) for utf8.RuneCountInString(value) -- a very natural
 		// instinct when someone touches a length-prefixed format -- changes
 		// the byte offset the decoder computes without changing the rune
-		// count, silently re-pointing every non-ASCII plan_hash and
-		// shape_key already on disk. An ASCII-only table cannot see this.
+		// count, silently re-pointing every non-ASCII plan_hash already
+		// on disk. An ASCII-only table cannot see this.
 		{name: "two-byte rune", field: "f", value: "\u00fc", want: "f=2:\u00fc\n"},
 		// A three-byte rune makes the byte-vs-rune distinction unmistakable:
 		// one rune, three bytes.
@@ -52,7 +51,7 @@ func TestEncodingFormatIsPinned(t *testing.T) {
 			writeField(&buf, c.field, c.value)
 			if got := buf.String(); got != c.want {
 				t.Errorf("writeField(%q, %q) = %q, want %q — this format is shared by every "+
-					"live plan_hash and shape_key on disk", c.field, c.value, got, c.want)
+					"live plan_hash on disk", c.field, c.value, got, c.want)
 			}
 		})
 	}
@@ -72,7 +71,7 @@ func TestEncodingFormatIsPinned(t *testing.T) {
 			writeCount(&buf, c.field, c.n)
 			if got := buf.String(); got != c.want {
 				t.Errorf("writeCount(%q, %d) = %q, want %q — this format is shared by every "+
-					"live plan_hash and shape_key on disk", c.field, c.n, got, c.want)
+					"live plan_hash on disk", c.field, c.n, got, c.want)
 			}
 		})
 	}

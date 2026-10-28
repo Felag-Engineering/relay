@@ -435,7 +435,7 @@ func TestAnsweredRetry_RefusedStateStaysDecidableByTheRescue(t *testing.T) {
 	}
 }
 
-// TestAnsweredRetry_ClientThatCannotBeAskedIgnoresRetryFields (AP-70, e2e
+// TestAnsweredRetry_ClientThatCannotBeAskedIgnoresRetryFields (AP-85, e2e
 // half): with NO WithMCPServerOptions hook — exactly what a real deployment
 // gets now that control_surfaces.go passes mcp.WithApprovalElicitation()
 // itself — a client that cannot be asked (no elicitation capability) still
