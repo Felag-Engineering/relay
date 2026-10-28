@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Proves scripts/compose-floor-check.sh accepts the good shape and refuses each violation of
-# RC-27 and the RC-36 port rule. Hermetic: bash, jq, awk and coreutils, with a stub `docker` on
+# RC-27, the RC-36 port rule and RC-7's digest-pin rule on the production stack. Hermetic: bash, jq, awk and coreutils, with a stub `docker` on
 # PATH that serves canned `docker compose config` JSON. No Docker, no network, no writes outside
 # its own `mktemp -d`.
 #
@@ -45,6 +45,9 @@ chmod +x "$BIN/docker"
 fail=0
 n=0
 
+PIN="ghcr.io/felag-engineering/relay:0.1.0@sha256:dcc567df8587152a2040c8a701790c105958be9e3b04f47b6a76bd6a1de7afc6"
+ZEROS="0000000000000000000000000000000000000000000000000000000000000000"
+
 reset() {
   cp "$REPO_ROOT/docker/relay.Dockerfile" "$TREE/docker/relay.Dockerfile"
   cp "$REPO_ROOT/relay/internal/relayconfig/retired.go" "$TREE/relay/internal/relayconfig/retired.go"
@@ -61,7 +64,8 @@ reset() {
     environment:{CONSOLE_ADMIN_PASSWORD:"x", RELAY_PUBLISH_ADDR:"127.0.0.1"}}'
   daemon='{build:{context:".",dockerfile:"docker/daemon.Dockerfile"}, environment:{RELAY_ADDRESS:"https://relay:7654"}}'
   netns='{image:"curlimages/curl", ports:[{target:7654,published:"7654"}]}'
-  jq -n "{services:{relay:$relay}}" >"$JSON/production.json"
+  # The production stack runs the published image pinned by digest; the others build from source.
+  jq -n --arg pin "$PIN" "{services:{relay:($relay | del(.build) | .image = \$pin)}}" >"$JSON/production.json"
   jq -n "{services:{relay:$relay, init:$oneshot, \"daemon-1\":$daemon}}" >"$JSON/test.json"
   jq -n "{services:{relay:$relay, init:$oneshot, \"daemon-1\":$daemon}}" >"$JSON/demo.json"
   jq -n "{services:{relay:$relay, init:$oneshot, \"daemon-1\":$daemon, \"relay-netns\":$netns}}" >"$JSON/oauth.json"
@@ -71,6 +75,9 @@ reset() {
 mut() { jq -c "$2" "$JSON/$1.json" >"$JSON/$1.tmp" && mv "$JSON/$1.tmp" "$JSON/$1.json"; }
 # mut_relay <jq filter on .services.relay>, applied to the demo stack.
 mut_relay() { mut demo ".services.relay |= ($1)"; }
+
+# mut_prod <jq filter on .services.relay>, applied to the production stack.
+mut_prod() { mut production ".services.relay |= ($1)"; }
 
 # run <name> <want-rc> <want-substring> [forbidden-substring]
 run() {
@@ -204,6 +211,25 @@ STUB
 chmod +x "$BIN/awk"
 refuse "20 the Dockerfile stage parser fails" "the stage parser failed" "ok: Dockerfile"
 rm -f "$BIN/awk"
+
+reset; mut_prod '.build = {context:".",dockerfile:"docker/relay.Dockerfile"}'
+refuse "21a production Relay has a build" "P1"
+reset; mut production '.services.extra = {image:"ghcr.io/felag-engineering/relay@sha256:'$ZEROS'", build:{context:"../../docker",dockerfile:"relay.Dockerfile"}}'
+refuse "21a2 a second Relay-image service is built beside the pinned Relay" "extra: P1"
+reset; mut production '.services.sidecar = {image:"curlimages/curl", build:{context:"."}}'
+refuse "21a3 a non-Relay production service has a build" "sidecar: P1"
+reset; mut_prod '.image = "ghcr.io/felag-engineering/relay:0.1.0"'
+refuse "21b production image is tag only" "P2"
+reset; mut_prod '.image = "ghcr.io/felag-engineering/relay:latest"'
+refuse "21c production image is :latest" "P2"
+reset; mut_prod '.image = "ghcr.io/felag-engineering/relay@sha256:abc"'
+refuse "21d production digest is short" "P2"
+reset; mut_prod ".image = \"ghcr.io/felag-engineering/relay@sha256:${ZEROS//0/A}\""
+refuse "21e production digest is uppercase hex" "P2"
+reset; mut_prod ".image = \"ghcr.io/someone-else/relay@sha256:$ZEROS\""
+refuse "21f production Relay on a foreign image" "no Relay service"
+reset; mut_prod ".image = \"ghcr.io/felag-engineering/relay@sha256:$ZEROS\""
+run "21g production digest without a tag is accepted" 0 "ok: production:"
 
 echo
 if [ "$fail" -ne 0 ]; then

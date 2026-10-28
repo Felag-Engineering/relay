@@ -5,6 +5,12 @@
 # (ADR-0043, invariant 11). It also proves the RC-36 port rule, that a published node-plane
 # port equals the listen port, since no committed stack sets advertised_address.
 #
+# It also proves the deployment-stack half of RC-7 on deploy/production: every Relay-image
+# service there names ghcr.io/felag-engineering/relay[:<tag>]@sha256:<64 lowercase hex>, and no
+# service there carries a build: at all (the stack runs only published images), so a build: on
+# any service is refused, a one-shot built from relay.Dockerfile included. The test and demo stacks build from source and are exempt
+# (DEV-ONLY). The check holds the shape of the pin and never resolves or chooses a digest.
+#
 # Needs bash, jq, awk and the `docker compose` CLI plugin, but NOT a Docker engine: each stack is
 # rendered with `docker compose config`, which reads files and never connects to a daemon.
 # Each stack is rendered with no inherited environment and no .env, so no caller variable can
@@ -87,6 +93,18 @@ def cfgmount: mounts | map(select(.target == "/etc/relay/relay.toml" or .target 
     "\($n): F9: node-plane port 7654 is published on \(.published); set node_plane.advertised_address in this stack'"'"'s relay.toml (RC-36) and update this check")
 )'
 
+# RC-7, production only: one line per service that builds, and per Relay-image service whose image
+# is not the published repository pinned by digest. Names and rule IDs, never the image string.
+PIN_JQ="$DEFS_JQ"'
+.services | to_entries[] | .key as $n | .value as $s |
+(
+  (if $s.build != null
+    then "\($n): P1: the deployment stack builds nothing; it runs only published images, and this service has a build: (RC-7)" else empty end),
+  ($s | select(isimage) |
+    if ((.image // "") | test("^ghcr\\.io/felag-engineering/relay(:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?@sha256:[0-9a-f]{64}$")) | not
+    then "\($n): P2: the deployment stack'"'"'s Relay image is not ghcr.io/felag-engineering/relay pinned by digest (@sha256:<64 hex>) (RC-7)" else empty end)
+)'
+
 COUNT_JQ="$DEFS_JQ"'[.services[] | select(isrelay)] | length'
 
 render() { # render <compose -f/--profile args>...
@@ -94,7 +112,7 @@ render() { # render <compose -f/--profile args>...
 }
 
 check_stack() { # check_stack <name> <compose args>...
-  local name="$1" json lines count line; shift
+  local name="$1" json lines pin_lines count line; shift
   local errfile; errfile="$(mktemp)" || { fail "$name: mktemp failed"; return; }
   if ! json="$(cd "$REPO_ROOT" && render "$@" 2>"$errfile")" || ! jq -e . >/dev/null 2>&1 <<<"$json"; then
     fail "$name: docker compose config failed or did not print JSON"
@@ -109,6 +127,10 @@ check_stack() { # check_stack <name> <compose args>...
     return
   fi
   lines="$(jq -r --argjson floor "$floor_json" "$ASSERT_JQ" <<<"$json")" || { fail "$name: assertion query failed"; return; }
+  if [ "$name" = production ]; then
+    pin_lines="$(jq -r "$PIN_JQ" <<<"$json")" || { fail "$name: pin query failed"; return; }
+    lines="$(printf '%s\n%s\n' "$lines" "$pin_lines" | grep -v '^$')"
+  fi
   if [ -n "$lines" ]; then
     while IFS= read -r line; do fail "$name: $line"; done <<<"$lines"
     return

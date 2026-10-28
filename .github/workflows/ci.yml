@@ -116,15 +116,15 @@ jobs:
         if: ${{ !cancelled() }}
         run: make test-release-image-guard
 
-      # RC-27's compose-floor check, proved against canned compose output with a stub docker.
+      # RC-7's and RC-27's compose-floor check, proved against canned compose output with a stub docker.
       # Hermetic: bash, jq and awk.
       - name: Compose floor check self-test
         if: ${{ !cancelled() }}
         run: make test-compose-floor-check
 
-      # RC-27 on the committed compose stacks and docker/relay.Dockerfile. Renders each stack
+      # RC-7 and RC-27 on the committed compose stacks and docker/relay.Dockerfile. Renders each stack
       # with the runner's `docker compose` CLI plugin, which needs no engine.
-      - name: Compose floor check (RC-27)
+      - name: Compose floor check (RC-7, RC-27)
         if: ${{ !cancelled() }}
         run: make compose-floor-check
 

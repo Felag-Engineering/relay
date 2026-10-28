@@ -24,9 +24,12 @@ import (
 
 // registrationSites lists, per Go source file in the package, each call that
 // registers a handler (Handle, HandleFunc) and each call that hands a mux to a
-// registrar, as "<file> <Type>.<func>: <call>(<first argument>)". It reads the
-// syntax only: it does not resolve types, so a mux renamed to something other
-// than mux or consoleMux escapes the hand-off half.
+// registrar, as "<file> <Type>.<func>: <call>(<first argument>)". A hand-off is
+// a mux identifier (mux, consoleMux) or a zero-argument .Mux() call passed to a
+// method or package-qualified call. It reads the syntax only: it does not
+// resolve types, so a mux renamed to something else, reached through a getter
+// not named Mux or a struct field, or handed to a bare function call such as
+// register(srv.Mux()), escapes the hand-off half.
 func registrationSites(t *testing.T, fset *token.FileSet, name string, file *ast.File, handOffs bool) []string {
 	t.Helper()
 	var sites []string
@@ -52,8 +55,8 @@ func registrationSites(t *testing.T, fset *token.FileSet, name string, file *ast
 				sites = append(sites, name+" "+fn+": "+types.ExprString(call.Fun)+"("+registrationArg(call.Args[0])+")")
 			case handOffs:
 				for _, arg := range call.Args {
-					if id, ok := arg.(*ast.Ident); ok && (id.Name == "mux" || id.Name == "consoleMux") {
-						sites = append(sites, name+" "+fn+": "+types.ExprString(call.Fun)+"("+id.Name+")")
+					if handed, ok := muxHandOff(arg); ok {
+						sites = append(sites, name+" "+fn+": "+types.ExprString(call.Fun)+"("+handed+")")
 					}
 				}
 			}
@@ -61,6 +64,20 @@ func registrationSites(t *testing.T, fset *token.FileSet, name string, file *ast
 		})
 	}
 	return sites
+}
+
+// muxHandOff reports whether arg hands over a mux, and renders it.
+func muxHandOff(arg ast.Expr) (string, bool) {
+	switch a := arg.(type) {
+	case *ast.Ident:
+		return a.Name, a.Name == "mux" || a.Name == "consoleMux"
+	case *ast.CallExpr:
+		sel, ok := a.Fun.(*ast.SelectorExpr)
+		if ok && len(a.Args) == 0 && sel.Sel.Name == "Mux" {
+			return types.ExprString(a), true
+		}
+	}
+	return "", false
 }
 
 func registrationArg(e ast.Expr) string {
@@ -134,6 +151,9 @@ func TestMuxRegistrationsAreTheKnownSites(t *testing.T) {
 			`control_surfaces.go consoleSurface.Mount: mux.Handle("/console/")`,
 			`control_surfaces.go mcpSurface.Mount: mux.Handle("/mcp")`,
 			`control_surfaces.go metricsSurface.Mount: mux.Handle("GET /metrics")`,
+			// The loop that mounts each control surface: its routes are the entries
+			// above and their packages' own RC-11 checks.
+			`main.go newServerWithHooks: s.Mount(controlSrv.Mux())`,
 			`reload_log.go swapHandler.Handle: s.handler().Handle(ctx)`,
 		}
 		if !slices.Equal(got, want) {
@@ -184,6 +204,42 @@ func (apiSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		want := []string{`control_surfaces.go apiSurface.Mount: mux.HandleFunc("POST /api/v1/settings")`}
 		if !slices.Equal(got, want) {
 			t.Errorf("the scan saw %q in a Mount body that registers a settings route, want %q; it would let that route through", got, want)
+		}
+	})
+
+	t.Run("negative control: a mux handed to a registrar as a call is seen", func(t *testing.T) {
+		const snippet = `package main
+
+func newServerWithHooks() {
+	settings.Register(controlSrv.Mux())
+}
+`
+		fset := token.NewFileSet()
+		file, err := parser.ParseFile(fset, "main.go", snippet, 0)
+		if err != nil {
+			t.Fatalf("parser.ParseFile: %v", err)
+		}
+		got := registrationSites(t, fset, "main.go", file, true)
+		want := []string{`main.go newServerWithHooks: settings.Register(controlSrv.Mux())`}
+		if !slices.Equal(got, want) {
+			t.Errorf("the scan saw %q for a mux handed to a registrar as a call, want %q; it would let a registrar in another package through", got, want)
+		}
+	})
+
+	t.Run("a zero-argument call that is not Mux is not a hand-off", func(t *testing.T) {
+		const snippet = `package main
+
+func newServerWithHooks() {
+	x.Register(srv.Handler())
+}
+`
+		fset := token.NewFileSet()
+		file, err := parser.ParseFile(fset, "main.go", snippet, 0)
+		if err != nil {
+			t.Fatalf("parser.ParseFile: %v", err)
+		}
+		if got := registrationSites(t, fset, "main.go", file, true); len(got) != 0 {
+			t.Errorf("the scan saw %q for a call that hands over no mux, want none; the hand-off match is Mux() only", got)
 		}
 	})
 }
