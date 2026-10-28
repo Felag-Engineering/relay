@@ -476,67 +476,74 @@ func newEventsHandler(d Deps, limiter *streamLimiter) http.HandlerFunc {
 		// and a 256-slot channel per abandoned request, forever.
 		defer sub.Close()
 
-		h := w.Header()
-		h.Set("Content-Type", "text/event-stream")
-		h.Set("Cache-Control", "no-store")
-		h.Set("X-Accel-Buffering", "no")
-		w.WriteHeader(http.StatusOK)
-		flusher.Flush()
+		serveEventStream(w, r, flusher, sub)
+	}
+}
 
-		keepalive := time.NewTicker(sseKeepalive)
-		defer keepalive.Stop()
+// serveEventStream writes the SSE response head and then forwards sub's
+// events, plus a keepalive comment, until the client goes away or sub closes.
+// The caller owns sub and closes it.
+func serveEventStream(w http.ResponseWriter, r *http.Request, flusher http.Flusher, sub *events.Subscription) {
+	h := w.Header()
+	h.Set("Content-Type", "text/event-stream")
+	h.Set("Cache-Control", "no-store")
+	h.Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
 
-		rc := http.NewResponseController(w)
-		// Belt and braces. net/http clears the write deadline itself after
-		// each HTTP/1.x request, and each h2 stream owns its own timer, so
-		// nothing is known to leak — but the loop below has several exits
-		// and none of them should be able to leave a timer armed.
-		defer func() { _ = rc.SetWriteDeadline(time.Time{}) }()
+	keepalive := time.NewTicker(sseKeepalive)
+	defer keepalive.Stop()
 
-		write := func(frame string) bool {
-			// Tolerating ErrNotSupported is for httptest.ResponseRecorder,
-			// which cannot take a deadline. It is a real hole if a
-			// ResponseWriter WRAPPER is ever added to this chain that
-			// implements Flush (so it passes the gate above) without
-			// Unwrap: the deadline would silently stop being set on a real
-			// connection. TestConsoleEvents_WriteDeadlinesSurviveTheMiddleware
-			// asserts, over a real connection on both transports, that this
-			// branch is not taken in production.
-			if err := rc.SetWriteDeadline(time.Now().Add(sseWriteTimeout)); err != nil &&
-				!errors.Is(err, http.ErrNotSupported) {
-				return false
-			}
-			if _, err := io.WriteString(w, frame); err != nil {
-				return false
-			}
-			flusher.Flush()
-			// Disarm. See sseWriteTimeout: over HTTP/2 a deadline left set
-			// is a countdown to RST_STREAM, not a bound on a write.
-			_ = rc.SetWriteDeadline(time.Time{})
-			return true
+	rc := http.NewResponseController(w)
+	// Belt and braces. net/http clears the write deadline itself after
+	// each HTTP/1.x request, and each h2 stream owns its own timer, so
+	// nothing is known to leak — but the loop below has several exits
+	// and none of them should be able to leave a timer armed.
+	defer func() { _ = rc.SetWriteDeadline(time.Time{}) }()
+
+	write := func(frame string) bool {
+		// Tolerating ErrNotSupported is for httptest.ResponseRecorder,
+		// which cannot take a deadline. It is a real hole if a
+		// ResponseWriter WRAPPER is ever added to this chain that
+		// implements Flush (so it passes newEventsHandler's Flusher check) without
+		// Unwrap: the deadline would silently stop being set on a real
+		// connection. TestConsoleEvents_WriteDeadlinesSurviveTheMiddleware
+		// asserts, over a real connection on both transports, that this
+		// branch is not taken in production.
+		if err := rc.SetWriteDeadline(time.Now().Add(sseWriteTimeout)); err != nil &&
+			!errors.Is(err, http.ErrNotSupported) {
+			return false
 		}
+		if _, err := io.WriteString(w, frame); err != nil {
+			return false
+		}
+		flusher.Flush()
+		// Disarm. See sseWriteTimeout: over HTTP/2 a deadline left set
+		// is a countdown to RST_STREAM, not a bound on a write.
+		_ = rc.SetWriteDeadline(time.Time{})
+		return true
+	}
 
-		for {
-			select {
-			case <-r.Context().Done():
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case ev, open := <-sub.C():
+			if !open {
+				// Close closed the channel. Reading `ev :=` alone
+				// would spin on zero values.
 				return
-			case ev, open := <-sub.C():
-				if !open {
-					// Close closed the channel. Reading `ev :=` alone
-					// would spin on zero values.
-					return
-				}
-				frame, renderable := frameEvent(ev)
-				if !renderable {
-					continue
-				}
-				if !write(frame) {
-					return
-				}
-			case <-keepalive.C:
-				if !write(": keepalive\n\n") {
-					return
-				}
+			}
+			frame, renderable := frameEvent(ev)
+			if !renderable {
+				continue
+			}
+			if !write(frame) {
+				return
+			}
+		case <-keepalive.C:
+			if !write(": keepalive\n\n") {
+				return
 			}
 		}
 	}
