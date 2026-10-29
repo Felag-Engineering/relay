@@ -128,9 +128,9 @@ func TestNewServer_MinimalConfigIsGRPCOnly(t *testing.T) {
 	}
 	cfg := sc.Config
 	if cfg.ControlEnabled || cfg.ConsoleEnabled || cfg.OAuthIssuer != "" ||
-		cfg.ApprovalWebhookURL.IsSet() || cfg.ApprovalGatePath != "" {
-		t.Fatalf("a minimal file enabled something: control=%v console=%v oauth issuer=%q webhook set=%v gate path=%q",
-			cfg.ControlEnabled, cfg.ConsoleEnabled, cfg.OAuthIssuer, cfg.ApprovalWebhookURL.IsSet(), cfg.ApprovalGatePath)
+		cfg.ApprovalWebhookURL.IsSet() || len(cfg.ApprovalRules) > 0 {
+		t.Fatalf("a minimal file enabled something: control=%v console=%v oauth issuer=%q webhook set=%v gate rules=%d",
+			cfg.ControlEnabled, cfg.ConsoleEnabled, cfg.OAuthIssuer, cfg.ApprovalWebhookURL.IsSet(), len(cfg.ApprovalRules))
 	}
 
 	srv, deps, err := newServer(cfg, testStartupFiles(t, cfg))

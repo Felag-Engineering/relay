@@ -183,7 +183,6 @@ type pendingApprovalResponse struct {
 	PlanHash     string   `json:"plan_hash"`
 	Summary      string   `json:"summary"`
 	MatchedRules []string `json:"matched_rules"`
-	Progress     string   `json:"progress"`
 	ExpiresAt    string   `json:"expires_at"`
 	// DecisionPath is where an approver answers. A convenience for building a
 	// link, never a capability: following it still requires an Account
@@ -362,7 +361,6 @@ func dispatchOrPlan(w http.ResponseWriter, r *http.Request, d Deps, p capability
 				PlanHash:     parked.PlanHash,
 				Summary:      parked.Summary,
 				MatchedRules: nonNil(parked.Rules),
-				Progress:     parked.Progress,
 				ExpiresAt:    controlplane.RFC3339(parked.ExpiresAt),
 				DecisionPath: "/api/v1/approvals/" + parked.RequestID + "/decision",
 			})

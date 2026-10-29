@@ -81,7 +81,7 @@ func (f *fakeApprovals) DecideApproval(_ context.Context, p capability.Principal
 func testApprovalRequest(id string, act jobs.Action) approval.Request {
 	return approval.NewRequest(id, "hash-"+id, "acct-g", "gleipnir-prod", act,
 		[]string{"node-a", "node-b"}, []string{"prod-mutates"},
-		approval.Requirement{Count: 2, Channel: approval.ChannelOutOfBand, TTL: time.Hour},
+		approval.Requirement{TTL: time.Hour},
 		apiNow)
 }
 
@@ -136,15 +136,25 @@ func TestListApprovals_RendersTheQueue(t *testing.T) {
 	if got.ActionKind != "operation" || got.RiskClass != "mutate" {
 		t.Errorf("action_kind/risk_class = %q/%q, want operation/mutate", got.ActionKind, got.RiskClass)
 	}
-	if got.Progress != "0 of 2" || got.RequiredCount != 2 {
-		t.Errorf("progress = %q, required_count = %d, want partial quorum visible", got.Progress, got.RequiredCount)
+	var raw map[string]any
+	var list struct {
+		Approvals []map[string]any `json:"approvals"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil || len(list.Approvals) != 1 {
+		t.Fatalf("decode raw list: %v", err)
+	}
+	raw = list.Approvals[0]
+	for _, key := range []string{"progress", "required_count", "audience", "requester_allowed", "channel"} {
+		if _, present := raw[key]; present {
+			t.Errorf("approval JSON carries %q, want it dropped (AP-81)", key)
+		}
 	}
 	if len(got.MatchedRules) != 1 || got.MatchedRules[0] != "prod-mutates" {
 		t.Errorf("matched_rules = %v, want the rule that parked it named", got.MatchedRules)
 	}
 }
 
-// TestListApprovals_ViewerMayRead: the audience restricts who may DECIDE, not
+// TestListApprovals_ViewerMayRead: the role floor restricts who may DECIDE, not
 // who may see that a decision is owed.
 func TestListApprovals_ViewerMayRead(t *testing.T) {
 	ap := &fakeApprovals{byID: map[string]approval.Request{}}
@@ -267,13 +277,9 @@ func TestDecideApproval_ErrorStatuses(t *testing.T) {
 		want int
 	}{
 		{"role floor", authz.ErrUnauthorized, http.StatusForbidden},
-		{"audience", approval.ErrNotInAudience, http.StatusForbidden},
 		{"already terminal", approval.ErrNotPending, http.StatusConflict},
-		{"requester excluded", approval.ErrRequesterExcluded, http.StatusConflict},
 		{"machine self-decision", approval.ErrMachineSelfDecision, http.StatusConflict},
-		{"duplicate decider", approval.ErrDuplicateDecider, http.StatusConflict},
 		{"plan changed", approval.ErrPlanChanged, http.StatusConflict},
-		{"weak channel", approval.ErrWeakChannel, http.StatusConflict},
 		{"unknown request", approval.ErrNotFound, http.StatusNotFound},
 	}
 	for _, tc := range cases {
@@ -299,7 +305,7 @@ func TestDecideApproval_ErrorStatuses(t *testing.T) {
 
 // TestDecideApproval_RefusalRendersTheSameWhateverRequestComesBack (#724):
 // the capability layer now returns the current Request alongside
-// ErrNotPending and ErrDuplicateDecider, instead of the zero value. This
+// ErrNotPending, instead of the zero value. This
 // handler discards the value on every error (writeApprovalError takes no
 // Request), so the rendered problem must be byte-identical either way, and
 // must never leak a field only the non-zero Request carries.
@@ -315,7 +321,6 @@ func TestDecideApproval_RefusalRendersTheSameWhateverRequestComesBack(t *testing
 		err  error
 	}{
 		{"already terminal", approval.ErrNotPending},
-		{"duplicate decider", approval.ErrDuplicateDecider},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			zero := do(t, newApprovalFixture(t, accounts.RoleOperator,

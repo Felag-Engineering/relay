@@ -18,7 +18,7 @@ import (
 
 // decideFixture builds a Service whose gate parks everything, with the given
 // approval authorizer, and returns it alongside the store and audit spy.
-func decideFixture(t *testing.T, count int, authorizer ApprovalAuthorizer) (*testSvc, *memApprovals, *spyAuditSink) {
+func decideFixture(t *testing.T, authorizer ApprovalAuthorizer) (*testSvc, *memApprovals, *spyAuditSink) {
 	t.Helper()
 	reg := registry.NewInMemory()
 	for _, id := range []string{"node-a", "node-b"} {
@@ -33,7 +33,7 @@ func decideFixture(t *testing.T, count int, authorizer ApprovalAuthorizer) (*tes
 		cap:    &spyCapChecker{},
 		audit:  audit,
 		freeze: &fakeFreezeStore{},
-		gate:   gateEverything(t, count), approvals: store, approvalAuthz: authorizer,
+		gate:   gateEverything(t), approvals: store, approvalAuthz: authorizer,
 		now: func() time.Time { return apNow },
 	})
 	s.disp = &spyDispatcher{jobID: "job-1"}
@@ -115,7 +115,7 @@ var machineRequester = Principal{AccountID: "acct-g", Account: "gleipnir-prod", 
 // TestDecideApprovalRecordsAndAudits is the happy path: a human answers, the
 // request reaches approved, and the answer is its own audit record.
 func TestDecideApprovalRecordsAndAudits(t *testing.T) {
-	s, _, audit := decideFixture(t, 1, &spyApprovalAuthorizer{})
+	s, _, audit := decideFixture(t, &spyApprovalAuthorizer{})
 	parked := park(t, s, machineRequester)
 
 	updated, err := s.DecideApproval(context.Background(), humanApprover("acct-ana", "ana"), ApprovalDecision{
@@ -132,7 +132,7 @@ func TestDecideApprovalRecordsAndAudits(t *testing.T) {
 		t.Fatalf("State = %v, want approved", updated.State)
 	}
 	if !updated.Satisfied(apNow) {
-		t.Error("a completed quorum must satisfy the requirement")
+		t.Error("an approved request must satisfy the requirement")
 	}
 
 	var decided *AuditEntry
@@ -159,7 +159,7 @@ func TestDecideApprovalRecordsAndAudits(t *testing.T) {
 // answering releases a Plan, it does not execute one. If deciding dispatched,
 // registry drift between the answer and the run would have nothing to re-check.
 func TestDecideApprovalDoesNotDispatch(t *testing.T) {
-	s, _, _ := decideFixture(t, 1, &spyApprovalAuthorizer{})
+	s, _, _ := decideFixture(t, &spyApprovalAuthorizer{})
 	parked := park(t, s, machineRequester)
 
 	if _, err := s.DecideApproval(context.Background(), humanApprover("acct-ana", "ana"), ApprovalDecision{
@@ -180,7 +180,7 @@ func TestDecideApprovalDoesNotDispatch(t *testing.T) {
 // what stops an operator releasing an admin's Raw Exec.
 func TestDecisionRoleFloorUsesTheParkedActionKind(t *testing.T) {
 	authorizer := &spyApprovalAuthorizer{}
-	s, _, _ := decideFixture(t, 1, authorizer)
+	s, _, _ := decideFixture(t, authorizer)
 	parked := park(t, s, machineRequester)
 
 	if _, err := s.DecideApproval(context.Background(), humanApprover("acct-ana", "ana"), ApprovalDecision{
@@ -195,10 +195,10 @@ func TestDecisionRoleFloorUsesTheParkedActionKind(t *testing.T) {
 }
 
 // TestDecisionRefusedByRoleFloorRecordsNothing: a refused decision must leave
-// no decision behind, or a quorum could be advanced by someone who was denied.
+// no decision behind, or a request could be ended by someone who was denied.
 func TestDecisionRefusedByRoleFloorRecordsNothing(t *testing.T) {
 	denied := errors.New("authz: unauthorized")
-	s, store, _ := decideFixture(t, 1, &spyApprovalAuthorizer{err: denied})
+	s, store, _ := decideFixture(t, &spyApprovalAuthorizer{err: denied})
 	parked := park(t, s, machineRequester)
 
 	if _, err := s.DecideApproval(context.Background(), humanApprover("acct-viewer", "vi"), ApprovalDecision{
@@ -220,10 +220,9 @@ func TestDecisionRefusedByRoleFloorRecordsNothing(t *testing.T) {
 // TestMachineCannotDecideItsOwnRequestThroughTheLayer is the acceptance
 // criterion "a machine Account can never satisfy its own gate on any channel",
 // exercised end to end through the capability layer under the most permissive
-// rule the config language can express (requester_allowed: true, and the
-// requester holding the admin role).
+// rule the config language can express (the requester holding the admin role).
 func TestMachineCannotDecideItsOwnRequestThroughTheLayer(t *testing.T) {
-	s, store, _ := decideFixture(t, 1, &spyApprovalAuthorizer{})
+	s, store, _ := decideFixture(t, &spyApprovalAuthorizer{})
 	parked := park(t, s, machineRequester)
 
 	_, err := s.DecideApproval(context.Background(), machineRequester, ApprovalDecision{
@@ -242,7 +241,7 @@ func TestMachineCannotDecideItsOwnRequestThroughTheLayer(t *testing.T) {
 // caller is human. The flag the domain sees is projected from the authenticated
 // Account, so an unset Kind is a machine.
 func TestDecisionKindComesFromThePrincipal(t *testing.T) {
-	s, store, _ := decideFixture(t, 1, &spyApprovalAuthorizer{})
+	s, store, _ := decideFixture(t, &spyApprovalAuthorizer{})
 	parked := park(t, s, machineRequester)
 
 	if _, err := s.DecideApproval(context.Background(),
@@ -260,7 +259,7 @@ func TestDecisionKindComesFromThePrincipal(t *testing.T) {
 // TestDenialIsTerminalAndAudited: deny beats approve, mirroring Policy's
 // deny-beats-allow, and the denial is recorded even though nothing ran.
 func TestDenialIsTerminalAndAudited(t *testing.T) {
-	s, _, audit := decideFixture(t, 2, &spyApprovalAuthorizer{})
+	s, _, audit := decideFixture(t, &spyApprovalAuthorizer{})
 	parked := park(t, s, machineRequester)
 
 	updated, err := s.DecideApproval(context.Background(), humanApprover("acct-ana", "ana"), ApprovalDecision{
@@ -296,7 +295,7 @@ func TestDenialIsTerminalAndAudited(t *testing.T) {
 // TestPlanHashMismatchIsRefused: an answer cannot be replayed onto a different
 // Plan, which is what closes park-something-innocuous-then-mutate-the-world.
 func TestPlanHashMismatchIsRefused(t *testing.T) {
-	s, _, _ := decideFixture(t, 1, &spyApprovalAuthorizer{})
+	s, _, _ := decideFixture(t, &spyApprovalAuthorizer{})
 	parked := park(t, s, machineRequester)
 
 	if _, err := s.DecideApproval(context.Background(), humanApprover("acct-ana", "ana"), ApprovalDecision{
@@ -311,7 +310,7 @@ func TestPlanHashMismatchIsRefused(t *testing.T) {
 // undecidable, even between sweeper runs. Expiry is a clock fact, not a
 // sweeper's opinion.
 func TestPendingApprovalsHidesExpired(t *testing.T) {
-	s, _, _ := decideFixture(t, 1, &spyApprovalAuthorizer{})
+	s, _, _ := decideFixture(t, &spyApprovalAuthorizer{})
 	parked := park(t, s, machineRequester)
 
 	live, err := s.PendingApprovals(context.Background())
@@ -336,7 +335,7 @@ func TestPendingApprovalsHidesExpired(t *testing.T) {
 // TestApprovalReadsTerminalRequests: a decider told "too late" must still be
 // able to find out what became of the request.
 func TestApprovalReadsTerminalRequests(t *testing.T) {
-	s, _, _ := decideFixture(t, 1, &spyApprovalAuthorizer{})
+	s, _, _ := decideFixture(t, &spyApprovalAuthorizer{})
 	parked := park(t, s, machineRequester)
 
 	if _, err := s.DecideApproval(context.Background(), humanApprover("acct-ana", "ana"), ApprovalDecision{
@@ -356,7 +355,7 @@ func TestApprovalReadsTerminalRequests(t *testing.T) {
 }
 
 func TestApprovalUnknownIDIsNotFound(t *testing.T) {
-	s, _, _ := decideFixture(t, 1, &spyApprovalAuthorizer{})
+	s, _, _ := decideFixture(t, &spyApprovalAuthorizer{})
 	if _, err := s.Approval(context.Background(), "req-nope"); !errors.Is(err, approval.ErrNotFound) {
 		t.Fatalf("err = %v, want approval.ErrNotFound unwrapped so a surface can map it to a 404", err)
 	}
@@ -376,7 +375,7 @@ func TestNotifierFiresOncePerPark(t *testing.T) {
 		cap:    &spyCapChecker{},
 		audit:  &spyAuditSink{},
 		freeze: &fakeFreezeStore{},
-		gate:   gateEverything(t, 1), approvals: newMemApprovals(), approvalAuthz: &spyApprovalAuthorizer{},
+		gate:   gateEverything(t), approvals: newMemApprovals(), approvalAuthz: &spyApprovalAuthorizer{},
 		approvalNotifier: spy,
 		now:              func() time.Time { return apNow },
 	})
@@ -414,7 +413,7 @@ func TestRedriveAuditsPendingObservedNotRequested(t *testing.T) {
 		cap:    &spyCapChecker{},
 		audit:  audit,
 		freeze: &fakeFreezeStore{},
-		gate:   gateEverything(t, 1), approvals: newMemApprovals(), approvalAuthz: &spyApprovalAuthorizer{},
+		gate:   gateEverything(t), approvals: newMemApprovals(), approvalAuthz: &spyApprovalAuthorizer{},
 		now: func() time.Time { return apNow },
 	})
 	s.disp = &spyDispatcher{jobID: "job-1"}
@@ -482,7 +481,7 @@ func TestNotifierSilentWhenNothingParks(t *testing.T) {
 // quietly at 3am.
 func TestNewApprovalsRequiresAnAuthorizer(t *testing.T) {
 	rec := NewRecorder(&spyAuditSink{}, nil, nil)
-	gate, store := gateEverything(t, 1), newMemApprovals()
+	gate, store := gateEverything(t), newMemApprovals()
 	defer func() {
 		if recover() == nil {
 			t.Fatal("NewApprovals with a gate and store but no approval authorizer must panic")
@@ -501,10 +500,8 @@ func (s *spyNotifier) NotifyParked(_ context.Context, n ApprovalNotice) {
 // audit entry carries the structured answer and the Channel it arrived on —
 // not just the prose Reason those facts used to live inside exclusively.
 //
-// The gate here requires only ChannelInBand (weaker than decideFixture's
-// ChannelOutOfBand) so both an OutOfBand approval and an InBand denial are
-// accepted in the same test — DISTINCT Channels on the approve and deny
-// cases is the point (#545's plan).
+// DISTINCT Channels on the approve and deny cases is the point: an OutOfBand
+// approval and an InBand denial are accepted in the same test (#545's plan).
 func TestDecideApprovalAuditEntryCarriesTheAnswerAndChannel(t *testing.T) {
 	reg := registry.NewInMemory()
 	if _, err := reg.Upsert(registry.Report{NodeID: "node-a"}); err != nil {
@@ -513,7 +510,7 @@ func TestDecideApprovalAuditEntryCarriesTheAnswerAndChannel(t *testing.T) {
 	gate, err := approval.NewGate([]approval.Rule{{
 		Name:    "everything",
 		Match:   approval.Match{},
-		Require: approval.Requirement{Count: 1, RequesterAllowed: true, Channel: approval.ChannelInBand, TTL: time.Hour},
+		Require: approval.Requirement{TTL: time.Hour},
 	}})
 	if err != nil {
 		t.Fatalf("NewGate: %v", err)
@@ -630,9 +627,9 @@ func TestDecideApprovalAuditEntryCarriesTheAnswerAndChannel(t *testing.T) {
 //
 // Each subtest gets its own gate, per the plan review's isolation note.
 func TestDecideApproval_InBandHumanWithNoAssertedApproverIsVerified(t *testing.T) {
-	t.Run("requester_allowed true, in-band: recorded as this human's own decision", func(t *testing.T) {
+	t.Run("in-band: recorded as this human's own decision", func(t *testing.T) {
 		s, audit := decideFixtureWithRequirement(t,
-			approval.Requirement{Count: 1, RequesterAllowed: true, Channel: approval.ChannelInBand, TTL: time.Hour},
+			approval.Requirement{TTL: time.Hour},
 			newMemApprovals(), &spyApprovalAuthorizer{}, func() time.Time { return apNow })
 
 		p := humanApprover("acct-ana", "ana")
@@ -665,46 +662,9 @@ func TestDecideApproval_InBandHumanWithNoAssertedApproverIsVerified(t *testing.T
 		}
 	})
 
-	t.Run("requester_allowed false: still excluded, whatever DeciderHuman says", func(t *testing.T) {
-		s, audit := decideFixtureWithRequirement(t,
-			approval.Requirement{Count: 1, RequesterAllowed: false, Channel: approval.ChannelInBand, TTL: time.Hour},
-			newMemApprovals(), &spyApprovalAuthorizer{}, func() time.Time { return apNow })
-
-		p := humanApprover("acct-ana", "ana")
-		parked := park(t, s, p)
-
-		_, err := s.DecideApproval(context.Background(), p, ApprovalDecision{
-			RequestID: parked.RequestID, PlanHash: parked.PlanHash, Approve: true, Channel: approval.ChannelInBand,
-		})
-		if !errors.Is(err, approval.ErrRequesterExcluded) {
-			t.Errorf("err = %v, want errors.Is(_, approval.ErrRequesterExcluded)", err)
-		}
-		for _, e := range audit.entries {
-			if e.Kind == AuditKindApprovalDecided {
-				t.Errorf("an AuditKindApprovalDecided entry was written for a refused decision: %+v", e)
-			}
-		}
-	})
-
-	t.Run("channel out-of-band required (AP-13): an in-band decision is still too weak", func(t *testing.T) {
-		s, _ := decideFixtureWithRequirement(t,
-			approval.Requirement{Count: 1, RequesterAllowed: true, Channel: approval.ChannelOutOfBand, TTL: time.Hour},
-			newMemApprovals(), &spyApprovalAuthorizer{}, func() time.Time { return apNow })
-
-		p := humanApprover("acct-ana", "ana")
-		parked := park(t, s, p)
-
-		_, err := s.DecideApproval(context.Background(), p, ApprovalDecision{
-			RequestID: parked.RequestID, PlanHash: parked.PlanHash, Approve: true, Channel: approval.ChannelInBand,
-		})
-		if !errors.Is(err, approval.ErrWeakChannel) {
-			t.Errorf("err = %v, want errors.Is(_, approval.ErrWeakChannel)", err)
-		}
-	})
-
 	t.Run("machine Account, same shape otherwise: ErrMachineSelfDecision", func(t *testing.T) {
 		s, _ := decideFixtureWithRequirement(t,
-			approval.Requirement{Count: 1, RequesterAllowed: true, Channel: approval.ChannelInBand, TTL: time.Hour},
+			approval.Requirement{TTL: time.Hour},
 			newMemApprovals(), &spyApprovalAuthorizer{}, func() time.Time { return apNow })
 
 		p := Principal{AccountID: "acct-mo", Account: "mo", Role: "operator", Kind: "machine"}
@@ -728,7 +688,7 @@ func TestDecideApproval_InBandHumanWithNoAssertedApproverIsVerified(t *testing.T
 // returns the Request as it now stands, not the zero value.
 func TestDecideApproval_NotPendingReturnsTheCurrentRequest(t *testing.T) {
 	t.Run("already approved with a bound Job", func(t *testing.T) {
-		s, _, audit := decideFixture(t, 1, &spyApprovalAuthorizer{})
+		s, _, audit := decideFixture(t, &spyApprovalAuthorizer{})
 		parked := park(t, s, machineRequester)
 
 		if _, err := s.DecideApproval(context.Background(), humanApprover("acct-ana", "ana"), ApprovalDecision{
@@ -737,7 +697,7 @@ func TestDecideApproval_NotPendingReturnsTheCurrentRequest(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("DecideApproval (approve): %v", err)
 		}
-		// The quorum is satisfied, so re-driving the same Plan dispatches and
+		// The request is approved, so re-driving the same Plan dispatches and
 		// binds the Job the approval released.
 		if _, err := s.Run(context.Background(), machineRequester, Selector{}, mutateAct()); err != nil {
 			t.Fatalf("Run after approval: %v", err)
@@ -769,7 +729,7 @@ func TestDecideApproval_NotPendingReturnsTheCurrentRequest(t *testing.T) {
 	})
 
 	t.Run("already denied", func(t *testing.T) {
-		s, _, audit := decideFixture(t, 1, &spyApprovalAuthorizer{})
+		s, _, audit := decideFixture(t, &spyApprovalAuthorizer{})
 		parked := park(t, s, machineRequester)
 
 		if _, err := s.DecideApproval(context.Background(), humanApprover("acct-ana", "ana"), ApprovalDecision{
@@ -800,7 +760,7 @@ func TestDecideApproval_NotPendingReturnsTheCurrentRequest(t *testing.T) {
 
 	t.Run("lapsed but not swept", func(t *testing.T) {
 		clock := apNow
-		req := approval.Requirement{Count: 1, RequesterAllowed: true, Channel: approval.ChannelOutOfBand, TTL: time.Hour}
+		req := approval.Requirement{TTL: time.Hour}
 		store := newMemApprovals()
 		s, audit := decideFixtureWithRequirement(t, req, store, &spyApprovalAuthorizer{}, func() time.Time { return clock })
 		parked := park(t, s, machineRequester)
@@ -841,11 +801,13 @@ func TestDecideApproval_NotPendingReturnsTheCurrentRequest(t *testing.T) {
 	})
 }
 
-// TestDecideApproval_DuplicateDeciderReturnsTheCurrentRequest is the issue's
-// second acceptance criterion: a decision refused because the same Account
-// already answered returns the Request as it now stands.
-func TestDecideApproval_DuplicateDeciderReturnsTheCurrentRequest(t *testing.T) {
-	s, store, audit := decideFixture(t, 2, &spyApprovalAuthorizer{})
+// TestDecideApproval_SecondDecisionReturnsTheCurrentRequest: one Decision ends
+// a request (AP-82), so a second one, even from the Account that decided first,
+// is refused as not pending and returns the Request as it now stands.
+//
+// Proves AP-82.
+func TestDecideApproval_SecondDecisionReturnsTheCurrentRequest(t *testing.T) {
+	s, store, audit := decideFixture(t, &spyApprovalAuthorizer{})
 	parked := park(t, s, machineRequester)
 
 	if _, err := s.DecideApproval(context.Background(), humanApprover("acct-ana", "ana"), ApprovalDecision{
@@ -855,30 +817,32 @@ func TestDecideApproval_DuplicateDeciderReturnsTheCurrentRequest(t *testing.T) {
 		t.Fatalf("first decision: %v", err)
 	}
 
-	got, err := s.DecideApproval(context.Background(), humanApprover("acct-ana", "ana"), ApprovalDecision{
-		RequestID: parked.RequestID, PlanHash: parked.PlanHash, Approve: true,
-		Channel: approval.ChannelOutOfBand,
-	})
-	if !errors.Is(err, approval.ErrDuplicateDecider) {
-		t.Fatalf("err = %v, want ErrDuplicateDecider", err)
-	}
-	if got.State != approval.StatePending {
-		t.Errorf("State = %v, want it still pending (1 of 2)", got.State)
-	}
-	if len(got.Decisions) != 1 || got.Decisions[0].AccountID != "acct-ana" {
-		t.Errorf("Decisions = %+v, want exactly ana's first decision", got.Decisions)
+	for _, p := range []Principal{humanApprover("acct-ana", "ana"), humanApprover("acct-bo", "bo")} {
+		got, err := s.DecideApproval(context.Background(), p, ApprovalDecision{
+			RequestID: parked.RequestID, PlanHash: parked.PlanHash, Approve: false,
+			Channel: approval.ChannelOutOfBand,
+		})
+		if !errors.Is(err, approval.ErrNotPending) {
+			t.Fatalf("second decision by %s: err = %v, want ErrNotPending", p.Account, err)
+		}
+		if got.State != approval.StateApproved {
+			t.Errorf("State = %v, want it still approved", got.State)
+		}
+		if len(got.Decisions) != 1 || got.Decisions[0].AccountID != "acct-ana" {
+			t.Errorf("Decisions = %+v, want exactly ana's first decision", got.Decisions)
+		}
 	}
 	if n := countApprovalDecided(audit); n != 1 {
-		t.Errorf("audited %d decisions, want exactly the first one — a rejected duplicate is not its own audit record", n)
+		t.Errorf("audited %d decisions, want exactly the first one: a refused decision is not its own audit record", n)
 	}
 	if len(store.byID[parked.RequestID].Decisions) != 1 {
-		t.Errorf("stored %d decisions, want 1 — a rejected duplicate must not be persisted", len(store.byID[parked.RequestID].Decisions))
+		t.Errorf("stored %d decisions, want 1", len(store.byID[parked.RequestID].Decisions))
 	}
 }
 
 // TestDecideApproval_OtherRefusalsAreUnchanged is the issue's third
-// acceptance criterion: every refusal besides ErrNotPending and
-// ErrDuplicateDecider returns exactly what it always has — the zero value —
+// acceptance criterion: every refusal besides ErrNotPending returns exactly
+// what it always has — the zero value —
 // and records or audits nothing new.
 func TestDecideApproval_OtherRefusalsAreUnchanged(t *testing.T) {
 	errRoleFloorDenied := errors.New("authz: unauthorized")
@@ -894,44 +858,9 @@ func TestDecideApproval_OtherRefusalsAreUnchanged(t *testing.T) {
 			name:    "role floor",
 			wantErr: errRoleFloorDenied,
 			build: func(t *testing.T) (*testSvc, Principal, ApprovalDecision, *spyAuditSink, func(t *testing.T)) {
-				s, store, audit := decideFixture(t, 1, &spyApprovalAuthorizer{err: errRoleFloorDenied})
+				s, store, audit := decideFixture(t, &spyApprovalAuthorizer{err: errRoleFloorDenied})
 				parked := park(t, s, machineRequester)
 				return s, humanApprover("acct-viewer", "vi"), ApprovalDecision{
-						RequestID: parked.RequestID, PlanHash: parked.PlanHash, Approve: true, Channel: approval.ChannelOutOfBand,
-					}, audit, func(t *testing.T) {
-						if got := store.byID[parked.RequestID]; len(got.Decisions) != 0 || got.State != approval.StatePending {
-							t.Errorf("stored record changed: %+v", got)
-						}
-					}
-			},
-		},
-		{
-			name:    "requester excluded",
-			wantErr: approval.ErrRequesterExcluded,
-			build: func(t *testing.T) (*testSvc, Principal, ApprovalDecision, *spyAuditSink, func(t *testing.T)) {
-				requester := humanApprover("acct-req", "requester")
-				req := approval.Requirement{Count: 1, RequesterAllowed: false, Channel: approval.ChannelOutOfBand, TTL: time.Hour}
-				store := newMemApprovals()
-				s, audit := decideFixtureWithRequirement(t, req, store, &spyApprovalAuthorizer{}, func() time.Time { return apNow })
-				parked := park(t, s, requester)
-				return s, requester, ApprovalDecision{
-						RequestID: parked.RequestID, PlanHash: parked.PlanHash, Approve: true, Channel: approval.ChannelOutOfBand,
-					}, audit, func(t *testing.T) {
-						if got := store.byID[parked.RequestID]; len(got.Decisions) != 0 || got.State != approval.StatePending {
-							t.Errorf("stored record changed: %+v", got)
-						}
-					}
-			},
-		},
-		{
-			name:    "audience",
-			wantErr: approval.ErrNotInAudience,
-			build: func(t *testing.T) (*testSvc, Principal, ApprovalDecision, *spyAuditSink, func(t *testing.T)) {
-				req := approval.Requirement{Count: 1, RequesterAllowed: true, Audience: []string{"bo"}, Channel: approval.ChannelOutOfBand, TTL: time.Hour}
-				store := newMemApprovals()
-				s, audit := decideFixtureWithRequirement(t, req, store, &spyApprovalAuthorizer{}, func() time.Time { return apNow })
-				parked := park(t, s, machineRequester)
-				return s, humanApprover("acct-ana", "ana"), ApprovalDecision{
 						RequestID: parked.RequestID, PlanHash: parked.PlanHash, Approve: true, Channel: approval.ChannelOutOfBand,
 					}, audit, func(t *testing.T) {
 						if got := store.byID[parked.RequestID]; len(got.Decisions) != 0 || got.State != approval.StatePending {
@@ -944,7 +873,7 @@ func TestDecideApproval_OtherRefusalsAreUnchanged(t *testing.T) {
 			name:    "machine self-decision",
 			wantErr: approval.ErrMachineSelfDecision,
 			build: func(t *testing.T) (*testSvc, Principal, ApprovalDecision, *spyAuditSink, func(t *testing.T)) {
-				req := approval.Requirement{Count: 1, RequesterAllowed: true, Channel: approval.ChannelOutOfBand, TTL: time.Hour}
+				req := approval.Requirement{TTL: time.Hour}
 				store := newMemApprovals()
 				s, audit := decideFixtureWithRequirement(t, req, store, &spyApprovalAuthorizer{}, func() time.Time { return apNow })
 				parked := park(t, s, machineRequester)
@@ -961,31 +890,10 @@ func TestDecideApproval_OtherRefusalsAreUnchanged(t *testing.T) {
 			name:    "plan hash",
 			wantErr: approval.ErrPlanChanged,
 			build: func(t *testing.T) (*testSvc, Principal, ApprovalDecision, *spyAuditSink, func(t *testing.T)) {
-				s, store, audit := decideFixture(t, 1, &spyApprovalAuthorizer{})
+				s, store, audit := decideFixture(t, &spyApprovalAuthorizer{})
 				parked := park(t, s, machineRequester)
 				return s, humanApprover("acct-ana", "ana"), ApprovalDecision{
 						RequestID: parked.RequestID, PlanHash: "some-other-plan", Approve: true, Channel: approval.ChannelOutOfBand,
-					}, audit, func(t *testing.T) {
-						if got := store.byID[parked.RequestID]; len(got.Decisions) != 0 || got.State != approval.StatePending {
-							t.Errorf("stored record changed: %+v", got)
-						}
-					}
-			},
-		},
-		{
-			name:    "weak channel",
-			wantErr: approval.ErrWeakChannel,
-			build: func(t *testing.T) (*testSvc, Principal, ApprovalDecision, *spyAuditSink, func(t *testing.T)) {
-				// The rule demands ChannelOutOfBand explicitly — never
-				// simplify this to InBand, or the decision's own
-				// ChannelUnspecified would no longer be weaker than what is
-				// required and this row would stop exercising the refusal.
-				req := approval.Requirement{Count: 1, RequesterAllowed: true, Channel: approval.ChannelOutOfBand, TTL: time.Hour}
-				store := newMemApprovals()
-				s, audit := decideFixtureWithRequirement(t, req, store, &spyApprovalAuthorizer{}, func() time.Time { return apNow })
-				parked := park(t, s, machineRequester)
-				return s, humanApprover("acct-ana", "ana"), ApprovalDecision{
-						RequestID: parked.RequestID, PlanHash: parked.PlanHash, Approve: true, Channel: approval.ChannelUnspecified,
 					}, audit, func(t *testing.T) {
 						if got := store.byID[parked.RequestID]; len(got.Decisions) != 0 || got.State != approval.StatePending {
 							t.Errorf("stored record changed: %+v", got)
@@ -1015,7 +923,7 @@ func TestDecideApproval_OtherRefusalsAreUnchanged(t *testing.T) {
 			name:       "missing ID",
 			wantErrSub: "request id is required",
 			build: func(t *testing.T) (*testSvc, Principal, ApprovalDecision, *spyAuditSink, func(t *testing.T)) {
-				s, _, audit := decideFixture(t, 1, &spyApprovalAuthorizer{})
+				s, _, audit := decideFixture(t, &spyApprovalAuthorizer{})
 				return s, humanApprover("acct-ana", "ana"), ApprovalDecision{
 					RequestID: "", PlanHash: "hash", Approve: true, Channel: approval.ChannelOutOfBand,
 				}, audit, func(t *testing.T) {}
@@ -1025,7 +933,7 @@ func TestDecideApproval_OtherRefusalsAreUnchanged(t *testing.T) {
 			name:    "not found",
 			wantErr: approval.ErrNotFound,
 			build: func(t *testing.T) (*testSvc, Principal, ApprovalDecision, *spyAuditSink, func(t *testing.T)) {
-				s, _, audit := decideFixture(t, 1, &spyApprovalAuthorizer{})
+				s, _, audit := decideFixture(t, &spyApprovalAuthorizer{})
 				return s, humanApprover("acct-ana", "ana"), ApprovalDecision{
 					RequestID: "req-nope", PlanHash: "hash", Approve: true, Channel: approval.ChannelOutOfBand,
 				}, audit, func(t *testing.T) {}
@@ -1037,7 +945,7 @@ func TestDecideApproval_OtherRefusalsAreUnchanged(t *testing.T) {
 			build: func(t *testing.T) (*testSvc, Principal, ApprovalDecision, *spyAuditSink, func(t *testing.T)) {
 				inner := newMemApprovals()
 				failing := &failingApprovals{memApprovals: inner, err: errStoreFailure}
-				req := approval.Requirement{Count: 1, RequesterAllowed: true, Channel: approval.ChannelOutOfBand, TTL: time.Hour}
+				req := approval.Requirement{TTL: time.Hour}
 				s, audit := decideFixtureWithRequirement(t, req, failing, &spyApprovalAuthorizer{}, func() time.Time { return apNow })
 				parked := park(t, s, machineRequester)
 				return s, humanApprover("acct-ana", "ana"), ApprovalDecision{
@@ -1081,7 +989,7 @@ func TestDecideApproval_OtherRefusalsAreUnchanged(t *testing.T) {
 //
 // Proves AP-12, AP-63.
 func TestAnswerElicited_RecordsAnInBandDecision(t *testing.T) {
-	req := approval.Requirement{Count: 1, RequesterAllowed: true, Channel: approval.ChannelInBand, TTL: time.Hour}
+	req := approval.Requirement{TTL: time.Hour}
 	store := newMemApprovals()
 	s, auditSink := decideFixtureWithRequirement(t, req, store, &spyApprovalAuthorizer{}, func() time.Time { return apNow })
 	parked := park(t, s, machineRequester)
@@ -1127,16 +1035,14 @@ func TestAnswerElicited_RecordsAnInBandDecision(t *testing.T) {
 func TestAnswerElicited_RefusesExactlyAsDecideApproval(t *testing.T) {
 	cases := []struct {
 		name     string
-		requires approval.Channel
 		planHash func(parked *ParkedError) string
 		wantErr  error
 	}{
-		{"plan hash mismatch", approval.ChannelInBand, func(*ParkedError) string { return "some-other-plan" }, approval.ErrPlanChanged},
-		{"out-of-band rule", approval.ChannelOutOfBand, func(p *ParkedError) string { return p.PlanHash }, approval.ErrWeakChannel},
+		{"plan hash mismatch", func(*ParkedError) string { return "some-other-plan" }, approval.ErrPlanChanged},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			req := approval.Requirement{Count: 1, RequesterAllowed: true, Channel: tc.requires, TTL: time.Hour}
+			req := approval.Requirement{TTL: time.Hour}
 			store := newMemApprovals()
 			s, auditSink := decideFixtureWithRequirement(t, req, store, &spyApprovalAuthorizer{}, func() time.Time { return apNow })
 			parked := park(t, s, machineRequester)

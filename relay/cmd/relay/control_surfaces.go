@@ -180,9 +180,7 @@ func (mcpSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 	opts := []mcp.Option{
 		// The MRTR answer path's seam (ADR-0029 decision 6): the SAME
 		// *capability.Approvals the API's decision endpoint uses. It records
-		// the answer through AnswerElicited, which stamps the in-band channel,
-		// so a rule configured `channel: "in-band"` is reachable here and an
-		// out-of-band rule still refuses the answer (ErrWeakChannel).
+		// the answer through AnswerElicited, which stamps the in-band channel.
 		mcp.WithApprovalAnswerer(d.approvals),
 		// The MRTR envelope over the same decision seam (ADR-0029
 		// decision 6): an askable in-band park from a client that can be

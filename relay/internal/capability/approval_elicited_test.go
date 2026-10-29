@@ -17,7 +17,7 @@ func tokenPrincipal(id, name string, kind string) Principal {
 
 func elicitedFixture(t *testing.T, now func() time.Time) (*testSvc, *memApprovals, *spyAuditSink) {
 	t.Helper()
-	req := approval.Requirement{Count: 1, RequesterAllowed: true, Channel: approval.ChannelInBand, TTL: time.Hour}
+	req := approval.Requirement{TTL: time.Hour}
 	store := newMemApprovals()
 	s, auditSink := decideFixtureWithRequirement(t, req, store, &spyApprovalAuthorizer{}, now)
 	return s, store, auditSink
@@ -226,7 +226,7 @@ func TestAnswerElicited_TokenSessionMeetsTheSameRefusals(t *testing.T) {
 
 	t.Run("role floor", func(t *testing.T) {
 		floor := errors.New("below the role floor")
-		req := approval.Requirement{Count: 1, RequesterAllowed: true, Channel: approval.ChannelInBand, TTL: time.Hour}
+		req := approval.Requirement{TTL: time.Hour}
 		store := newMemApprovals()
 		s, auditSink := decideFixtureWithRequirement(t, req, store, &spyApprovalAuthorizer{err: floor}, func() time.Time { return apNow })
 		parked := park(t, s, machineRequester)
@@ -311,4 +311,35 @@ func TestAnswerElicited_RecordsHowTheDeciderWasIdentified(t *testing.T) {
 			t.Errorf("audit reason %q names an identification for an out-of-band decision", reason)
 		}
 	})
+}
+
+// TestAnswerElicited_HumanRequesterConfirmsOwnRequest: a human Account answers
+// the park its own session created, in-band, and that ends the request.
+//
+// Proves AP-11.
+func TestAnswerElicited_HumanRequesterConfirmsOwnRequest(t *testing.T) {
+	cases := []struct {
+		name string
+		p    Principal
+	}{
+		{"oauth session", Principal{AccountID: "acct-ana", Account: "ana", Role: "operator", Kind: PrincipalKindHuman, AuthMethod: AuthMethodOAuth}},
+		{"api token session", tokenPrincipal("acct-hana", "hana", PrincipalKindHuman)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _, _ := elicitedFixture(t, func() time.Time { return apNow })
+			parked := park(t, s, tc.p)
+
+			got, err := s.AnswerElicited(context.Background(), tc.p, parked.RequestID, parked.PlanHash, true)
+			if err != nil {
+				t.Fatalf("AnswerElicited: %v", err)
+			}
+			if got.State != approval.StateApproved {
+				t.Errorf("State = %v, want approved", got.State)
+			}
+			if d := got.Decisions[0]; d.Channel != approval.ChannelInBand || d.AccountID != tc.p.AccountID {
+				t.Errorf("decision = %+v, want the requester's own in-band decision", d)
+			}
+		})
+	}
 }

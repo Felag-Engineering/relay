@@ -1,6 +1,6 @@
 // Package main: mcp_elicitation_refusals_e2e_test.go is S6 of #646 (v0.7.0):
-// proof for docs/specs/approval.md AP-61, AP-62, AP-65, AP-66, AP-67,
-// AP-69, AP-85, AP-87 (and AP-17 kept proven for an MCP-originated request), plus
+// proof for docs/specs/approval.md AP-62, AP-65, AP-66, AP-67,
+// AP-85, AP-87 (and AP-17 kept proven for an MCP-originated request), plus
 // the ADR-0040-as-amended rescue: the Control API keeps deciding any parked
 // request, including one an MCP client parked, unchanged.
 //
@@ -71,7 +71,7 @@ const (
 	// nextStepRanAndRecorded mirrors nextStepRanThePipeline + " " +
 	// nextStepAnswerRecorded (tools_approval.go).
 	nextStepRanAndRecorded = "the call was re-entered through the full dispatch pipeline once in this response, and the Job shown ran. Do not re-issue it. " +
-		"the answer was recorded (progress shown when the rule needs more)."
+		"the answer was recorded."
 
 	// nextStepReattachedNotRecorded mirrors nextStepReattachedExistingJob + " " +
 	// nextStepAnswerNotRecordedAlreadyDecided (tools_approval.go).
@@ -82,20 +82,6 @@ const (
 // metaKeyReplayedFrom mirrors elicit's own unexported replayedFromMetaKey —
 // duplicated here since this test cannot reach the unexported original.
 const metaKeyReplayedFrom = "io.gleipnir/replayed-from"
-
-// gateInBandAudienceOmitsCaller is an askable-shaped in-band rule (requester
-// allowed, channel in-band) whose audience names only "alice" — the caller in
-// every test here is the machine Account "gleipnir-prod", so only
-// askableBy's audience term is false (capability/approval.go).
-const gateInBandAudienceOmitsCaller = `{
-  "rules": [
-    {
-      "name": "mutates-ask-alice-only",
-      "match": { "risk_class": "mutate" },
-      "require": { "count": 1, "requester_allowed": true, "channel": "in-band", "audience": ["alice"], "ttl": "1h" }
-    }
-  ]
-}`
 
 // -----------------------------------------------------------------------
 // Helpers
@@ -495,7 +481,7 @@ func TestMCPElicitation_WrongCallStateIsRefused(t *testing.T) {
 func TestMCPElicitation_ExpiredStateIsRefused(t *testing.T) {
 	var skew atomic.Int64
 	clock := func() time.Time { return time.Now().UTC().Add(time.Duration(skew.Load())) }
-	f, token, _ := startElicitingRelayWith(t, gateAllMutatesInBandAskable, WithMCPServerOptions(mcp.WithClock(clock)))
+	f, token, _ := startElicitingRelayWith(t, gateAllMutates, WithMCPServerOptions(mcp.WithClock(clock)))
 	session := connectEliciting(t, f, token)
 	q, qid, rid, _ := askApproval(t, session, restartNginxArgs())
 
@@ -610,86 +596,6 @@ func TestMCPElicitation_AnUnusableAnswerIsRefusedAndRecordsNothing(t *testing.T)
 // -----------------------------------------------------------------------
 // Emission refusals
 // -----------------------------------------------------------------------
-
-// TestMCPElicitation_OutOfBandRuleNeverAsks is AP-69's e2e proof: an
-// out-of-band rule's FIRST park — a created park, so AP-62's "already
-// observed" reason cannot explain the absence of a question — never renders
-// one, on an MRTR-capable, elicitation-advertising client.
-func TestMCPElicitation_OutOfBandRuleNeverAsks(t *testing.T) {
-	f, token, _ := startElicitingRelayWith(t, gateAllMutatesOutOfBandAskable)
-	session := connectEliciting(t, f, token)
-
-	res := relaytest.CallToolWith(t, session, &sdkmcp.CallToolParams{Name: "run_operation", Arguments: restartNginxArgs()})
-	if res.NeedsInput() {
-		t.Fatal("NeedsInput() = true, want false — an out-of-band rule must never render a question")
-	}
-	if res.IsError {
-		t.Fatalf("IsError = true unexpectedly: content=%+v", res.Content)
-	}
-	if res.InputRequests != nil {
-		t.Errorf("InputRequests = %+v, want nil", res.InputRequests)
-	}
-	if res.RequestState != "" {
-		t.Errorf("RequestState = %q, want empty", res.RequestState)
-	}
-	var out mcp.RunOrPlanOutput
-	relaytest.DecodeToolJSON(t, res, &out)
-	if out.PendingApproval == nil {
-		t.Fatalf("did not park: %+v", out)
-	}
-	if out.PendingApproval.Status != "pending_approval" {
-		t.Errorf("Status = %q, want pending_approval", out.PendingApproval.Status)
-	}
-	rid := out.PendingApproval.RequestID
-	parkRecordFor(t, f, rid) // a KindApprovalRequested record means a CREATED park
-
-	pending := fetchApproval(t, f, rid)
-	if pending.State != "pending" || len(pending.Decisions) != 0 {
-		t.Errorf("approval = %+v, want pending with no decisions", pending)
-	}
-	if got := len(allJobs(t, f)); got != 0 {
-		t.Errorf("Jobs = %d, want 0", got)
-	}
-}
-
-// TestMCPElicitation_RequesterExcludedAndAudienceRestrictedNeverAsk is AP-61's
-// e2e proof: a requester-excluded rule, and a rule naming an audience that
-// omits the caller, each render no question on the FIRST (created) park.
-func TestMCPElicitation_RequesterExcludedAndAudienceRestrictedNeverAsk(t *testing.T) {
-	cases := []struct {
-		name string
-		gate string
-	}{
-		{"requester excluded", gateAllMutatesInBand},
-		{"audience omits the caller", gateInBandAudienceOmitsCaller},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			f, token, _ := startElicitingRelayWith(t, tc.gate)
-			session := connectEliciting(t, f, token)
-
-			res := relaytest.CallToolWith(t, session, &sdkmcp.CallToolParams{Name: "run_operation", Arguments: restartNginxArgs()})
-			if res.NeedsInput() {
-				t.Fatal("NeedsInput() = true, want false")
-			}
-			var out mcp.RunOrPlanOutput
-			relaytest.DecodeToolJSON(t, res, &out)
-			if out.PendingApproval == nil {
-				t.Fatalf("did not park: %+v", out)
-			}
-			rid := out.PendingApproval.RequestID
-			parkRecordFor(t, f, rid)
-
-			pending := fetchApproval(t, f, rid)
-			if pending.State != "pending" || len(pending.Decisions) != 0 {
-				t.Errorf("approval = %+v, want pending with no decisions", pending)
-			}
-			if got := len(allJobs(t, f)); got != 0 {
-				t.Errorf("Jobs = %d, want 0", got)
-			}
-		})
-	}
-}
 
 // TestMCPElicitation_LegacyHeaderWithModernMetaDoesNotAsk proves the
 // emission predicate's condition 2 (clientCanBeAsked, elicit.go): the
@@ -1186,89 +1092,80 @@ func TestMCPElicitation_DuplicateRetryReAttaches(t *testing.T) {
 // -----------------------------------------------------------------------
 
 // TestApprovalCallout_ControlAPIDecidesAnMCPParkedRequest is the ADR-0040-as-
-// amended rescue for a request parked over MCP under a NON-askable rule: a
-// human Account still decides it on the Control API — nothing is dispatched
-// by the decision itself, which is attributed to the deciding human, verified
-// and out-of-band (AP-17) — and the requester's re-drive over the SAME MCP
-// session then runs. No other e2e test parks over MCP and decides on the
-// Control API under a non-askable rule.
+// amended rescue for a request parked over MCP and never asked in-band (the
+// client advertises no elicitation): a human Account still decides it on the
+// Control API — nothing is dispatched by the decision itself, which is
+// attributed to the deciding human, verified and out-of-band (AP-17) — and the
+// requester's re-drive over the SAME MCP session then runs. No other e2e test
+// parks over MCP and decides on the Control API for a client that cannot be
+// asked.
 func TestApprovalCallout_ControlAPIDecidesAnMCPParkedRequest(t *testing.T) {
-	cases := []struct {
-		name string
-		gate string
-	}{
-		{"out-of-band rule", gateAllMutatesOutOfBandAskable},
-		{"requester-excluded rule", gateAllMutatesInBand},
+	f, token, _ := startElicitingRelayWith(t, gateAllMutates)
+	// An ordinary client: it advertises no elicitation, so it is never asked.
+	session := relaytest.Connect(t, f.ControlBase, f.ClientFor(token))
+
+	res := relaytest.CallTool(t, session, "run_operation", restartNginxArgs())
+	if res.NeedsInput() {
+		t.Fatal("NeedsInput() = true, want false — this client cannot be asked")
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			f, token, _ := startElicitingRelayWith(t, tc.gate)
-			session := connectEliciting(t, f, token)
-
-			res := relaytest.CallTool(t, session, "run_operation", restartNginxArgs())
-			if res.NeedsInput() {
-				t.Fatal("NeedsInput() = true, want false — this rule is not askable")
-			}
-			var out mcp.RunOrPlanOutput
-			relaytest.DecodeToolJSON(t, res, &out)
-			if out.PendingApproval == nil {
-				t.Fatalf("did not park: %+v", out)
-			}
-			rid := out.PendingApproval.RequestID
-			ph := out.PendingApproval.PlanHash
-
-			if got := len(allJobs(t, f)); got != 0 {
-				t.Errorf("Jobs before the decision = %d, want 0", got)
-			}
-			if dispatchCount, _ := auditCounts(t, f); dispatchCount != 0 {
-				t.Errorf("KindDispatch records before the decision = %d, want 0 — a park dispatches nothing", dispatchCount)
-			}
-
-			dana := mintAccount(t, f, "dana", accounts.KindHuman, accounts.RoleOperator)
-			decideResp := controlAPIRequest(t, f.ClientFor(dana), http.MethodPost,
-				f.ControlBase+"/api/v1/approvals/"+rid+"/decision", dana,
-				map[string]any{"approve": true, "plan_hash": ph})
-			defer decideResp.Body.Close()
-			if decideResp.StatusCode != http.StatusOK {
-				body, _ := io.ReadAll(decideResp.Body)
-				t.Fatalf("decision status = %d, want 200; body = %s", decideResp.StatusCode, body)
-			}
-
-			if got := fetchApproval(t, f, rid); got.State != "approved" {
-				t.Errorf("approval state = %q, want approved", got.State)
-			}
-			getResp := controlAPIRequest(t, f.Client(), http.MethodGet, f.ControlBase+"/api/v1/approvals/"+rid, f.Credential, nil)
-			defer getResp.Body.Close()
-			var view elicitDecisionView
-			if err := json.NewDecoder(getResp.Body).Decode(&view); err != nil {
-				t.Fatalf("decode approval: %v", err)
-			}
-			if len(view.Decisions) != 1 {
-				t.Fatalf("decisions = %+v, want exactly 1", view.Decisions)
-			}
-			cd := view.Decisions[0]
-			if cd.Account != "dana" || !cd.Approve || cd.Channel != "out-of-band" || !cd.Human {
-				t.Errorf("Control API decision = %+v, want dana's human out-of-band approval", cd)
-			}
-
-			decisions := decisionRecordsFor(t, f, rid)
-			if len(decisions) != 1 {
-				t.Fatalf("decision records = %+v, want exactly 1", decisions)
-			}
-			d := decisions[0]
-			if d.DecisionChannel != "out-of-band" {
-				t.Errorf("DecisionChannel = %q, want out-of-band", d.DecisionChannel)
-			}
-			if d.Attribution.Verified.AccountName != "dana" {
-				t.Errorf("Attribution.Verified.AccountName = %q, want dana", d.Attribution.Verified.AccountName)
-			}
-			if d.Attribution.Asserted.OnBehalfOf != "" {
-				t.Errorf("Attribution.Asserted.OnBehalfOf = %q, want empty — out of band, dana IS the approver, verified", d.Attribution.Asserted.OnBehalfOf)
-			}
-
-			assertRedriveRuns(t, f, session, rid)
-		})
+	var out mcp.RunOrPlanOutput
+	relaytest.DecodeToolJSON(t, res, &out)
+	if out.PendingApproval == nil {
+		t.Fatalf("did not park: %+v", out)
 	}
+	rid := out.PendingApproval.RequestID
+	ph := out.PendingApproval.PlanHash
+
+	if got := len(allJobs(t, f)); got != 0 {
+		t.Errorf("Jobs before the decision = %d, want 0", got)
+	}
+	if dispatchCount, _ := auditCounts(t, f); dispatchCount != 0 {
+		t.Errorf("KindDispatch records before the decision = %d, want 0 — a park dispatches nothing", dispatchCount)
+	}
+
+	dana := mintAccount(t, f, "dana", accounts.KindHuman, accounts.RoleOperator)
+	decideResp := controlAPIRequest(t, f.ClientFor(dana), http.MethodPost,
+		f.ControlBase+"/api/v1/approvals/"+rid+"/decision", dana,
+		map[string]any{"approve": true, "plan_hash": ph})
+	defer decideResp.Body.Close()
+	if decideResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(decideResp.Body)
+		t.Fatalf("decision status = %d, want 200; body = %s", decideResp.StatusCode, body)
+	}
+
+	if got := fetchApproval(t, f, rid); got.State != "approved" {
+		t.Errorf("approval state = %q, want approved", got.State)
+	}
+	getResp := controlAPIRequest(t, f.Client(), http.MethodGet, f.ControlBase+"/api/v1/approvals/"+rid, f.Credential, nil)
+	defer getResp.Body.Close()
+	var view elicitDecisionView
+	if err := json.NewDecoder(getResp.Body).Decode(&view); err != nil {
+		t.Fatalf("decode approval: %v", err)
+	}
+	if len(view.Decisions) != 1 {
+		t.Fatalf("decisions = %+v, want exactly 1", view.Decisions)
+	}
+	cd := view.Decisions[0]
+	if cd.Account != "dana" || !cd.Approve || cd.Channel != "out-of-band" || !cd.Human {
+		t.Errorf("Control API decision = %+v, want dana's human out-of-band approval", cd)
+	}
+
+	decisions := decisionRecordsFor(t, f, rid)
+	if len(decisions) != 1 {
+		t.Fatalf("decision records = %+v, want exactly 1", decisions)
+	}
+	d := decisions[0]
+	if d.DecisionChannel != "out-of-band" {
+		t.Errorf("DecisionChannel = %q, want out-of-band", d.DecisionChannel)
+	}
+	if d.Attribution.Verified.AccountName != "dana" {
+		t.Errorf("Attribution.Verified.AccountName = %q, want dana", d.Attribution.Verified.AccountName)
+	}
+	if d.Attribution.Asserted.OnBehalfOf != "" {
+		t.Errorf("Attribution.Asserted.OnBehalfOf = %q, want empty — out of band, dana IS the approver, verified", d.Attribution.Asserted.OnBehalfOf)
+	}
+
+	assertRedriveRuns(t, f, session, rid)
 }
 
 // TestMCPElicitation_StrandedAnswerIsRescuedOnTheControlAPI is
@@ -1280,7 +1177,7 @@ func TestApprovalCallout_ControlAPIDecidesAnMCPParkedRequest(t *testing.T) {
 // decision surface (mirrors TestAnsweredRetry_RefusedStateStaysDecidableByTheRescue's plain-
 // retry proof, minus the question).
 func TestMCPElicitation_StrandedAnswerIsRescuedOnTheControlAPI(t *testing.T) {
-	f, token, accountID := startElicitingRelayWith(t, gateAllMutatesInBandAskable)
+	f, token, accountID := startElicitingRelayWith(t, gateAllMutates)
 	session := connectEliciting(t, f, token)
 	q, qid, rid, ph := askApproval(t, session, restartNginxArgs())
 

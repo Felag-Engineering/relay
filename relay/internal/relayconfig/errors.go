@@ -60,7 +60,7 @@ func render(key string, line int, reason string) string {
 // or a section's key. Those names come from the schema; any other segment is
 // source text and is never rendered.
 func safeKey(parts []string) (string, bool) {
-	if key, _, removed := removedKey(parts); removed && len(parts) == 2 {
+	if key, _, depth, removed := removedKey(parts); removed && len(parts) == depth {
 		return key, true
 	}
 	if len(parts) == 0 || schemaPrefix(parts) != len(parts) {
@@ -69,10 +69,14 @@ func safeKey(parts []string) (string, bool) {
 	return strings.Join(parts, "."), true
 }
 
-// schemaPrefix is how many leading segments of parts form an exact schema path.
+// schemaPrefix is how many leading segments of parts form an exact schema path:
+// a section, a section's key, or a gate-rule field.
 func schemaPrefix(parts []string) int {
 	if len(parts) == 0 || !sections[parts[0]] {
 		return 0
+	}
+	if len(parts) >= 3 && parts[0] == "approval" && parts[1] == "rules" && ruleFields[parts[2]] {
+		return 3
 	}
 	if len(parts) >= 2 && schemaKeySet[parts[0]+"."+parts[1]] {
 		return 2

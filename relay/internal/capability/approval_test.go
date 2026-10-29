@@ -173,12 +173,12 @@ func hasAuditKind(entries []AuditEntry, kind AuditKind) bool {
 	return false
 }
 
-func gateEverything(t *testing.T, count int) ApprovalGate {
+func gateEverything(t *testing.T) ApprovalGate {
 	t.Helper()
 	g, err := approval.NewGate([]approval.Rule{{
 		Name:    "everything",
 		Match:   approval.Match{},
-		Require: approval.Requirement{Count: count, RequesterAllowed: true, Channel: approval.ChannelOutOfBand, TTL: time.Hour},
+		Require: approval.Requirement{TTL: time.Hour},
 	}})
 	if err != nil {
 		t.Fatalf("NewGate: %v", err)
@@ -247,7 +247,7 @@ func mutateAct() jobs.Action {
 // must stop BEFORE the dispatcher, not after.
 func TestGatedDispatchParksAndSendsNothing(t *testing.T) {
 	store := newMemApprovals()
-	s, disp := approvalFixture(t, []string{"node-a", "node-b"}, gateEverything(t, 1), store, func() time.Time { return apNow })
+	s, disp := approvalFixture(t, []string{"node-a", "node-b"}, gateEverything(t), store, func() time.Time { return apNow })
 
 	res, err := s.Run(context.Background(), Principal{AccountID: "acct-g", Account: "gleipnir-prod"}, Selector{}, mutateAct())
 
@@ -264,56 +264,11 @@ func TestGatedDispatchParksAndSendsNothing(t *testing.T) {
 	if parked.RequestID == "" || parked.PlanHash == "" {
 		t.Error("ParkedError must carry the request ID and plan hash a decider needs")
 	}
-	if parked.Progress != "0 of 1" {
-		t.Errorf("Progress = %q, want %q", parked.Progress, "0 of 1")
-	}
 	if len(parked.Rules) != 1 || parked.Rules[0] != "everything" {
 		t.Errorf("Rules = %v, want the rule that fired to be named", parked.Rules)
 	}
 	if len(store.byID) != 1 {
 		t.Errorf("stored %d requests, want exactly 1", len(store.byID))
-	}
-}
-
-// blankAudienceGate is a minimal ApprovalGate that hands back a Requirement
-// carrying a blank audience entry — something a real *approval.Gate can no
-// longer produce (approval.Rule.Validate), so this stands in for any other
-// ApprovalGate implementation checkApproval's own guard must defend against.
-type blankAudienceGate struct {
-	req   approval.Requirement
-	rules []string
-}
-
-func (g blankAudienceGate) Evaluate(approval.Dispatch) (approval.Requirement, []string, bool) {
-	return g.req, g.rules, true
-}
-
-// TestGatedDispatchRefusesABlankAudienceEntryBeforeAnyWrite is #608's
-// dispatch-path (park) regression: the park path has no capability-level
-// audience check of its own on main, and relies entirely on
-// approval.Rule.Validate to have kept a blank entry out of the gate in the
-// first place. A non-validating ApprovalGate must still be refused here,
-// before a Request is created.
-func TestGatedDispatchRefusesABlankAudienceEntryBeforeAnyWrite(t *testing.T) {
-	store := newMemApprovals()
-	gate := blankAudienceGate{
-		req:   approval.Requirement{Count: 1, Audience: []string{"ana", ""}, Channel: approval.ChannelOutOfBand, TTL: time.Hour},
-		rules: []string{"blank-rule"},
-	}
-	s, disp := approvalFixture(t, []string{"node-a"}, gate, store, func() time.Time { return apNow })
-
-	_, err := s.Run(context.Background(), Principal{AccountID: "acct-g", Account: "gleipnir-prod"}, Selector{}, mutateAct())
-	if !errors.Is(err, approval.ErrAudienceBlankEntry) {
-		t.Fatalf("err = %v, want errors.Is(err, ErrAudienceBlankEntry)", err)
-	}
-	if !strings.Contains(err.Error(), "require.audience") || !strings.Contains(err.Error(), "blank-rule") {
-		t.Errorf("error = %q, want it to mention require.audience and the offending rule", err)
-	}
-	if disp.called {
-		t.Error("dispatcher was called; a refused dispatch must never reach it")
-	}
-	if len(store.byID) != 0 {
-		t.Error("a refused dispatch must not create an approval request")
 	}
 }
 
@@ -342,7 +297,7 @@ func TestUngatedDispatchIsUntouched(t *testing.T) {
 // the same dispatch proceeds and the approval is joined to the Job it released.
 func TestApprovedPlanDispatchesAndBindsTheJob(t *testing.T) {
 	store := newMemApprovals()
-	s, disp := approvalFixture(t, []string{"node-a", "node-b"}, gateEverything(t, 1), store, func() time.Time { return apNow })
+	s, disp := approvalFixture(t, []string{"node-a", "node-b"}, gateEverything(t), store, func() time.Time { return apNow })
 	p := Principal{AccountID: "acct-g", Account: "gleipnir-prod"}
 
 	_, err := s.Run(context.Background(), p, Selector{}, mutateAct())
@@ -382,7 +337,7 @@ func TestRegistryDriftReParksAnApprovedPlan(t *testing.T) {
 	s := build(t, seams{reg: reg,
 		authz: &spyAuthorizer{}, cap: &spyCapChecker{},
 		audit: &spyAuditSink{}, freeze: &fakeFreezeStore{},
-		gate: gateEverything(t, 1), approvals: store, approvalAuthz: &spyApprovalAuthorizer{}, now: func() time.Time { return apNow },
+		gate: gateEverything(t), approvals: store, approvalAuthz: &spyApprovalAuthorizer{}, now: func() time.Time { return apNow },
 	})
 	s.disp = disp
 	p := Principal{AccountID: "acct-g", Account: "gleipnir-prod"}
@@ -420,7 +375,7 @@ func TestRegistryDriftReParksAnApprovedPlan(t *testing.T) {
 // notification and let a requester shop for a friendlier approver.
 func TestRepeatedRunReusesTheSamePark(t *testing.T) {
 	store := newMemApprovals()
-	s, _ := approvalFixture(t, []string{"node-a"}, gateEverything(t, 2), store, func() time.Time { return apNow })
+	s, _ := approvalFixture(t, []string{"node-a"}, gateEverything(t), store, func() time.Time { return apNow })
 	p := Principal{AccountID: "acct-g", Account: "gleipnir-prod"}
 
 	var ids []string
@@ -455,7 +410,7 @@ func TestFrozenRelayNeverEvenParks(t *testing.T) {
 	s := build(t, seams{reg: reg,
 		authz: &spyAuthorizer{}, cap: &spyCapChecker{},
 		audit: &spyAuditSink{}, freeze: &fakeFreezeStore{frozen: true},
-		gate: gateEverything(t, 1), approvals: store, approvalAuthz: &spyApprovalAuthorizer{}, now: func() time.Time { return apNow },
+		gate: gateEverything(t), approvals: store, approvalAuthz: &spyApprovalAuthorizer{}, now: func() time.Time { return apNow },
 	})
 
 	_, err := s.Run(context.Background(), Principal{Account: "gleipnir-prod"}, Selector{}, mutateAct())
@@ -503,7 +458,7 @@ func TestSameShapeDifferentPlanStillParks(t *testing.T) {
 	store := newMemApprovals()
 	s, disp, reg := shapeFixture(t, map[string]map[string]string{
 		"node-a": {"role": "web"},
-	}, gateEverything(t, 1), store)
+	}, gateEverything(t), store)
 
 	sel, err := ParseSelector("node:role=web")
 	if err != nil {
@@ -563,7 +518,7 @@ func approveViaRecordDecision(t *testing.T, repo approval.Repository, id, planHa
 // records an audited read rather than a second dispatch.
 func TestRun_ReDriveOfAReleasedApprovalReAttachesAndDispatchesNothing(t *testing.T) {
 	store := newMemApprovals()
-	s, disp, audit := approvalFixtureWithAudit(t, []string{"node-a", "node-b"}, gateEverything(t, 1), store, func() time.Time { return apNow })
+	s, disp, audit := approvalFixtureWithAudit(t, []string{"node-a", "node-b"}, gateEverything(t), store, func() time.Time { return apNow })
 	p := Principal{AccountID: "acct-g", Account: "gleipnir-prod"}
 
 	_, err := s.Run(context.Background(), p, Selector{}, mutateAct())
@@ -628,7 +583,7 @@ func TestRun_ReDriveOfAReleasedApprovalReAttachesAndDispatchesNothing(t *testing
 // Request's requester is unchanged.
 func TestRun_DifferentRequesterReAttachesToTheReleasedJob(t *testing.T) {
 	store := newMemApprovals()
-	s, disp, audit := approvalFixtureWithAudit(t, []string{"node-a"}, gateEverything(t, 1), store, func() time.Time { return apNow })
+	s, disp, audit := approvalFixtureWithAudit(t, []string{"node-a"}, gateEverything(t), store, func() time.Time { return apNow })
 	accountA := Principal{AccountID: "acct-a", Account: "alice"}
 	accountB := Principal{AccountID: "acct-b", Account: "bob"}
 
@@ -699,7 +654,7 @@ func TestRun_ReAttachThatCannotBeAuditedReturnsNothing(t *testing.T) {
 	s := build(t, seams{reg: reg,
 		authz: &spyAuthorizer{}, cap: &spyCapChecker{},
 		audit: audit, freeze: &fakeFreezeStore{},
-		gate: gateEverything(t, 1), approvals: store, approvalAuthz: &spyApprovalAuthorizer{},
+		gate: gateEverything(t), approvals: store, approvalAuthz: &spyApprovalAuthorizer{},
 		now: func() time.Time { return apNow },
 	})
 	s.disp = disp
@@ -737,7 +692,7 @@ func TestRun_ReAttachThatCannotBeAuditedReturnsNothing(t *testing.T) {
 func TestRun_ReleasedApprovalPastItsDeadlineParksAfresh(t *testing.T) {
 	store := newMemApprovals()
 	clock := apNow
-	s, disp := approvalFixture(t, []string{"node-a"}, gateEverything(t, 1), store, func() time.Time { return clock })
+	s, disp := approvalFixture(t, []string{"node-a"}, gateEverything(t), store, func() time.Time { return clock })
 	p := Principal{AccountID: "acct-g", Account: "gleipnir-prod"}
 
 	_, err := s.Run(context.Background(), p, Selector{}, mutateAct())
@@ -774,7 +729,7 @@ func TestRun_ReleasedApprovalPastItsDeadlineParksAfresh(t *testing.T) {
 // id rather than claiming and dispatching again.
 func TestRun_ClaimedReleaseThatFailsToDispatchStaysSpent(t *testing.T) {
 	store := newMemApprovals()
-	s, disp := approvalFixture(t, []string{"node-a"}, gateEverything(t, 1), store, func() time.Time { return apNow })
+	s, disp := approvalFixture(t, []string{"node-a"}, gateEverything(t), store, func() time.Time { return apNow })
 	p := Principal{AccountID: "acct-g", Account: "gleipnir-prod"}
 
 	_, err := s.Run(context.Background(), p, Selector{}, mutateAct())
@@ -820,7 +775,7 @@ func TestRun_ClaimedReleaseThatFailsToDispatchStaysSpent(t *testing.T) {
 // the refusal is audited exactly like any other internal refusal.
 func TestRun_ReserveJobIDFailureRefusesWithoutDispatching(t *testing.T) {
 	store := newMemApprovals()
-	s, disp := approvalFixture(t, []string{"node-a"}, gateEverything(t, 1), store, func() time.Time { return apNow })
+	s, disp := approvalFixture(t, []string{"node-a"}, gateEverything(t), store, func() time.Time { return apNow })
 	p := Principal{AccountID: "acct-g", Account: "gleipnir-prod"}
 
 	_, err := s.Run(context.Background(), p, Selector{}, mutateAct())
@@ -873,7 +828,7 @@ func TestRun_StoreErrorReadingForAPlanIsRefused(t *testing.T) {
 	s := build(t, seams{reg: reg,
 		authz: &spyAuthorizer{}, cap: &spyCapChecker{},
 		audit: audit, freeze: &fakeFreezeStore{},
-		gate: gateEverything(t, 1), approvals: failing, approvalAuthz: &spyApprovalAuthorizer{},
+		gate: gateEverything(t), approvals: failing, approvalAuthz: &spyApprovalAuthorizer{},
 		now: func() time.Time { return apNow },
 	})
 	s.disp = disp
@@ -938,7 +893,7 @@ func TestRun_ReleasedJobStaysBoundWhenTheCallIsCancelledMidDispatch(t *testing.T
 	s := build(t, seams{reg: reg,
 		authz: &spyAuthorizer{}, cap: &spyCapChecker{},
 		audit: &spyAuditSink{}, freeze: &fakeFreezeStore{},
-		gate: gateEverything(t, 1), approvals: repo, approvalAuthz: &spyApprovalAuthorizer{},
+		gate: gateEverything(t), approvals: repo, approvalAuthz: &spyApprovalAuthorizer{},
 		now: func() time.Time { return apNow },
 	})
 	s.disp = disp
@@ -1033,7 +988,7 @@ func TestRun_CallCancelledBeforeTheClaimDispatchesNothingAndLeavesTheApprovalRel
 	s := build(t, seams{reg: reg,
 		authz: &spyAuthorizer{}, cap: &spyCapChecker{},
 		audit: audit, freeze: &fakeFreezeStore{},
-		gate: gateEverything(t, 1), approvals: wrapped, approvalAuthz: &spyApprovalAuthorizer{},
+		gate: gateEverything(t), approvals: wrapped, approvalAuthz: &spyApprovalAuthorizer{},
 		now: func() time.Time { return apNow },
 	})
 	s.disp = disp
@@ -1110,7 +1065,7 @@ func (w laterNowOnBindJobApprovalStore) BindJob(ctx context.Context, id, jobID s
 // Satisfied and releases it normally.
 func TestRun_ClaimThatFindsTheDeadlinePassedDispatchesNothing(t *testing.T) {
 	store := newMemApprovals()
-	s, disp, audit := approvalFixtureWithAudit(t, []string{"node-a"}, gateEverything(t, 1), store, func() time.Time { return apNow })
+	s, disp, audit := approvalFixtureWithAudit(t, []string{"node-a"}, gateEverything(t), store, func() time.Time { return apNow })
 	p := Principal{AccountID: "acct-g", Account: "gleipnir-prod"}
 
 	_, err := s.Run(context.Background(), p, Selector{}, mutateAct())
@@ -1179,7 +1134,7 @@ func (alwaysAlreadyReleasedNoJobIDApprovalStore) BindJob(context.Context, string
 // store itself can never produce it under SetMaxOpenConns(1).
 func TestRun_ClaimAlreadyReleasedWithNoJobIDIsRefusedRatherThanReattachingToNothing(t *testing.T) {
 	store := newMemApprovals()
-	s, disp, audit := approvalFixtureWithAudit(t, []string{"node-a"}, gateEverything(t, 1), store, func() time.Time { return apNow })
+	s, disp, audit := approvalFixtureWithAudit(t, []string{"node-a"}, gateEverything(t), store, func() time.Time { return apNow })
 	p := Principal{AccountID: "acct-g", Account: "gleipnir-prod"}
 
 	_, err := s.Run(context.Background(), p, Selector{}, mutateAct())
@@ -1256,7 +1211,7 @@ func TestRun_ConcurrentReDrivesDispatchExactlyOneJob(t *testing.T) {
 	s := build(t, seams{reg: reg,
 		authz: &spyAuthorizer{}, cap: &spyCapChecker{},
 		audit: &spyAuditSink{}, freeze: &fakeFreezeStore{},
-		gate: gateEverything(t, 1), approvals: repo, approvalAuthz: &spyApprovalAuthorizer{},
+		gate: gateEverything(t), approvals: repo, approvalAuthz: &spyApprovalAuthorizer{},
 		now: func() time.Time { return apNow },
 	})
 	s.disp = disp
@@ -1346,7 +1301,7 @@ func TestApprovals_NoDispatchConsultsAGrant(t *testing.T) {
 // fan-out, parks as its own Request and runs nothing.
 func TestRun_EveryGatedDispatchParksOnItsOwn(t *testing.T) {
 	store := newMemApprovals()
-	s, disp := approvalFixture(t, []string{"node-a"}, gateEverything(t, 1), store, func() time.Time { return apNow })
+	s, disp := approvalFixture(t, []string{"node-a"}, gateEverything(t), store, func() time.Time { return apNow })
 	p := Principal{AccountID: "acct-g", Account: "gleipnir-prod"}
 
 	var parkedA *ParkedError

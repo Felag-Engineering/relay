@@ -329,12 +329,12 @@ type jobView struct {
 	ApprovalID string
 	GrantID    string
 
-	// Approval carries who gated this dispatch, under which rule, at what
-	// quorum, and what the Relay-authored Summary told them — rendered from
-	// the same Approval() read that already resolved the plan hash below, so
-	// the auditor never has to open a second screen. Nil when the dispatch
-	// was never gated, or when the approval record itself could not be
-	// resolved (see ApprovalError and ApprovalReaderMissing).
+	// Approval carries who gated this dispatch, under which rule, and what the
+	// Relay-authored Summary told them — rendered from the same Approval()
+	// read that already resolved the plan hash below, so the auditor never has
+	// to open a second screen. Nil when the dispatch was never gated, or when
+	// the approval record itself could not be resolved (see ApprovalError and
+	// ApprovalReaderMissing).
 	Approval *jobApproval
 
 	// ApprovalError is set when v.ApprovalID names a record that could not be
@@ -452,17 +452,6 @@ type jobApproval struct {
 	// stored at park time and never re-rendered from today's fleet.
 	Summary string
 
-	// Signed and Required are the quorum. Required is 0 for a record with no
-	// stored Requirement, and the template says so rather than claiming
-	// "0 of 0".
-	Signed   int
-	Required int
-
-	// Short is true when the record holds fewer approvals than Required — a
-	// defensive render, stated and never hidden, for a record this page did
-	// not expect to see incomplete on a released Job.
-	Short bool
-
 	// Deciders holds only the APPROVING Decisions, in stored order. A
 	// released Job's Request carries no terminal deny (one is terminal), so
 	// this is every decision that mattered.
@@ -504,17 +493,6 @@ func stampOrAbsent(t time.Time) string {
 	return utcStamp(t)
 }
 
-// countApprovals is how many of a request's Decisions approved.
-func countApprovals(req approval.Request) int {
-	n := 0
-	for _, d := range req.Decisions {
-		if d.Approve {
-			n++
-		}
-	}
-	return n
-}
-
 // identifiedByLabel is the words for how a Decision's decider was identified
 // (AP-88). A value this function does not know renders nothing rather than a
 // guess.
@@ -538,11 +516,8 @@ func newJobApproval(req approval.Request, viaGrant bool, jobRequesterID, jobRequ
 	a := &jobApproval{
 		Rules:    req.MatchedRules,
 		Summary:  req.Summary,
-		Signed:   countApprovals(req),
-		Required: req.Require.Count,
 		ViaGrant: viaGrant,
 	}
-	a.Short = a.Required > 0 && a.Signed < a.Required
 
 	for _, dec := range req.Decisions {
 		// One denial is terminal (approval.Decision), so a released Job's
@@ -1179,7 +1154,6 @@ var jobTmpl = newScreen("job", `
 {{with .Approval}}
 <section class="jobapproval" aria-label="Approval">
   <p>gated by rule {{if .Rules}}<code>{{join ", " .Rules}}</code>{{else}}no gate rule recorded{{end}}</p>
-  <p>{{if gt .Required 0}}<b>{{.Signed}}</b> of {{.Required}} {{plural .Required "approval" "approvals"}}{{else}}no quorum recorded{{end}}{{if .Short}} <span class="gap">The record holds fewer approvals than the rule required; why it was released is unknown.</span>{{end}}</p>
   {{if .ParkedByDiffers}}<p>approval parked by {{template "trust-chip" (trust .ParkedBy .ParkedByVerified)}} <span class="dim">{{if .ViaGrant}}— the Account that requested the Grant{{else}}— not the Account that requested this Job; the approval was released on its plan hash{{end}}</span></p>{{end}}
   {{range .Deciders}}
   <div class="decider">

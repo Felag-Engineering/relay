@@ -1,6 +1,6 @@
 # Relay configuration
 
-**Status:** designed, not built, as of `2026-10-28`.
+**Status:** designed, not built, as of `2026-10-29`.
 **Claim prefix:** `RC`
 **Governed by:** ADR-0043, ADR-0010, ADR-0033, ADR-0030, ADR-0047, ADR-0052, ADR-0027, ADR-0024,
 ADR-0023, ADR-0014, ADR-0004, ADR-0012, ADR-0009, ADR-0021; invariants 5, 10, 11, 14.
@@ -30,9 +30,7 @@ a reload or restart. The Relay installs from an OS package or as a container ima
 
 - **RC-4** With no optional setting given, the Relay comes up with the gRPC listener only: no
   control plane, no Console, no OAuth and no approval notification.
-- **RC-5** The approval-gate rules file is opened without following a symlink, checked on that
-  descriptor and read from it; a directory is refused, and a file that cannot be loaded fails
-  closed rather than loading no rules.
+- **RC-37** Gate rules are a section of the configuration file, checked, read and reloaded with it (RC-15, RC-16, RC-21), so whoever administers the Relay's host sets them and nothing on the wire can (ADR-0047). The separate gate-rules file goes, and with it its own load checks; a configuration naming `approval.gate_rules_path` is refused at start and on reload, naming the key. What the rules ship as is `approval.md`.
 - **RC-48** The approval webhook secret file is opened without following a symlink, checked on
   that descriptor and read from it; a directory is refused.
 - **RC-6** The shipped systemd unit runs the Relay as an unprivileged Unix account with an empty
@@ -77,8 +75,6 @@ a reload or restart. The Relay installs from an OS package or as a container ima
 - **RC-42** The Relay's logs are always JSON. The log level stays a setting (RC-22).
 - **RC-43** A Console session's maximum age is built in at 12 hours and the step-up window at 5
   minutes. The Console session's idle timeout stays a setting.
-- **RC-49** The approval-gate rules file's path is a value in the configuration file, with no
-  default (`approval.md`).
 - **RC-27** The Relay container image takes its configuration file, and any secret files it
   names, as a read-only mount: nothing about the floor is in the container's environment, so
   inspecting the container shows a mount path, not settings or secrets. The deployment stack
@@ -109,15 +105,12 @@ a reload or restart. The Relay installs from an OS package or as a container ima
 
 ## Refusals
 
-- **RC-8** A gate-rules file that is group- or world-writable is refused at load.
 - **RC-9** A webhook secret file readable or writable by group or world is refused at start,
   naming the mode.
 - **RC-10** OAuth configured with an issuer but without an audience or a public URL refuses
   start.
 - **RC-11** No MCP tool and no Control API route writes any configuration, and none may be
   added. There is no endpoint to refuse it.
-- **RC-35** A configured approval-gate rules file that cannot be loaded refuses start; the
-  Relay never runs ungated because a file is unreadable or malformed (`approval.md`).
 - **RC-44** A key the configuration file no longer accepts refuses start, and refuses a reload,
   naming the key and never its value. The removed keys are `enrollment.ip_rate_per_minute`,
   `enrollment.ip_burst`, `enrollment.global_rate_per_minute`, `enrollment.global_burst`,
@@ -139,7 +132,6 @@ a reload or restart. The Relay installs from an OS package or as a container ima
 | RC-25 | The Relay package writes the configuration file once, at first install, only if none exists, and never again: the host's fully qualified name as the certificate hostname, the CA directory and store path inside the state directory, the control plane and Admin Console enabled, and the control-plane listener bound to loopback. The file is generated, not package-owned configuration, so no upgrade rewrites it. | MVP |
 | RC-26 | Removing the Relay package keeps configuration and state. `apt purge` removes configuration and moves the CA and the store aside together, re-owned by root and readable by nobody else, and prints where; it never deletes them, never splits them, and never deletes the Relay's Unix account. Purge deletes only paths the package itself created. `.rpm` removal never deletes state and prints the paths to delete by hand. | MVP |
 | RC-34 | Per-Account Console preferences are stored per Account, not fleet-wide. | After MVP |
-| RC-37 | Gate rules are a section of the configuration file, checked, read and reloaded with it (RC-15, RC-16, RC-21), so whoever administers the Relay's host sets them and nothing on the wire can (ADR-0047). The separate gate-rules file goes, and with it its own load checks; a configuration naming `approval.gate_rules_path` is refused at start and on reload, naming the key. What the rules ship as is `approval.md`. Replaces RC-5, RC-8, RC-35 and RC-49 when promoted. | MVP |
 | RC-45 | The quickstart installs the Relay from its OS package. The container image with its deployment stack (RC-7, RC-27) stays a supported install, as built. | MVP |
 
 ## Out of scope
@@ -169,9 +161,7 @@ Generated by `make spec-proof` from the tests that name the claim they prove.
 | Claim | Proven by | Seam |
 |---|---|---|
 | RC-4 | `TestNewServer_MinimalConfigIsGRPCOnly` | Relay |
-| RC-5 | `TestLoadFailsClosed`, `TestLoadRefusesDirectory`, `TestLoadRefusesSymlink` | approval |
 | RC-6 | `TestRelayUnit_UnprivilegedNoCapsReadOnly` | Relay |
-| RC-8 | `TestDecide_Table`, `TestLoadFailsClosed` | approval, hostfile |
 | RC-9 | `TestSecretFilePermissionsAreEnforced` | approvalnotify |
 | RC-10 | `TestValidate_OAuthIssuerNeedsAudienceAndPublicURL` | relayconfig |
 | RC-11 | `TestDeps_HasNoConfigField`, `TestMuxRegistrationsAreTheKnownSites`, `TestNoRouteWritesConfiguration`, `TestNoToolWritesConfiguration` | API, MCP, Relay |
@@ -180,10 +170,10 @@ Generated by `make spec-proof` from the tests that name the claim they prove.
 | RC-14 | `TestLoadConfig_FileSecretsResolved`, `TestMain_OtherFlagsRefused`, `TestMain_RetiredEnvNameRefusesNamingKey`, `TestSecret_FileLoad`, `TestStartupLog_CarriesNoWebhookURLOrSecret` | Relay, relayconfig |
 | RC-20 | `TestMain_CoherentButSuspectConfigStartsWithWarning`, `TestValidate_ConsoleWithoutControlPlaneRefused`, `TestValidate_MutateCapAboveReadCapWarns`, `TestValidate_OAuthWithoutIssuerRefused` | Relay, relayconfig |
 | RC-21 | `TestCapability_ReadsReachSettingsPerRequest`, `TestReload_BindTimeChangeRefusedRestartRequired`, `TestReload_FailedReloadProcessSurvives`, `TestReload_InvalidValueRefusedConfigIntact`, `TestReload_RechecksFileFirst`, `TestReload_ValidChangeAppliedAndAudited` | Relay, capability |
-| RC-22 | `TestApprovalGatePathAbsentMeansNoGate`, `TestDefaults_EachReachValueWhenAbsent`, `TestEveryKeyReachesConfig`, `TestFromFile_CarriesEverySetting`, `TestNewLogHandler_JSONAtConfiguredLevel`, `TestValidate_InvalidValueRefusedNamingSetting` | Relay, relayconfig |
+| RC-22 | `TestDefaults_EachReachValueWhenAbsent`, `TestEveryKeyReachesConfig`, `TestFromFile_CarriesEverySetting`, `TestNewLogHandler_JSONAtConfiguredLevel`, `TestValidate_InvalidValueRefusedNamingSetting` | Relay, relayconfig |
 | RC-28 | `TestInit_CreatesNamedAdminAndMintsOnce`, `TestInit_NoReservedName`, `TestInit_RecoverReMintsAndAudits`, `TestInit_RecoverRefusesDisabledOrNonAdmin`, `TestInit_RefusesAbsentStore`, `TestInit_RefusesRoot`, `TestInit_RefusesWhenAHumanAccountExists`, `TestInit_RerunEmitsNothing`, `TestInit_TTLAppliesToTheFirstAndTheRecoveredToken`, `TestNewServer_ControlEnabled_SeedsNoAccount`, `TestReadNoEcho_ThePasswordIsNotEchoedAndEchoIsRestored` | Relay |
-| RC-35 | `TestStart_RefusesMalformedGateFile`, `TestStartup_RefusedGateRefusesBeforeTheCA` | Relay, startup |
 | RC-36 | `TestMintEnrollmentToken_JoinStringUsesAdvertisedAddress` | Relay |
+| RC-37 | `TestLoad_GateRulesOnlyAsArrayTables`, `TestLoad_GateRulesPathRefusedNamingKey`, `TestReloader_GateRulesPathRefusedNamingKey`, `TestStart_RefusesGateRulesPath`, `TestValidate_GateRuleValuesRefusedNamingField` | Relay, relayconfig |
 | RC-38 | `TestFromFile_EnrollmentRateLimitsAreBuiltIn` | Relay |
 | RC-39 | `TestFromFile_CertExpiringFractionIsAQuarter` | Relay |
 | RC-40 | `TestFromFile_DispatchConcurrencyIsSixteen` | Relay |
@@ -194,12 +184,14 @@ Generated by `make spec-proof` from the tests that name the claim they prove.
 | RC-46 | `TestServerCertificateNames`, `TestServerCertificate_NamesEveryHostAJoinStringCarries` | Relay |
 | RC-47 | `TestDiff_ExtraNamesChangeIsRestartRequired`, `TestReloader_ExtraNamesChangeRefusedRestartRequired`, `TestValidate_ExtraNamesCappedAt32`, `TestValidate_ExtraNamesEachEntryChecked` | Relay, relayconfig |
 
-Unproven: RC-7, RC-27, RC-48, RC-49.
-Designed claims a test already cites: RC-15 (`TestDecide_Table`, `TestInit_RefusesRoot`, `TestStart_RefusesConfigWritableByRelay`, `TestStart_RefusesSecretReadableByOthers`); RC-16 (`TestStart_RefusesSymlinkedConfig`); RC-17 (`TestCA_RefusesGroupReadableKeyOrDirectory`, `TestStart_RefusesGroupReadableStateOrKey`); RC-18 (`TestRefusals_CarryNoSecretOrWebhookURL`, `TestReload_AuditNamesSecretKeyNotValue`); RC-19 (`TestPackagedRelayTOML_WithoutFQDNRefusesNamingTLSHostname`); RC-23 (`release_attaches_every_package_and_its_sbom_under_sha256sums`, `release_packages_are_built_twice_compared_wrap_the_binary_and_carry_no_signature`, `release_publishes_nothing_unless_the_install_matrix_passes_on_its_packages`, `release_signs_and_tests_only_the_sha256sums_the_comparing_job_wrote`); RC-25 (`TestPackagedRelayTOML_FirstInstallSettings`, `TestPackagedRelayTOML_WithoutFQDNRefusesNamingTLSHostname`).
+Unproven: RC-7, RC-27, RC-48.
+Designed claims a test already cites: RC-15 (`TestDecide_Table`, `TestInit_RefusesRoot`, `TestStart_RefusesConfigWritableByRelay`, `TestStart_RefusesSecretReadableByOthers`); RC-16 (`TestStart_RefusesSymlinkedConfig`); RC-17 (`TestCA_RefusesGroupReadableKeyOrDirectory`, `TestStart_RefusesGroupReadableStateOrKey`); RC-18 (`TestNewGate_RefusalNamesNoRuleNameOrValue`, `TestRefusals_CarryNoSecretOrWebhookURL`, `TestReload_AuditNamesSecretKeyNotValue`, `TestValidate_GateRuleValuesRefusedNamingField`); RC-19 (`TestPackagedRelayTOML_WithoutFQDNRefusesNamingTLSHostname`); RC-23 (`release_attaches_every_package_and_its_sbom_under_sha256sums`, `release_packages_are_built_twice_compared_wrap_the_binary_and_carry_no_signature`, `release_publishes_nothing_unless_the_install_matrix_passes_on_its_packages`, `release_signs_and_tests_only_the_sha256sums_the_comparing_job_wrote`); RC-25 (`TestPackagedRelayTOML_FirstInstallSettings`, `TestPackagedRelayTOML_WithoutFQDNRefusesNamingTLSHostname`).
 <!-- proof:end -->
 
 ## Retired
 
+- **RC-5**, **RC-8**, **RC-35**, **RC-49** — `2026-10-29` — the approval-gate rules file, its
+  load checks and its configured path; replaced by RC-37.
 - **RC-50** — `2026-10-28` — the `state:cert-expiring` fraction was a configuration value;
   replaced by RC-39.
 - **RC-51** — `2026-10-28` — the enrollment rate limits, bursts and tracked-IP ceiling were

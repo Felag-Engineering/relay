@@ -1,7 +1,7 @@
 # Relay test fleet: the Relay and three relay-daemons, DEV-ONLY (docs/dev-fleet.md).
 # Not a deployment: deploy/production is that.
 #
-# Everything this fleet loads is in this folder: relay.toml and approval-gates.json are staged
+# Everything this fleet loads is in this folder: relay.toml is staged
 # by the relay-config one-shot. `make dev-fleet-up` runs it; so can any compose tool pointed at
 # this file, Komodo included. The project is fixed by `name:` below. One fleet per Docker
 # engine: it publishes the same host ports as deploy/demo, and the Makefile refuses to start
@@ -47,11 +47,11 @@ x-daemon-base: &daemon-base
 
 services:
   # The Relay's configuration, staged onto the relay-etc volume by
-  # docker/dev-fleet-config.sh: relay.toml root:10001 0640 and approval-gates.json root:root
-  # 0644, both from this folder. A named volume is on the engine's own Linux filesystem, which
+  # docker/dev-fleet-config.sh: relay.toml root:10001 0640, from this folder. A named volume is on the
+  # engine's own Linux filesystem, which
   # the Relay's start-time check accepts; a bind mount from the checkout carries the
   # developer's uid and mode and, on Docker Desktop, arrives over virtiofs, 9p or FUSE, which
-  # it refuses (docs/dev-fleet.md). So the files are mounted here, read-only, and the Relay
+  # it refuses (docs/dev-fleet.md). So the file is mounted here, read-only, and the Relay
   # mounts the staged copy. Root with only CAP_CHOWN (to group the file to 10001 and hand
   # init's volumes to that uid) and CAP_DAC_OVERRIDE (to read a 0600 checkout), no network.
   relay-config:
@@ -77,7 +77,6 @@ services:
     volumes:
       - ../../docker/dev-fleet-config.sh:/dev-fleet-config.sh:ro
       - ./relay.toml:/src/relay.toml:ro
-      - ./approval-gates.json:/src/approval-gates.json:ro
       - relay-etc:/stage
       # init's two output volumes, handed to the Relay's uid (dev-fleet-config.sh).
       - control-credential:/handoff/credential
@@ -126,10 +125,9 @@ services:
       # Relay still listens on 9443 inside the container.
       - "${RELAY_PUBLISH_ADDR:-127.0.0.1}:${RELAY_PUBLISH_PORT:-9443}:9443"
     volumes:
-      # The Relay's configuration directory, read-only (ADR-0043): relay.toml and
-      # the gate files staged by relay-config. Every setting lives in relay.toml,
-      # the approval gate's path included; the comments in the fixtures carry the
-      # reasoning.
+      # The Relay's configuration directory, read-only (ADR-0043): relay.toml staged
+      # by relay-config. Every setting lives in relay.toml, the approval gate's
+      # rules included; the comments in the fixture carry the reasoning.
       - type: volume
         source: relay-etc
         target: /etc/relay

@@ -62,7 +62,6 @@ func (e *scriptedRetryExecutor) Start(context.Context, capability.Principal, cap
 			RequestID: answerRequestID,
 			PlanHash:  answerPlanHash,
 			Summary:   `service.restart(unit="nginx") [mutate] on 1 node(s): node-a`,
-			Progress:  "0 of 1",
 			Rules:     []string{"all-mutates-need-a-human"},
 			ExpiresAt: fixedNow.Add(4 * time.Hour),
 			Askable:   true,
@@ -234,7 +233,6 @@ func TestAnsweredRetry_LapsedRequestReParks(t *testing.T) {
 		RequestID: "apr-2",
 		PlanHash:  "hash-2",
 		Summary:   `service.restart(unit="nginx") [mutate] on 1 node(s): node-a`,
-		Progress:  "0 of 1",
 		Rules:     []string{"all-mutates-need-a-human"},
 		ExpiresAt: fixedNow.Add(4 * time.Hour),
 		Askable:   true,
@@ -279,9 +277,6 @@ func TestAnsweredRetry_DomainRefusalsAreResultsNotErrors(t *testing.T) {
 		// answerer is reached.
 		adapterRefusal bool
 	}{
-		{name: "ErrRequesterExcluded", action: "accept", meta: permissionResponder("alice"), deciderErr: approval.ErrRequesterExcluded},
-		{name: "ErrNotInAudience", action: "accept", meta: permissionResponder("alice"), deciderErr: approval.ErrNotInAudience},
-		{name: "ErrWeakChannel", action: "accept", meta: permissionResponder("alice"), deciderErr: approval.ErrWeakChannel},
 		{name: "ErrPlanChanged", action: "accept", meta: permissionResponder("alice"), deciderErr: approval.ErrPlanChanged},
 		{name: "the decider itself returns ErrMachineSelfDecision", action: "accept", meta: permissionResponder("alice"), deciderErr: approval.ErrMachineSelfDecision},
 		// This session is an API-token one (AP-87), so an answer with no
@@ -555,20 +550,6 @@ func TestAnsweredRetry_NextStepFollowsWhatTheDispatchReturned(t *testing.T) {
 		wantChannel    string
 		wantOnBehalfOf string
 	}{
-		{
-			name: "quorum completed concurrently: still pending, but the re-entered dispatch ran",
-			dec: scriptedAnswerer{resp: inBandDecisionBy(approval.Request{
-				ID: answerRequestID, State: approval.StatePending, PlanHash: answerPlanHash,
-				Require: approval.Requirement{Count: 3}, Decisions: []approval.Decision{{Approve: true}},
-			}, answerAccountID, true)},
-			second: func(e *scriptedRetryExecutor) {
-				e.second.results = []capability.NodeResult{{NodeID: "node-a", Outcome: jobs.OutcomeUnreachable, JobID: "job-1"}}
-			},
-			wantJobID:      "job-1",
-			wantNextStep:   nextStepRanThePipeline + " " + nextStepAnswerRecorded,
-			wantChannel:    wantInBand,
-			wantOnBehalfOf: "alice",
-		},
 		{
 			name: "the rule changed: approved and recorded, but the re-entered dispatch re-parks non-askable",
 			dec:  scriptedAnswerer{resp: inBandDecisionBy(approval.Request{ID: answerRequestID, State: approval.StateApproved, PlanHash: answerPlanHash}, answerAccountID, true)},

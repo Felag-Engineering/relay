@@ -16,7 +16,7 @@ beside the systemd unit, and its posture is stated in its runbook (ADR-0033).
 **Configuration.** Production's `relay.toml` is a host file by design (ADR-0043): it is
 root-owned on the deployment host, at `/etc/relay/relay.toml` unless `RELAY_CONFIG_FILE`
 names another absolute path, and is never in the checkout. The test and demo fleets carry
-theirs in the folder (`relay.toml`, `approval-gates.json`, and for the demo `relay.oauth.toml`);
+theirs in the folder (`relay.toml`, and for the demo `relay.oauth.toml`);
 their `relay-config` one-shot stages them onto a named volume on every `up`, so an edit to the
 folder reaches the Relay on the next `up`.
 

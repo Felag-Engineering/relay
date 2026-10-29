@@ -48,13 +48,12 @@ type Repository interface {
 
 	// RecordDecision appends d to the Request and persists the resulting state
 	// transition atomically. The read-modify-write must happen inside one
-	// transaction: two approvers answering a count:2 Request simultaneously
-	// must not both read "0 approvals so far" and both append, and a decision
-	// must never be recorded without its state change (or vice versa).
+	// transaction: two deciders answering one Request simultaneously must not
+	// both read "pending" and both append, and a decision must never be recorded
+	// without its state change (or vice versa).
 	//
 	// It returns the updated Request, or one of ErrNotFound, ErrNotPending,
-	// ErrRequesterExcluded, ErrNotInAudience, ErrDuplicateDecider,
-	// ErrPlanChanged, ErrMachineSelfDecision, or ErrWeakChannel.
+	// ErrPlanChanged, or ErrMachineSelfDecision.
 	//
 	// On a domain eligibility refusal (every error above but ErrNotFound), the
 	// returned Request is the one read inside the transaction, unchanged, with
@@ -74,7 +73,7 @@ type Repository interface {
 	//     Request is the one read inside the transaction, carrying the bound
 	//     JobID, so the caller can re-attach to it.
 	//   - ErrNotReleasable: the Request is not Satisfied (pending, denied,
-	//     expired, past its deadline, or short of quorum), or jobID is empty.
+	//     expired, or past its deadline), or jobID is empty.
 	//     The returned Request is the one read inside the transaction,
 	//     unchanged, mirroring RecordDecision's "refusal returns cur" contract.
 	BindJob(ctx context.Context, id, jobID string, now time.Time) (Request, error)

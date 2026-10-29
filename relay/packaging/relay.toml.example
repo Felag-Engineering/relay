@@ -137,15 +137,16 @@ hostname = "relay.example.internal"
 # ---------------------------------------------------------------------------
 [approval]
 
-# Path to the approval-gate rules: which dispatches must wait for a human.
-# Leaving it out means no gating.
+# Gate rules: which dispatches must wait for a human. Each rule is one
+# [[approval.rules]] section of this file, naming what it matches and how long
+# a parked request lives, and nothing else (docs/operations/approval-gates.md).
+# A file with no gate rules gates nothing.
 #
-# A path in this file, for the same reason the blast caps are here: a stolen
+# They are in this file, for the same reason the blast caps are: a stolen
 # credential that could edit its own approval requirements would make the whole
-# mechanism decorative. A configured path that cannot be read REFUSES STARTUP
-# rather than coming up with an empty rule set, because a Relay that silently
-# decided nothing needs approval is the failure this exists to prevent.
-# gate_rules_path = "/etc/relay/approval-gates.json"
+# mechanism decorative. A rule that cannot be loaded REFUSES STARTUP rather than
+# coming up with an empty rule set, because a Relay that silently decided
+# nothing needs approval is the failure this exists to prevent.
 
 # Where to push a Relay-authored notice that a dispatch has parked. Optional:
 # with no URL nothing is pushed and approvers read the queue instead. A secret:

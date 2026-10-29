@@ -321,8 +321,7 @@ func testParkedError() *capability.ParkedError {
 		RequestID: "apr-123",
 		PlanHash:  "hash-abc",
 		Summary:   `service.restart(unit="nginx") [mutate] on 12 node(s): node-a, node-b`,
-		Progress:  "0 of 2",
-		Rules:     []string{"prod-mutates-need-two-people"},
+		Rules:     []string{"prod-mutates-need-a-human"},
 		ExpiresAt: time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC),
 	}
 }
@@ -358,8 +357,8 @@ func TestDispatch_ParkIsAResultNotAnError(t *testing.T) {
 	if pa.Summary != testParkedError().Summary {
 		t.Errorf("summary = %q, want the Relay-authored text verbatim", pa.Summary)
 	}
-	if pa.Progress != "0 of 2" || len(pa.MatchedRules) != 1 {
-		t.Errorf("pending_approval = %+v, want the quorum state and the rule that fired", pa)
+	if len(pa.MatchedRules) != 1 {
+		t.Errorf("pending_approval = %+v, want the rule that fired", pa)
 	}
 	if pa.ExpiresAt != "2026-08-15T12:00:00Z" {
 		t.Errorf("expires_at = %q, want RFC 3339 UTC", pa.ExpiresAt)

@@ -92,7 +92,7 @@ type AuditReader interface {
 }
 
 // ApprovalReader is Job detail's read of the one approval record a dispatch
-// names (ADR-0027), so the Job header can show its approvers, rule, quorum and
+// names (ADR-0027), so the Job header can show its approvers, rule and
 // plan hash. It declares no PendingApprovals, so no Console screen lists pending
 // requests (AP-80). *capability.Approvals satisfies it and still carries
 // PendingApprovals. The no_dispatch guard refuses a

@@ -70,7 +70,6 @@ func TestValidate_InvalidValueRefusedNamingSetting(t *testing.T) {
 		{"tls", "hostname", `"-bad.example"`},
 		{"tls", "hostname", `"relay.example.internal:7654"`},
 		{"console", "session_idle", `"-5m"`},
-		{"approval", "gate_rules_path", `"gates.json"`},
 		{"approval", "webhook_url_file", `"relative"`},
 		{"log", "level", `"verbose"`},
 		{"reach", "read_blast_cap", `0`},

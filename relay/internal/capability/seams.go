@@ -419,7 +419,7 @@ const (
 	// AuditKindApprovalDecided is one recorded answer to a parked dispatch
 	// (ADR-0027): Principal is the decider, ApprovalID and PlanHash name
 	// what they answered, and Reason states the answer, the resulting request
-	// state, the quorum progress, and the decider's own note.
+	// state, and the decider's own note.
 	//
 	// Selector, Action, JobID, and Results are all empty. A decision is not a
 	// dispatch and does not describe one — it is an act on the approval object,
@@ -427,10 +427,7 @@ const (
 	// than by copying the Action into a second place where the two could
 	// disagree.
 	//
-	// Every decision is recorded, not only the one that completes a quorum, so
-	// "one approver signed and then it expired" is answerable. A partial
-	// approval that leaves no trace is how an audit trail loses the interesting
-	// half of the story.
+	// Every decision is recorded, approving or denying.
 	//
 	// ApprovalAnswer and DecisionChannel are set by DecideApproval on
 	// this kind only.

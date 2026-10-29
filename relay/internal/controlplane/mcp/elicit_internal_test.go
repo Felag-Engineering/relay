@@ -95,7 +95,6 @@ func TestElicit_LegacyHeaderWithModernMetaDoesNotAsk(t *testing.T) {
 		RequestID: "req-predicate-1",
 		PlanHash:  "hash-predicate-1",
 		Summary:   `service.restart(unit="nginx") [mutate] on 1 node(s): node-a`,
-		Progress:  "0 of 1",
 		Rules:     []string{"all-mutates-need-a-human"},
 		ExpiresAt: time.Now().Add(time.Hour),
 		Askable:   true,

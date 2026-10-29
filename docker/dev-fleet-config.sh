@@ -2,7 +2,7 @@
 # Dev-fleet configuration one-shot (docs/dev-fleet.md). DEV-ONLY. Runs once per
 # `compose up`, as the `relay-config` compose service, before the Relay starts.
 #
-# It stages the Relay's relay.toml and approval-gate fixtures onto the
+# It stages the Relay's relay.toml onto the
 # relay-etc named volume, which the Relay mounts read-only at /etc/relay. That
 # volume lives on the Docker engine's own Linux filesystem, which the Relay's
 # start-time filesystem allowlist accepts (ADR-0043). A bind mount from the
@@ -10,11 +10,10 @@
 # Docker Desktop it arrives over virtiofs, 9p or FUSE.
 #
 # Inputs, mounted read-only from the fleet's folder (deploy/test or deploy/demo):
-# /src/relay.toml and /src/approval-gates.json. Output: /stage, the volume root. It also hands
+# /src/relay.toml. Output: /stage, the volume root. It also hands
 # init's two output volumes, /handoff/credential and /handoff/bootstrap, to the
 # Relay's uid.
 #   relay.toml                root:10001 0640, the layout the Relay accepts
-#   approval-gates.json       root:root  0644, what the gate loader demands
 #
 # FLEET_HOSTNAME (default `relay`) replaces the committed tls.hostname line in the
 # staged relay.toml, so a fleet can carry a real DNS name in its certificate. It is
@@ -50,12 +49,10 @@ if ! valid_hostname "$hostname"; then
   exit 1
 fi
 
-for f in relay.toml approval-gates.json; do
-  if ! [ -r "/src/$f" ]; then
-    echo "dev-fleet-config: cannot read /src/$f; check the checkout's file mode" >&2
-    exit 1
-  fi
-done
+if ! [ -r /src/relay.toml ]; then
+  echo "dev-fleet-config: cannot read /src/relay.toml; check the checkout's file mode" >&2
+  exit 1
+fi
 
 chown 0:0 /stage
 chmod 0755 /stage
@@ -80,13 +77,12 @@ if [ "$hostname" != relay ]; then
   mv -f /stage/.relay.toml.tmp /stage/relay.toml
   echo "dev-fleet-config: tls.hostname = \"$hostname\""
 fi
-stage approval-gates.json 0 0644
 
 # Nothing else stays: a file left by a previous fixture must not linger.
 for entry in /stage/* /stage/.[!.]*; do
   [ -e "$entry" ] || continue
   case "${entry#/stage/}" in
-    relay.toml | approval-gates.json) ;;
+    relay.toml) ;;
     *) rm -rf "$entry" ;;
   esac
 done

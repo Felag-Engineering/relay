@@ -1,6 +1,6 @@
 # Approval
 
-**Status:** designed, not built, as of `2026-10-28`.
+**Status:** designed, not built, as of `2026-10-29`.
 **Claim prefix:** `AP`
 **Governed by:** ADR-0047, ADR-0027, ADR-0029, ADR-0049, ADR-0043; invariants 4, 5, 7, 10, 11, 13.
 
@@ -39,8 +39,8 @@ retires when the row lands.
 
 **Gate rules**
 
-- **AP-4** Gate rules are an optional root-owned file, loaded at Relay startup and re-read on
-  every successful configuration reload; when no file is configured nothing is gated.
+- **AP-89** Gate rules live where `relay-configuration.md` sets, as a section of the Relay configuration file; a configuration with no gate rules gates nothing.
+- **AP-81** A gate rule names what it matches and how long a request it parks lives, and nothing else. A rule naming a count, an audience, a requester exclusion or a channel is refused when the configuration loads, naming the field, and no rule demands a channel.
 - **AP-5** No API route and no MCP tool can write gate rules.
 - **AP-6** A gate rule only adds a gate; it never waives a guardrail. A rule no decision could
   ever satisfy is refused when the rules load.
@@ -48,13 +48,6 @@ retires when the row lands.
   ungated (threat model R23).
 - **AP-8** Gate rules that cannot be loaded refuse Relay startup: the Relay never runs ungated
   because its rules are unreadable or malformed.
-- **AP-9** A rule selects a rung of the confirmation ladder: no gate, self-confirmation, or
-  second-person, where the rule's audience excludes the requester.
-- **AP-13** A decision's channel must be at least as strong as the rule demands, and
-  `out-of-band` is the stronger: a rule demanding `in-band` is satisfied by either path, one
-  demanding `out-of-band` only by the Control API, and an asserted approver does not upgrade an
-  in-band answer.
-- **AP-14** A rule that states no channel demands `out-of-band`.
 
 **Answering**
 
@@ -63,9 +56,6 @@ retires when the row lands.
   answer and the channel.
 - **AP-60** A gated dispatch from a client that can be asked is answered with a question carrying
   the Relay-written summary, the request ID and the plan hash, and parks.
-- **AP-61** A question is emitted only where an answer from that caller could be accepted: the
-  rule's channel is in-band, the rule does not exclude the requester, and its audience admits the
-  calling Account. Otherwise nobody is asked.
 - **AP-62** A question is emitted only for a park this call created; a re-drive that bounces off
   a request already pending asks nobody.
 - **AP-86** Whether Relay asks a client turns on the client advertising elicitation, on any
@@ -95,7 +85,6 @@ retires when the row lands.
   authorization, the cap and the plan-hash match, and a changed Node set parks again.
 - **AP-67** A retry whose decision already released a Job re-attaches to it and mints no second.
 - **AP-68** A denial on the retry is terminal and audited, and nothing is dispatched.
-- **AP-69** A rule demanding `out-of-band` yields no answerable question, on any client.
 - **AP-85** A parked request is never rendered as an MCP task handle: a park that asks nobody
   is answered `pending_approval`.
 - **AP-80** The Control API decision endpoint decides any parked request, recording the channel
@@ -108,9 +97,7 @@ retires when the row lands.
 **What a decision does**
 
 - **AP-26** A decision is refused for any cause under *Refusals*, and for no other.
-- **AP-73** A rule may require two decisions from distinct Accounts. Until that many arrive the
-  request stays pending, each decision is its own audit record, and the Control API's read of
-  the request shows who has decided.
+- **AP-82** A request is ended by its first Decision that no refusal stops: an approving Decision releases it, and a denying one ends it.
 - **AP-27** A denial is terminal, and audited as fully as a release.
 - **AP-11** A machine Account cannot decide its own request on the Control API; only an
   accepted in-band answer counts as its self-confirmation.
@@ -149,11 +136,7 @@ retires when the row lands.
 | Claim | Refusal | Cause |
 |---|---|---|
 | **AP-42** | Not pending / not found | The request is terminal, expired, or unknown |
-| **AP-43** | Requester excluded | The rule demands a second person |
-| **AP-44** | Not in audience | The decider is outside the rule's audience |
-| **AP-45** | Duplicate decider | This Account has already decided this request |
 | **AP-46** | Plan hash changed | The cited plan hash is not the request's |
-| **AP-47** | Weak channel | The decision's channel is weaker than the rule demands, denials included |
 | **AP-48** | Machine self-decision | A machine Account deciding its own request other than by an accepted in-band answer |
 | **AP-49** | Role floor | The decider is below the floor the Action needed to be requested |
 | **AP-54** | Approvals unavailable | The gate rules could not be loaded, so the Relay does not start (AP-8) |
@@ -165,9 +148,6 @@ where it replaces any.
 
 | Claim | Statement | Milestone |
 |---|---|---|
-| AP-81 | A gate rule names what it matches and how long a request it parks lives, and nothing else. A rule naming a count, an audience, a requester exclusion or a channel is refused when the configuration loads, naming the field, and no rule demands a channel. Replaces AP-9, AP-13, AP-14, AP-43, AP-44, AP-47, AP-61, AP-69 and AP-73 when promoted. | MVP |
-| AP-82 | A request is ended by its first Decision that no refusal stops: an approving Decision releases it, and a denying one ends it. Replaces AP-45 and AP-73 when promoted. | MVP |
-| AP-89 | Gate rules live where `relay-configuration.md` sets, as a section of the Relay configuration file; a configuration with no gate rules gates nothing. Replaces AP-4 when promoted. | MVP |
 | AP-90 | Every configuration Relay ships, the one the package writes and the example a container install starts from, carries rules that gate every `mutate` and every Raw Exec, so a fresh install is gated; `read` is not. Replaces AP-7 when promoted. | MVP |
 
 ## Out of scope
@@ -192,42 +172,50 @@ Generated by `make spec-proof` from the tests that name the claim they prove.
 <!-- proof:begin -->
 | Claim | Proven by | Seam |
 |---|---|---|
-| AP-2 | `TestElicit_AskableParkFromMRTRClientGetsAQuestion`, `TestParkIsAskableOnlyForAnInBandCreatedParkTheCallerCouldAnswer` | Relay, capability |
-| AP-11 | `TestDecideApproval_TokenCarveOutIsInBandOnly` | capability |
+| AP-2 | `TestElicit_AskableParkFromMRTRClientGetsAQuestion`, `TestParkIsAskableOnlyWhenThisCallCreatedIt` | Relay, capability |
+| AP-8 | `TestLoadConfig_MalformedGateRuleRefusesStart`, `TestLoad_VariantSpellingOfRulesKeysRefused`, `TestStart_RefusesMalformedGateRule` | Relay, relayconfig |
+| AP-11 | `TestAnswerElicited_HumanRequesterConfirmsOwnRequest`, `TestDecideApproval_TokenCarveOutIsInBandOnly`, `TestDecide_HumanRequesterMayConfirmOwnRequest`, `TestMCPElicitation_ClaudeCodeOnAnOAuthHumanSessionIsTheHumansVerifiedDecision` | Relay, approval, capability |
 | AP-12 | `TestAnswerElicited_RecordsAnInBandDecision` | capability |
 | AP-17 | `TestApprovalCallout_ControlAPIDecidesAnMCPParkedRequest` | Relay |
 | AP-21 | `TestAnsweredRetry_FleetChangedReParksAndAsksAfresh`, `TestSameShapeDifferentPlanStillParks` | Relay, capability |
 | AP-25 | `TestRun_ReleasedApprovalPastItsDeadlineParksAfresh` | capability |
 | AP-42 | `TestAnswerElicited_TokenSessionMeetsTheSameRefusals` | capability |
 | AP-46 | `TestAnswerElicited_TokenSessionMeetsTheSameRefusals` | capability |
-| AP-48 | `TestAnswerElicited_TokenSessionMeetsTheSameRefusals`, `TestDecideApproval_TokenCarveOutIsInBandOnly`, `TestDecide_MachineAPITokenAnswerIsInBandSelfConfirmation`, `TestElicitedAnswer_OnAnotherSessionAnUnusableAnswerIsAMachineSelfDecision` | MCP, approval, capability |
+| AP-48 | `TestAnswerElicited_TokenSessionMeetsTheSameRefusals`, `TestApprovalCallout_MachineCannotSatisfyItsOwnGate`, `TestDecideApproval_TokenCarveOutIsInBandOnly`, `TestDecide_MachineAPITokenAnswerIsInBandSelfConfirmation`, `TestDecide_MachineSelfDecisionOnlyInBandForms`, `TestElicitedAnswer_OnAnotherSessionAnUnusableAnswerIsAMachineSelfDecision` | MCP, Relay, approval, capability |
 | AP-49 | `TestAnswerElicited_TokenSessionMeetsTheSameRefusals` | capability |
 | AP-60 | `TestElicit_AskableParkFromMRTRClientGetsAQuestion`, `TestElicit_QuestionCarriesNoContent`, `TestMCPElicitation_ApproveRunsTheJobAndReturnsResults` | MCP, Relay |
-| AP-61 | `TestAudienceThatOmitsTheCallerIsNotAskable`, `TestDemoFleetGateFixture_InBandOpenAudienceRequesterAllowed`, `TestElicit_NonAskableParkRendersPendingApproval`, `TestElicitedAnswer_VerifiedFormMeetsTheSameRefusals`, `TestMCPElicitation_ClaudeCodeHumanAnswerMeetsTheSameRefusals`, `TestMCPElicitation_RequesterExcludedAndAudienceRestrictedNeverAsk`, `TestParkIsAskableOnlyForAnInBandCreatedParkTheCallerCouldAnswer`, `TestPlanPreflightNeverEmitsAQuestion`, `TestRelaytest_ElicitationClientSeesTodaysPendingApproval`, `TestRequesterExcludedParkIsNotAskable` | MCP, Relay, approval, capability |
-| AP-62 | `TestElicit_NonAskableParkRendersPendingApproval`, `TestMCPElicitation_OutOfBandRuleNeverAsks`, `TestMCPElicitation_RedriveOfAPendingRequestAsksNobody`, `TestPartialQuorumRedriveIsNotAskable`, `TestPlanPreflightNeverEmitsAQuestion`, `TestRedriveOfAPendingRequestIsNotAskable` | MCP, Relay, capability |
+| AP-62 | `TestElicit_NonAskableParkRendersPendingApproval`, `TestElicit_UnaskableParkNeverAsks_HandlerSeam`, `TestMCPElicitation_RedriveOfAPendingRequestAsksNobody`, `TestParkIsAskableOnlyWhenThisCallCreatedIt`, `TestPlanPreflightNeverEmitsAQuestion`, `TestRedriveOfAPendingRequestIsNotAskable` | MCP, Relay, capability |
 | AP-63 | `TestAnswerElicited_RecordsAnInBandDecision`, `TestAnsweredRetry_ApproveRunsTheJobOnce`, `TestMCPElicitation_ApproveRunsTheJobAndReturnsResults`, `TestMCPElicitation_DecisionIsInBandVerifiedRequesterAssertedApprover` | Relay, capability |
 | AP-65 | `TestMCPElicitation_CrossAccountStateIsRefused`, `TestMCPElicitation_CrossRequestStateIsRefused`, `TestMCPElicitation_ExpiredStateIsRefused`, `TestMCPElicitation_TamperedStateIsRefused`, `TestMCPElicitation_WrongCallStateIsRefused` | Relay |
 | AP-66 | `TestAnsweredRetry_ApproveRunsTheJobOnce`, `TestAnsweredRetry_FleetChangedReParksAndAsksAfresh`, `TestMCPElicitation_FleetChangedRetryReParks` | Relay |
 | AP-67 | `TestAnsweredRetry_BoundJobReAttaches`, `TestMCPElicitation_DuplicateRetryReAttaches`, `TestRun_ReAttachThatCannotBeAuditedReturnsNothing` | Relay, capability |
 | AP-68 | `TestAnsweredRetry_DeclineIsTerminalAndDispatchesNothing`, `TestMCPElicitation_DeclineIsTerminalAndAudited` | Relay |
-| AP-69 | `TestElicit_OutOfBandParkNeverAsks`, `TestElicit_OutOfBandParkNeverAsks_HandlerSeam`, `TestMCPElicitation_OutOfBandRuleNeverAsks`, `TestOutOfBandParkIsNeverAskable`, `TestPlanPreflightNeverEmitsAQuestion` | MCP, Relay, capability |
-| AP-73 | `TestApprovalCallout_PartialQuorumIsReadFromTheControlAPI` | Relay |
 | AP-77 | `TestApprovalRelease_DifferentAccountReAttachesAndRunsNothing`, `TestApprovalRelease_ReDriveOnAnySurfaceReAttaches`, `TestBindJob_BindsOnceAndReportsTheBoundJob`, `TestBindJob_ConcurrentClaimsExactlyOneWins`, `TestJobEngine_RunUsesTheReservedJobID`, `TestMCPElicitation_DuplicateRetryReAttaches`, `TestRun_ConcurrentReDrivesDispatchExactlyOneJob`, `TestRun_DifferentRequesterReAttachesToTheReleasedJob`, `TestRun_ReDriveOfAReleasedApprovalReAttachesAndDispatchesNothing`, `TestRun_ReleasedApprovalPastItsDeadlineParksAfresh`, `TestRun_ReleasedJobStaysBoundWhenTheCallIsCancelledMidDispatch` | Relay, capability, store |
-| AP-79 | `TestAnswerElicited_OAuthHumanSessionClearsAnyAssertion`, `TestDecideApproval_InBandHumanWithNoAssertedApproverIsVerified`, `TestElicitedAnswer_FailureAfterAVerifiedDecisionMayHaveBeenRecorded`, `TestElicitedAnswer_OAuthHumanSessionAnswerIsTheHumansVerifiedDecision`, `TestElicitedAnswer_OAuthHumanSessionDeclineIsADenial`, `TestElicitedAnswer_ResponderOnAnOAuthHumanSessionIsIgnored`, `TestElicitedAnswer_TheSessionDecidesWhatAResponderIsFor`, `TestElicitedAnswer_VerifiedFormIgnoresTheDeclaredName`, `TestElicitedAnswer_VerifiedFormMeetsTheSameRefusals`, `TestElicitedResponderRule_TurnsOnTheSession`, `TestMCPElicitation_ClaudeCodeHumanAnswerMeetsTheSameRefusals`, `TestMCPElicitation_ClaudeCodeOnAMachineOAuthSessionIsAskedButNeedsAResponder`, `TestMCPElicitation_ClaudeCodeOnAnOAuthHumanSessionIsTheHumansVerifiedDecision`, `TestMCPElicitation_GleipnirOnAnOAuthHumanSessionIsTheHumansVerifiedDecision`, `TestMCPElicitation_HumanAPITokenSessionAnswerIsTheHumansTokenSessionDecision`, `TestMCPElicitation_MachineOAuthSessionNeverTakesTheVerifiedPath`, `TestMCPElicitation_ResponderOnAnOAuthHumanSessionIsIgnored` | MCP, Relay, capability |
-| AP-80 | `TestApprovalCallout_PartialQuorumIsReadFromTheControlAPI`, `TestApprovalCallout_TheConsoleHasNoApprovalSurface`, `TestApprovalReader_ReadsOneRecordAndCannotListOrDecide`, `TestConsole_ADecisionPostOnARealSessionFindsNothing`, `TestConsole_HasNoApprovalSurface` | Console, Relay |
+| AP-79 | `TestAnswerElicited_OAuthHumanSessionClearsAnyAssertion`, `TestDecideApproval_InBandHumanWithNoAssertedApproverIsVerified`, `TestElicitedAnswer_FailureAfterAVerifiedDecisionMayHaveBeenRecorded`, `TestElicitedAnswer_OAuthHumanSessionAnswerIsTheHumansVerifiedDecision`, `TestElicitedAnswer_OAuthHumanSessionDeclineIsADenial`, `TestElicitedAnswer_ResponderOnAnOAuthHumanSessionIsIgnored`, `TestElicitedAnswer_TheSessionDecidesWhatAResponderIsFor`, `TestElicitedAnswer_VerifiedFormIgnoresTheDeclaredName`, `TestElicitedAnswer_VerifiedFormMeetsTheSameRefusals`, `TestElicitedResponderRule_TurnsOnTheSession`, `TestMCPElicitation_ClaudeCodeOnAMachineOAuthSessionIsAskedButNeedsAResponder`, `TestMCPElicitation_ClaudeCodeOnAnOAuthHumanSessionIsTheHumansVerifiedDecision`, `TestMCPElicitation_GleipnirOnAnOAuthHumanSessionIsTheHumansVerifiedDecision`, `TestMCPElicitation_HumanAPITokenSessionAnswerIsTheHumansTokenSessionDecision`, `TestMCPElicitation_MachineOAuthSessionNeverTakesTheVerifiedPath`, `TestMCPElicitation_ResponderOnAnOAuthHumanSessionIsIgnored` | MCP, Relay, capability |
+| AP-80 | `TestApprovalCallout_OneDecisionEndsTheRequest`, `TestApprovalCallout_TheConsoleHasNoApprovalSurface`, `TestApprovalReader_ReadsOneRecordAndCannotListOrDecide`, `TestConsole_ADecisionPostOnARealSessionFindsNothing`, `TestConsole_HasNoApprovalSurface` | Console, Relay |
+| AP-81 | `TestAskableOverlappingRulesNameEveryMatch`, `TestGate_OverlappingRulesShortestTTLWins`, `TestLoad_RuleFieldNamingADecisionTermRefusedNamingField`, `TestParkIsAskableOnlyWhenThisCallCreatedIt`, `TestPlanPreflightNeverEmitsAQuestion`, `TestStart_RefusesMalformedGateRule`, `TestValidate_GateRuleValuesRefusedNamingField` | Relay, approval, capability, relayconfig |
+| AP-82 | `TestAnsweredRetry_RefusedStateStaysDecidableByTheRescue`, `TestApprovalCallout_OneDecisionEndsTheRequest`, `TestApprovals_HistoricalQuorumAndAudienceRowsReadBack`, `TestDecideApproval_SecondDecisionReturnsTheCurrentRequest`, `TestDecide_FirstDecisionEndsTheRequest`, `TestRecordDecision_SecondDecisionIsNotPending` | Relay, approval, capability, store |
 | AP-83 | `TestApproveRequestIsNotRegistered`, `TestCompositionRoot_RegistersNoDecisionTool`, `TestNoMCPTextPointsAtApproveRequest` | MCP, Relay |
 | AP-84 | `TestApprovalGrant_TheComposedRelayServesNoGrantRoute`, `TestApprovals_NoDispatchConsultsAGrant`, `TestControlAPI_ServesNoApprovalGrantRoute`, `TestMCP_NoToolRequestsAnApprovalGrant`, `TestRun_EveryGatedDispatchParksOnItsOwn`, `TestSink_NoRecordCarriesAGrantLink` | API, MCP, Relay, auditsink, capability |
 | AP-85 | `TestAnsweredRetry_ClientThatCannotBeAskedIgnoresRetryFields`, `TestCompositionRoot_ClientThatCannotBeAskedSeesNoChange`, `TestElicit_ElicitedParkEmitsNoTaskEnvelope`, `TestElicit_ElicitedParkEmitsNoTaskEnvelope_E2E`, `TestElicit_NonElicitingClientsRetryFieldsAreIgnored`, `TestElicit_OptionOffChangesNothing`, `TestGolden_CreateForANonCapableClient`, `TestMCPElicitation_ClientThatCannotBeAskedSeesNoChange`, `TestMCPElicitation_ElicitedParkEmitsNoTaskEnvelope`, `TestMCP_NoTasksMethodIsServed`, `TestMCP_TasksDeclaringParkThatAsksNobodyIsPendingApproval`, `TestPendingApproval_TasksDeclaringClientGetsPendingApproval`, `TestTasksMethodsAreNotServed` | MCP, Relay |
 | AP-86 | `TestElicit_AnyElicitingClientIsAsked`, `TestElicit_AskedOnElicitationNeverOnTheName`, `TestElicit_ClaudeCodeOnAnAPITokenSessionIsAsked`, `TestElicit_RetryDeclaringAnotherNameIsStillAnAnswer`, `TestElicitedAnswer_OAuthHumanSessionAnswerIsTheHumansVerifiedDecision`, `TestElicitedAnswer_ResponderOnAnOAuthHumanSessionIsIgnored`, `TestElicitedAnswer_TheSessionDecidesWhatAResponderIsFor`, `TestElicitedAnswer_VerifiedFormIgnoresTheDeclaredName`, `TestElicitedAnswer_VerifiedFormMeetsTheSameRefusals`, `TestMCPElicitation_AnyElicitingClientIsAskedOnAnySession`, `TestMCPElicitation_ClaudeCodeOnAMachineOAuthSessionIsAskedButNeedsAResponder`, `TestMCPElicitation_ClaudeCodeOnAnAPITokenSessionIsAskedAndItsAnswerCounts`, `TestMCPElicitation_GleipnirOnAnOAuthHumanSessionIsTheHumansVerifiedDecision`, `TestMCPElicitation_MachineOAuthSessionNeverTakesTheVerifiedPath`, `TestMCPElicitation_SpoofedClientNamesEarnNothingBeyondBeingAsked` | MCP, Relay |
 | AP-87 | `TestAnswerElicited_HumanTokenSessionIsTheHumansTokenSessionDecision`, `TestAnswerElicited_MachineTokenSessionIsMachineSelfConfirmation`, `TestAnswerElicited_OtherSessionNeedsAResponder`, `TestDecide_MachineAPITokenAnswerIsInBandSelfConfirmation`, `TestElicitedAnswer_AStrayOnBehalfOfHeaderNeverReachesTheAssertedLane`, `TestElicitedAnswer_OnATokenSessionAnUnusableAnswerIsRefusedAccurately`, `TestElicitedAnswer_OnAnotherSessionAnUnusableAnswerIsAMachineSelfDecision`, `TestElicitedAnswer_TheSessionDecidesWhatAResponderIsFor`, `TestElicitedResponderRule_TurnsOnTheSession`, `TestMCPElicitation_AnUnusableAnswerIsRefusedAndRecordsNothing`, `TestMCPElicitation_ClaudeCodeOnAMachineOAuthSessionIsAskedButNeedsAResponder`, `TestMCPElicitation_ClaudeCodeOnAnAPITokenSessionIsAskedAndItsAnswerCounts`, `TestMCPElicitation_HumanAPITokenSessionAnswerIsTheHumansTokenSessionDecision`, `TestMCPElicitation_MachineAPITokenAnswerIsMachineSelfConfirmation`, `TestMCPElicitation_SpoofedClientNamesEarnNothingBeyondBeingAsked` | MCP, Relay, approval, capability |
 | AP-88 | `TestActivity_ApprovalDecisionShowsHowTheDeciderWasIdentified`, `TestAnswerElicited_HumanTokenSessionIsTheHumansTokenSessionDecision`, `TestAnswerElicited_MachineTokenSessionIsMachineSelfConfirmation`, `TestAnswerElicited_RecordsHowTheDeciderWasIdentified`, `TestApprovals_DecisionIdentifiedByRoundTrips`, `TestApprovals_DecisionRendersHowTheDeciderWasIdentified`, `TestApprovals_UnknownIdentifiedByIsAnError`, `TestElicitedAnswer_DecisionOutputNamesHowTheDeciderWasIdentified`, `TestJob_DeciderShowsHowItWasIdentified`, `TestMCPElicitation_HumanAPITokenSessionAnswerIsTheHumansTokenSessionDecision`, `TestMCPElicitation_MachineAPITokenAnswerIsMachineSelfConfirmation` | API, Console, MCP, Relay, capability, store |
+| AP-89 | `TestApprovalRulesLoadFromTheConfigurationFile`, `TestDiff_GateRulesChangeAppliedByReload`, `TestFleetRelayTOML_GatesFleetWideMutatesAndRawExec`, `TestLoad_GateRulesOnlyAsArrayTables`, `TestLoad_VariantSpellingOfRulesKeysRefused`, `TestLoad_WhitespaceOnlyRuleNameRefusedWithLine`, `TestReloader_GateRulesReloadWithTheFile`, `TestReloader_NonArrayGateRulesRefusedWithoutPanic` | Relay, relayconfig |
 | AP-92 | `TestApprovals_CreateWritesNoShapeKey`, `TestOpen_LeavesStoredShapeKeysAlone`, `TestSameShapeDifferentPlanStillParks` | capability, store |
 
-Unproven: AP-1, AP-3, AP-4, AP-5, AP-6, AP-7, AP-8, AP-9, AP-10, AP-13, AP-14, AP-18, AP-20, AP-22, AP-26, AP-27, AP-28, AP-38, AP-39, AP-40, AP-41, AP-43, AP-44, AP-45, AP-47, AP-54.
+Unproven: AP-1, AP-3, AP-5, AP-6, AP-7, AP-10, AP-18, AP-20, AP-22, AP-26, AP-27, AP-28, AP-38, AP-39, AP-40, AP-41, AP-54.
 <!-- proof:end -->
 
 ## Retired
 
+- **AP-4** — `2026-10-29` — gate rules as an optional root-owned file; replaced by AP-89.
+- **AP-9**, **AP-13**, **AP-14**, **AP-43**, **AP-44**, **AP-47**, **AP-61**, **AP-69** —
+  `2026-10-29` — the confirmation ladder, channel strength, requester exclusion, audience and
+  the channel a rule demands, and the questions they gated; replaced by AP-81.
+- **AP-45** — `2026-10-29` — the duplicate-decider refusal; replaced by AP-82.
+- **AP-73** — `2026-10-29` — a rule requiring two decisions from distinct Accounts; replaced
+  by AP-81 and AP-82.
 - **AP-78** — `2026-10-28` — a question emitted only to a client Relay recognises by its declared
   name; replaced by AP-86.
 - **AP-64** — `2026-10-28` — an answer accepted only with a responder assertion; replaced by AP-87.

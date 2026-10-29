@@ -10,6 +10,8 @@ import (
 	"net"
 	"slices"
 	"time"
+
+	"github.com/Felag-Engineering/relay/relay/internal/approval"
 )
 
 // DefaultPath is where the Relay reads its configuration when --config is not
@@ -93,11 +95,12 @@ type OAuth struct {
 	PublicURL     string
 }
 
-// Approval is the approval gate and its notification path. An empty
-// GateRulesPath means no gate; an unset WebhookURL means no notification. The
-// URL and the secret are read only from files the configuration names (RC-41).
+// Approval is the approval gate and its notification path. Rules are the
+// [[approval.rules]] sections of the file, in order; none means nothing is
+// gated (AP-89). An unset WebhookURL means no notification. The URL and the
+// secret are read only from files the configuration names (RC-41).
 type Approval struct {
-	GateRulesPath string
+	Rules         []approval.Rule
 	WebhookURL    Secret
 	WebhookSecret Secret
 }
@@ -138,6 +141,9 @@ func (c Config) EffectiveAdvertisedAddress() string {
 // failure it returns the zero Config and every problem at once, ordered by
 // line. Warnings are settings that are accepted and likely wrong.
 func Load(data []byte) (Config, []Warning, error) {
+	if errs := ruleForm(data); len(errs) > 0 {
+		return Config{}, nil, joinErrors(errs)
+	}
 	doc, errs := decode(data)
 	if len(errs) > 0 {
 		return Config{}, nil, joinErrors(errs)

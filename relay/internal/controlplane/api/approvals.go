@@ -100,28 +100,20 @@ type decisionResponse struct {
 // reads differently in the approval queue than at execution *is* the
 // approval-view fidelity gap, reintroduced by us.
 type approvalResponse struct {
-	RequestID     string   `json:"request_id"`
-	State         string   `json:"state"`
-	PlanHash      string   `json:"plan_hash"`
-	Summary       string   `json:"summary"`
-	ActionKind    string   `json:"action_kind"`
-	RiskClass     string   `json:"risk_class"`
-	RequestedBy   string   `json:"requested_by"`
-	RequestedByID string   `json:"requested_by_id,omitempty"`
-	MatchedRules  []string `json:"matched_rules"`
-	RequiredCount int      `json:"required_count"`
-	Audience      []string `json:"audience,omitempty"`
-	// RequesterAllowed and Channel are the rule's terms, published so a
-	// would-be decider can tell why they are (or are not) eligible before
-	// spending a round trip on a refusal.
-	RequesterAllowed bool               `json:"requester_allowed"`
-	Channel          string             `json:"channel"`
-	Progress         string             `json:"progress"`
-	Decisions        []decisionResponse `json:"decisions"`
-	JobID            string             `json:"job_id,omitempty"`
-	CreatedAt        string             `json:"created_at"`
-	ExpiresAt        string             `json:"expires_at"`
-	ResolvedAt       string             `json:"resolved_at,omitempty"`
+	RequestID     string             `json:"request_id"`
+	State         string             `json:"state"`
+	PlanHash      string             `json:"plan_hash"`
+	Summary       string             `json:"summary"`
+	ActionKind    string             `json:"action_kind"`
+	RiskClass     string             `json:"risk_class"`
+	RequestedBy   string             `json:"requested_by"`
+	RequestedByID string             `json:"requested_by_id,omitempty"`
+	MatchedRules  []string           `json:"matched_rules"`
+	Decisions     []decisionResponse `json:"decisions"`
+	JobID         string             `json:"job_id,omitempty"`
+	CreatedAt     string             `json:"created_at"`
+	ExpiresAt     string             `json:"expires_at"`
+	ResolvedAt    string             `json:"resolved_at,omitempty"`
 }
 
 type listApprovalsResponse struct {
@@ -167,25 +159,20 @@ func renderApproval(r approval.Request) approvalResponse {
 		rules = []string{}
 	}
 	return approvalResponse{
-		RequestID:        r.ID,
-		State:            r.State.String(),
-		PlanHash:         r.PlanHash,
-		Summary:          r.Summary,
-		ActionKind:       approval.ActionKindName(r.ActionKind),
-		RiskClass:        jobs.RiskClassName(r.RiskClass),
-		RequestedBy:      r.RequestedBy,
-		RequestedByID:    r.RequestedByID,
-		MatchedRules:     rules,
-		RequiredCount:    r.Require.Count,
-		Audience:         r.Require.Audience,
-		RequesterAllowed: r.Require.RequesterAllowed,
-		Channel:          r.Require.Channel.String(),
-		Progress:         r.Progress(),
-		Decisions:        decisions,
-		JobID:            r.JobID,
-		CreatedAt:        controlplane.RFC3339(r.CreatedAt),
-		ExpiresAt:        controlplane.RFC3339(r.ExpiresAt),
-		ResolvedAt:       controlplane.RFC3339(r.ResolvedAt),
+		RequestID:     r.ID,
+		State:         r.State.String(),
+		PlanHash:      r.PlanHash,
+		Summary:       r.Summary,
+		ActionKind:    approval.ActionKindName(r.ActionKind),
+		RiskClass:     jobs.RiskClassName(r.RiskClass),
+		RequestedBy:   r.RequestedBy,
+		RequestedByID: r.RequestedByID,
+		MatchedRules:  rules,
+		Decisions:     decisions,
+		JobID:         r.JobID,
+		CreatedAt:     controlplane.RFC3339(r.CreatedAt),
+		ExpiresAt:     controlplane.RFC3339(r.ExpiresAt),
+		ResolvedAt:    controlplane.RFC3339(r.ResolvedAt),
 	}
 }
 
@@ -196,11 +183,11 @@ func renderApproval(r approval.Request) approvalResponse {
 // handleListApprovals implements GET /api/v1/approvals: the queue of parked
 // dispatches still awaiting a decision.
 //
-// Any authenticated caller may read it. A rule's `audience` restricts who may
-// DECIDE, not who may see that a decision is owed — narrowing the queue to the
-// audience would hide pending fleet state from the operators watching it, and
-// every entry is a Relay-authored summary of an action the same caller can
-// already read in the audit trail.
+// Any authenticated caller may read it. The role floor restricts who may
+// DECIDE, not who may see that a decision is owed — narrowing the queue would
+// hide pending fleet state from the operators watching it, and every entry is a
+// Relay-authored summary of an action the same caller can already read in the
+// audit trail.
 //
 // Not audited as a read (ADR-0025): this returns no captured Task output. It is
 // the same posture list_nodes has — fleet shape, not somebody else's command
@@ -259,10 +246,9 @@ func handleGetApproval(d Deps) http.HandlerFunc {
 // This handler enforces exactly two things — that a plan hash was cited and
 // that the reason is bounded — and delegates everything that decides anything.
 // The role floor (deciding requires the role the Action would have needed to be
-// requested), the requester exclusion, the machine-self-decision rule, the
-// audience, the duplicate-decider rule, quorum arithmetic, and the audit record
-// are all below the capability layer's door, where the Console and the MCP
-// envelope reach them too.
+// requested), the machine-self-decision rule, the first-Decision-ends-it rule
+// and the audit record are all below the capability layer's door, where the
+// Console and the MCP envelope reach them too.
 func handleDecideApproval(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		p, ok := principal(w, r)
@@ -323,15 +309,15 @@ func writeApprovalsUnavailable(w http.ResponseWriter) {
 //
 // Every eligibility refusal is a 409 Conflict rather than a 403: the caller's
 // credential is fine and the route is theirs to call — it is the REQUEST'S
-// state (already decided, expired, already signed by you, bound to a different
-// Plan) that refuses. A 403 would tell an approver to go find a bigger token,
-// which is the wrong lesson. The two genuine authorization failures — the role
-// floor and the audience — do render as 403.
+// state (already decided, expired, bound to a different Plan) that refuses. A
+// 403 would tell an approver to go find a bigger token, which is the wrong
+// lesson. The one genuine authorization failure, the role floor, renders as
+// 403.
 //
 // Detail carries the domain error's own text in every case. These are rule
-// statements: which role is required, that the plan moved, that a second
-// distinct decider is needed. None of them is a secret, and an approver who
-// cannot tell WHY their answer bounced will eventually stop answering.
+// statements: which role is required, that the plan moved. None of them is a
+// secret, and an approver who cannot tell WHY their answer bounced will
+// eventually stop answering.
 func writeApprovalError(w http.ResponseWriter, id string, err error) {
 	switch {
 	case errors.Is(err, approval.ErrNotFound):
@@ -342,19 +328,12 @@ func writeApprovalError(w http.ResponseWriter, id string, err error) {
 		writeProblem(w, http.StatusNotFound, "approval request not found", detail)
 	case errors.Is(err, authz.ErrUnauthorized):
 		writeProblem(w, http.StatusForbidden, "forbidden", err.Error())
-	case errors.Is(err, approval.ErrNotInAudience):
-		writeProblem(w, http.StatusForbidden, "not in the approval audience", err.Error())
 	case errors.Is(err, approval.ErrNotPending):
 		writeProblem(w, http.StatusConflict, "approval request is not pending", err.Error())
-	case errors.Is(err, approval.ErrRequesterExcluded),
-		errors.Is(err, approval.ErrMachineSelfDecision):
-		writeProblem(w, http.StatusConflict, "requester may not decide this request", err.Error())
-	case errors.Is(err, approval.ErrDuplicateDecider):
-		writeProblem(w, http.StatusConflict, "already decided by this account", err.Error())
+	case errors.Is(err, approval.ErrMachineSelfDecision):
+		writeProblem(w, http.StatusConflict, "a machine Account may not decide its own request here", err.Error())
 	case errors.Is(err, approval.ErrPlanChanged):
 		writeProblem(w, http.StatusConflict, "plan hash mismatch", err.Error())
-	case errors.Is(err, approval.ErrWeakChannel):
-		writeProblem(w, http.StatusConflict, "decision channel is too weak", err.Error())
 	case errors.Is(err, capability.ErrApprovalUnavailable):
 		writeApprovalsUnavailable(w)
 	default:

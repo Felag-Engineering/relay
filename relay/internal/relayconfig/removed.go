@@ -22,13 +22,38 @@ var removedKeys = map[string]string{
 
 const reasonBuiltIn = "is no longer a setting: the Relay uses a built-in value; remove the key"
 
+// movedKeys are keys whose setting moved into the file itself (RC-37). They are
+// refused like removedKeys, but kept apart because RC-44 names a closed set.
+var movedKeys = map[string]string{
+	"approval.gate_rules_path": "is no longer accepted: gate rules are [[approval.rules]] sections of this file; move each rule here and remove the key",
+}
+
+// removedRuleFields are the fields a gate rule used to carry and no longer does
+// (AP-81). A rule names only what it matches and its ttl.
+var removedRuleFields = map[string]bool{
+	"count":             true,
+	"audience":          true,
+	"requester_allowed": true,
+	"channel":           true,
+}
+
+const reasonRemovedRuleField = "is not a gate-rule field: a rule names only what it matches and its ttl; remove it"
+
 // removedKey reports whether parts names a removed key, or something under one
-// (a table written where the key was), and if so its key and reason.
-func removedKey(parts []string) (key, reason string, ok bool) {
+// (a table written where the key was), and if so its key, its reason, and how
+// many leading segments of parts the key spans: 2 for a section's key, 3 for a
+// gate-rule field.
+func removedKey(parts []string) (key, reason string, depth int, ok bool) {
 	if len(parts) < 2 {
-		return "", "", false
+		return "", "", 0, false
+	}
+	if len(parts) >= 3 && parts[0] == "approval" && parts[1] == "rules" && removedRuleFields[parts[2]] {
+		return "approval.rules." + parts[2], reasonRemovedRuleField, 3, true
 	}
 	key = parts[0] + "." + parts[1]
-	reason, ok = removedKeys[key]
-	return key, reason, ok
+	if reason, ok = removedKeys[key]; ok {
+		return key, reason, 2, true
+	}
+	reason, ok = movedKeys[key]
+	return key, reason, 2, ok
 }

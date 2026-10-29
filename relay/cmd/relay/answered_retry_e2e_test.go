@@ -25,20 +25,6 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/relaytest"
 )
 
-// gateCountTwoInBandAskable is gateAllMutatesInBandAskable (elicit_e2e_test.go)
-// with count raised to 2 and requester_allowed true — shared by the
-// partial-quorum and rescue tests below, both of which need a quorum that
-// survives a single answer.
-const gateCountTwoInBandAskable = `{
-  "rules": [
-    {
-      "name": "two-approvals-in-band",
-      "match": { "risk_class": "mutate" },
-      "require": { "count": 2, "requester_allowed": true, "channel": "in-band", "ttl": "1h" }
-    }
-  ]
-}`
-
 // answerRetry wraps relaytest.RetryTool with the answered-retry envelope: one
 // InputResponseMap entry keyed reqID, an ElicitResult carrying action and an
 // io.gleipnir/responder assertion naming "alice".
@@ -104,7 +90,7 @@ func askQuestionE2E(t *testing.T, session *sdkmcp.ClientSession) *sdkmcp.CallToo
 // approving retry with no Job bound calls the dispatch pipeline exactly once
 // and carries the decision alongside the results.
 func TestAnsweredRetry_ApproveRunsTheJobOnce(t *testing.T) {
-	f := startGatedRelay(t, gateAllMutatesInBandAskable, WithMCPServerOptions(mcp.WithApprovalElicitation()))
+	f := startGatedRelay(t, gateAllMutates, WithMCPServerOptions(mcp.WithApprovalElicitation()))
 	session := relaytest.ConnectWithOptions(t, f.ControlBase, f.Client(), relaytest.ConnectOptions{Client: relaytest.ElicitingClientOptions(), ClientName: relaytest.GleipnirClientName})
 
 	q := askQuestionE2E(t, session)
@@ -183,7 +169,7 @@ func TestAnsweredRetry_ApproveRunsTheJobOnce(t *testing.T) {
 // created park — is itself askable. The FIRST request, decided against the
 // plan the human was actually shown, stays approved.
 func TestAnsweredRetry_FleetChangedReParksAndAsksAfresh(t *testing.T) {
-	f := startGatedRelay(t, gateAllMutatesInBandAskable, WithMCPServerOptions(mcp.WithApprovalElicitation()))
+	f := startGatedRelay(t, gateAllMutates, WithMCPServerOptions(mcp.WithApprovalElicitation()))
 	session := relaytest.ConnectWithOptions(t, f.ControlBase, f.Client(), relaytest.ConnectOptions{Client: relaytest.ElicitingClientOptions(), ClientName: relaytest.GleipnirClientName})
 
 	q := askQuestionE2E(t, session)
@@ -227,7 +213,7 @@ func TestAnsweredRetry_FleetChangedReParksAndAsksAfresh(t *testing.T) {
 // retry against an already-bound Job re-attaches — no second Job — and the
 // re-attach is an audited KindRead record naming that Job and run_operation.
 func TestAnsweredRetry_BoundJobReAttaches(t *testing.T) {
-	f := startGatedRelay(t, gateAllMutatesInBandAskable, WithMCPServerOptions(mcp.WithApprovalElicitation()))
+	f := startGatedRelay(t, gateAllMutates, WithMCPServerOptions(mcp.WithApprovalElicitation()))
 	session := relaytest.ConnectWithOptions(t, f.ControlBase, f.Client(), relaytest.ConnectOptions{Client: relaytest.ElicitingClientOptions(), ClientName: relaytest.GleipnirClientName})
 
 	q := askQuestionE2E(t, session)
@@ -276,7 +262,7 @@ func TestAnsweredRetry_BoundJobReAttaches(t *testing.T) {
 // proof: a declining retry is terminal — no dispatch, no Job — and the
 // denial is audited both as a decision record and on the Control API.
 func TestAnsweredRetry_DeclineIsTerminalAndDispatchesNothing(t *testing.T) {
-	f := startGatedRelay(t, gateAllMutatesInBandAskable, WithMCPServerOptions(mcp.WithApprovalElicitation()))
+	f := startGatedRelay(t, gateAllMutates, WithMCPServerOptions(mcp.WithApprovalElicitation()))
 	session := relaytest.ConnectWithOptions(t, f.ControlBase, f.Client(), relaytest.ConnectOptions{Client: relaytest.ElicitingClientOptions(), ClientName: relaytest.GleipnirClientName})
 
 	q := askQuestionE2E(t, session)
@@ -325,44 +311,12 @@ func TestAnsweredRetry_DeclineIsTerminalAndDispatchesNothing(t *testing.T) {
 	}
 }
 
-// TestAnsweredRetry_PartialQuorumStaysPending: a count-2 rule's first answer
-// leaves the request pending — an OBSERVED, non-askable park — dispatches
-// nothing, and asks no new question.
-func TestAnsweredRetry_PartialQuorumStaysPending(t *testing.T) {
-	f := startGatedRelay(t, gateCountTwoInBandAskable, WithMCPServerOptions(mcp.WithApprovalElicitation()))
-	session := relaytest.ConnectWithOptions(t, f.ControlBase, f.Client(), relaytest.ConnectOptions{Client: relaytest.ElicitingClientOptions(), ClientName: relaytest.GleipnirClientName})
-
-	q := askQuestionE2E(t, session)
-	requestID, _ := q.Meta["relay/request_id"].(string)
-
-	res := answerRetry(t, session, "run_operation", restartNginxArgs(), q.RequestState, requestID, "accept")
-	if res.NeedsInput() {
-		t.Fatalf("retry: NeedsInput() = true, want false (a partial quorum's park is OBSERVED, not askable)")
-	}
-	if res.IsError {
-		t.Fatalf("IsError = true, want false: content=%+v", res.Content)
-	}
-	var out mcp.RunOrPlanOutput
-	relaytest.DecodeToolJSON(t, res, &out)
-	if out.PendingApproval == nil {
-		t.Fatalf("PendingApproval is nil, want a still-pending park: %+v", out)
-	}
-	if out.Decision == nil || out.Decision.Progress != "1 of 2" {
-		t.Errorf("decision = %+v, want progress 1 of 2", out.Decision)
-	}
-
-	dispatchCount, _ := auditCounts(t, f)
-	if dispatchCount != 0 {
-		t.Errorf("KindDispatch records = %d, want 0", dispatchCount)
-	}
-}
-
 // TestAnsweredRetry_RefusedStateStaysDecidableByTheRescue (suggestion 8): a
 // tampered state is refused fail-closed, leaving the request undecided and
-// still decidable — first by one human, then by a second, each on the Control
-// API's decision endpoint — proving the rescue on one request.
+// still decidable by a human on the Control API's decision endpoint, whose one
+// Decision ends it (AP-82) — proving the rescue on one request.
 func TestAnsweredRetry_RefusedStateStaysDecidableByTheRescue(t *testing.T) {
-	f := startGatedRelay(t, gateCountTwoInBandAskable, WithMCPServerOptions(mcp.WithApprovalElicitation()))
+	f := startGatedRelay(t, gateAllMutates, WithMCPServerOptions(mcp.WithApprovalElicitation()))
 	session := relaytest.ConnectWithOptions(t, f.ControlBase, f.Client(), relaytest.ConnectOptions{Client: relaytest.ElicitingClientOptions(), ClientName: relaytest.GleipnirClientName})
 
 	q := askQuestionE2E(t, session)
@@ -390,8 +344,8 @@ func TestAnsweredRetry_RefusedStateStaysDecidableByTheRescue(t *testing.T) {
 		t.Fatalf("approval = %+v, want pending with no decision recorded", stillPending)
 	}
 
-	// Rescue 1: a human decides on the Control API's decision endpoint and
-	// records 1 of 2.
+	// The rescue: a human decides on the Control API's decision endpoint, and
+	// that one Decision ends the request.
 	first := mintAccount(t, f, "ana", accounts.KindHuman, accounts.RoleOperator)
 	decideFirst := controlAPIRequest(t, f.ClientFor(first), http.MethodPost,
 		f.ControlBase+"/api/v1/approvals/"+requestID+"/decision", first,
@@ -405,26 +359,18 @@ func TestAnsweredRetry_RefusedStateStaysDecidableByTheRescue(t *testing.T) {
 	if err := json.NewDecoder(decideFirst.Body).Decode(&decision1); err != nil {
 		t.Fatalf("decode first decision: %v", err)
 	}
-	if decision1.Progress != "1 of 2" {
-		t.Errorf("progress after the first rescue = %q, want 1 of 2", decision1.Progress)
+	if decision1.State != "approved" {
+		t.Errorf("state after the rescue = %q, want approved", decision1.State)
 	}
 
-	// Rescue 2: a second human decides on the Control API's decision endpoint.
+	// A second human's Decision is refused: one Decision ended the request.
 	second := mintAccount(t, f, "bianca", accounts.KindHuman, accounts.RoleOperator)
 	decideResp := controlAPIRequest(t, f.ClientFor(second), http.MethodPost,
 		f.ControlBase+"/api/v1/approvals/"+requestID+"/decision", second,
 		map[string]any{"approve": true, "plan_hash": planHash})
 	defer decideResp.Body.Close()
-	if decideResp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(decideResp.Body)
-		t.Fatalf("second decision status = %d; body = %s", decideResp.StatusCode, body)
-	}
-	var decided approvalBody
-	if err := json.NewDecoder(decideResp.Body).Decode(&decided); err != nil {
-		t.Fatalf("decode decision: %v", err)
-	}
-	if decided.State != "approved" {
-		t.Errorf("state after 2 of 2 = %q, want approved", decided.State)
+	if decideResp.StatusCode != http.StatusConflict {
+		t.Fatalf("second decision status = %d, want 409 not pending", decideResp.StatusCode)
 	}
 
 	getFinal := controlAPIRequest(t, f.Client(), http.MethodGet, f.ControlBase+"/api/v1/approvals/"+requestID, f.Credential, nil)
@@ -455,7 +401,7 @@ func TestAnsweredRetry_RefusedStateStaysDecidableByTheRescue(t *testing.T) {
 // TestElicit_OptionOffChangesNothing (internal/controlplane/mcp/elicit_test.go),
 // both unchanged.
 func TestAnsweredRetry_ClientThatCannotBeAskedIgnoresRetryFields(t *testing.T) {
-	f := startGatedRelay(t, gateAllMutatesInBandAskable) // NO WithMCPServerOptions hook
+	f := startGatedRelay(t, gateAllMutates) // NO WithMCPServerOptions hook
 	session := relaytest.ConnectWithOptions(t, f.ControlBase, f.Client(), relaytest.ConnectOptions{
 		Client:     &sdkmcp.ClientOptions{MultiRoundTrip: &sdkmcp.MultiRoundTripOptions{Disabled: true}},
 		ClientName: relaytest.GleipnirClientName,

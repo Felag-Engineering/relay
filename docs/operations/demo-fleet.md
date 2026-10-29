@@ -162,14 +162,13 @@ required, and `0` means never expires, so never use `0` here.
 The role choice:
 
 - **`kind: "machine"`.** The AI-agent authenticates as a machine Account (GLOSSARY). Whatever
-  `requester_allowed` says, Relay refuses a machine Account's answer to its own request
+  a rule says, Relay refuses a machine Account's answer to its own request
   (`approval.ErrMachineSelfDecision`) unless it arrives in-band with a non-blank asserted name
   (the responder on an answered approval question),
   recorded as an assertion beside the verified Account, never as verified. Relay cannot tell
   whether a human gave that name: a client could answer the question itself with a made-up
   responder name and release its own request. That is the accepted client-integrity assumption
-  of in-band approval ([approval.md, Channel strength](../specs/approval.md#channel-strength);
-  ADR-0029), not a guarantee this fleet adds. A machine Account cannot engage the Freeze
+  of in-band approval (ADR-0029), not a guarantee this fleet adds. A machine Account cannot engage the Freeze
   (human-only).
 - **`role: "operator"` is the default and the recommendation**: the lowest role that runs the
   demo's Operations (`authz.requiredRole`), per the "lowest role that does its job" rule in
@@ -244,39 +243,37 @@ off the laptop.
 
 ### The human approver
 
-**The demo fleet runs its own gate, and it is in-band.** `make demo-reset` and `make demo-up`
-start the Relay on `deploy/demo/approval-gates.json`, not the test fleet's out-of-band gate
-([The approval gate](../dev-fleet.md#the-approval-gate)). The `relay-config` one-shot stages
-the folder's `relay.toml` and `approval-gates.json` onto the read-only config volume, and
-`relay.toml`'s `approval.gate_rules_path` names the gate at `/etc/relay/approval-gates.json`,
-so any `up` of `deploy/demo/docker-compose.yml` gets this gate. The gate file is staged
-root-owned `0644`. No API writes it: changing a rule is an edit in `deploy/demo/` and another
-`up`, which re-stages the folder and restarts the Relay. (Invariant 11 would allow gate
+**The demo fleet runs its own gate.** `make demo-reset` and `make demo-up` start the Relay on
+the `[[approval.rules]]` sections of `deploy/demo/relay.toml`, the same two rules as the test
+fleet's ([The approval gate](../dev-fleet.md#the-approval-gate)). The `relay-config` one-shot
+stages the folder's `relay.toml` onto the read-only config volume, so any `up` of
+`deploy/demo/docker-compose.yml` gets this gate. No API writes it: changing a rule is an edit
+in `deploy/demo/` and another `up`, which re-stages the folder and restarts the Relay. (Invariant 11 would allow gate
 rules to become a runtime object, edited only by a human with step-up and audited; they are
 not one.) Rule names are not secret: a parked response lists them in `matched_rules`. The two
 rules match exactly what the test fleet's two match:
 
 | Rule | Matches | Requires |
 | --- | --- | --- |
-| `demo-fleet-wide-mutates-need-a-human` | `mutate` class, fan-out **≥ 2** | 1 approval, `in-band`, `requester_allowed: true`, no audience, `ttl` 1h |
-| `demo-raw-exec-always-needs-a-human` | every Raw Exec | 1 approval, `in-band`, `requester_allowed: true`, no audience, `ttl` 1h |
+| `demo-fleet-wide-mutates-need-a-human` | `mutate` class, fan-out **≥ 2** | 1 approval, `ttl` 1h |
+| `demo-raw-exec-always-needs-a-human` | every Raw Exec | 1 approval, `ttl` 1h |
 
-They let an MCP client be **asked** the approval question in-band. The test fleet's
-out-of-band gate does not: no question is emitted.
+A rule names no audience, requester exclusion or channel, so an MCP client that advertises
+elicitation is **asked** the approval question in-band, and the Control API decides the same
+request out-of-band.
 
 **Who may decide** ([approval-gates.md](approval-gates.md#who-may-decide)):
 
-- **No audience** means any Account whose role clears the decision floor, which is the floor
-  for requesting: `operator` for an Operation, `admin` for a Raw Exec. So `dev-approver`
+- **Any Account whose role clears the decision floor**, which is the floor for requesting: `operator` for an Operation, `admin` for a Raw Exec. So `dev-approver`
   (human, admin) and the founding admin (human, admin) may decide any request here, on the
   Control API. `auto-incident-response` (operator) may decide a gated Operation, never a Raw
   Exec; so may `demo-user`, the OAuth fleet's human operator.
-- **`requester_allowed: true`** means the requester may fill the slot. A **human** requester,
-  such as the founding admin driving a Raw Exec by hand, may approve its own dispatch. A
-  **machine** requester may too, if its in-band answer carries a non-blank asserted name;
-  Relay cannot tell whether a human gave it (see `kind: "machine"` above).
-- **In-band is the floor, not the only way.** An out-of-band decision also satisfies an in-band
-  rule.
+- **A requester may confirm its own request.** A **human** requester, such as the founding
+  admin driving a Raw Exec by hand, may approve its own dispatch. A **machine** requester may
+  too, if its in-band answer carries a non-blank asserted name; Relay cannot tell whether a
+  human gave it (see `kind: "machine"` above).
+- **Either channel decides.** An in-band and an out-of-band decision end a request alike; the
+  channel is recorded, never demanded.
 
 Two ways to answer. Approving releases the request but does not dispatch: re-issue the original
 call unchanged (on the asked-in-band path, the client's retry is that re-issue).
@@ -297,15 +294,15 @@ call unchanged (on the asked-in-band path, the client's retry is that re-issue).
 
    The Console has no approval surface (ADR-0044).
 
-**What is structural, and what is not.** Much less than on the test fleet, deliberately: an
+**What is structural, and what is not.** Little, deliberately, and the same on the test fleet: an
 in-band answer is, by construction, the requesting session's word that a human agreed. What
 holds: no API changes the gate; nobody below `admin` releases a Raw Exec; a decision binds to
 the plan hash, and a retry whose Node set changed parks and asks again. What does not hold is
 a second person, or even a verified first one: a human requester may approve its own request;
 one presenter holds every credential in `.dev-fleet/`; and a machine Account's in-band answer
 needs only a name the client supplies (the accepted client-integrity assumption,
-[approval.md, Channel strength](../specs/approval.md#channel-strength); ADR-0029). Say so on
-stage rather than call this a two-person control; the test fleet's gate demonstrates that.
+ADR-0029). Say so on
+stage rather than call this a two-person control; neither fleet demonstrates one.
 
 `dev-approver` still exists here: the `init` one-shot (`docker/dev-fleet-init.sh`) creates it,
 a human admin, on every reset, and `make demo-reset` copies its token to

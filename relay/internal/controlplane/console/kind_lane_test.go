@@ -36,7 +36,7 @@ func TestJob_DeciderWithNoAccountIDGetsNoKind(t *testing.T) {
 	}
 	d := jobDeps(q)
 	d.Approvals = &fakeApprovals{pending: []approval.Request{{
-		ID: "ap-1", State: approval.StateApproved, Require: approval.Requirement{Count: 2},
+		ID: "ap-1", State: approval.StateApproved,
 		Decisions: []approval.Decision{
 			unattributedDecider(),
 			{Account: "mike", AccountID: "acct-2", Approve: true, Channel: approval.ChannelOutOfBand, DeciderHuman: true, At: testNow},

@@ -1,6 +1,7 @@
 package approval
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -101,10 +102,10 @@ func hasNamespace(have []string, want string) bool {
 // may name (ADR-0006, ADR-0020, ADR-0034).
 var knownNamespaces = []string{"node", "relay", "tag", "state"}
 
-// isKnownNamespace reports whether ns is exactly one of knownNamespaces,
-// case-sensitively. It is the single vocabulary check behind Rule.Validate's
-// selector_namespace acceptance.
-func isKnownNamespace(ns string) bool {
+// IsKnownNamespace reports whether ns is exactly one of the selector
+// namespaces a gate rule may name, case-sensitively. The configuration loader
+// and Rule.Validate share it so both accept the same vocabulary.
+func IsKnownNamespace(ns string) bool {
 	for _, known := range knownNamespaces {
 		if known == ns {
 			return true
@@ -124,45 +125,24 @@ type Rule struct {
 	Require Requirement
 }
 
-// Validate checks a Rule for the mistakes that would make it a silent no-op or
-// an unsatisfiable park. It is called by the loader, so a bad rule fails at
-// load rather than at 3am.
+// Validate checks a Rule for the mistakes that would make it a silent no-op.
+// Its messages are fixed text: they never carry the rule's name or a value
+// (RC-18), because they reach logs and the startup error.
 func (r Rule) Validate() error {
 	if strings.TrimSpace(r.Name) == "" {
-		return fmt.Errorf("approval: rule has no name")
-	}
-	if r.Require.Count < 1 {
-		return fmt.Errorf("approval: rule %q: count must be at least 1", r.Name)
-	}
-	if r.Require.Count > MaxCount {
-		return fmt.Errorf("approval: rule %q: count %d exceeds the v1 maximum of %d", r.Name, r.Require.Count, MaxCount)
+		return errors.New("rule has no name")
 	}
 	if r.Require.TTL < 0 {
-		return fmt.Errorf("approval: rule %q: ttl must not be negative", r.Name)
-	}
-	if err := ValidateAudience(r.Require.Audience); err != nil {
-		return fmt.Errorf("approval: rule %q: require.audience: %w; an audience names the Accounts that may decide and a blank entry names none, so remove it or name an Account",
-			r.Name, err)
-	}
-	// A rule that excludes the requester and has an audience of exactly the
-	// requester can never be satisfied. We cannot know the requester at load
-	// time, but we CAN catch the unconditional version: count 2 with a
-	// single-member audience is unsatisfiable, because quorum needs distinct
-	// deciders.
-	if r.Require.Count > 1 && len(r.Require.Audience) > 0 && len(r.Require.Audience) < r.Require.Count {
-		return fmt.Errorf(
-			"approval: rule %q: count %d with an audience of %d cannot ever be satisfied — quorum needs distinct deciders",
-			r.Name, r.Require.Count, len(r.Require.Audience))
+		return errors.New("ttl must not be negative")
 	}
 	if r.Match.MinFanOut < 0 {
-		return fmt.Errorf("approval: rule %q: min_fan_out must not be negative", r.Name)
+		return errors.New("min_fan_out must not be negative")
 	}
 	// The comparison is case-SENSITIVE, unlike hasNamespace's matching of a
 	// dispatch's namespaces, because this validates a rule's own configuration
 	// rather than something the Selector grammar has already normalized.
-	if ns := r.Match.SelectorNamespace; ns != "" && !isKnownNamespace(ns) {
-		return fmt.Errorf("approval: rule %q: unknown selector namespace %q (want node, relay, tag, or state)",
-			r.Name, ns)
+	if ns := r.Match.SelectorNamespace; ns != "" && !IsKnownNamespace(ns) {
+		return errors.New("unknown selector namespace (want node, relay, tag, or state)")
 	}
 	return nil
 }
@@ -176,24 +156,25 @@ func (r Rule) Validate() error {
 // stop, so an empty one leaves the pre-approval pipeline (Selector -> authz ->
 // blast cap -> Policy) exactly as it was.
 //
-// What is NOT safe is an empty Gate that resulted from a config file the Relay
-// failed to read. That distinction is the loader's job (see Load): a missing
-// path means "no approvals configured", but an unreadable or invalid file is a
-// startup error, never a silent zero.
+// What is NOT safe is an empty Gate that resulted from a configuration the
+// Relay failed to read. The rules come from the configuration file's
+// [[approval.rules]] sections: a file with none gates nothing, but one whose
+// rules cannot be loaded is a startup error, never a silent zero.
 type Gate struct {
 	rules []Rule
 }
 
-// NewGate builds a Gate from rules, validating each.
+// NewGate builds a Gate from rules, validating each. A refusal names the
+// rule's 1-based position and never its name or a value (RC-18).
 func NewGate(rules []Rule) (*Gate, error) {
 	seen := make(map[string]struct{}, len(rules))
-	for _, r := range rules {
+	for i, r := range rules {
 		if err := r.Validate(); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("approval: rule %d: %w", i+1, err)
 		}
 		key := strings.ToLower(r.Name)
 		if _, dup := seen[key]; dup {
-			return nil, fmt.Errorf("approval: duplicate rule name %q — names identify which rule parked a Job, so they must be unique", r.Name)
+			return nil, fmt.Errorf("approval: rule %d: repeats an earlier rule's name; names must be unique", i+1)
 		}
 		seen[key] = struct{}{}
 	}
@@ -215,35 +196,30 @@ func (g *Gate) Rules() []Rule {
 // Evaluate reports whether d must be approved, and if so under what
 // Requirement and which rules demanded it.
 //
-// When several rules match, their Requirements merge to the STRICTEST
-// (mergeStricter) rather than first-match-wins. First-match-wins would make
-// rule order security-relevant and would let a broad permissive rule shadow a
-// narrow strict one — the mistake that makes firewall rulesets dangerous. Here,
-// adding a rule can only ever tighten the outcome.
+// Every matching rule applies, not the first: rule order is never
+// security-relevant. When several match, the shortest TTL wins (AP-81), the
+// narrower window being the more restrictive one.
 func (g *Gate) Evaluate(d Dispatch) (Requirement, []string, bool) {
 	if g == nil || len(g.rules) == 0 {
 		return Requirement{}, nil, false
 	}
 
 	var (
-		merged  Requirement
-		names   []string
-		matched bool
+		req   Requirement
+		names []string
 	)
 	for _, r := range g.rules {
 		if !r.Match.matches(d) {
 			continue
 		}
-		req := r.Require.normalized()
-		if !matched {
-			merged, matched = req, true
-		} else {
-			merged = mergeStricter(merged, req)
+		ttl := r.Require.normalized().TTL
+		if len(names) == 0 || ttl < req.TTL {
+			req.TTL = ttl
 		}
 		names = append(names, r.Name)
 	}
-	if !matched {
+	if len(names) == 0 {
 		return Requirement{}, nil, false
 	}
-	return merged.normalized(), names, true
+	return req, names, true
 }

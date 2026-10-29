@@ -52,7 +52,6 @@ func (p askableParker) Start(context.Context, capability.Principal, capability.S
 		RequestID: askableElicitRequestID,
 		PlanHash:  askableElicitPlanHash,
 		Summary:   `service.restart(unit="nginx") [mutate] on 1 node(s): node-a`,
-		Progress:  "0 of 1",
 		Rules:     []string{"all-mutates-need-a-human"},
 		ExpiresAt: goldenNow.Add(4 * time.Hour),
 		Askable:   p.askable,
@@ -276,7 +275,7 @@ const (
 	mcpMetaKeyPlanHash  = "relay/plan_hash"
 )
 
-// TestElicit_NonAskableParkRendersPendingApproval is AP-61/AP-62: a park the
+// TestElicit_NonAskableParkRendersPendingApproval is AP-62: a park the
 // capability layer marked NOT askable renders byte-for-byte the same
 // pending_approval result as a server with no elicitation option at all,
 // even with the option on, an answerer wired, and an MRTR/elicitation-capable
@@ -297,26 +296,24 @@ func TestElicit_NonAskableParkRendersPendingApproval(t *testing.T) {
 	assertGoldenJSON(t, gotBody, wantBody)
 }
 
-// TestElicit_OutOfBandParkNeverAsks_HandlerSeam is AP-69's weaker,
-// mcp-handler-seam companion to cmd/relay/elicit_e2e_test.go's
-// TestElicit_OutOfBandParkNeverAsks, which drives the real gate (the real
-// source of Askable=false for an out-of-band rule); here the fixture stands
-// in for that gate by setting askableParker{askable: false} directly (an
-// out-of-band park is exactly a non-askable one; askableBy's channel term,
-// capability/approval.go), so what this test actually proves is the same
-// claim TestElicit_NonAskableParkRendersPendingApproval does — that an
+// TestElicit_UnaskableParkNeverAsks_HandlerSeam is the mcp-handler-seam
+// companion to the e2e proofs in cmd/relay: an observed re-drive is the one
+// source of Askable=false (capability/approval.go), and the fixture stands in
+// for it by setting askableParker{askable: false} directly. It proves the same
+// claim TestElicit_NonAskableParkRendersPendingApproval does — an
 // elicitation-advertising client still gets pending_approval when Askable is
-// false — kept as a separate, differently-shaped assertion (substring rather
-// than golden-JSON-equal) rather than folded into it, so a regression in
-// either style of check is still caught.
-func TestElicit_OutOfBandParkNeverAsks_HandlerSeam(t *testing.T) {
+// false — as a differently-shaped assertion (substring rather than
+// golden-JSON-equal), so a regression in either style of check is still caught.
+//
+// Proves AP-62.
+func TestElicit_UnaskableParkNeverAsks_HandlerSeam(t *testing.T) {
 	srv := elicitServer(t, askableParker{askable: false},
 		mcp.WithApprovalElicitation(), mcp.WithApprovalAnswerer(stubAnswerer{t: t}))
 
 	_, body, _ := postJSONRPC(t, srv, "tools/call", "run_operation", elicitRunOperationRequest(elicitCaps))
 	res := decodeElicitResult(t, body)
 	if res.ResultType == "input_required" {
-		t.Fatalf("resultType = input_required, want pending_approval rendering (out-of-band park): %s", body)
+		t.Fatalf("resultType = input_required, want pending_approval rendering (unaskable park): %s", body)
 	}
 	if !strings.Contains(body, "pending_approval") {
 		t.Fatalf("body has no pending_approval: %s", body)

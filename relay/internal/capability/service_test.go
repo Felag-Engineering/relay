@@ -590,7 +590,7 @@ func TestConstructorsPanicOnNilSeam(t *testing.T) {
 	tokens := &fakeAPITokenStore{}
 	ctl := NewControl(rec, authz, freeze)
 	read := NewReadLane(rec, reg, aq, jq, nil, nil, testSettings, nil)
-	gate := gateEverything(t, 1)
+	gate := gateEverything(t)
 	astore := newMemApprovals()
 	aauthz := &spyApprovalAuthorizer{}
 	appr := NewApprovals(rec, gate, astore, aauthz, nil, nil)
@@ -725,7 +725,7 @@ func TestNewExecution_RefusesApprovalsOverADifferentRecorder(t *testing.T) {
 // with no nil check — so NewApprovals must map nil to the no-op.
 func TestNewApprovals_NilNotifierParksWithoutNotifying(t *testing.T) {
 	rec := NewRecorder(&spyAuditSink{}, nil, nil)
-	appr := NewApprovals(rec, gateEverything(t, 1), newMemApprovals(), &spyApprovalAuthorizer{}, nil, nil)
+	appr := NewApprovals(rec, gateEverything(t), newMemApprovals(), &spyApprovalAuthorizer{}, nil, nil)
 	ctl := NewControl(rec, &spyAuthorizer{}, &fakeFreezeStore{})
 	read := newReadLane(rec, seedOneNode(t), nil, nil, nil, nil, testSettings, nil)
 	svc := newExecution(ctl, read, appr, noopCapChecker{}, nil, noopDispatcher{}, nil)

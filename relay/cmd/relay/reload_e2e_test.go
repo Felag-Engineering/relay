@@ -313,6 +313,9 @@ func TestReload_BindTimeChangeRefusedRestartRequired(t *testing.T) {
 	}
 }
 
+// malformedGateRule is a gate rule the loader refuses at the value stage, after the file check.
+const malformedGateRule = "[[approval.rules]]\nname = \"a\"\nchannel = \"in-band\"\n"
+
 // Proves RC-21.
 func TestReload_FailedReloadProcessSurvives(t *testing.T) {
 	r := startReloadable(t, "")
@@ -322,8 +325,7 @@ func TestReload_FailedReloadProcessSurvives(t *testing.T) {
 	r.waitForLogCount(refusedMsg, 1)
 	r.requireAlive()
 
-	gate := r.layout.WriteFile(t, "gates.json", `{"rules": [`, "root", relaytest.TestUser, "0640")
-	r.rewriteRoot(r.body(reloadBody{sections: "[approval]\ngate_rules_path = \"" + gate + "\"\n"}))
+	r.rewriteRoot(r.body(reloadBody{sections: malformedGateRule}))
 	r.hup()
 	r.waitForLogCount(refusedMsg, 2)
 	r.requireAlive()
@@ -345,8 +347,7 @@ func TestReload_FailedReloadProcessSurvives(t *testing.T) {
 // Proves RC-21.
 func TestReload_RechecksFileFirst(t *testing.T) {
 	r := startReloadable(t, "")
-	gate := r.layout.WriteFile(t, "gates.json", `{"rules": [`, "root", relaytest.TestUser, "0640")
-	bad := r.body(reloadBody{sections: "[approval]\ngate_rules_path = \"" + gate + "\"\n\n[reach]\nmutate_blast_cap = 0\n"})
+	bad := r.body(reloadBody{sections: malformedGateRule + "\n[reach]\nmutate_blast_cap = 0\n"})
 
 	for _, tc := range []struct{ name, owner, group, mode, want string }{
 		{"owned by the Relay", relaytest.TestUser, relaytest.TestUser, "0640", "the Relay owns it on a filesystem mounted writable"},
@@ -362,7 +363,7 @@ func TestReload_RechecksFileFirst(t *testing.T) {
 			out := r.proc.Log()[mark:]
 			wantInOutput(t, out, r.path, tc.want)
 			// The file check ran before decode, validation and the files the configuration names.
-			for _, notYet := range []string{"mutate_blast_cap", gate, "approval gate"} {
+			for _, notYet := range []string{"mutate_blast_cap", "approval.rules"} {
 				if strings.Contains(out, notYet) {
 					t.Errorf("the refusal names %q, so something past the file check ran first:\n%s", notYet, out)
 				}

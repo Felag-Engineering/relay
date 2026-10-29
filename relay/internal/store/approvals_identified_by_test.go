@@ -21,7 +21,7 @@ func TestApprovals_DecisionIdentifiedByRoundTrips(t *testing.T) {
 	} {
 		t.Run(id.String(), func(t *testing.T) {
 			repo := approvalStore(t)
-			if err := repo.Create(ctx, pendingRequest("req-1", "hash-a", 1, time.Hour)); err != nil {
+			if err := repo.Create(ctx, pendingRequest("req-1", "hash-a", time.Hour)); err != nil {
 				t.Fatalf("Create: %v", err)
 			}
 			at := storeNow.Add(time.Minute)
@@ -50,7 +50,7 @@ func TestApprovals_UnknownIdentifiedByIsAnError(t *testing.T) {
 	ctx := context.Background()
 	st, db := openStore(t)
 	repo := st.Approvals()
-	if err := repo.Create(ctx, pendingRequest("req-1", "hash-a", 1, time.Hour)); err != nil {
+	if err := repo.Create(ctx, pendingRequest("req-1", "hash-a", time.Hour)); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	at := storeNow.Add(time.Minute)

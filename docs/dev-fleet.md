@@ -7,7 +7,7 @@ is the **test fleet**; the nine-Node demo fleet has its own runbook
 ([The demo fleet](#the-demo-profile)).
 
 The test fleet is `deploy/test/`: its `docker-compose.yml` and every configuration file it
-loads (`relay.toml`, `approval-gates.json`). Every command below names the file with `-f`
+loads (`relay.toml`, which carries the approval gate). Every command below names the file with `-f`
 (the `make dev-fleet-*` targets do it for you). The compose project is `relay-test`, fixed by
 the file's `name:`, and one per Docker engine: the make targets refuse a fleet another
 checkout started. The demo fleet (`deploy/demo/`, project `relay-demo`) publishes the same
@@ -31,14 +31,13 @@ and it must never run on a machine that holds a development checkout like this o
   `!reset`.
 - Network access to Docker Hub the first time. The binaries are compiled inside multi-stage
   images; no host Go or Rust toolchain is needed.
-- **A Docker data root on a Linux filesystem.** The Relay refuses `relay.toml`, its gate files
-  and its state directory unless every path component sits on a filesystem whose owner and
+- **A Docker data root on a Linux filesystem.** The Relay refuses `relay.toml` and its state
+  directory unless every path component sits on a filesystem whose owner and
   mode the kernel reports itself (ext4, XFS, btrfs, tmpfs, overlayfs). A checkout bind mount
   fails twice over: it carries your uid and mode `0644`, and on Docker Desktop it arrives over
-  virtiofs, 9p or FUSE. So the `relay-config` one-shot copies the folder's `relay.toml` and
-  `approval-gates.json` onto the `relay-etc` named volume, on the engine's own Linux filesystem
-  (Docker Desktop's VM included), as `root:10001` `0640` and `root:root` `0644`, and the Relay
-  mounts it read-only at `/etc/relay`. A data root on ZFS or NFS is refused the same way.
+  virtiofs, 9p or FUSE. So the `relay-config` one-shot copies the folder's `relay.toml`
+  onto the `relay-etc` named volume, on the engine's own Linux filesystem (Docker Desktop's VM
+  included), as `root:10001` `0640`, and the Relay mounts it read-only at `/etc/relay`. A data root on ZFS or NFS is refused the same way.
 
 Docker is **not** required for `make build`, `make test` or `make lint`. CI never runs the
 fleet; it only renders these files with `docker compose config`.
@@ -48,8 +47,8 @@ fleet; it only renders these files with `docker compose config`.
 | Piece | What it is |
 | --- | --- |
 | `relay` | The Go Relay. Node-plane gRPC on `:7654`, control-plane HTTPS (MCP + `/api/v1`) on `:9443` — distinct listeners, distinct published ports. Runs as UID 10001 with no capabilities, a read-only root filesystem, `/tmp` on tmpfs and `relay-data` as its one writable volume, which holds the CA and the SQLite store. |
-| `relay-config` | A one-shot, on the Relay image, that stages `deploy/test/relay.toml` and `deploy/test/approval-gates.json` onto the `relay-etc` volume (see [Prerequisites](#prerequisites)), hands `init`'s two output volumes to UID 10001, then exits. The Relay starts only after it exits 0. |
-| `init` | A one-shot, on the Relay image, running as UID 10001 like the Relay (`relay init` refuses root) and reading the same read-only `relay-etc` volume: runs `relay init` to create the first admin, the Console `admin` (with its password and first API Token, see [The Admin Console](#the-admin-console)), creates `dev-approver` (with its token — the approval gate forbids self-approval, see [The approval gate](#the-approval-gate)), mints an Enrollment Token naming the initial tags `tag:env=dev` and `tag:fleet=dev` through `POST /api/v1/enrollment-tokens` and writes the response's join string for the daemons, then exits. If it fails, no daemon starts. |
+| `relay-config` | A one-shot, on the Relay image, that stages `deploy/test/relay.toml` onto the `relay-etc` volume (see [Prerequisites](#prerequisites)), hands `init`'s two output volumes to UID 10001, then exits. The Relay starts only after it exits 0. |
+| `init` | A one-shot, on the Relay image, running as UID 10001 like the Relay (`relay init` refuses root) and reading the same read-only `relay-etc` volume: runs `relay init` to create the first admin, the Console `admin` (with its password and first API Token, see [The Admin Console](#the-admin-console)), creates `dev-approver` (a second human, with its token, see [The approval gate](#the-approval-gate)), mints an Enrollment Token naming the initial tags `tag:env=dev` and `tag:fleet=dev` through `POST /api/v1/enrollment-tokens` and writes the response's join string for the daemons, then exits. If it fails, no daemon starts. |
 | `daemon-1..3` | Three relay-daemons (Rust, musl static binary). Each has a baked, root-owned Policy fixture and a private state volume, enrolls on first start, and reports health once it has a persisted identity. The two `role=web` Nodes (`daemon-1`, `daemon-2`) also run the dev-fleet demo service; `daemon-3` (`role=db`) loads a different Policy fixture and runs no demo service. |
 | `daemon-4..9` (demo fleet only) | Six more relay-daemons, in `deploy/demo/` and not in this fleet. See [The demo fleet](#the-demo-profile). |
 
@@ -234,8 +233,8 @@ the CA (`claude mcp add -e` would not help). `NODE_EXTRA_CA_CERTS` does it:
 $ NODE_EXTRA_CA_CERTS=$PWD/.dev-fleet/ca-cert.pem claude
 ```
 
-That connects as **`admin`**, the requester, which **cannot** approve its own parked
-dispatches; `dev-approver` does that ([The approval gate](#the-approval-gate)).
+That connects as **`admin`**, the requester. `dev-approver` is the second human that decides
+its parked dispatches from outside the session ([The approval gate](#the-approval-gate)).
 
 ### Any other MCP client
 
@@ -281,23 +280,26 @@ evaluates Policy (ADR-0002, ADR-0011).
 
 ## The approval gate
 
-The fleet ships an **approval gate** (`deploy/test/approval-gates.json`, ADR-0027), so
-parked dispatches can be exercised. This section covers the dev fixture;
-gates for operators (rule schema, webhook, decision endpoint) are in
-[docs/operations/approval-gates.md](operations/approval-gates.md). The nine-Node demo fleet
-runs a different, in-band gate, its own folder's `deploy/demo/approval-gates.json`
+The fleet ships an **approval gate** (the `[[approval.rules]]` sections of
+`deploy/test/relay.toml`, ADR-0027, ADR-0047), so parked dispatches can be exercised. This
+section covers the dev fixture; gates for operators (rule schema, webhook, decision endpoint)
+are in [docs/operations/approval-gates.md](operations/approval-gates.md). The nine-Node demo
+fleet runs the same rules from its own folder's `deploy/demo/relay.toml`
 ([The human approver](operations/demo-fleet.md#the-human-approver)).
 
-Each fleet's `relay-config` one-shot stages its folder's `relay.toml` and
-`approval-gates.json`; `relay.toml`'s `approval.gate_rules_path` names the staged gate. Which
+Each fleet's `relay-config` one-shot stages its folder's `relay.toml`, rules included. Which
 gate runs is which folder you deploy, never your shell or a `.env`.
 
 Two rules:
 
 | Rule | Matches | Requires |
 | --- | --- | --- |
-| `dev-fleet-wide-mutates-need-a-human` | `mutate` class, fan-out **≥ 2** | 1 approval from `dev-approver`, out-of-band |
-| `dev-raw-exec-always-needs-a-human` | every Raw Exec | 1 approval from `dev-approver`, out-of-band |
+| `dev-fleet-wide-mutates-need-a-human` | `mutate` class, fan-out **≥ 2** | 1 approval, from any Account whose role clears the floor |
+| `dev-raw-exec-always-needs-a-human` | every Raw Exec | 1 approval, from any Account whose role clears the floor |
+
+Neither rule names an audience or a channel: the first Decision ends the request, in-band or on
+the Control API. This is not a two-person demo; `dev-approver` exists so there is a second human
+to decide from outside the requesting session.
 
 The fan-out threshold leaves **both** paths reachable: a mutate on one Node runs straight
 through; the same mutate fleet-wide parks. Here `node:role=db` is one Node and runs, while
@@ -306,18 +308,15 @@ read [its runbook](#the-demo-profile) before presenting.
 
 Security-relevant choices, made explicit:
 
-- **The gate is Relay configuration, not a runtime object.** It is staged root-owned `0644`
-  onto the read-only config volume, at the path `approval.gate_rules_path` names. To change
-  it, edit `deploy/test/approval-gates.json` (or `relay.toml`) and run `make dev-fleet-up`
-  again: `relay-config` re-stages the folder and the Relay restarts, with no rebuild. No
+- **The gate is Relay configuration, not a runtime object.** It is part of `relay.toml`,
+  staged onto the read-only config volume. To change it, edit `deploy/test/relay.toml` and run
+  `make dev-fleet-up` again: `relay-config` re-stages the folder and the Relay restarts, with no rebuild. No
   Account of any role can read or loosen it through the API (invariant 11): a credential that
   could edit its own approval requirements would make the mechanism decorative.
-- **Loading it is fail-closed.** A malformed, missing, symlinked, or group- or world-writable
-  gate file fails Relay startup, never degrading to "nothing needs approval": a broken fixture
-  crash-loops the container instead of disarming the fleet.
+- **Loading it is fail-closed.** A rule the loader refuses fails Relay startup, never degrading
+  to "nothing needs approval": a broken fixture crash-loops the container instead of disarming
+  the fleet.
   `docker compose -f deploy/test/docker-compose.yml logs relay` says what the loader objected to.
-- **`requester_allowed` is unset, the strict default.** The requesting Account may **not**
-  approve its own dispatch, which is why `dev-approver` exists.
 - **`dev-approver`'s credential is on the `control-credential` volume**, which no daemon
   mounts: an approver credential readable by every Node would let a compromised Node approve
   its own remediation.
@@ -339,10 +338,9 @@ does not itself dispatch.
 
 Two properties to watch:
 
-- The **admin** credential cannot decide its own request: it gets
-  `409 requester may not decide their own request`, even as an admin.
+- The first Decision ends the request: a second one gets `409` not pending, from any Account.
 - The decision arrives on a credential the requesting MCP session does not hold, which is
-  what `channel: out-of-band` records.
+  what the recorded channel, `out-of-band`, says.
 
 ## Mutates that really run — and where they cannot
 
@@ -505,7 +503,7 @@ Job pages read the store; there is no general audit-query route on the API or MC
 ## The demo profile
 
 The nine-Node fleet is `deploy/demo/`, a separate compose project, `relay-demo`, with its own
-`relay.toml` and in-band gate. Its roster, the four beats, the injected fault, `make
+`relay.toml`, which carries its gate. Its roster, the four beats, the injected fault, `make
 demo-reset` and resource usage are in its own runbook,
 [docs/operations/demo-fleet.md](operations/demo-fleet.md); drive it with the runbook's `make
 demo-*` targets. It shares this fleet's host ports, so `make dev-fleet-down` before a demo and

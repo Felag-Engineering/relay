@@ -51,7 +51,7 @@ func TestStore_GrantLinkedHistoryVerifiesAndReadsBack(t *testing.T) {
 			t.Fatalf("append %s: %v", r.ID, err)
 		}
 	}
-	if err := st.Approvals().Create(ctx, pendingRequest("appr-g", "grant-subject-hash", 1, time.Hour)); err != nil {
+	if err := st.Approvals().Create(ctx, pendingRequest("appr-g", "grant-subject-hash", time.Hour)); err != nil {
 		t.Fatalf("create request: %v", err)
 	}
 	insertHistoricalGrant(t, st.db, "appr-g", "g-1")

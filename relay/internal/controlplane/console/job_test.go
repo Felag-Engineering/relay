@@ -1217,7 +1217,6 @@ func TestJob_FullPathGatedJobAnswersAttributionOnOneScreen(t *testing.T) {
 		MatchedRules:  []string{"prod-mutate"},
 		Summary:       "restart nginx on 4 Nodes",
 		PlanHash:      "sha256:4b18c02f9911",
-		Require:       approval.Requirement{Count: 1},
 		Decisions: []approval.Decision{{
 			Account: "mike", AccountID: "acct-2", Approve: true,
 			Channel: approval.ChannelOutOfBand, DeciderHuman: true, At: testNow,
@@ -1256,8 +1255,8 @@ func TestJob_FullPathGatedJobAnswersAttributionOnOneScreen(t *testing.T) {
 	if strings.Contains(body, "stored when the Job was parked") {
 		t.Error(`the summary's qualifier still says "stored when the Job was parked", which does not hold for a Grant-released Job`)
 	}
-	if !strings.Contains(body, "<b>1</b> of 1 approval") {
-		t.Error("the quorum is not shown as signed-of-required")
+	if strings.Contains(body, "quorum") || strings.Contains(body, " of 1 approval") {
+		t.Error("the page renders a quorum, but one Decision ends a request and there is no quorum to show")
 	}
 	if !strings.Contains(body, "sha256:4b18c02f9911") {
 		t.Error("the plan hash the approval committed to is not shown")
@@ -1296,7 +1295,7 @@ func TestJob_UnattributedApproverRendersInTheAssertedLane(t *testing.T) {
 	}
 	d := jobDeps(q)
 	d.Approvals = &fakeApprovals{pending: []approval.Request{{
-		ID: "ap-1", Require: approval.Requirement{Count: 1},
+		ID:        "ap-1",
 		Decisions: []approval.Decision{{Account: "mike", Approve: true, Channel: approval.ChannelOutOfBand, At: testNow}},
 	}}}
 	body := jobBody(t, d, jobPath(""))
@@ -1309,11 +1308,10 @@ func TestJob_UnattributedApproverRendersInTheAssertedLane(t *testing.T) {
 	}
 }
 
-// TestJob_PartialQuorumHistoryIsReadable: a released Job's approval has
-// always MET its quorum, so "partial quorum" is read off the history — two
-// signatures, each with its own time, showing the moment the record stood at
-// 1 of 2.
-func TestJob_PartialQuorumHistoryIsReadable(t *testing.T) {
+// TestJob_HistoricalDecisionsRenderInStoredOrder: a record written before one
+// Decision ended a request can hold two approvals; each renders with its own
+// time, in stored order, and no count is claimed.
+func TestJob_HistoricalDecisionsRenderInStoredOrder(t *testing.T) {
 	tasks := []capability.TaskRow{mutateTask("node-a", jobs.OutcomeSuccess, "ok")}
 	early := testNow.Add(-2 * time.Hour)
 	late := testNow.Add(-10 * time.Minute)
@@ -1324,7 +1322,7 @@ func TestJob_PartialQuorumHistoryIsReadable(t *testing.T) {
 	}
 	d := jobDeps(q)
 	d.Approvals = &fakeApprovals{pending: []approval.Request{{
-		ID: "ap-1", Require: approval.Requirement{Count: 2},
+		ID: "ap-1",
 		Decisions: []approval.Decision{
 			{Account: "mike", AccountID: "acct-2", Approve: true, Channel: approval.ChannelOutOfBand, DeciderHuman: true, At: early},
 			{Account: "sam", AccountID: "acct-3", Approve: true, Channel: approval.ChannelOutOfBand, DeciderHuman: true, At: late},
@@ -1332,8 +1330,8 @@ func TestJob_PartialQuorumHistoryIsReadable(t *testing.T) {
 	}}}
 	body := jobBody(t, d, jobPath(""))
 
-	if !strings.Contains(body, "<b>2</b> of 2 approvals") {
-		t.Error("the quorum does not read 2 of 2")
+	if strings.Contains(body, " of 2 approvals") {
+		t.Error("the page claims a count of approvals, but there is no quorum to show")
 	}
 	for _, want := range []string{
 		`data-trust="verified" title="The Relay authenticated this identity.">mike<`,
@@ -1346,53 +1344,6 @@ func TestJob_PartialQuorumHistoryIsReadable(t *testing.T) {
 	}
 	if strings.Index(body, stampOrAbsent(early)) > strings.Index(body, stampOrAbsent(late)) {
 		t.Error("the deciders do not render in stored order")
-	}
-}
-
-// TestJob_ShortQuorumRecordIsStatedNotHidden is the defensive render: a
-// record that holds fewer approvals than the rule required states the count
-// and never claims the approval was complete.
-func TestJob_ShortQuorumRecordIsStatedNotHidden(t *testing.T) {
-	tasks := []capability.TaskRow{mutateTask("node-a", jobs.OutcomeSuccess, "ok")}
-	q := &fakeQueries{
-		jobs:  []capability.JobSummary{oneJob(tasks, jobs.RiskClassMutate)},
-		tasks: tasks,
-		rows:  []capability.AuditRow{{Kind: audit.KindDispatch, JobID: testJobID, ApprovalID: "ap-1"}},
-	}
-	d := jobDeps(q)
-	d.Approvals = &fakeApprovals{pending: []approval.Request{{
-		ID: "ap-1", Require: approval.Requirement{Count: 2},
-		Decisions: []approval.Decision{{Account: "mike", AccountID: "acct-2", Approve: true, Channel: approval.ChannelOutOfBand, DeciderHuman: true, At: testNow}},
-	}}}
-	body := jobBody(t, d, jobPath(""))
-
-	if !strings.Contains(body, "<b>1</b> of 2 approvals") {
-		t.Error("a short quorum does not state its true count")
-	}
-	if !strings.Contains(body, "fewer approvals than the rule required") {
-		t.Error("a short quorum record is hidden rather than stated")
-	}
-}
-
-// TestJob_ZeroQuorumRecordSaysSoRatherThanZeroOfZero. A record with no stored
-// Requirement is not "0 of 0 met" — it is a record this page cannot read a
-// quorum from at all, and it must say that rather than a number.
-func TestJob_ZeroQuorumRecordSaysSoRatherThanZeroOfZero(t *testing.T) {
-	tasks := []capability.TaskRow{mutateTask("node-a", jobs.OutcomeSuccess, "ok")}
-	q := &fakeQueries{
-		jobs:  []capability.JobSummary{oneJob(tasks, jobs.RiskClassMutate)},
-		tasks: tasks,
-		rows:  []capability.AuditRow{{Kind: audit.KindDispatch, JobID: testJobID, ApprovalID: "ap-1"}},
-	}
-	d := jobDeps(q)
-	d.Approvals = &fakeApprovals{pending: []approval.Request{{ID: "ap-1"}}}
-	body := jobBody(t, d, jobPath(""))
-
-	if !strings.Contains(body, "no quorum recorded") {
-		t.Error(`a record with no stored Requirement does not say "no quorum recorded"`)
-	}
-	if strings.Contains(body, "<b>0</b> of 0") {
-		t.Error(`a record with no stored Requirement rendered "0 of 0" rather than saying no quorum was recorded`)
 	}
 }
 
@@ -1409,7 +1360,7 @@ func TestJob_InBandDecisionShowsTheAssertedHumanInTheAssertedLane(t *testing.T) 
 	}
 	d := jobDeps(q)
 	d.Approvals = &fakeApprovals{pending: []approval.Request{{
-		ID: "ap-1", Require: approval.Requirement{Count: 1},
+		ID: "ap-1",
 		Decisions: []approval.Decision{{
 			Account: "relay-bot", AccountID: "acct-9", Approve: true,
 			Channel: approval.ChannelInBand, DeciderHuman: false, OnBehalfOf: "carol", At: testNow,
@@ -1445,7 +1396,7 @@ func TestJob_ApprovalParkedByAnotherAccountIsShown(t *testing.T) {
 	d := jobDeps(q)
 	d.Approvals = &fakeApprovals{pending: []approval.Request{{
 		ID: "ap-1", RequestedBy: "bob", RequestedByID: "acct-9",
-		Require:   approval.Requirement{Count: 1},
+		Require:   approval.Requirement{},
 		Decisions: []approval.Decision{{Account: "mike", AccountID: "acct-2", Approve: true, Channel: approval.ChannelOutOfBand, DeciderHuman: true, At: testNow}},
 	}}}
 	body := jobBody(t, d, jobPath(""))
@@ -1478,7 +1429,7 @@ func TestJob_DeniedNodesAppearInTheGatedRecord(t *testing.T) {
 	}
 	d := jobDeps(q)
 	d.Approvals = &fakeApprovals{pending: []approval.Request{{
-		ID: "ap-1", Require: approval.Requirement{Count: 1},
+		ID:        "ap-1",
 		Decisions: []approval.Decision{{Account: "mike", AccountID: "acct-2", Approve: true, Channel: approval.ChannelOutOfBand, DeciderHuman: true, At: testNow}},
 	}}}
 	body := jobBody(t, d, jobPath(""))
@@ -1506,7 +1457,7 @@ func TestJob_GrantReleasedJobShowsNoPlanHashAndSaysWhy(t *testing.T) {
 	}
 	d := jobDeps(q)
 	d.Approvals = &fakeApprovals{pending: []approval.Request{{
-		ID: "ap-g", PlanHash: "sha256:scopehash", Require: approval.Requirement{Count: 1},
+		ID: "ap-g", PlanHash: "sha256:scopehash",
 		Decisions: []approval.Decision{{Account: "mike", AccountID: "acct-2", Approve: true, Channel: approval.ChannelOutOfBand, DeciderHuman: true, At: testNow}},
 	}}}
 	body := jobBody(t, d, jobPath(""))
@@ -1647,7 +1598,7 @@ func TestJob_MissingGateRuleIsNotWrappedInCode(t *testing.T) {
 	}
 	d := jobDeps(q)
 	d.Approvals = &fakeApprovals{pending: []approval.Request{{
-		ID: "ap-1", Require: approval.Requirement{Count: 1}, // no MatchedRules stored
+		ID:        "ap-1", // no MatchedRules stored
 		Decisions: []approval.Decision{{Account: "mike", AccountID: "acct-2", Approve: true, Channel: approval.ChannelOutOfBand, DeciderHuman: true, At: testNow}},
 	}}}
 	body := jobBody(t, d, jobPath(""))
@@ -1672,7 +1623,7 @@ func TestJob_DeciderWithNoRecordedTimeSaysSoProperly(t *testing.T) {
 	}
 	d := jobDeps(q)
 	d.Approvals = &fakeApprovals{pending: []approval.Request{{
-		ID: "ap-1", Require: approval.Requirement{Count: 1},
+		ID:        "ap-1",
 		Decisions: []approval.Decision{{Account: "mike", AccountID: "acct-2", Approve: true, Channel: approval.ChannelOutOfBand, DeciderHuman: true}}, // At left zero
 	}}}
 	body := jobBody(t, d, jobPath(""))
@@ -1697,7 +1648,7 @@ func TestJob_ApprovalWithNoDecidersSaysSo(t *testing.T) {
 		rows:  []capability.AuditRow{{Kind: audit.KindDispatch, JobID: testJobID, ApprovalID: "ap-1"}},
 	}
 	d := jobDeps(q)
-	d.Approvals = &fakeApprovals{pending: []approval.Request{{ID: "ap-1", Require: approval.Requirement{Count: 1}}}} // no Decisions
+	d.Approvals = &fakeApprovals{pending: []approval.Request{{ID: "ap-1", Require: approval.Requirement{}}}} // no Decisions
 	body := jobBody(t, d, jobPath(""))
 
 	if !strings.Contains(body, "no approving decision recorded") {
@@ -1722,7 +1673,7 @@ func TestJob_DeciderShowsHowItWasIdentified(t *testing.T) {
 	}
 	d := jobDeps(q)
 	d.Approvals = &fakeApprovals{pending: []approval.Request{{
-		ID: "ap-1", Require: approval.Requirement{Count: 4},
+		ID: "ap-1",
 		Decisions: []approval.Decision{
 			{Account: "oauth-hana", AccountID: "acct-1", Approve: true, Channel: approval.ChannelInBand, DeciderHuman: true, IdentifiedBy: approval.IdentifiedByOAuthSession, At: testNow},
 			{Account: "token-hana", AccountID: "acct-2", Approve: true, Channel: approval.ChannelInBand, DeciderHuman: true, IdentifiedBy: approval.IdentifiedByAPITokenSession, At: testNow},

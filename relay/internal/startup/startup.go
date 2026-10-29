@@ -1,8 +1,7 @@
 // Package startup is the Relay's start-time file check on everything its configuration names
-// apart from the file itself and its secrets (ADR-0043): the approval-gate file, then the
-// state locations. Its result, Files, can only be made by Open, or by the test-only
-// startuptest that depguard keeps out of production code; the composition root takes a Files
-// and opens none of these files itself.
+// apart from the file itself and its secrets (ADR-0043): the state locations. Its result,
+// Files, can only be made by Open, or by the test-only startuptest that depguard keeps out of
+// production code; the composition root takes a Files and opens none of these files itself.
 package startup
 
 import (
@@ -11,27 +10,21 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/Felag-Engineering/relay/relay/internal/approval"
 	"github.com/Felag-Engineering/relay/relay/internal/ca"
 	"github.com/Felag-Engineering/relay/relay/internal/hostfile"
 	"github.com/Felag-Engineering/relay/relay/internal/startup/internal/sealed"
 )
 
-// Files is what the start-time check read: the CA and the approval gate, each read from the
-// descriptor hostfile checked, and the store's path with a recheck of its directory. Its one
-// field is unexported and of a type no package outside the startup tree can name.
+// Files is what the start-time check read: the CA, read from the descriptor hostfile checked,
+// and the store's path with a recheck of its directory. Its one field is unexported and of a
+// type no package outside the startup tree can name.
 type Files struct {
 	v sealed.Files
 }
 
-// Open checks and reads the approval-gate file at gatePath (RC-15, RC-16; empty means no
-// gate), the store's directory, and the CA directory and private key at caDir (RC-17). Any
-// refusal refuses start.
-func Open(gatePath, caDir, storePath string) (Files, error) {
-	gate, err := approval.Load(gatePath)
-	if err != nil {
-		return Files{}, fmt.Errorf("load approval gate config: %w", err)
-	}
+// Open checks the store's directory, and the CA directory and private key at caDir (RC-17).
+// Any refusal refuses start.
+func Open(caDir, storePath string) (Files, error) {
 	recheck := func() error { return checkStoreDir(storePath) }
 	if err := recheck(); err != nil {
 		return Files{}, err
@@ -40,13 +33,13 @@ func Open(gatePath, caDir, storePath string) (Files, error) {
 	if err != nil {
 		return Files{}, fmt.Errorf("open CA: %w", err)
 	}
-	return Files{v: sealed.New(relayCA, gate, storePath, recheck)}, nil
+	return Files{v: sealed.New(relayCA, storePath, recheck)}, nil
 }
 
 // FromSealed wraps v. Its parameter's type is internal to the startup tree, so only the
 // test-only constructor can pass it anything but a zero value; it refuses any part missing.
 func FromSealed(v sealed.Files) (Files, error) {
-	if v.CA == nil || v.Gate == nil || v.StorePath == "" || v.RecheckStore == nil {
+	if v.CA == nil || v.StorePath == "" || v.RecheckStore == nil {
 		return Files{}, errors.New("startup: incomplete start-time files")
 	}
 	return Files{v: v}, nil
@@ -54,14 +47,11 @@ func FromSealed(v sealed.Files) (Files, error) {
 
 // Valid reports whether f came from Open or FromSealed rather than being the zero value.
 func (f Files) Valid() bool {
-	return f.v.CA != nil && f.v.Gate != nil && f.v.StorePath != "" && f.v.RecheckStore != nil
+	return f.v.CA != nil && f.v.StorePath != "" && f.v.RecheckStore != nil
 }
 
 // CA is the Relay's CA, read from the checked directory.
 func (f Files) CA() *ca.CA { return f.v.CA }
-
-// Gate is the approval gate, read from the checked file; empty when no file is configured.
-func (f Files) Gate() *approval.Gate { return f.v.Gate }
 
 // StorePath is the store's path, whose directory Open checked. The store is opened at
 // exactly this path.

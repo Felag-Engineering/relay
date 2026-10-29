@@ -135,7 +135,7 @@ That is why these settings live here rather than anywhere more convenient:
 |---|---|
 | `reach.read_blast_cap` / `reach.mutate_blast_cap` | The cap on how much damage one dispatch can do — including from a compromised AI-agent. An API that could raise its own limit is not a limit. |
 | `ca.dir` | The key that mints Node identities. |
-| `approval.gate_rules_path` | A stolen credential that could edit its own approval requirements would make approvals decorative. |
+| `approval.rules` | A stolen credential that could edit its own approval requirements would make approvals decorative. |
 | `[oauth]` | An API that could repoint its own issuer could authenticate anyone. |
 
 Runtime *objects* (Accounts, API Tokens, Enrollment Tokens, Nodes, Jobs, approvals) are

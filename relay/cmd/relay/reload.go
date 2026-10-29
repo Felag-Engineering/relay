@@ -4,9 +4,10 @@ package main
 // steps that read the configuration file against the path given at start, and
 // applies the result all-or-nothing: any failure refuses the whole reload and
 // leaves the running configuration untouched. On success it swaps three
-// things: the operator-settings snapshot, the approval gate and the log
-// handler. Every reload, applied or refused, writes one audit record attributed
-// to the host, naming setting keys and fixed phrases only (RC-18).
+// things: the operator-settings snapshot, the approval gate (built from the
+// file's [[approval.rules]]) and the log handler. Every reload, applied or
+// refused, writes one audit record attributed to the host, naming setting keys
+// and fixed phrases only (RC-18).
 
 import (
 	"context"
@@ -14,9 +15,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"reflect"
 	"time"
 
+	"github.com/Felag-Engineering/relay/relay/internal/approval"
 	"github.com/Felag-Engineering/relay/relay/internal/audit"
 	"github.com/Felag-Engineering/relay/relay/internal/auditsink"
 	"github.com/Felag-Engineering/relay/relay/internal/relayconfig"
@@ -42,7 +43,7 @@ type reloader struct {
 	// The start steps a reload reruns. Production sets loadConfig and
 	// startup.Open; only this package's tests substitute them.
 	load func(path string) (startupConfig, error)
-	open func(gatePath, caDir, storePath string) (startup.Files, error)
+	open func(caDir, storePath string) (startup.Files, error)
 }
 
 // newReloader builds the reloader for the Relay main started from sc at path.
@@ -97,7 +98,7 @@ func (r *reloader) reload(ctx context.Context) ([]string, error) {
 	}
 
 	cfg := sc.Config
-	files, err := r.open(cfg.ApprovalGatePath, cfg.CADir, cfg.StorePath)
+	files, err := r.open(cfg.CADir, cfg.StorePath)
 	if err != nil {
 		return nil, r.refuse(ctx, auditsink.ReloadRefusedNamedFiles, nil, err)
 	}
@@ -116,14 +117,16 @@ func (r *reloader) reload(ctx context.Context) ([]string, error) {
 		return nil, r.refuse(ctx, auditsink.ReloadRefusedSettings, nil, err)
 	}
 
-	keys := make([]string, 0, len(changes)+1)
+	keys := make([]string, 0, len(changes))
 	for _, c := range changes {
 		keys = append(keys, c.Key)
 	}
-	// The gate file is re-read on every reload, so its rules can change with
-	// the path unchanged.
-	if !reflect.DeepEqual(r.gate.rules(), files.Gate().Rules()) && !contains(keys, "approval.gate_rules_path") {
-		keys = append(keys, "approval.gate_rules_path")
+	// The gate is built before anything is written or swapped: a rule that
+	// cannot be loaded refuses the whole reload, naming a rule's position and
+	// never its name or a value.
+	gate, err := approval.NewGate(cfg.ApprovalRules)
+	if err != nil {
+		return nil, r.refuse(ctx, auditsink.ReloadRefusedSettings, nil, err)
 	}
 
 	id, err := r.newID()
@@ -141,22 +144,22 @@ func (r *reloader) reload(ctx context.Context) ([]string, error) {
 	// The handler is built before the first swap, so the swaps below are bare
 	// atomic stores and a reload is never half-applied.
 	handler := newLogHandler(r.stderr, sc.Log)
-	r.gate.swap(files.Gate())
+	r.gate.swap(gate)
 	r.live.swap(next)
 	r.logs.swap(handler)
 	r.file = sc.File
 
 	slog.Info("configuration reloaded", "changed", keys)
-	if n := len(files.Gate().Rules()); n > 0 {
-		slog.Info("approval gating enabled", "rules", n, "config", cfg.ApprovalGatePath)
+	if n := len(cfg.ApprovalRules); n > 0 {
+		slog.Info("approval gating enabled", "rules", n)
 	}
 	return keys, nil
 }
 
 // refuse logs the refusal, audits it best-effort, and returns err. Nothing is
 // swapped and the process never exits. Every error reaching here names only a
-// key, a line or a path; the audit record carries a fixed phrase, never the
-// error's text.
+// key, a line, a rule's position or a path; the audit record carries a fixed
+// phrase, never the error's text.
 func (r *reloader) refuse(ctx context.Context, stage auditsink.ReloadStage, restartKeys []string, err error) error {
 	slog.Error("configuration reload refused; the running configuration is unchanged", "err", err)
 	r.auditRefusal(ctx, stage, restartKeys)
@@ -182,13 +185,4 @@ func (r *reloader) appendRecord(ctx context.Context, rec audit.Record) error {
 	ctx, cancel := context.WithTimeout(ctx, reloadAuditTimeout)
 	defer cancel()
 	return r.audit.Append(ctx, rec)
-}
-
-func contains(ss []string, s string) bool {
-	for _, x := range ss {
-		if x == s {
-			return true
-		}
-	}
-	return false
 }

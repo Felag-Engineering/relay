@@ -33,10 +33,10 @@ var storeAction = jobs.Action{
 	RiskClass:     jobs.RiskClassMutate,
 }
 
-func pendingRequest(id, planHash string, count int, ttl time.Duration) approval.Request {
+func pendingRequest(id, planHash string, ttl time.Duration) approval.Request {
 	return approval.NewRequest(id, planHash, "acct-g", "gleipnir-prod",
 		storeAction, []string{"node-a"}, []string{"rule-a"},
-		approval.Requirement{Count: count, RequesterAllowed: true, Channel: approval.ChannelOutOfBand, TTL: ttl},
+		approval.Requirement{TTL: ttl},
 		storeNow)
 }
 
@@ -44,7 +44,7 @@ func TestApprovalRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	repo := approvalStore(t)
 
-	want := pendingRequest("req-1", "hash-a", 2, time.Hour)
+	want := pendingRequest("req-1", "hash-a", time.Hour)
 	if err := repo.Create(ctx, want); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -61,7 +61,7 @@ func TestApprovalRoundTrip(t *testing.T) {
 	if got.RequestedByID != want.RequestedByID || got.Summary != want.Summary {
 		t.Errorf("RequestedByID, Summary = %q, %q, want %q, %q", got.RequestedByID, got.Summary, want.RequestedByID, want.Summary)
 	}
-	if got.Require.Count != 2 || got.Require.Channel != approval.ChannelOutOfBand || got.Require.TTL != time.Hour {
+	if got.Require.TTL != time.Hour {
 		t.Errorf("requirement did not round-trip: %+v", got.Require)
 	}
 	if len(got.MatchedRules) != 1 || got.MatchedRules[0] != "rule-a" {
@@ -76,15 +76,17 @@ func TestApprovalRoundTrip(t *testing.T) {
 	}
 }
 
-// TestRecordDecisionPersistsQuorumProgress walks a count:2 Request through both
-// approvals and checks the state transition is durable at every step.
-func TestRecordDecisionPersistsQuorumProgress(t *testing.T) {
+// TestRecordDecision_SecondDecisionIsNotPending: the first Decision ends a
+// request through the store, and a second one, from any Account, is refused as
+// not pending and writes nothing.
+//
+// Proves AP-82.
+func TestRecordDecision_SecondDecisionIsNotPending(t *testing.T) {
 	ctx := context.Background()
 	repo := approvalStore(t)
-	if err := repo.Create(ctx, pendingRequest("req-1", "hash-a", 2, time.Hour)); err != nil {
+	if err := repo.Create(ctx, pendingRequest("req-1", "hash-a", time.Hour)); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-
 	dec := func(id, name string, at time.Time) approval.Decision {
 		return approval.Decision{AccountID: id, Account: name, Approve: true, Channel: approval.ChannelOutOfBand, PlanHash: "hash-a", At: at}
 	}
@@ -93,55 +95,25 @@ func TestRecordDecisionPersistsQuorumProgress(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first decision: %v", err)
 	}
-	if r.State != approval.StatePending || r.Progress() != "1 of 2" {
-		t.Errorf("after 1 of 2: state=%v progress=%q", r.State, r.Progress())
+	if r.State != approval.StateApproved || !r.Satisfied(storeNow.Add(2*time.Minute)) {
+		t.Fatalf("after one Decision: state = %v, want approved and satisfied", r.State)
 	}
 
-	// The partial state must survive a re-read, not just live in the returned value.
+	for _, id := range []string{"acct-ana", "acct-bo"} {
+		got, err := repo.RecordDecision(ctx, "req-1", dec(id, id, storeNow.Add(2*time.Minute)), storeNow.Add(2*time.Minute))
+		if !errors.Is(err, approval.ErrNotPending) {
+			t.Fatalf("second Decision by %s: err = %v, want ErrNotPending", id, err)
+		}
+		if len(got.Decisions) != 1 {
+			t.Errorf("refusal returned %d decisions, want the one recorded", len(got.Decisions))
+		}
+	}
 	reread, err := repo.Get(ctx, "req-1")
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if len(reread.Decisions) != 1 || reread.Progress() != "1 of 2" {
-		t.Errorf("partial quorum did not persist: %+v", reread)
-	}
-
-	r, err = repo.RecordDecision(ctx, "req-1", dec("acct-bo", "bo", storeNow.Add(2*time.Minute)), storeNow.Add(2*time.Minute))
-	if err != nil {
-		t.Fatalf("second decision: %v", err)
-	}
-	if r.State != approval.StateApproved {
-		t.Fatalf("after 2 of 2: state = %v, want approved", r.State)
-	}
-	if !r.Satisfied(storeNow.Add(3 * time.Minute)) {
-		t.Error("a fully approved, unexpired Request must be satisfied")
-	}
-}
-
-// TestRecordDecisionRejectsDuplicateDecider checks the guard holds through the
-// store, where the UNIQUE(request_id, account_id) constraint backs it up.
-func TestRecordDecisionRejectsDuplicateDecider(t *testing.T) {
-	ctx := context.Background()
-	repo := approvalStore(t)
-	if err := repo.Create(ctx, pendingRequest("req-1", "hash-a", 2, time.Hour)); err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-	d := approval.Decision{AccountID: "acct-ana", Account: "ana", Approve: true, Channel: approval.ChannelOutOfBand, PlanHash: "hash-a", At: storeNow.Add(time.Minute)}
-
-	if _, err := repo.RecordDecision(ctx, "req-1", d, storeNow.Add(time.Minute)); err != nil {
-		t.Fatalf("first: %v", err)
-	}
-	if _, err := repo.RecordDecision(ctx, "req-1", d, storeNow.Add(2*time.Minute)); !errors.Is(err, approval.ErrDuplicateDecider) {
-		t.Fatalf("second by the same account: err = %v, want ErrDuplicateDecider", err)
-	}
-
-	// And the rejected decision must not have been written.
-	r, err := repo.Get(ctx, "req-1")
-	if err != nil {
-		t.Fatalf("Get: %v", err)
-	}
-	if len(r.Decisions) != 1 {
-		t.Errorf("stored %d decisions, want 1 — a rejected decision must not be persisted", len(r.Decisions))
+	if len(reread.Decisions) != 1 {
+		t.Errorf("stored %d decisions, want 1: a refused decision must not be persisted", len(reread.Decisions))
 	}
 }
 
@@ -153,7 +125,7 @@ func TestRecordDecisionReturnsTheCurrentRequestOnRefusal(t *testing.T) {
 
 	t.Run("already approved with a bound Job", func(t *testing.T) {
 		repo := approvalStore(t)
-		if err := repo.Create(ctx, pendingRequest("req-1", "hash-a", 1, time.Hour)); err != nil {
+		if err := repo.Create(ctx, pendingRequest("req-1", "hash-a", time.Hour)); err != nil {
 			t.Fatalf("Create: %v", err)
 		}
 		d := approval.Decision{AccountID: "acct-ana", Account: "ana", Approve: true, Channel: approval.ChannelOutOfBand, PlanHash: "hash-a", At: storeNow.Add(time.Minute)}
@@ -188,39 +160,9 @@ func TestRecordDecisionReturnsTheCurrentRequestOnRefusal(t *testing.T) {
 		}
 	})
 
-	t.Run("duplicate decider", func(t *testing.T) {
-		repo := approvalStore(t)
-		if err := repo.Create(ctx, pendingRequest("req-2", "hash-b", 2, time.Hour)); err != nil {
-			t.Fatalf("Create: %v", err)
-		}
-		d := approval.Decision{AccountID: "acct-ana", Account: "ana", Approve: true, Channel: approval.ChannelOutOfBand, PlanHash: "hash-b", At: storeNow.Add(time.Minute)}
-		if _, err := repo.RecordDecision(ctx, "req-2", d, storeNow.Add(time.Minute)); err != nil {
-			t.Fatalf("first decision: %v", err)
-		}
-
-		got, err := repo.RecordDecision(ctx, "req-2", d, storeNow.Add(2*time.Minute))
-		if !errors.Is(err, approval.ErrDuplicateDecider) {
-			t.Fatalf("err = %v, want ErrDuplicateDecider", err)
-		}
-		if got.State != approval.StatePending {
-			t.Errorf("State = %v, want it still pending (1 of 2)", got.State)
-		}
-		if len(got.Decisions) != 1 {
-			t.Errorf("Decisions = %d, want 1", len(got.Decisions))
-		}
-
-		reread, err := repo.Get(ctx, "req-2")
-		if err != nil {
-			t.Fatalf("Get: %v", err)
-		}
-		if len(reread.Decisions) != 1 {
-			t.Errorf("a rejected duplicate must not have persisted anything new: %+v", reread)
-		}
-	})
-
 	t.Run("lapsed but not swept", func(t *testing.T) {
 		repo := approvalStore(t)
-		if err := repo.Create(ctx, pendingRequest("req-3", "hash-c", 1, time.Minute)); err != nil {
+		if err := repo.Create(ctx, pendingRequest("req-3", "hash-c", time.Minute)); err != nil {
 			t.Fatalf("Create: %v", err)
 		}
 
@@ -251,10 +193,10 @@ func TestExpirePendingRetiresOnlyLapsedRequests(t *testing.T) {
 	ctx := context.Background()
 	repo := approvalStore(t)
 
-	if err := repo.Create(ctx, pendingRequest("short", "hash-short", 1, time.Minute)); err != nil {
+	if err := repo.Create(ctx, pendingRequest("short", "hash-short", time.Minute)); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if err := repo.Create(ctx, pendingRequest("long", "hash-long", 1, 8*time.Hour)); err != nil {
+	if err := repo.Create(ctx, pendingRequest("long", "hash-long", 8*time.Hour)); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
@@ -306,11 +248,11 @@ func TestApprovals_CountWaitingCountsOnlyAnswerablePending(t *testing.T) {
 	}
 
 	for _, r := range []approval.Request{
-		pendingRequest("future", "hash-future", 1, 8*time.Hour),
-		pendingRequest("lapsed", "hash-lapsed", 1, time.Minute),
-		pendingRequest("approved", "hash-approved", 1, 8*time.Hour),
-		pendingRequest("denied", "hash-denied", 1, 8*time.Hour),
-		pendingRequest("expired", "hash-expired", 1, time.Minute),
+		pendingRequest("future", "hash-future", 8*time.Hour),
+		pendingRequest("lapsed", "hash-lapsed", time.Minute),
+		pendingRequest("approved", "hash-approved", 8*time.Hour),
+		pendingRequest("denied", "hash-denied", 8*time.Hour),
+		pendingRequest("expired", "hash-expired", time.Minute),
 	} {
 		if err := repo.Create(ctx, r); err != nil {
 			t.Fatalf("Create %s: %v", r.ID, err)
@@ -345,7 +287,7 @@ func TestApprovals_CountWaitingCountsOnlyAnswerablePending(t *testing.T) {
 func TestExpiredRequestIsNotDecidable(t *testing.T) {
 	ctx := context.Background()
 	repo := approvalStore(t)
-	if err := repo.Create(ctx, pendingRequest("req-1", "hash-a", 1, time.Minute)); err != nil {
+	if err := repo.Create(ctx, pendingRequest("req-1", "hash-a", time.Minute)); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	if _, err := repo.ExpirePending(ctx, storeNow.Add(time.Hour)); err != nil {
@@ -358,163 +300,14 @@ func TestExpiredRequestIsNotDecidable(t *testing.T) {
 	}
 }
 
-// --- #608: a blank audience entry must never be storable, and a stored row
-// that somehow carries one must fail closed rather than read back
-// unrestricted ---
-
-// TestCreateRefusesBlankAudienceEntry: the comma-joined require_audience
-// column cannot represent a lone blank entry, so Create must refuse rather
-// than write a row that would read back unrestricted.
-func TestCreateRefusesBlankAudienceEntry(t *testing.T) {
-	ctx := context.Background()
-	repo := approvalStore(t)
-
-	for _, tc := range []struct {
-		name     string
-		audience []string
-	}{
-		{name: "lone blank", audience: []string{""}},
-		{name: "named account plus blank", audience: []string{"ana", ""}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			r := pendingRequest("req-blank", "hash-blank", 1, time.Hour)
-			r.Require.Audience = tc.audience
-
-			if err := repo.Create(ctx, r); !errors.Is(err, approval.ErrAudienceBlankEntry) {
-				t.Fatalf("Create: err = %v, want errors.Is(err, ErrAudienceBlankEntry)", err)
-			}
-			if _, err := repo.Get(ctx, "req-blank"); !errors.Is(err, approval.ErrNotFound) {
-				t.Fatalf("Get after a refused Create: err = %v, want ErrNotFound — nothing must have been written", err)
-			}
-		})
-	}
-}
-
-// TestStoredAudienceWithBlankEntryFailsClosed simulates a row Create can no
-// longer produce (a prior build, or an ApprovalGate implementation other than
-// *approval.Gate): the require_audience column corrupted directly via SQL.
-// The read must PRESERVE the blank entry rather than filter it, and every
-// decision path must fail closed on it.
-func TestStoredAudienceWithBlankEntryFailsClosed(t *testing.T) {
-	ctx := context.Background()
-
-	for _, tc := range []struct {
-		name   string
-		column string
-	}{
-		// "ana," and "ana, ,bo" are the sharpest proofs that a malformed
-		// stored audience admits NO decider: both scan to an audience
-		// containing a previously-named account plus a blank, and pre-fix a
-		// decision by that named account would have gone through unrefused.
-		// They do not reproduce this issue's own worked example, though: a
-		// column of exactly "" (from a stored Audience of [""]) scans back
-		// byte-identical to a genuinely unrestricted audience, so that legacy
-		// row can never be distinguished from an intentionally unrestricted
-		// one by any read, so it is not — and cannot be — exercised here.
-		// "," and " " also fail
-		// closed, but their stored column scans to an audience with no
-		// named account at all either way.
-		{name: "trailing comma", column: "ana,"},
-		{name: "lone comma", column: ","},
-		{name: "lone space", column: " "},
-		{name: "named plus two blanks", column: "ana, ,bo"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			st, db := openStore(t)
-			repo := st.Approvals()
-
-			r := pendingRequest("req-corrupt", "hash-corrupt", 1, time.Hour)
-			r.Require.Audience = []string{"ana"}
-			if err := repo.Create(ctx, r); err != nil {
-				t.Fatalf("Create: %v", err)
-			}
-			if _, err := db.ExecContext(ctx,
-				`UPDATE approval_requests SET require_audience = ? WHERE request_id = ?`,
-				tc.column, "req-corrupt"); err != nil {
-				t.Fatalf("corrupt require_audience: %v", err)
-			}
-
-			got, err := repo.Get(ctx, "req-corrupt")
-			if err != nil {
-				t.Fatalf("Get: %v", err)
-			}
-			if !got.Require.AudienceMalformed() {
-				t.Fatalf("AudienceMalformed() = false for stored column %q, want true (audience preserved as %v)",
-					tc.column, got.Require.Audience)
-			}
-
-			d := approval.Decision{
-				AccountID: "acct-ana", Account: "ana", Approve: true,
-				Channel: approval.ChannelOutOfBand, PlanHash: "hash-corrupt", At: storeNow.Add(time.Minute),
-			}
-			if _, err := repo.RecordDecision(ctx, "req-corrupt", d, storeNow.Add(time.Minute)); !errors.Is(err, approval.ErrNotInAudience) {
-				t.Fatalf("RecordDecision by a previously-named account: err = %v, want ErrNotInAudience", err)
-			}
-
-			reread, err := repo.Get(ctx, "req-corrupt")
-			if err != nil {
-				t.Fatalf("Get after refused decision: %v", err)
-			}
-			if len(reread.Decisions) != 0 || reread.State != approval.StatePending {
-				t.Fatalf("a refused decision must not be recorded: decisions=%d state=%v", len(reread.Decisions), reread.State)
-			}
-
-			// A malformed pending Request must still be able to expire — the
-			// read never errors on it, and the sweeper must not be able to
-			// get stuck on a row it cannot parse.
-			expired, err := repo.ExpirePending(ctx, storeNow.Add(2*time.Hour))
-			if err != nil {
-				t.Fatalf("ExpirePending: %v", err)
-			}
-			if len(expired) != 1 || expired[0].ID != "req-corrupt" || expired[0].State != approval.StateExpired {
-				t.Fatalf("ExpirePending = %v, want the corrupted row to expire normally", expired)
-			}
-		})
-	}
-}
-
-// TestUnrestrictedAudienceStillRoundTripsAsUnrestricted is the regression
-// guard on the fix itself: a genuinely empty audience (the documented
-// "unrestricted") must still round-trip as empty and admit any decider, the
-// exact behaviour a malformed-audience check must not disturb.
-func TestUnrestrictedAudienceStillRoundTripsAsUnrestricted(t *testing.T) {
-	ctx := context.Background()
-	repo := approvalStore(t)
-
-	r := pendingRequest("req-open", "hash-open", 1, time.Hour)
-	r.Require.Audience = nil
-	if err := repo.Create(ctx, r); err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-
-	got, err := repo.Get(ctx, "req-open")
-	if err != nil {
-		t.Fatalf("Get: %v", err)
-	}
-	if len(got.Require.Audience) != 0 {
-		t.Fatalf("Audience = %v, want empty", got.Require.Audience)
-	}
-	if got.Require.AudienceMalformed() {
-		t.Fatal("AudienceMalformed() = true for a genuinely empty audience, want false")
-	}
-
-	d := approval.Decision{
-		AccountID: "acct-cy", Account: "cy", Approve: true,
-		Channel: approval.ChannelOutOfBand, PlanHash: "hash-open", At: storeNow.Add(time.Minute),
-	}
-	if _, err := repo.RecordDecision(ctx, "req-open", d, storeNow.Add(time.Minute)); err != nil {
-		t.Fatalf("RecordDecision by an unlisted account against an unrestricted audience: %v", err)
-	}
-}
-
 // TestByPlanHashReturnsTheMostRecent is what the dispatch path relies on to
 // release an approved Plan.
 func TestByPlanHashReturnsTheMostRecent(t *testing.T) {
 	ctx := context.Background()
 	repo := approvalStore(t)
 
-	older := pendingRequest("older", "hash-a", 1, time.Hour)
-	newer := pendingRequest("newer", "hash-a", 1, time.Hour)
+	older := pendingRequest("older", "hash-a", time.Hour)
+	newer := pendingRequest("newer", "hash-a", time.Hour)
 	newer.CreatedAt = storeNow.Add(time.Hour)
 	newer.ExpiresAt = newer.CreatedAt.Add(time.Hour)
 	if err := repo.Create(ctx, older); err != nil {
@@ -542,7 +335,7 @@ func TestByPlanHashReturnsTheMostRecent(t *testing.T) {
 func TestBindJobJoinsApprovalToExecution(t *testing.T) {
 	ctx := context.Background()
 	repo := approvalStore(t)
-	if err := repo.Create(ctx, pendingRequest("req-1", "hash-a", 1, time.Hour)); err != nil {
+	if err := repo.Create(ctx, pendingRequest("req-1", "hash-a", time.Hour)); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	// BindJob is the release claim (AP-77): it only binds a Satisfied
@@ -584,7 +377,7 @@ func approveRequest(t *testing.T, repo approval.Repository, id, planHash string,
 func TestBindJob_BindsOnceAndReportsTheBoundJob(t *testing.T) {
 	ctx := context.Background()
 	repo := approvalStore(t)
-	if err := repo.Create(ctx, pendingRequest("req-1", "hash-a", 1, time.Hour)); err != nil {
+	if err := repo.Create(ctx, pendingRequest("req-1", "hash-a", time.Hour)); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	approveRequest(t, repo, "req-1", "hash-a", storeNow.Add(time.Minute))
@@ -633,7 +426,7 @@ func TestBindJob_RefusesAnUnreleasableRequest(t *testing.T) {
 
 	t.Run("pending", func(t *testing.T) {
 		repo := approvalStore(t)
-		if err := repo.Create(ctx, pendingRequest("req-1", "hash-a", 1, time.Hour)); err != nil {
+		if err := repo.Create(ctx, pendingRequest("req-1", "hash-a", time.Hour)); err != nil {
 			t.Fatalf("Create: %v", err)
 		}
 		if _, err := repo.BindJob(ctx, "req-1", "job-1", storeNow); !errors.Is(err, approval.ErrNotReleasable) {
@@ -646,7 +439,7 @@ func TestBindJob_RefusesAnUnreleasableRequest(t *testing.T) {
 
 	t.Run("past its deadline", func(t *testing.T) {
 		repo := approvalStore(t)
-		if err := repo.Create(ctx, pendingRequest("req-1", "hash-a", 1, time.Minute)); err != nil {
+		if err := repo.Create(ctx, pendingRequest("req-1", "hash-a", time.Minute)); err != nil {
 			t.Fatalf("Create: %v", err)
 		}
 		approveRequest(t, repo, "req-1", "hash-a", storeNow.Add(30*time.Second))
@@ -657,7 +450,7 @@ func TestBindJob_RefusesAnUnreleasableRequest(t *testing.T) {
 
 	t.Run("denied", func(t *testing.T) {
 		repo := approvalStore(t)
-		if err := repo.Create(ctx, pendingRequest("req-1", "hash-a", 1, time.Hour)); err != nil {
+		if err := repo.Create(ctx, pendingRequest("req-1", "hash-a", time.Hour)); err != nil {
 			t.Fatalf("Create: %v", err)
 		}
 		d := approval.Decision{AccountID: "acct-ana", Account: "ana", Approve: false, Channel: approval.ChannelOutOfBand, PlanHash: "hash-a", At: storeNow.Add(time.Minute)}
@@ -687,7 +480,7 @@ func TestBindJob_RefusesAnUnreleasableRequest(t *testing.T) {
 func TestBindJob_ConcurrentClaimsExactlyOneWins(t *testing.T) {
 	ctx := context.Background()
 	repo := approvalStore(t)
-	if err := repo.Create(ctx, pendingRequest("req-1", "hash-a", 1, time.Hour)); err != nil {
+	if err := repo.Create(ctx, pendingRequest("req-1", "hash-a", time.Hour)); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	approveRequest(t, repo, "req-1", "hash-a", storeNow.Add(time.Minute))
@@ -765,7 +558,7 @@ func TestApprovalRoundTripPreservesTheDecisionFacts(t *testing.T) {
 	}
 	want := approval.NewRequest("req-raw", "hash-raw", "acct-g", "gleipnir-prod",
 		rawExec, []string{"node-a"}, []string{"raw-exec-always-asks"},
-		approval.Requirement{Count: 1, RequesterAllowed: false, Channel: approval.ChannelOutOfBand, TTL: time.Hour},
+		approval.Requirement{TTL: time.Hour},
 		storeNow)
 	if err := repo.Create(ctx, want); err != nil {
 		t.Fatalf("Create: %v", err)
@@ -821,6 +614,79 @@ func openStore(t *testing.T) (*Store, *sql.DB) {
 	return st, st.db
 }
 
+// TestApprovals_RequireColumnsWrittenAsConstants: the historical require_*
+// columns are written as constants and never from the Request (ADR-0047).
+func TestApprovals_RequireColumnsWrittenAsConstants(t *testing.T) {
+	ctx := context.Background()
+	st, db := openStore(t)
+
+	if err := st.Approvals().Create(ctx, pendingRequest("req-new", "hash-new", time.Hour)); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	var (
+		count, allowed, channel int
+		audience                string
+	)
+	if err := db.QueryRow(`SELECT require_count, require_audience, requester_allowed, require_channel
+		FROM approval_requests WHERE request_id = ?`, "req-new").Scan(&count, &audience, &allowed, &channel); err != nil {
+		t.Fatalf("read columns: %v", err)
+	}
+	if count != 1 || audience != "" || allowed != 1 || channel != 0 {
+		t.Errorf("columns = %d, %q, %d, %d, want 1, \"\", 1, 0", count, audience, allowed, channel)
+	}
+}
+
+// TestApprovals_HistoricalQuorumAndAudienceRowsReadBack: a row written under
+// the old rules, with a quorum, an audience and a channel requirement, reads
+// back without error, and the next accepted Decision ends it.
+//
+// Proves AP-82.
+func TestApprovals_HistoricalQuorumAndAudienceRowsReadBack(t *testing.T) {
+	ctx := context.Background()
+	st, db := openStore(t)
+	repo := st.Approvals()
+
+	if err := repo.Create(ctx, pendingRequest("req-old", "hash-old", time.Hour)); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := db.Exec(`UPDATE approval_requests
+		SET require_count = 2, require_audience = 'ana,bo', requester_allowed = 0, require_channel = 2
+		WHERE request_id = ?`, "req-old"); err != nil {
+		t.Fatalf("seed historical columns: %v", err)
+	}
+	// One prior approve: a legacy partial quorum.
+	if _, err := db.Exec(`INSERT INTO approval_decisions
+		(request_id, account_id, account, approve, reason, channel, plan_hash, decider_human, decided_at)
+		VALUES (?, 'acct-ana', 'ana', 1, '', 2, 'hash-old', 1, ?)`,
+		"req-old", formatTime(roundTripTime(storeNow.Add(time.Minute)))); err != nil {
+		t.Fatalf("seed prior decision: %v", err)
+	}
+
+	got, err := repo.Get(ctx, "req-old")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.State != approval.StatePending || len(got.Decisions) != 1 || got.Require.TTL != time.Hour {
+		t.Fatalf("historical row read back as %+v", got)
+	}
+	pending, err := repo.Pending(ctx)
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("Pending = %v, %v, want the historical row", pending, err)
+	}
+
+	bo := approval.Decision{AccountID: "acct-bo", Account: "bo", Approve: true, Channel: approval.ChannelOutOfBand, PlanHash: "hash-old", At: storeNow.Add(2 * time.Minute)}
+	ended, err := repo.RecordDecision(ctx, "req-old", bo, storeNow.Add(2*time.Minute))
+	if err != nil {
+		t.Fatalf("RecordDecision: %v", err)
+	}
+	if ended.State != approval.StateApproved || len(ended.Decisions) != 2 {
+		t.Fatalf("after the next Decision: state = %v, decisions = %d, want approved with 2", ended.State, len(ended.Decisions))
+	}
+	if _, err := repo.RecordDecision(ctx, "req-old", bo, storeNow.Add(3*time.Minute)); !errors.Is(err, approval.ErrNotPending) {
+		t.Fatalf("a further Decision: err = %v, want ErrNotPending", err)
+	}
+}
+
 // TestApprovals_CreateWritesNoShapeKey (AP-92): a new approval request records
 // no shape key; the stored column keeps its default, so a request is addressed
 // only by its ID and its plan hash.
@@ -828,7 +694,7 @@ func TestApprovals_CreateWritesNoShapeKey(t *testing.T) {
 	ctx := context.Background()
 	st, db := openStore(t)
 
-	if err := st.Approvals().Create(ctx, pendingRequest("req-new", "hash-new", 1, time.Hour)); err != nil {
+	if err := st.Approvals().Create(ctx, pendingRequest("req-new", "hash-new", time.Hour)); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	var key string
@@ -856,7 +722,7 @@ func TestOpen_LeavesStoredShapeKeysAlone(t *testing.T) {
 		"req-blank":  "",
 	}
 	for id, key := range stored {
-		if err := st.Approvals().Create(ctx, pendingRequest(id, "hash-"+id, 1, time.Hour)); err != nil {
+		if err := st.Approvals().Create(ctx, pendingRequest(id, "hash-"+id, time.Hour)); err != nil {
 			t.Fatalf("Create %s: %v", id, err)
 		}
 		if _, err := st.db.Exec(`UPDATE approval_requests SET shape_key = ? WHERE request_id = ?`, key, id); err != nil {

@@ -1545,14 +1545,9 @@ func TestElicitedAnswer_AStrayOnBehalfOfHeaderNeverReachesTheAssertedLane(t *tes
 // verified answer's domain refusal identically to how it classifies a named
 // one — run against both recognised client names, because acceptance never
 // reads the name (AP-86). recordingAnswerer is scripted here, so this proves
-// the adapter's classification only; the real domain's side (requester
-// exclusion, machine self-decision) is item 7's capability-seam proof
-// (TestDecideApproval_InBandHumanWithNoAssertedApproverIsVerified). Its
-// ErrRequesterExcluded row is "requester exclusion still refuses" at this
-// seam; requester exclusion is UNREACHABLE end to end at all (AP-61 never
-// asks where the rule excludes the requester, and the seal binds an answer
-// to the asking Account) — see
-// TestMCPElicitation_ClaudeCodeHumanAnswerMeetsTheSameRefusals's doc.
+// the adapter's classification only; the real domain's side (machine
+// self-decision) is item 7's capability-seam proof
+// (TestDecideApproval_InBandHumanWithNoAssertedApproverIsVerified).
 func TestElicitedAnswer_VerifiedFormMeetsTheSameRefusals(t *testing.T) {
 	p := oauthHumanPrincipal(t)
 	sealer, err := requeststate.Mint()
@@ -1568,23 +1563,7 @@ func TestElicitedAnswer_VerifiedFormMeetsTheSameRefusals(t *testing.T) {
 		wantOutcome  elicitedOutcome
 		wantNextStep string
 	}{
-		{name: "ErrRequesterExcluded", action: "accept", err: approval.ErrRequesterExcluded, wantOutcome: elicitedRefused, wantNextStep: answerRefusalNextStepRequesterExcluded},
-		{name: "ErrWeakChannel", action: "accept", err: approval.ErrWeakChannel, wantOutcome: elicitedRefused, wantNextStep: answerRefusalNextStepCannotAnswerHere},
-		{name: "ErrNotInAudience", action: "accept", err: approval.ErrNotInAudience, wantOutcome: elicitedRefused, wantNextStep: answerRefusalNextStepIneligibleAccount},
 		{name: "ErrPlanChanged", action: "accept", err: approval.ErrPlanChanged, wantOutcome: elicitedRefused, wantNextStep: answerRefusalNextStepUnchanged},
-		{
-			// A decline that lost the race to an out-of-band approval: the
-			// SAME shape TestElicitedAnswer_ClassifiesEveryOutcome exercises
-			// for the named path ("DECLINE, ErrNotPending, approved, no Job,
-			// not past deadline"), so ErrDuplicateDecider is proven here
-			// against the identical resp/action combination that row uses.
-			name:         "ErrDuplicateDecider, a decline that lost the race",
-			action:       "decline",
-			resp:         approval.Request{ID: answerRequestID, PlanHash: answerPlanHash, State: approval.StateApproved},
-			err:          approval.ErrDuplicateDecider,
-			wantOutcome:  elicitedRefused,
-			wantNextStep: answerRefusalNextStepDeclineNotRecorded,
-		},
 		{
 			name:         "ErrNotPending, a decline that lost the race",
 			action:       "decline",
@@ -1698,27 +1677,24 @@ func TestElicitedAnswer_ClassifiesEveryOutcome(t *testing.T) {
 			State:     state,
 			JobID:     jobID,
 			ExpiresAt: expiresAt,
-			Require:   approval.Requirement{Count: 2},
 			Decisions: []approval.Decision{{Approve: true}},
 		}
 	}
 
 	cases := []struct {
-		name         string
-		decline      bool
-		resp         approval.Request
-		err          error
-		wantOutcome  elicitedOutcome
-		wantErrIs    error
-		wantProgress string
-		checkState   bool
+		name        string
+		decline     bool
+		resp        approval.Request
+		err         error
+		wantOutcome elicitedOutcome
+		wantErrIs   error
+		checkState  bool
 	}{
 		{
-			name:         "nil err, approved, no Job",
-			resp:         otherReq(approval.StateApproved, "", future),
-			wantOutcome:  elicitedApproved,
-			wantProgress: "1 of 2",
-			checkState:   true,
+			name:        "nil err, approved, no Job",
+			resp:        otherReq(approval.StateApproved, "", future),
+			wantOutcome: elicitedApproved,
+			checkState:  true,
 		},
 		{
 			name:        "nil err, approved, JobID bound",
@@ -1733,11 +1709,11 @@ func TestElicitedAnswer_ClassifiesEveryOutcome(t *testing.T) {
 			checkState:  true,
 		},
 		{
-			name:         "nil err, still pending, 1 of 2",
-			resp:         otherReq(approval.StatePending, "", future),
-			wantOutcome:  elicitedStillPending,
-			wantProgress: "1 of 2",
-			checkState:   true,
+			name:        "nil err, still pending (a recorded decision always ends the request): fail closed",
+			resp:        otherReq(approval.StatePending, "", future),
+			wantOutcome: elicitedRefused,
+			wantErrIs:   errUnknownRequestState,
+			checkState:  true,
 		},
 		{
 			name:        "nil err, unrecognised State (fail closed default)",
@@ -1821,22 +1797,6 @@ func TestElicitedAnswer_ClassifiesEveryOutcome(t *testing.T) {
 			checkState:  true,
 		},
 		{
-			name:        "ErrDuplicateDecider, pending, not past deadline",
-			resp:        otherReq(approval.StatePending, "", future),
-			err:         approval.ErrDuplicateDecider,
-			wantOutcome: elicitedStillPending,
-			wantErrIs:   approval.ErrDuplicateDecider,
-			checkState:  true,
-		},
-		{
-			name:        "ErrDuplicateDecider, pending, past its deadline",
-			resp:        otherReq(approval.StatePending, "", past),
-			err:         approval.ErrDuplicateDecider,
-			wantOutcome: elicitedLapsed,
-			wantErrIs:   approval.ErrDuplicateDecider,
-			checkState:  true,
-		},
-		{
 			name:        "ErrNotPending with a zero Request",
 			resp:        approval.Request{},
 			err:         approval.ErrNotPending,
@@ -1852,32 +1812,11 @@ func TestElicitedAnswer_ClassifiesEveryOutcome(t *testing.T) {
 			checkState:  true,
 		},
 		{
-			name:        "ErrRequesterExcluded with an approved Request",
-			resp:        otherReq(approval.StateApproved, "job-1", future),
-			err:         approval.ErrRequesterExcluded,
-			wantOutcome: elicitedRefused,
-			wantErrIs:   approval.ErrRequesterExcluded,
-		},
-		{
-			name:        "ErrNotInAudience with an approved Request",
-			resp:        otherReq(approval.StateApproved, "", future),
-			err:         approval.ErrNotInAudience,
-			wantOutcome: elicitedRefused,
-			wantErrIs:   approval.ErrNotInAudience,
-		},
-		{
 			name:        "ErrMachineSelfDecision with an approved Request",
 			resp:        otherReq(approval.StateApproved, "", future),
 			err:         approval.ErrMachineSelfDecision,
 			wantOutcome: elicitedRefused,
 			wantErrIs:   approval.ErrMachineSelfDecision,
-		},
-		{
-			name:        "ErrWeakChannel with an approved Request",
-			resp:        otherReq(approval.StateApproved, "", future),
-			err:         approval.ErrWeakChannel,
-			wantOutcome: elicitedRefused,
-			wantErrIs:   approval.ErrWeakChannel,
 		},
 		{
 			name:        "ErrPlanChanged with an approved Request",
@@ -1927,12 +1866,6 @@ func TestElicitedAnswer_ClassifiesEveryOutcome(t *testing.T) {
 			}
 			if tc.wantErrIs != nil && !errors.Is(result.Err, tc.wantErrIs) {
 				t.Errorf("Err = %v, want errors.Is(_, %v)", result.Err, tc.wantErrIs)
-			}
-			if tc.wantProgress != "" && result.Progress != tc.wantProgress {
-				t.Errorf("Progress = %q, want %q", result.Progress, tc.wantProgress)
-			}
-			if tc.wantOutcome == elicitedRefused && result.Progress != "" {
-				t.Errorf("Progress = %q, want empty on a refusal", result.Progress)
 			}
 			// stateReported must agree with checkState exactly: it is the flag
 			// a caller's refusalOutput uses to decide whether State/JobID/
@@ -2035,9 +1968,6 @@ func TestElicitedAnswer_ARefusedDecisionExposesOnlyStateJobAndDeadline(t *testin
 				t.Errorf("rendered result contains %q, which came from another approver's Decision — it must never leak: %s", secret, rendered)
 			}
 		}
-		if result.Progress != "" {
-			t.Errorf("Progress = %q, want empty on a refusal", result.Progress)
-		}
 		if result.State != leaky.State || result.JobID != leaky.JobID || !result.ExpiresAt.Equal(leaky.ExpiresAt) {
 			t.Errorf("State/JobID/ExpiresAt = %v/%q/%v, want %v/%q/%v",
 				result.State, result.JobID, result.ExpiresAt, leaky.State, leaky.JobID, leaky.ExpiresAt)
@@ -2077,10 +2007,10 @@ func TestDecisionOutput_ChoosesNextStepFromOutcomeAndDispatchResult(t *testing.T
 			wantNextStep: nextStepRanThePipeline + " " + nextStepAnswerNotRecordedAlreadyDecided,
 		},
 		{
-			name:         "still pending, ErrDuplicateDecider, dispatch re-parked (observed, non-askable)",
-			result:       elicitedAnswerResult{Outcome: elicitedStillPending, State: approval.StatePending, Err: approval.ErrDuplicateDecider},
+			name:         "approved but ErrNotPending, dispatch re-parked (observed, non-askable)",
+			result:       elicitedAnswerResult{Outcome: elicitedApproved, State: approval.StateApproved, Err: approval.ErrNotPending},
 			after:        RunOrPlanOutput{PendingApproval: &PendingApprovalOutput{}},
-			wantNextStep: nextStepReParkedOnApproval + " " + nextStepAnswerNotRecordedDuplicateDecider,
+			wantNextStep: nextStepReParkedOnApproval + " " + nextStepAnswerNotRecordedAlreadyDecided,
 		},
 		{
 			name:           "Job-bound re-attach, recorded",
@@ -2204,12 +2134,6 @@ func TestRefusalOutput_ReasonArmsAndOrdering(t *testing.T) {
 			wantNextStep: answerRefusalNextStepRequestClosed,
 		},
 		{
-			name:         "arm 5: ErrRequesterExcluded says a different human must decide out-of-band, not that it can still be answered",
-			result:       elicitedAnswerResult{Err: approval.ErrRequesterExcluded, OnBehalfOf: "alice"},
-			wantReason:   renderApprovalError(approval.ErrRequesterExcluded).Error(),
-			wantNextStep: answerRefusalNextStepRequesterExcluded,
-		},
-		{
 			name:         "arm 5: capability.ErrApprovalUnavailable (decider never wired) says no endpoint can decide it",
 			result:       elicitedAnswerResult{Err: capability.ErrApprovalUnavailable},
 			wantReason:   renderApprovalError(capability.ErrApprovalUnavailable).Error(),
@@ -2310,32 +2234,9 @@ func TestRefusalOutput_NextStepNeverContradictsReason(t *testing.T) {
 			forbid: []string{stillAnswerable, "can still be decided"},
 		},
 		{
-			name:    "ErrWeakChannel: no in-band answer can ever satisfy this rule",
-			result:  elicitedAnswerResult{Err: approval.ErrWeakChannel, OnBehalfOf: "alice"},
-			forbid:  []string{stillAnswerable, "can still be decided"},
-			require: []string{"Control API's decision endpoint"},
-		},
-		{
-			name:    "ErrRequesterExcluded: this call runs in the requesting Account's own session, so no in-band answer can ever decide it",
-			result:  elicitedAnswerResult{Err: approval.ErrRequesterExcluded, OnBehalfOf: "alice"},
-			forbid:  []string{stillAnswerable, "approve_request"},
-			require: []string{"out-of-band"},
-		},
-		{
-			name:    "ErrNotInAudience: this Account is not in the named audience",
-			result:  elicitedAnswerResult{Err: approval.ErrNotInAudience, OnBehalfOf: "alice"},
-			forbid:  []string{stillAnswerable, "can still be decided"},
-			require: []string{"not in the request's audience"},
-		},
-		{
 			name:   "ErrNotPending, no Request read at all (stateReported false)",
 			result: elicitedAnswerResult{Err: approval.ErrNotPending, OnBehalfOf: "alice"},
 			forbid: []string{stillAnswerable, "can still be decided"},
-		},
-		{
-			name:   "ErrDuplicateDecider, no Request read at all (stateReported false)",
-			result: elicitedAnswerResult{Err: approval.ErrDuplicateDecider, OnBehalfOf: "alice"},
-			forbid: []string{stillAnswerable},
 		},
 		{
 			// classifyElicitedDecision never produces ErrNotPending with a
@@ -2348,26 +2249,9 @@ func TestRefusalOutput_NextStepNeverContradictsReason(t *testing.T) {
 			forbid: []string{stillAnswerable, "can still be decided"},
 		},
 		{
-			// Likewise unreachable from classifyElicitedDecision (a
-			// duplicate decider on an already-denied Request is classified
-			// elicitedDenied there, never routed through this refusal
-			// shape) — a unit check of refusalOutput alone.
-			name:   "ErrDuplicateDecider, Request read back terminal (denied): this Account's say is spent, not necessarily the request",
-			result: elicitedAnswerResult{Err: approval.ErrDuplicateDecider, OnBehalfOf: "alice", stateReported: true, State: approval.StateDenied},
-			forbid: []string{stillAnswerable},
-		},
-		{
 			name: "ErrNotPending, approved with no Job bound: a decline that lost the race, not recorded",
 			result: elicitedAnswerResult{
 				Err: approval.ErrNotPending, OnBehalfOf: "alice", stateReported: true, State: approval.StateApproved, JobID: "",
-			},
-			require: []string{"decline was not recorded"},
-			forbid:  []string{stillAnswerable},
-		},
-		{
-			name: "ErrDuplicateDecider, approved with no Job bound: a decline that lost the race, not recorded",
-			result: elicitedAnswerResult{
-				Err: approval.ErrDuplicateDecider, OnBehalfOf: "alice", stateReported: true, State: approval.StateApproved, JobID: "",
 			},
 			require: []string{"decline was not recorded"},
 			forbid:  []string{stillAnswerable},
@@ -2485,14 +2369,9 @@ func TestNextStepConstants_CarryNoReviewerReferences(t *testing.T) {
 	nextSteps := map[string]string{
 		"nextStepAnswerRecorded":                             nextStepAnswerRecorded,
 		"nextStepAnswerNotRecordedAlreadyDecided":            nextStepAnswerNotRecordedAlreadyDecided,
-		"nextStepAnswerNotRecordedDuplicateDecider":          nextStepAnswerNotRecordedDuplicateDecider,
 		"answerRefusalNextStepUnchanged":                     answerRefusalNextStepUnchanged,
-		"answerRefusalNextStepCannotAnswerHere":              answerRefusalNextStepCannotAnswerHere,
-		"answerRefusalNextStepIneligibleAccount":             answerRefusalNextStepIneligibleAccount,
-		"answerRefusalNextStepRequesterExcluded":             answerRefusalNextStepRequesterExcluded,
 		"answerRefusalNextStepNoSuchRequest":                 answerRefusalNextStepNoSuchRequest,
 		"answerRefusalNextStepRequestClosed":                 answerRefusalNextStepRequestClosed,
-		"answerRefusalNextStepAlreadyDecidedByThisAccount":   answerRefusalNextStepAlreadyDecidedByThisAccount,
 		"answerRefusalNextStepApprovalsUnavailable":          answerRefusalNextStepApprovalsUnavailable,
 		"answerRefusalNextStepDeclineNotRecorded":            answerRefusalNextStepDeclineNotRecorded,
 		"answerRefusalNextStepDeclineRecordedButNotHonoured": answerRefusalNextStepDeclineRecordedButNotHonoured,
@@ -2607,20 +2486,5 @@ func TestRecordedChannel_EmptyAccountIDRendersNothing(t *testing.T) {
 	req := approval.Request{Decisions: []approval.Decision{{AccountID: "", Channel: approval.ChannelInBand}}}
 	if got := recordedChannel(req, ""); got != "" {
 		t.Errorf("recordedChannel with an empty account id = %q, want empty", got)
-	}
-}
-
-// TestRefusalOutput_WeakChannelPointsAtTheControlAPI pins the rewritten
-// ErrWeakChannel text: a refused out-of-band rule names the Control API and
-// no tool.
-func TestRefusalOutput_WeakChannelPointsAtTheControlAPI(t *testing.T) {
-	out := elicitedAnswerResult{Err: approval.ErrWeakChannel}.refusalOutput()
-	for _, text := range []string{out.Reason, out.NextStep} {
-		if !strings.Contains(text, "Control API") || !strings.Contains(text, "out-of-band") {
-			t.Errorf("text = %q, want it to name the Control API and out-of-band", text)
-		}
-		if strings.Contains(text, "approve_request") || strings.Contains(text, "through this tool") {
-			t.Errorf("text = %q, must not point at a tool", text)
-		}
 	}
 }

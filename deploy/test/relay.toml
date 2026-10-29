@@ -5,15 +5,15 @@
 # every setting from this one file and nothing from its environment (ADR-0043, invariant 11).
 # Edit it here and bring the fleet up again: relay-config re-stages it and the Relay restarts.
 #
-# The approval gate (ADR-0027) is approval-gates.json beside this file, staged root-owned
-# 0644. It is Relay configuration, not a runtime object, so no Account can loosen it through
-# the API, and loading it is fail-closed: a malformed file fails startup. This one parks fleet-wide
-# mutates (fan-out >= 2) and every Raw Exec for `dev-approver`, out of band; a single-Node
-# mutate runs straight through, so both paths are exercised.
+# The approval gate (ADR-0027, ADR-0047) is the [[approval.rules]] sections at the foot of this
+# file. It is Relay configuration, not a runtime object, so no Account can loosen it through
+# the API, and a malformed rule fails startup. This one parks fleet-wide mutates (fan-out >= 2)
+# and every Raw Exec; a single-Node mutate runs straight through, so both paths are exercised.
+# One Decision ends a parked request: any Account whose role clears the floor decides, in-band
+# or on the Control API.
 #
-# The ca and store paths and gate_rules_path are fixed by the compose file, and tls.hostname
-# by FLEET_HOSTNAME (default `relay`, the name init and the daemons dial): /var/lib/relay is the Relay's only writable volume, and
-# relay-config stages the gate at /etc/relay/approval-gates.json.
+# The ca and store paths are fixed by the compose file, and tls.hostname
+# by FLEET_HOSTNAME (default `relay`, the name init and the daemons dial): /var/lib/relay is the Relay's only writable volume.
 
 # Node-plane gRPC listener (relay-daemon dial-home).
 [node_plane]
@@ -39,5 +39,13 @@ path = "/var/lib/relay/store/relay.db"
 [tls]
 hostname = "relay"
 
-[approval]
-gate_rules_path = "/etc/relay/approval-gates.json"
+[[approval.rules]]
+name = "dev-fleet-wide-mutates-need-a-human"
+risk_class = "mutate"
+min_fan_out = 2
+ttl = "1h"
+
+[[approval.rules]]
+name = "dev-raw-exec-always-needs-a-human"
+raw_exec = true
+ttl = "1h"

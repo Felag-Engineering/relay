@@ -28,42 +28,13 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/relaytest"
 )
 
-// gateAllMutatesInBandAskable is gateAllMutatesInBand
-// (mrtr_harness_e2e_test.go) with requester_allowed switched to true, so a
-// first-call park is askable (askableBy, capability/approval.go): channel
-// in-band, no audience restriction, RequesterAllowed true.
-const gateAllMutatesInBandAskable = `{
-  "rules": [
-    {
-      "name": "all-mutates-ask-in-band",
-      "match": { "risk_class": "mutate" },
-      "require": { "count": 1, "requester_allowed": true, "channel": "in-band", "ttl": "1h" }
-    }
-  ]
-}`
-
-// gateAllMutatesOutOfBandAskable is gateAllMutatesInBandAskable with its
-// channel switched to out-of-band — askableBy's first, unconditional term
-// (r.Require.Channel != ChannelInBand) refuses it regardless of
-// RequesterAllowed or audience, so this park is never askable no matter who
-// asks (AP-69).
-const gateAllMutatesOutOfBandAskable = `{
-  "rules": [
-    {
-      "name": "all-mutates-ask-out-of-band",
-      "match": { "risk_class": "mutate" },
-      "require": { "count": 1, "requester_allowed": true, "channel": "out-of-band", "ttl": "1h" }
-    }
-  ]
-}`
-
 // TestElicit_AskableParkFromMRTRClientGetsAQuestion is AP-60's e2e proof:
 // through the real composition root, with the option turned on ONLY via the
 // test-only hook, an askable park from an MRTR-capable, elicitation-advertising
 // client renders a question — not pending_approval — and dispatches nothing
 // (no Job, no Tasks — AP-2 preserved).
 func TestElicit_AskableParkFromMRTRClientGetsAQuestion(t *testing.T) {
-	f := startGatedRelay(t, gateAllMutatesInBandAskable, WithMCPServerOptions(mcp.WithApprovalElicitation()))
+	f := startGatedRelay(t, gateAllMutates, WithMCPServerOptions(mcp.WithApprovalElicitation()))
 
 	asked := relaytest.ConnectWithOptions(t, f.ControlBase, f.Client(), relaytest.ConnectOptions{
 		Client:     relaytest.ElicitingClientOptions(),
@@ -71,8 +42,8 @@ func TestElicit_AskableParkFromMRTRClientGetsAQuestion(t *testing.T) {
 	})
 
 	// The FIRST call creates the park (rather than observing one already
-	// pending), which is what makes it askable (askableBy's created/observed
-	// term, AP-62).
+	// pending), which is what makes it askable (the created/observed term,
+	// AP-62).
 	res := relaytest.CallToolWith(t, asked, &sdkmcp.CallToolParams{
 		Name:      "run_operation",
 		Arguments: restartNginxArgs(),
@@ -174,71 +145,6 @@ func TestElicit_AskableParkFromMRTRClientGetsAQuestion(t *testing.T) {
 	}
 }
 
-// TestElicit_OutOfBandParkNeverAsks is AP-69's e2e proof: through the real
-// gate (which computes Askable itself, unlike the mcp-handler-seam fixture's
-// hand-built ParkedError), an out-of-band rule's park is never askable, on
-// any client — MRTR-capable and elicitation-advertising, an ordinary client,
-// and a legacy client whose ElicitationHandler must never be called.
-func TestElicit_OutOfBandParkNeverAsks(t *testing.T) {
-	f := startGatedRelay(t, gateAllMutatesOutOfBandAskable, WithMCPServerOptions(mcp.WithApprovalElicitation()))
-
-	asked := relaytest.ConnectWithOptions(t, f.ControlBase, f.Client(), relaytest.ConnectOptions{
-		Client:     relaytest.ElicitingClientOptions(),
-		ClientName: relaytest.GleipnirClientName,
-	})
-
-	// The FIRST call, so a pass here cannot be explained by "the park was
-	// already observed, not created" (AP-62's other reason) — only the
-	// channel term.
-	res := relaytest.CallToolWith(t, asked, &sdkmcp.CallToolParams{
-		Name:      "run_operation",
-		Arguments: restartNginxArgs(),
-	})
-	if res.NeedsInput() {
-		t.Fatal("NeedsInput() = true, want false — an out-of-band gate's park must never be askable")
-	}
-	if res.RequestState != "" {
-		t.Errorf("RequestState = %q, want empty", res.RequestState)
-	}
-	var askedOut mcp.RunOrPlanOutput
-	relaytest.DecodeToolJSON(t, res, &askedOut)
-	if askedOut.PendingApproval == nil {
-		t.Fatalf("run_operation did not park: %+v", askedOut)
-	}
-
-	plain := relaytest.Connect(t, f.ControlBase, f.Client())
-	plainRes := relaytest.CallTool(t, plain, "run_operation", restartNginxArgs())
-	var plainOut mcp.RunOrPlanOutput
-	relaytest.DecodeToolJSON(t, plainRes, &plainOut)
-	if plainOut.PendingApproval == nil {
-		t.Fatalf("plain session's run_operation did not park: %+v", plainOut)
-	}
-
-	var elicitCalls atomic.Int32
-	legacy := relaytest.ConnectWithOptions(t, f.ControlBase, f.Client(), relaytest.ConnectOptions{
-		Client: &sdkmcp.ClientOptions{
-			Capabilities: &sdkmcp.ClientCapabilities{
-				Elicitation: &sdkmcp.ElicitationCapabilities{Form: &sdkmcp.FormElicitationCapabilities{}},
-			},
-			ElicitationHandler: func(context.Context, *sdkmcp.ElicitRequest) (*sdkmcp.ElicitResult, error) {
-				elicitCalls.Add(1)
-				return &sdkmcp.ElicitResult{Action: "decline"}, nil
-			},
-		},
-		Session:    &sdkmcp.ClientSessionOptions{ProtocolVersion: "2025-11-25"},
-		ClientName: relaytest.GleipnirClientName,
-	})
-	legacyRes := relaytest.CallTool(t, legacy, "run_operation", restartNginxArgs())
-	var legacyOut mcp.RunOrPlanOutput
-	relaytest.DecodeToolJSON(t, legacyRes, &legacyOut)
-	if legacyOut.PendingApproval == nil {
-		t.Fatalf("legacy session's run_operation did not park: %+v", legacyOut)
-	}
-	if calls := elicitCalls.Load(); calls != 0 {
-		t.Errorf("ElicitationHandler was called %d times, want 0 — no server-initiated elicitation/create either", calls)
-	}
-}
-
 // TestElicit_ElicitedParkEmitsNoTaskEnvelope_E2E is AP-85's e2e reinforcement:
 // the SDK client cannot hand-advertise the Tasks extension's
 // clientCapabilities (there is no ClientOptions knob for it —
@@ -249,7 +155,7 @@ func TestElicit_OutOfBandParkNeverAsks(t *testing.T) {
 // proves the same claim against a fake Executor at the mcp-handler seam;
 // this is the real gate and the real composition root together.
 func TestElicit_ElicitedParkEmitsNoTaskEnvelope_E2E(t *testing.T) {
-	f := startGatedRelay(t, gateAllMutatesInBandAskable, WithMCPServerOptions(mcp.WithApprovalElicitation()))
+	f := startGatedRelay(t, gateAllMutates, WithMCPServerOptions(mcp.WithApprovalElicitation()))
 
 	body, err := json.Marshal(map[string]any{
 		"jsonrpc": "2.0", "id": 9, "method": "tools/call",
@@ -332,7 +238,7 @@ func TestElicit_ElicitedParkEmitsNoTaskEnvelope_E2E(t *testing.T) {
 // mcp_elicitation_e2e_test.go's TestMCPElicitation_ApproveRunsTheJobAndReturnsResults
 // (S5) proves the same round trip, but only through the #721 test-only hook.
 func TestCompositionRoot_EnablesElicitation(t *testing.T) {
-	f := startGatedRelay(t, gateAllMutatesInBandAskable) // NO WithMCPServerOptions hook
+	f := startGatedRelay(t, gateAllMutates) // NO WithMCPServerOptions hook
 	token := mintAccount(t, f, elicitRequesterName, accounts.KindMachine, accounts.RoleAdmin)
 	session := connectEliciting(t, f, token)
 
@@ -391,7 +297,7 @@ func TestCompositionRoot_EnablesElicitation(t *testing.T) {
 // both still park exactly as before, and both requests are still decidable
 // on the Control API's decision endpoint.
 func TestCompositionRoot_ClientThatCannotBeAskedSeesNoChange(t *testing.T) {
-	f := startGatedRelay(t, gateAllMutatesInBandAskable) // NO WithMCPServerOptions hook
+	f := startGatedRelay(t, gateAllMutates) // NO WithMCPServerOptions hook
 	token := mintAccount(t, f, elicitRequesterName, accounts.KindMachine, accounts.RoleAdmin)
 
 	// Client A: 2026-07-28, but advertises no elicitation capability at all.
@@ -532,7 +438,7 @@ func TestCompositionRoot_ClientThatCannotBeAskedSeesNoChange(t *testing.T) {
 //
 // Proves AP-83.
 func TestCompositionRoot_RegistersNoDecisionTool(t *testing.T) {
-	f := startGatedRelay(t, gateAllMutatesInBandAskable) // NO WithMCPServerOptions hook
+	f := startGatedRelay(t, gateAllMutates) // NO WithMCPServerOptions hook
 	token := mintAccount(t, f, elicitRequesterName, accounts.KindMachine, accounts.RoleAdmin)
 	session := relaytest.Connect(t, f.ControlBase, f.ClientFor(token))
 

@@ -29,8 +29,8 @@ import (
 // # What this file may and may not assume
 //
 // It may hand an answer to the capability layer. It may NOT decide what an
-// answer means: the eligibility rules (requester exclusion, audience, quorum,
-// plan binding, channel strength, expiry) all live in package approval and are
+// answer means: the eligibility rules (machine self-decision, plan binding,
+// expiry, the first Decision ending a request) all live in package approval and are
 // enforced by Request.Decide on the way to the store. This file supplies three
 // facts and nothing else: WHO was authenticated, WHAT they answered, and which
 // sealed request and plan the answer is for.
@@ -156,9 +156,8 @@ func withAssertedApprover(ctx context.Context, approver string) context.Context 
 // carries (RunOrPlanOutput.Decision).
 type ApprovalDecisionOutput struct {
 	RequestID    string `json:"request_id" jsonschema:"The request that was answered."`
-	State        string `json:"state" jsonschema:"The request's state at the moment this answer was evaluated — the dispatch that follows may have moved it on further (for example a concurrent approval completing the quorum). One of pending (more approvals still required), approved, denied, or expired."`
-	Progress     string `json:"progress" jsonschema:"Quorum progress, e.g. '1 of 2'."`
-	Channel      string `json:"channel" jsonschema:"The channel the Relay recorded for this call's answer: 'in-band', because the answer arrived over the same session that requested the action, and rules requiring out-of-band strength are not satisfied by it. Empty when this call's answer was not recorded (for example the request was already decided by someone else)."`
+	State        string `json:"state" jsonschema:"The request's state at the moment this answer was evaluated — the dispatch that follows may have moved it on further (for example a concurrent approval releasing a Job). One of approved, denied, or expired."`
+	Channel      string `json:"channel" jsonschema:"The channel the Relay recorded for this call's answer: 'in-band', because the answer arrived over the same session that requested the action. Empty when this call's answer was not recorded (for example the request was already decided by someone else)."`
 	IdentifiedBy string `json:"identified_by" jsonschema:"How the Relay identified who decided: oauth_session (a human Account's OAuth session, verified), api_token_session (the API Token session's own Account), or responder_assertion (a responder the client asserted, on any other session). Empty when channel is empty."`
 	OnBehalfOf   string `json:"on_behalf_of" jsonschema:"The asserted approver identity recorded for this decision. Asserted, never verified. Empty when channel is empty, when the decision was the calling human's own verified answer with no asserted approver (an answer given on that human's own OAuth session, whatever the client), and when an API-token session's answer carried no responder."`
 	NextStep     string `json:"next_step" jsonschema:"What to do next."`
@@ -168,25 +167,14 @@ type ApprovalDecisionOutput struct {
 // Reason for the AI-agent.
 //
 // The domain's errors are deliberately not collapsed into one "refused": an
-// AI-agent that reads "already decided" should stop, one that reads "plan changed"
-// should re-read the queue, and one that reads "requires out-of-band" must send
-// a human elsewhere entirely. Same refusal, three different next actions.
+// AI-agent that reads "already decided" should stop, and one that reads "plan
+// changed" should re-read the queue. Same refusal, different next actions.
 func renderApprovalError(err error) error {
 	switch {
 	case errors.Is(err, approval.ErrNotFound):
 		return fmt.Errorf("no such approval request — it may have expired and been swept. Re-issue the original call to be asked afresh: %w", err)
-	case errors.Is(err, approval.ErrWeakChannel):
-		return fmt.Errorf("this request requires an out-of-band decision and cannot be answered in-band. "+
-			"A human must answer it on the Control API decision endpoint with their own credential: %w", err)
-	case errors.Is(err, approval.ErrRequesterExcluded):
-		return fmt.Errorf("this request requires a second person: the Account that asked for it may not answer it, "+
-			"whoever is relaying the answer. A different human must decide it out-of-band: %w", err)
 	// refusalOutput intercepts ErrMachineSelfDecision before it reaches here; a
 	// stray one falls to the generic default.
-	case errors.Is(err, approval.ErrNotInAudience):
-		return fmt.Errorf("this request names a specific audience, and this Account is not in it: %w", err)
-	case errors.Is(err, approval.ErrDuplicateDecider):
-		return fmt.Errorf("this Account has already decided this request; a second answer from the same Account is not a second approval: %w", err)
 	case errors.Is(err, approval.ErrPlanChanged):
 		return fmt.Errorf("the Plan moved since this request was shown, so this answer was not applied "+
 			"rather than approving something different from what was reviewed. Re-issue the original call to be asked afresh, "+
@@ -291,11 +279,8 @@ const (
 	// exists — the caller re-attaches to it (AP-67) rather than dispatching
 	// again.
 	elicitedApprovedJobBound
-	// elicitedDenied is terminal (AP-68): one denial ends the Request.
+	// elicitedDenied is terminal (AP-68): one Decision ends the Request.
 	elicitedDenied
-	// elicitedStillPending is a partial quorum: more distinct approvals are
-	// required than this one answer supplied.
-	elicitedStillPending
 	// elicitedLapsed is a Request that is expired, or that is no longer
 	// dispatchable because its deadline passed before a Job was bound.
 	elicitedLapsed
@@ -332,7 +317,7 @@ const (
 //
 // Callers branch on Outcome alone, never on whether Err is nil: Err is not a
 // "did this fail" flag. elicitedApproved and elicitedApprovedJobBound can
-// both carry a non-nil Err (ErrNotPending or ErrDuplicateDecider, the
+// both carry a non-nil Err (ErrNotPending, the
 // requestOnRefusal shape above) when the Request had already moved before
 // this answer landed — that is a recorded decision, not a failure, and the
 // Outcome says so. elicitedApprovedJobBound returned for a DECLINE means
@@ -343,15 +328,7 @@ const (
 // re-attaching to the existing Job (AP-67) is still safe, because it
 // dispatches nothing new.
 //
-// The contract for elicitedStillPending: the caller re-drives Execution.Run
-// with the same call to observe the park. The park it observes is not
-// askable (AP-62: a partial quorum is an OBSERVED park, not a created one),
-// so the caller renders pending_approval and asks no new question — it does
-// NOT "re-emit the elicitation", which does not happen for an observed park.
-// This type must never be widened to carry the Request or its Decisions just
-// to render progress — Progress (a count string) is the only quorum detail a
-// caller gets, and it is set ONLY when Err is nil (a recorded decision);
-// every refusal leaves it empty.
+// This type must never be widened to carry the Request or its Decisions.
 type elicitedAnswerResult struct {
 	Outcome elicitedOutcome
 	// RequestID and PlanHash are read from the verified SEAL, never from the
@@ -364,7 +341,7 @@ type elicitedAnswerResult struct {
 	ExpiresAt time.Time
 	// stateReported is true only where State/JobID/ExpiresAt were actually
 	// copied from capability's Request: classifyElicitedDecision's err == nil
-	// branch, and its ErrNotPending/ErrDuplicateDecider branch when req.ID !=
+	// branch, and its ErrNotPending branch when req.ID !=
 	// "". approval.StatePending is the zero value, so a zero State does not
 	// by itself mean "unknown" — without this flag, a refusal made before the
 	// answerer was even called (an unbound state, a malformed responder), or a
@@ -372,8 +349,6 @@ type elicitedAnswerResult struct {
 	// untrue. A caller rendering a refusal (refusalOutput) must copy
 	// State/JobID/ExpiresAt only when this is true.
 	stateReported bool
-	// Progress is set only when Err is nil; empty on every refusal.
-	Progress string
 	// Channel is the recorded Decision's channel, copied as a string, set only
 	// when Err is nil. One string copied from one Decision is not the Decisions.
 	Channel string
@@ -611,7 +586,7 @@ func recordedIdentification(req approval.Request, accountID string) string {
 // the state the domain already decided.
 //
 // req is the Request AnswerElicited returned; err is its error, or nil. On
-// ErrNotPending or ErrDuplicateDecider capability returns the Request as it
+// ErrNotPending capability returns the Request as it
 // now stands (requestOnRefusal); on every other domain refusal, and on a
 // non-domain (store/audit) failure, req is the zero value. approve is the
 // answer THAT WAS SENT (Action == "accept"), passed in rather than read off
@@ -623,7 +598,6 @@ func classifyElicitedDecision(req approval.Request, err error, approve bool, now
 			State:         req.State,
 			JobID:         req.JobID,
 			ExpiresAt:     req.ExpiresAt,
-			Progress:      req.Progress(),
 			stateReported: true,
 		}
 		switch {
@@ -637,35 +611,31 @@ func classifyElicitedDecision(req approval.Request, err error, approve bool, now
 			// nil — that would present the decliner's answer as an approval.
 			out.Outcome = elicitedRefused
 			out.Err = errDeclineNotHonoured
-			out.Progress = ""
 		case req.State == approval.StateApproved && req.JobID != "":
 			out.Outcome = elicitedApprovedJobBound
 		case req.State == approval.StateApproved:
 			out.Outcome = elicitedApproved
 		case req.State == approval.StateDenied:
 			out.Outcome = elicitedDenied
-		case req.State == approval.StatePending:
-			out.Outcome = elicitedStillPending
 		case req.State == approval.StateExpired:
 			out.Outcome = elicitedLapsed
 		default:
-			// Fail closed: an approval.State this switch does not recognise
-			// must never fall through to elicitedRefused's zero value with
+			// Fail closed: a recorded decision always ends the request, so a
+			// pending state here, like any state this switch does not
+			// recognise, must never fall through to elicitedRefused's zero value with
 			// Err left nil — that would read as "nothing happened" rather
 			// than "refused", contradicting the doc on elicitedAnswerResult.
 			out.Outcome = elicitedRefused
-			out.Progress = ""
 			out.Err = errUnknownRequestState
 		}
 		return out
 	}
 
-	if errors.Is(err, approval.ErrNotPending) || errors.Is(err, approval.ErrDuplicateDecider) {
+	if errors.Is(err, approval.ErrNotPending) {
 		if req.ID == "" {
-			// Eligibility (requester exclusion, machine self-decision,
-			// audience, channel strength) is checked AFTER Terminal/Expired
-			// inside the domain, so these two sentinels can also fire with no
-			// Request read at all (capability.Approval itself failed). See
+			// Eligibility (machine self-decision) is checked AFTER
+			// Terminal/Expired inside the domain, so this sentinel can also
+			// fire with no Request read at all (capability.Approval itself failed). See
 			// capability.requestOnRefusal.
 			return elicitedAnswerResult{Outcome: elicitedRefused, Err: err}
 		}
@@ -689,25 +659,19 @@ func classifyElicitedDecision(req approval.Request, err error, approve bool, now
 			out.Outcome = elicitedDenied
 		case req.State == approval.StateExpired:
 			out.Outcome = elicitedLapsed
-		case req.State == approval.StatePending && errors.Is(err, approval.ErrNotPending):
+		case req.State == approval.StatePending:
 			// capability refuses a Pending Request as not pending ONLY
 			// because its own clock found the deadline passed — so a Pending
 			// Request that is not yet past the deadline by THIS clock is
 			// clock skew between the two reads, and the Request is lapsed
 			// either way.
 			out.Outcome = elicitedLapsed
-		case req.State == approval.StatePending && errors.Is(err, approval.ErrDuplicateDecider):
-			if req.PastDeadline(now) {
-				out.Outcome = elicitedLapsed
-			} else {
-				out.Outcome = elicitedStillPending
-			}
 		}
 		return out
 	}
 
-	// Every other domain sentinel (ErrRequesterExcluded, ErrNotInAudience,
-	// ErrMachineSelfDecision, ErrWeakChannel, ErrPlanChanged, ErrNotFound),
+	// Every other domain sentinel (ErrMachineSelfDecision, ErrPlanChanged,
+	// ErrNotFound),
 	// capability.ErrApprovalUnavailable, and any non-domain error (including
 	// the audit-write failure, where capability still returns the updated
 	// Request — see DecideApproval, which AnswerElicited delegates to) all
@@ -755,11 +719,11 @@ var (
 // beside acceptElicitedAnswer.
 // -----------------------------------------------------------------------
 
-// The four "what happened to the call" texts decisionOutput's NextStep opens
+// The "what happened to the call" texts decisionOutput's NextStep opens
 // with, chosen from (Outcome, what the dispatch actually returned) rather
-// than from Outcome alone: a partial quorum
-// completing concurrently, a rule changing mid-retry, or a re-park can each
-// make the Outcome alone contradict what this response actually carries.
+// than from Outcome alone: a concurrent decision, a rule changing mid-retry, or
+// a re-park can each make the Outcome alone contradict what this response
+// actually carries.
 const (
 	nextStepDenialIsTerminal      = "a denial is terminal. Nothing ran; do not retry."
 	nextStepReattachedExistingJob = "the results shown are the Job this approval already released, re-attached. Nothing new was dispatched."
@@ -769,23 +733,17 @@ const (
 )
 
 // The two "what became of the answer" texts decisionOutput's NextStep ends
-// with. Chosen by r.Err rather than collapsed into one "not recorded" string:
-// ErrDuplicateDecider means THIS
-// Account already decided — the request need not be decided at all, quorum
-// may still be open — while every other non-nil r.Err reaching this function
-// (only ErrNotPending) means the request had already reached a resolution
-// before this answer arrived.
+// with. Chosen by r.Err: nil means this answer was recorded, and the only
+// non-nil r.Err reaching this function (ErrNotPending) means the request had
+// already reached a resolution before this answer arrived.
 const (
-	nextStepAnswerRecorded = "the answer was recorded (progress shown when the rule needs more)."
+	nextStepAnswerRecorded = "the answer was recorded."
 
 	// nextStepAnswerNotRecordedAlreadyDecided must never read as if the
 	// person who declined had approved — the state shown is the request's
 	// actual outcome, not this call's answer.
 	nextStepAnswerNotRecordedAlreadyDecided = "your answer was NOT recorded: the request had already reached a resolution " +
 		"(decided, or lapsed) before this call arrived (state shown)."
-
-	nextStepAnswerNotRecordedDuplicateDecider = "your answer was NOT recorded: this Account had already decided this request before " +
-		"this call arrived. Any progress or Job shown reflects other approvers' decisions, not this one."
 )
 
 // decisionOutput renders r as the decision block a successful branch of an
@@ -799,7 +757,6 @@ func (r elicitedAnswerResult) decisionOutput(after RunOrPlanOutput) *ApprovalDec
 	out := &ApprovalDecisionOutput{
 		RequestID: r.RequestID,
 		State:     r.State.String(),
-		Progress:  r.Progress,
 	}
 	if r.Err == nil {
 		// Channel is the channel the capability layer recorded for this answer;
@@ -827,13 +784,8 @@ func (r elicitedAnswerResult) decisionOutput(after RunOrPlanOutput) *ApprovalDec
 		part1 = nextStepNothingWasDispatched
 	}
 
-	var part2 string
-	switch {
-	case r.Err == nil:
-		part2 = nextStepAnswerRecorded
-	case errors.Is(r.Err, approval.ErrDuplicateDecider):
-		part2 = nextStepAnswerNotRecordedDuplicateDecider
-	default:
+	part2 := nextStepAnswerRecorded
+	if r.Err != nil {
 		part2 = nextStepAnswerNotRecordedAlreadyDecided
 	}
 
@@ -850,11 +802,7 @@ func (r elicitedAnswerResult) decisionOutput(after RunOrPlanOutput) *ApprovalDec
 func isKnownApprovalRefusal(err error) bool {
 	for _, sentinel := range []error{
 		approval.ErrNotFound,
-		approval.ErrWeakChannel,
-		approval.ErrRequesterExcluded,
 		approval.ErrMachineSelfDecision,
-		approval.ErrNotInAudience,
-		approval.ErrDuplicateDecider,
 		approval.ErrPlanChanged,
 		approval.ErrNotPending,
 		capability.ErrApprovalUnavailable,
@@ -874,33 +822,6 @@ func isKnownApprovalRefusal(err error) bool {
 const answerRefusalNextStepUnchanged = "this call left the request (if any) unchanged. " +
 	"It can still be decided on the Control API's decision endpoint."
 
-// answerRefusalNextStepCannotAnswerHere is refusalOutput's NextStep for
-// approval.ErrWeakChannel: the rule requires an out-of-band decision, so —
-// unlike every other refusal isKnownApprovalRefusal recognises — no in-band
-// answer can ever satisfy it. Sharing answerRefusalNextStepUnchanged's "it can
-// still be decided" here would contradict this refusal's own Reason.
-const answerRefusalNextStepCannotAnswerHere = "no in-band answer can decide this one. " +
-	"A human must decide it on the Control API's decision endpoint, with their own out-of-band credential."
-
-// answerRefusalNextStepIneligibleAccount is refusalOutput's NextStep for
-// approval.ErrNotInAudience: THIS Account is not in the request's named
-// audience, so saying "it can still be answered" without naming who by would
-// read as an invitation to retry with the same Account — but a different,
-// eligible Account can still decide it on the Control API (unlike
-// approval.ErrRequesterExcluded, which this session can never resolve: see
-// answerRefusalNextStepRequesterExcluded).
-const answerRefusalNextStepIneligibleAccount = "this Account is not in the request's audience. An Account in the " +
-	"audience must decide it, on the Control API's decision endpoint."
-
-// answerRefusalNextStepRequesterExcluded is refusalOutput's NextStep for
-// approval.ErrRequesterExcluded: this call runs in the requesting Account's
-// own MCP session — so unlike answerRefusalNextStepIneligibleAccount, no
-// Account reachable from this session can ever decide the request. Only the
-// Control API's decision endpoint, exercised by a different human with their
-// own credential, can.
-const answerRefusalNextStepRequesterExcluded = "the Account that asked cannot decide it. A different human must " +
-	"decide it out-of-band, on the Control API's decision endpoint with their own credential."
-
 // answerRefusalNextStepNoSuchRequest is refusalOutput's NextStep for
 // approval.ErrNotFound: there is no request at this id to answer at all, so
 // nothing is "still answerable" until the caller finds the right one.
@@ -914,15 +835,6 @@ const answerRefusalNextStepNoSuchRequest = "there is no request to answer here �
 const answerRefusalNextStepRequestClosed = "this request is no longer open (already decided, or expired); " +
 	"it cannot be decided again."
 
-// answerRefusalNextStepAlreadyDecidedByThisAccount is refusalOutput's
-// NextStep for approval.ErrDuplicateDecider outside the approved-with-no-Job
-// decline: only THIS Account's answer is redundant — unlike
-// answerRefusalNextStepRequestClosed, the request itself may still need more
-// approvals from someone else.
-const answerRefusalNextStepAlreadyDecidedByThisAccount = "this Account already decided this request; answering again " +
-	"from the same Account changes nothing. If the rule still needs more approvals, a different Account must supply " +
-	"them, on the Control API's decision endpoint."
-
 // answerRefusalNextStepApprovalsUnavailable is refusalOutput's NextStep for
 // capability.ErrApprovalUnavailable: no answerer is configured on this Relay
 // at all, so there is no endpoint — in-band or on the Control API — that can
@@ -931,7 +843,7 @@ const answerRefusalNextStepApprovalsUnavailable = "approvals are not configured 
 	"in-band or on the Control API, that can decide this request."
 
 // answerRefusalNextStepDeclineNotRecorded is refusalOutput's NextStep when a
-// decline was refused with ErrNotPending or ErrDuplicateDecider because the
+// decline was refused with ErrNotPending because the
 // request already stands approved with no Job bound: the caller must never
 // read this as if the decline had won.
 const answerRefusalNextStepDeclineNotRecorded = "the decline was not recorded: the request stands approved. This call dispatched nothing."
@@ -964,27 +876,15 @@ func (r elicitedAnswerResult) knownRefusalNextStep() string {
 	switch {
 	case errors.Is(r.Err, approval.ErrNotFound):
 		return answerRefusalNextStepNoSuchRequest
-	case errors.Is(r.Err, approval.ErrWeakChannel):
-		return answerRefusalNextStepCannotAnswerHere
-	case errors.Is(r.Err, approval.ErrRequesterExcluded):
-		return answerRefusalNextStepRequesterExcluded
-	case errors.Is(r.Err, approval.ErrNotInAudience):
-		return answerRefusalNextStepIneligibleAccount
-	case errors.Is(r.Err, approval.ErrNotPending), errors.Is(r.Err, approval.ErrDuplicateDecider):
+	case errors.Is(r.Err, approval.ErrNotPending):
 		// The decline-not-recorded text applies only when this landed on a
 		// request that stands approved with no Job bound — a decline that
-		// lost the race to an out-of-band approval. Otherwise ErrNotPending means the REQUEST is closed to
-		// everyone, while ErrDuplicateDecider means only THIS Account's say
-		// in it is spent — the request itself may still need more approvals
-		// from someone else, so the two get different text.
-		switch {
-		case r.stateReported && r.State == approval.StateApproved && r.JobID == "":
+		// lost the race to an out-of-band approval. Otherwise the REQUEST is
+		// closed to everyone.
+		if r.stateReported && r.State == approval.StateApproved && r.JobID == "" {
 			return answerRefusalNextStepDeclineNotRecorded
-		case errors.Is(r.Err, approval.ErrDuplicateDecider):
-			return answerRefusalNextStepAlreadyDecidedByThisAccount
-		default:
-			return answerRefusalNextStepRequestClosed
 		}
+		return answerRefusalNextStepRequestClosed
 	case errors.Is(r.Err, approval.ErrPlanChanged):
 		return answerRefusalNextStepUnchanged
 	default:

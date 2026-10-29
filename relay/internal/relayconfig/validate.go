@@ -10,8 +10,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Felag-Engineering/relay/relay/internal/approval"
 	"github.com/Felag-Engineering/relay/relay/internal/capability"
 	"github.com/Felag-Engineering/relay/relay/internal/consoleauth"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 	"github.com/Felag-Engineering/relay/relay/internal/registry"
 )
 
@@ -398,7 +400,7 @@ func httpURLProblem(s string) string {
 }
 
 func (v *validator) buildApproval(c *Config, d approvalDoc) {
-	c.Approval.GateRulesPath = v.path("approval.gate_rules_path", d.GateRulesPath)
+	c.Approval.Rules = v.gateRules(d.Rules)
 	c.Approval.WebhookURL = v.secretFile(keyWebhookURLFile, d.WebhookURLFile)
 	c.Approval.WebhookSecret = v.secretFile(keyWebhookSecFile, d.WebhookSecretFile)
 
@@ -408,6 +410,84 @@ func (v *validator) buildApproval(c *Config, d approvalDoc) {
 	if d.WebhookSecretFile != nil {
 		v.fail(keyWebhookSecFile, "requires approval.webhook_url_file; it would apply to no notification")
 	}
+}
+
+// failRule reports a refused field of rule i, on that field's own line. The
+// reason is schema text: it never carries the rule's name or a value (RC-18).
+func (v *validator) failRule(i int, field, reason string) {
+	v.errs = append(v.errs, &Error{
+		Key:    keyRules + "." + field,
+		Line:   v.idx.elemLine(keyRules, i, field),
+		Reason: reason,
+	})
+}
+
+// gateRules builds the gate rules from the [[approval.rules]] sections. An
+// absent section is a nil slice: nothing is gated (AP-89).
+func (v *validator) gateRules(p *[]ruleDoc) []approval.Rule {
+	if p == nil {
+		return nil
+	}
+	rules := make([]approval.Rule, 0, len(*p))
+	seen := map[string]bool{}
+	for i, d := range *p {
+		var r approval.Rule
+		switch {
+		case d.Name == nil:
+			v.failRule(i, "name", "must be set: a rule's name says which rule parked a request")
+		case strings.TrimSpace(*d.Name) == "":
+			v.failRule(i, "name", reasonEmpty)
+		case seen[strings.ToLower(*d.Name)]:
+			v.failRule(i, "name", "repeats an earlier rule's name; each rule's name must be unique")
+		default:
+			seen[strings.ToLower(*d.Name)] = true
+			r.Name = *d.Name
+		}
+		if d.RiskClass != nil {
+			class, ok := jobs.ParseRiskClass(*d.RiskClass)
+			if !ok {
+				v.failRule(i, "risk_class", "must be read or mutate")
+			}
+			r.Match.RiskClass = class
+		}
+		if d.MinFanOut != nil {
+			if *d.MinFanOut < 0 {
+				v.failRule(i, "min_fan_out", "must be at least 0")
+			} else {
+				r.Match.MinFanOut = *d.MinFanOut
+			}
+		}
+		if d.SelectorNamespace != nil {
+			if !approval.IsKnownNamespace(*d.SelectorNamespace) {
+				v.failRule(i, "selector_namespace", "must be one of node, relay, tag or state")
+			} else {
+				r.Match.SelectorNamespace = *d.SelectorNamespace
+			}
+		}
+		if d.Account != nil {
+			if *d.Account == "" {
+				v.failRule(i, "account", reasonEmpty)
+			}
+			r.Match.Account = *d.Account
+		}
+		if d.Operation != nil {
+			if *d.Operation == "" {
+				v.failRule(i, "operation", reasonEmpty)
+			}
+			r.Match.Operation = *d.Operation
+		}
+		r.Match.RawExec = boolOr(d.RawExec, false)
+		if d.TTL != nil {
+			ttl, err := time.ParseDuration(*d.TTL)
+			if err != nil || ttl <= 0 {
+				v.failRule(i, "ttl", "must be a positive duration such as \"1h\"")
+			} else {
+				r.Require.TTL = ttl
+			}
+		}
+		rules = append(rules, r)
+	}
+	return rules
 }
 
 // secretFile turns a secret's file key into a Secret that is resolved later

@@ -450,7 +450,6 @@ type PendingApprovalOutput struct {
 	Summary string `json:"summary" jsonschema:"The Relay-authored description of what is waiting, exactly as the approver will see it. Relay writes this text, not the caller — report it verbatim rather than paraphrasing, so what you tell a human matches what they are asked to approve."`
 
 	MatchedRules []string `json:"matched_rules" jsonschema:"Which approval-gate rules required a human for this dispatch. Always an array, never null."`
-	Progress     string   `json:"progress" jsonschema:"Partial quorum, e.g. '0 of 2' — how many of the required distinct approvals have been recorded."`
 	ExpiresAt    string   `json:"expires_at" jsonschema:"When the parked request lapses (RFC 3339). After this it can no longer be approved and the dispatch must be re-requested."`
 
 	// DecisionPath names the Control API route an approver uses. See the type

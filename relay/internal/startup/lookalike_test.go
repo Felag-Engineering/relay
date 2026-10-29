@@ -18,14 +18,12 @@ const lookalikeHeader = `package main
 import (
 	"crypto/ecdsa"
 
-	"github.com/Felag-Engineering/relay/relay/internal/approval"
 	"github.com/Felag-Engineering/relay/relay/internal/ca"
 	"github.com/Felag-Engineering/relay/relay/internal/startup"
 )
 
 var (
 	_ *ecdsa.PrivateKey
-	_ *approval.Gate
 	_ *ca.CA
 	_ startup.Files
 )
@@ -47,14 +45,12 @@ var lookalikes = map[string]string{
 `,
 	"startup.FromSealed": `	_, _ = startup.FromSealed(struct {
 		CA           *ca.CA
-		Gate         *approval.Gate
 		StorePath    string
 		RecheckStore func() error
 	}{StorePath: "/x", RecheckStore: func() error { return nil }})
 `,
 	"startup.FromSealed with a blank field": `	_, _ = startup.FromSealed(struct {
 		CA           *ca.CA
-		Gate         *approval.Gate
 		StorePath    string
 		RecheckStore func() error
 		_            struct{}

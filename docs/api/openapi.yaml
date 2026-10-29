@@ -269,8 +269,8 @@ paths:
         the expiry sweeper has not retired them yet, so the queue never
         advertises something undecidable.
 
-        Any authenticated caller may read it. A rule's `audience` restricts who
-        may **decide**, not who may see that a decision is owed.
+        Any authenticated caller may read it. The role floor restricts who may
+        **decide**, not who may see that a decision is owed.
       responses:
         "200":
           description: The pending approval queue.
@@ -326,16 +326,13 @@ paths:
         | Rule | Result |
         |---|---|
         | Role below what the Action needed to be **requested** | `403` |
-        | Decider outside the rule's `audience` | `403` |
         | Request already decided, or expired | `409` |
-        | Requester deciding their own request under `requester_allowed: false` | `409` |
         | A **machine** Account deciding its own request, under any configuration | `409` |
-        | The same Account filling a second quorum slot | `409` |
         | `plan_hash` no longer matches | `409` |
 
-        One denial is terminal: deny beats approve, mirroring Policy's
-        deny-beats-allow, so a second approver cannot override a colleague's
-        refusal.
+        The first Decision no refusal stops ends the request: an approving
+        Decision releases it and a denying one ends it, so a second Decision is
+        refused as not pending.
       requestBody:
         required: true
         content:
@@ -1829,7 +1826,7 @@ components:
         account_id: { type: string }
         approve:
           type: boolean
-          description: false is a denial, and one denial is terminal.
+          description: false is a denial. The first Decision ends the request, approving or denying.
         reason: { type: string }
         channel:
           type: string
@@ -1842,9 +1839,7 @@ components:
             evidence. Every decision made through this API is `out-of-band`.
         human:
           type: boolean
-          description: |
-            Whether a human Account answered. The second approver of a `count: 2`
-            request is entitled to know what kind of signature is already on it.
+          description: Whether a human Account answered.
         identified_by:
           type: string
           enum: [oauth_session, api_token_session, responder_assertion]
@@ -1866,8 +1861,7 @@ components:
         reintroduces the approval-view fidelity gap this design closes.
       required:
         [request_id, state, plan_hash, summary, action_kind, risk_class,
-         requested_by, matched_rules, required_count, requester_allowed,
-         channel, progress, decisions, created_at, expires_at]
+         requested_by, matched_rules, decisions, created_at, expires_at]
       properties:
         request_id: { type: string }
         state:
@@ -1894,7 +1888,7 @@ components:
           enum: [read, mutate, unspecified]
         requested_by:
           type: string
-          description: The verified requester. `requester_allowed` is evaluated against it.
+          description: The verified requester.
         requested_by_id: { type: string }
         matched_rules:
           type: array
@@ -1903,21 +1897,6 @@ components:
             Which gate rules parked this dispatch — the answer to "why am I being
             asked?". A gate that cannot explain itself trains operators to
             disable it.
-        required_count:
-          type: integer
-          description: Distinct approvals needed. Quorum means distinct Accounts.
-        audience:
-          type: array
-          items: { type: string }
-          description: Account names that may decide. Absent means unrestricted.
-        requester_allowed: { type: boolean }
-        channel:
-          type: string
-          enum: [in-band, out-of-band, unspecified]
-          description: The minimum channel strength a decision must arrive over.
-        progress:
-          type: string
-          description: Partial quorum, rendered for a human ("1 of 2").
         decisions:
           type: array
           items: { $ref: '#/components/schemas/ApprovalDecision' }
@@ -1967,7 +1946,7 @@ components:
         A dispatch that parked instead of running. It carries no `job_id` and no
         `results` field at all — a parked dispatch creates no Job, so there is
         nothing to poll and nothing to read back.
-      required: [status, request_id, plan_hash, summary, matched_rules, progress, expires_at, decision_path]
+      required: [status, request_id, plan_hash, summary, matched_rules, expires_at, decision_path]
       properties:
         status:
           type: string
@@ -1981,9 +1960,6 @@ components:
         matched_rules:
           type: array
           items: { type: string }
-        progress:
-          type: string
-          description: Partial quorum ("0 of 2").
         expires_at: { type: string, format: date-time }
         decision_path:
           type: string

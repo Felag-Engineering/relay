@@ -278,23 +278,31 @@ func TestStart_RefusesSymlinkedConfig(t *testing.T) {
 		link := layout.Symlink(t, real, "relay-link.toml")
 		wantInOutput(t, refusedStart(t, layout, bin, link), "a symbolic link is on the path")
 	})
-	t.Run("approval gate file", func(t *testing.T) {
-		bin, layout := shippableLayout(t)
-		gate := layout.WriteFile(t, "gates.json", `{"rules": []}`, "root", relaytest.TestUser, "0640")
-		link := layout.Symlink(t, gate, "gates-link.json")
-		cfg := layout.WriteConfig(t, layoutTOML(layout, freeAddr(t), "\n[approval]\ngate_rules_path = \""+link+"\"\n"))
-		wantInOutput(t, refusedStart(t, layout, bin, cfg), "approval gate", "a symbolic link is on the path")
-	})
 }
 
-// TestStart_RefusesMalformedGateFile is RC-35 on the shippable binary: a gate-rules file the
-// file check passes, root-owned and well placed, that cannot be parsed refuses start, naming
-// the approval gate; the Relay never runs ungated because its rules did not load.
-func TestStart_RefusesMalformedGateFile(t *testing.T) {
+// TestStart_RefusesGateRulesPath is RC-37 on the shippable binary: a configuration naming
+// approval.gate_rules_path is refused at start, naming the key, and never the path.
+func TestStart_RefusesGateRulesPath(t *testing.T) {
 	bin, layout := shippableLayout(t)
-	gate := layout.WriteFile(t, "gates.json", `{"rules": [`, "root", relaytest.TestUser, "0640")
-	cfg := layout.WriteConfig(t, layoutTOML(layout, freeAddr(t), "\n[approval]\ngate_rules_path = \""+gate+"\"\n"))
-	wantInOutput(t, refusedStart(t, layout, bin, cfg), "load approval gate config", "parse gate config")
+	cfg := layout.WriteConfig(t, layoutTOML(layout, freeAddr(t), "\n[approval]\ngate_rules_path = \"/etc/relay/CANARY.json\"\n"))
+	out := refusedStart(t, layout, bin, cfg)
+	wantInOutput(t, out, "approval.gate_rules_path")
+	if strings.Contains(out, "CANARY") {
+		t.Errorf("the refusal echoes the path:\n%s", out)
+	}
+}
+
+// TestStart_RefusesMalformedGateRule is AP-8 and AP-81 on the shippable binary: a gate rule
+// naming a field a rule no longer has refuses start, naming the field; the Relay never runs
+// ungated because its rules did not load.
+func TestStart_RefusesMalformedGateRule(t *testing.T) {
+	bin, layout := shippableLayout(t)
+	cfg := layout.WriteConfig(t, layoutTOML(layout, freeAddr(t), "\n[[approval.rules]]\nname = \"CANARY\"\ncount = 1\n"))
+	out := refusedStart(t, layout, bin, cfg)
+	wantInOutput(t, out, "approval.rules.count")
+	if strings.Contains(out, "CANARY") {
+		t.Errorf("the refusal echoes a rule name:\n%s", out)
+	}
 }
 
 // TestStart_RefusesGroupReadableStateOrKey is RC-17 on the shippable binary: the CA directory,

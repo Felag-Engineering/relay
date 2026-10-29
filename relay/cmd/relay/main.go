@@ -110,18 +110,17 @@ type Config struct {
 	// exists to catch.
 	CertExpiringFraction float64
 
-	// ApprovalGatePath is the approval-gate config (ADR-0027): which dispatches
-	// must park for a human. Same file-only mechanism as the blast caps, and the
-	// gate file is re-read on a host reload (RC-21) — a path read from the
-	// configuration file, never settable through any API, since
-	// a stolen credential that could edit its own approval requirements would
-	// make the mechanism decorative.
+	// ApprovalRules are the gate rules (ADR-0027, ADR-0047 decision 7): which
+	// dispatches must park for a human. They are the configuration file's
+	// [[approval.rules]] sections and are reloaded with it (RC-21) — never
+	// settable through any API, since a stolen credential that could edit its
+	// own approval requirements would make the mechanism decorative.
 	//
-	// EMPTY means no approval gates, which is safe because a gate can only add a reason to stop. A NON-EMPTY path that
-	// cannot be loaded refuses startup — a Relay that silently decided nothing
-	// needs approval because it could not read its own config is the exact
-	// failure this mechanism exists to prevent (approval.Load).
-	ApprovalGatePath string
+	// NONE means no approval gates, which is safe because a gate can only add a
+	// reason to stop. A rule that cannot be loaded refuses startup — a Relay
+	// that silently decided nothing needs approval because it could not read
+	// its own config is the exact failure this mechanism exists to prevent.
+	ApprovalRules []approval.Rule
 
 	// ApprovalWebhook* configure the out-of-band notification envelope
 	// (ADR-0027): where to push a Relay-authored notice that a dispatch has
@@ -331,17 +330,15 @@ const approvalsWaitingTimeout = 2 * time.Second
 // root with an empty serverHooks, so no test-only seam is ever populated on
 // the path main takes. See newServerWithHooks and serverHooks
 // (control_surfaces.go). files is what startup.Open read through the
-// start-time file check; newServer opens neither the CA nor the gate itself,
-// and opens the store at the path whose directory the check decided on.
+// start-time file check; newServer does not open the CA itself, and opens the
+// store at the path whose directory the check decided on.
 func newServer(cfg Config, files startup.Files) (*grpc.Server, *appDeps, error) {
 	return newServerWithHooks(cfg, files, serverHooks{})
 }
 
 func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*grpc.Server, *appDeps, error) {
 	if !files.Valid() {
-		// Never a default: an absent gate would read as "nothing needs
-		// approval", the failure approval.Load exists to prevent.
-		return nil, nil, errors.New("build server: the CA, the approval gate and the store directory were not read through the start-time file check")
+		return nil, nil, errors.New("build server: the CA and the store directory were not read through the start-time file check")
 	}
 	relayCA := files.CA()
 
@@ -619,15 +616,19 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 	// reason (capability's allowlist bars internal/audit).
 	queries := auditquery.New(st.AuditQueries(), st.JobQueries())
 
-	// The approval gate (ADR-0027), loaded by startup.Open before anything
-	// here was built: a load failure refuses start rather than degrading, so an
+	// The approval gate (ADR-0027), built from the configuration's rules: a rule
+	// that cannot be loaded refuses start rather than degrading (AP-8), so an
 	// empty Gate only ever means "no rules configured", never "the rules could
-	// not be read".
-	// The gate is held behind a swappable pointer so a reload replaces it whole.
+	// not be read". The gate is held behind a swappable pointer so a reload
+	// replaces it whole.
+	gate, err := approval.NewGate(cfg.ApprovalRules)
+	if err != nil {
+		return nil, nil, fmt.Errorf("build server: %w", err)
+	}
 	approvalGate := &liveGate{}
-	approvalGate.swap(files.Gate())
-	if n := len(files.Gate().Rules()); n > 0 {
-		slog.Info("approval gating enabled", "rules", n, "config", cfg.ApprovalGatePath)
+	approvalGate.swap(gate)
+	if n := len(cfg.ApprovalRules); n > 0 {
+		slog.Info("approval gating enabled", "rules", n)
 	}
 
 	// ONE RoleGate for the whole process. It answers both "who may dispatch
@@ -1075,7 +1076,7 @@ func main() {
 		slog.Warn(w.String())
 	}
 	cfg := sc.Config
-	files, err := startup.Open(cfg.ApprovalGatePath, cfg.CADir, cfg.StorePath)
+	files, err := startup.Open(cfg.CADir, cfg.StorePath)
 	if err != nil {
 		slog.Error("start-time file check refused", "err", err)
 		os.Exit(1)
@@ -1213,7 +1214,7 @@ func auditExpiry(ctx context.Context, deps *appDeps, r approval.Request) error {
 		Attribution: audit.Attribution{
 			Verified: audit.Verified{AccountID: r.RequestedByID, AccountName: r.RequestedBy},
 		},
-		Reason: fmt.Sprintf("approval request %s expired at %s without reaching %s (plan %s): %s",
-			r.ID, r.ExpiresAt.UTC().Format(time.RFC3339), r.Progress(), r.PlanHash, r.Summary),
+		Reason: fmt.Sprintf("approval request %s expired at %s without a decision (plan %s): %s",
+			r.ID, r.ExpiresAt.UTC().Format(time.RFC3339), r.PlanHash, r.Summary),
 	})
 }
