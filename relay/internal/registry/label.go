@@ -1,6 +1,6 @@
 package registry
 
-import "unicode/utf8"
+import "github.com/Felag-Engineering/relay/relay/internal/textbound"
 
 // WellFormedLabel reports whether (key, value) is safe to store as a Label in
 // EVERY stored namespace — safe meaning "renders as exactly one Selector
@@ -247,12 +247,5 @@ const MaxLoggedLabelKeyBytes = 128
 // The tunnel also bounds the wire hello.node_id with it, the same hazard: an
 // attacker-controlled string headed for a log.
 func BoundLogKey(k string) (bounded string, truncated bool) {
-	if len(k) <= MaxLoggedLabelKeyBytes {
-		return k, false
-	}
-	cut := MaxLoggedLabelKeyBytes
-	for cut > 0 && !utf8.RuneStart(k[cut]) {
-		cut--
-	}
-	return k[:cut], true
+	return textbound.Truncate(k, MaxLoggedLabelKeyBytes)
 }

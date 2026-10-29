@@ -57,7 +57,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/Felag-Engineering/relay/relay/internal/approval"
 	"github.com/Felag-Engineering/relay/relay/internal/audit"
@@ -66,6 +65,7 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 	"github.com/Felag-Engineering/relay/relay/internal/policyalias"
 	"github.com/Felag-Engineering/relay/relay/internal/registry"
+	"github.com/Felag-Engineering/relay/relay/internal/textbound"
 )
 
 // idGen mints a new unique audit Record ID. A seam so tests can inject
@@ -878,12 +878,6 @@ func (s *Sink) RecordLogin(ctx context.Context, e consoleauth.LoginEvent) error 
 // truncate bounds a caller-supplied string to n bytes, cutting on a rune
 // boundary so a truncated record never holds an invalid UTF-8 fragment.
 func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	cut := n
-	for cut > 0 && !utf8.RuneStart(s[cut]) {
-		cut--
-	}
-	return s[:cut]
+	bounded, _ := textbound.Truncate(s, n)
+	return bounded
 }
