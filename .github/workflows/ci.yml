@@ -75,6 +75,7 @@ jobs:
       proto: ${{ steps.paths.outputs.proto }}
       deps: ${{ steps.paths.outputs.deps }}
       packaging: ${{ steps.paths.outputs.packaging }}
+      release: ${{ steps.paths.outputs.release }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -180,6 +181,13 @@ jobs:
       - name: Changed-paths classifier self-test
         if: ${{ !cancelled() }}
         run: make test-ci-changed-paths
+
+      # scripts/ci-release-matrix.sh, CI OK's evidence for an install matrix only the release
+      # dry run ran, proved against a stubbed gh: it passes only on that run's every row passing.
+      # Bash and jq only, no token, no network.
+      - name: Release install-matrix evidence self-test
+        if: ${{ !cancelled() }}
+        run: make test-ci-release-matrix
 
       # scripts/install-matrix-platforms.sh, the DI-33 platform-list check below, proved against
       # fixture specs and workflows in both claim shapes. Bash and awk only.
@@ -559,12 +567,15 @@ jobs:
   # tooling-only change) and on every push to main; a red row blocks the merge through
   # ci-ok. Cancellation of a superseded run comes from this file's workflow-level
   # concurrency group.
+  # Run once: on a pull request that release.yml's own path filter also matches (`release=`),
+  # the release dry run runs this matrix on the release's packages, so this copy is skipped
+  # and ci-ok requires that run's matrix to have passed instead.
   # Cost shape: a job of its own, because it needs per-platform systemd containers on both
   # x86_64 and aarch64 runners, which no existing job has. ----
   install-matrix:
     name: Install matrix
     needs: docs
-    if: ${{ !cancelled() && needs.docs.outputs.packaging != 'false' && github.event.pull_request.draft != true }}
+    if: ${{ !cancelled() && needs.docs.outputs.packaging != 'false' && needs.docs.outputs.release != 'true' && github.event.pull_request.draft != true }}
     permissions:
       contents: read
     uses: ./.github/workflows/install-matrix.yml
@@ -577,21 +588,36 @@ jobs:
   # as passes. This job fails closed instead: it is red on a draft run, and green only
   # when Docs passed and every other job either passed or was skipped for the one
   # legitimate reason (the classifier said the change cannot reach it: `packaging=false` is
-  # the only excuse for a skipped install matrix). Require this
-  # check alone; the jobs it names stay visible for diagnosis.
+  # one excuse for a skipped install matrix). The other is `release=true` on a pull request,
+  # and it is not an excuse but a redirection: this job then waits for the release dry run
+  # for the PR's head commit and fails unless every row of that run's install matrix passed
+  # (scripts/ci-release-matrix.sh, reading the Actions API with this job's token). That wait
+  # is why the timeout is long: the dry run builds twice before its matrix starts. Require
+  # this check alone; the jobs it names stay visible for diagnosis.
   ci-ok:
     name: CI OK
     needs: [docs, relay, daemon, proto, integration, install-matrix]
     if: ${{ always() }}
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 90
+    permissions:
+      actions: read # the release dry run's jobs, for scripts/ci-release-matrix.sh
+      contents: read
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
       - name: Every gate this change needs ran and passed
         env:
           DRAFT: ${{ github.event.pull_request.draft }}
+          EVENT: ${{ github.event_name }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GH_TOKEN: ${{ github.token }}
           CODE: ${{ needs.docs.outputs.code }}
           PROTO: ${{ needs.docs.outputs.proto }}
           PACKAGING: ${{ needs.docs.outputs.packaging }}
+          RELEASE: ${{ needs.docs.outputs.release }}
           DOCS: ${{ needs.docs.result }}
           RELAY: ${{ needs.relay.result }}
           DAEMON: ${{ needs.daemon.result }}
@@ -620,7 +646,18 @@ jobs:
           check daemon "$DAEMON" "$CODE"
           check integration "$INTEGRATION" "$CODE"
           check proto "$PROTO_JOB" "$PROTO"
-          check install-matrix "$INSTALL_MATRIX" "$PACKAGING"
+          # A matrix skipped because the release dry run carries it passes only on that run's
+          # evidence, and only on a pull request: a push always runs CI's own copy.
+          if [ "$INSTALL_MATRIX" = skipped ] && [ "$PACKAGING" != "false" ] \
+            && [ "$RELEASE" = "true" ] && [ "$EVENT" = "pull_request" ]; then
+            if [ "$fail" -ne 0 ]; then
+              echo "::error::install-matrix: not waiting for the release dry run's matrix; a gate above already failed"
+            else
+              bash scripts/ci-release-matrix.sh "$HEAD_SHA" || fail=1
+            fi
+          else
+            check install-matrix "$INSTALL_MATRIX" "$PACKAGING"
+          fi
           exit "$fail"
 
   # ---- release-build: compile-check the musl static binary (main only) ----

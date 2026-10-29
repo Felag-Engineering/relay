@@ -5,7 +5,10 @@
 # manifest, lockfile and scanner input trips deps, every input of the packages and the
 # install matrix (daemon and Relay source, proto/, the packaging and the matrix itself) trips
 # packaging while a docs-only or tooling-only change does not — and that it fails OPEN, running every job and gate, when
-# it is not a pull request or cannot diff the merge commit.
+# it is not a pull request or cannot diff the merge commit. It also proves release= is true
+# exactly when release.yml's own pull_request path filter matches, read from the real
+# release.yml, and false (CI keeps its own install matrix) wherever the filter cannot be
+# modelled exactly or the change is not a pull request.
 #
 # A wrong `false` here is the dangerous direction: it skips a gate on a change that reaches
 # it, and the PR goes green on a check that never ran. Before this test, a docs-only PR that
@@ -55,6 +58,7 @@ CODE=""
 PROTO=""
 DEPS=""
 PACKAGING=""
+RELEASE=""
 RC=0
 
 # classify <fixture> <GITHUB_EVENT_NAME, or "" for unset> [path...]
@@ -71,14 +75,17 @@ classify() {
   PROTO="$(sed -n 's/^proto=//p' <<<"$out")"
   DEPS="$(sed -n 's/^deps=//p' <<<"$out")"
   PACKAGING="$(sed -n 's/^packaging=//p' <<<"$out")"
+  RELEASE="$(sed -n 's/^release=//p' <<<"$out")"
 }
 
-# expect <case name> <want code> <want proto> <want deps> <want packaging>
-# Every case states all four: a wrong `false` is the dangerous direction, so none defaults.
+# expect <case name> <want code> <want proto> <want deps> <want packaging> <want release>
+# Every case states all five: a wrong `false` is the dangerous direction for the first four,
+# and a wrong `true` for release (CI would skip its matrix), so none defaults. A fixture
+# without release.yml has no release filter, so release is false in sections 1 to 6.
 expect() {
   if [ "$RC" -ne 0 ] || [ "$CODE" != "$2" ] || [ "$PROTO" != "$3" ] || [ "$DEPS" != "$4" ] \
-    || [ "$PACKAGING" != "$5" ]; then
-    echo "FAIL: $1: got rc=$RC code=$CODE proto=$PROTO deps=$DEPS packaging=$PACKAGING, want rc=0 code=$2 proto=$3 deps=$4 packaging=$5" >&2
+    || [ "$PACKAGING" != "$5" ] || [ "$RELEASE" != "$6" ]; then
+    echo "FAIL: $1: got rc=$RC code=$CODE proto=$PROTO deps=$DEPS packaging=$PACKAGING release=$RELEASE, want rc=0 code=$2 proto=$3 deps=$4 packaging=$5 release=$6" >&2
     fail=$((fail + 1))
   fi
 }
@@ -107,7 +114,7 @@ for p in \
     fail=$((fail + 1))
   fi
   classify "$ARGS" "" "$p"
-  expect "test-read docs path $p" true false false false
+  expect "test-read docs path $p" true false false false false
 done
 
 # --- 2. Documentation nothing builds or tests reads stays skippable — including neighbours
@@ -123,22 +130,22 @@ for p in \
   README.md \
   GLOSSARY.md; do
   classify "$ARGS" "" "$p"
-  expect "documentation path $p" false false false false
+  expect "documentation path $p" false false false false false
 done
 
 # One read path among docs-only paths still makes the change code.
 classify "$ARGS" "" docs/adr/0001-example.md README.md docs/brand/relay-icon.svg
-expect "mixed docs change with one test-read path" true false false false
+expect "mixed docs change with one test-read path" true false false false false
 
 # --- 3. Code, and paths the script has never heard of, are code. Daemon and Relay source is
 # also package payload (section 4c); tooling and unknown paths are code only.
 for p in relay/cmd/relay/main.go daemon/src/main.rs daemon/fuzz/Cargo.lock; do
   classify "$ARGS" "" "$p"
-  expect "code and packaging path $p" true false false true
+  expect "code and packaging path $p" true false false true false
 done
 for p in scripts/check-docs.sh deploy/test/docker-compose.yml unknown-top-level-file; do
   classify "$ARGS" "" "$p"
-  expect "code path $p" true false false false
+  expect "code path $p" true false false false false
 done
 
 # --- 4. Every input of the proto gates trips proto: the contract and its generated Go, the
@@ -148,16 +155,16 @@ done
 # so they also trip packaging; tools/buf is tooling and does not.
 for p in proto/relay/v1/relay.proto proto/buf.yaml relay/internal/relay/v1/relay.pb.go; do
   classify "$ARGS" "" "$p"
-  expect "proto and packaging input $p" true true false true
+  expect "proto and packaging input $p" true true false true false
 done
 classify "$ARGS" "" tools/buf/go.mod
-expect "proto input tools/buf/go.mod" true true false false
+expect "proto input tools/buf/go.mod" true true false false false
 # The CI machinery, the Makefile and relay/go.mod are inputs of the proto gates, the
 # dependency scans and the install matrix alike.
 for p in Makefile scripts/ci-changed-paths.sh .github/workflows/ci.yml \
   .github/actions/go-cache-restore/action.yml relay/go.mod; do
   classify "$ARGS" "" "$p"
-  expect "proto, deps and packaging input $p" true true true true
+  expect "proto, deps and packaging input $p" true true true true false
 done
 
 # --- 4b. Every input of the PR-time advisory scans trips deps: the manifests and lockfiles
@@ -167,15 +174,15 @@ done
 # and pin are tooling and do not.
 for p in relay/go.sum daemon/deny.toml relay/govulncheck-exceptions.txt; do
   classify "$ARGS" "" "$p"
-  expect "deps and packaging input $p" true false true true
+  expect "deps and packaging input $p" true false true true false
 done
 for p in scripts/vuln-gate.sh tools/govulncheck/go.sum; do
   classify "$ARGS" "" "$p"
-  expect "deps input $p" true false true false
+  expect "deps input $p" true false true false false
 done
 # The other pinned tools run a lint or scan gate, not a proto or advisory one: code only.
 classify "$ARGS" "" tools/golangci-lint/go.mod
-expect "tool pin tools/golangci-lint/go.mod" true false false false
+expect "tool pin tools/golangci-lint/go.mod" true false false false false
 
 # --- 4c. Every input of the packages and the install matrix trips packaging. Both binaries
 # are package payload, so all daemon and Relay source does, the packaged unit files,
@@ -218,16 +225,16 @@ for p in $PACKAGING_INPUTS docs/operations/daemon-privilege-posture.md; do
 done
 for p in $PACKAGING_INPUTS; do
   classify "$ARGS" "" "$p"
-  expect "packaging input $p" true false false true
+  expect "packaging input $p" true false false true false
 done
 # The daemon's manifests and lockfile are also dependency inputs, so deps and packaging trip.
 for p in daemon/Cargo.toml daemon/crates/relay-policy/Cargo.toml daemon/Cargo.lock; do
   classify "$ARGS" "" "$p"
-  expect "deps and packaging input $p" true false true true
+  expect "deps and packaging input $p" true false true true false
 done
 # The posture doc is documentation, but a payload file: the package bytes change with it.
 classify "$ARGS" "" docs/operations/daemon-privilege-posture.md
-expect "packaging input docs/operations/daemon-privilege-posture.md" false false false true
+expect "packaging input docs/operations/daemon-privilege-posture.md" false false false true false
 
 # A tooling-only change does not run the install matrix: the lint and scan tools and their
 # config, the other scripts (the package guard reads packages but is not an input of them),
@@ -242,24 +249,24 @@ for p in tools/golangci-lint/go.mod tools/gitleaks/go.mod .golangci.yml .gitleak
     fail=$((fail + 1))
   fi
   classify "$ARGS" "" "$p"
-  expect "tooling path $p" true false false false
+  expect "tooling path $p" true false false false false
 done
 # A docs-only change does not run it either.
 for p in docs/operations/relay-install.md docs/specs/daemon-installation.md README.md; do
   classify "$ARGS" "" "$p"
-  expect "docs path $p" false false false false
+  expect "docs path $p" false false false false false
 done
 # A tooling-and-docs change is still neither; one daemon file among them is packaging.
 classify "$ARGS" "" scripts/check-docs.sh docs/specs/daemon-installation.md tools/gitleaks/go.mod
-expect "tooling and docs change" true false false false
+expect "tooling and docs change" true false false false false
 classify "$ARGS" "" scripts/check-docs.sh docs/specs/daemon-installation.md daemon/src/main.rs
-expect "tooling and docs change with one daemon source file" true false false true
+expect "tooling and docs change with one daemon source file" true false false true false
 
 # --- 5. Fail open: not a pull request runs every job, whatever the arguments would say.
 classify "$ARGS" ""
-expect "no event, no paths" true true true true
+expect "no event, no paths" true true true true false
 classify "$ARGS" push
-expect "push event" true true true true
+expect "push event" true true true true false
 
 # --- 6. The pull_request path: diff the checked-out commit against its first parent, as on
 # the merge commit CI checks out. A fixture repo, two commits.
@@ -287,43 +294,43 @@ pr_fixture() {
 
 pr_fixture pr-docs sh -c 'echo changed >>docs/adr/0001-example.md'
 classify "$PR_FIX" pull_request
-expect "pull_request touching only an unread doc" false false false false
+expect "pull_request touching only an unread doc" false false false false false
 
 pr_fixture pr-brand sh -c 'echo changed >>docs/brand/relay-icon.svg'
 classify "$PR_FIX" pull_request
-expect "pull_request touching only docs/brand" true false false false
+expect "pull_request touching only docs/brand" true false false false false
 
 pr_fixture pr-packaging sh -c 'mkdir -p daemon/packaging && echo x >daemon/packaging/relay-daemon.service'
 classify "$PR_FIX" pull_request
-expect "pull_request touching the packaged unit" true false false true
+expect "pull_request touching the packaged unit" true false false true false
 
 pr_fixture pr-daemon-source sh -c 'mkdir -p daemon/src && echo x >daemon/src/main.rs'
 classify "$PR_FIX" pull_request
-expect "pull_request touching daemon source" true false false true
+expect "pull_request touching daemon source" true false false true false
 
 pr_fixture pr-tooling sh -c 'mkdir -p tools/golangci-lint && echo x >tools/golangci-lint/go.mod'
 classify "$PR_FIX" pull_request
-expect "pull_request touching only a lint tool's pin" true false false false
+expect "pull_request touching only a lint tool's pin" true false false false false
 
 pr_fixture pr-lockfile sh -c 'echo changed >relay/go.sum'
 classify "$PR_FIX" pull_request
-expect "pull_request touching a lockfile" true false true true
+expect "pull_request touching a lockfile" true false true true false
 
 # A non-ASCII name under relay/ classifies as itself: it is Relay source (an embedded asset
 # here), not an unmatched path.
 pr_fixture pr-non-ascii sh -c 'mkdir -p relay/assets && echo x >"relay/assets/$(printf "\303\251").js"'
 classify "$PR_FIX" pull_request
-expect "pull_request adding a non-ASCII name under relay/" true false false true
+expect "pull_request adding a non-ASCII name under relay/" true false false true false
 
 # A name git still prints quoted (a tab in it) fails open rather than matching nothing.
 pr_fixture pr-quoted sh -c 'mkdir -p relay/assets && echo x >"relay/assets/a$(printf "\t")b.js"'
 classify "$PR_FIX" pull_request
-expect "pull_request adding a name git prints quoted" true true true true
+expect "pull_request adding a name git prints quoted" true true true true false
 
 # A rename classifies BOTH paths: moving a file the build reads into docs/ is a code change.
 pr_fixture pr-rename git mv relay/main.go docs/adr/main.go
 classify "$PR_FIX" pull_request
-expect "pull_request renaming code into docs/" true false false true
+expect "pull_request renaming code into docs/" true false false true false
 
 # No parent to diff against (a fetch-depth of 1): fail open.
 ROOT_ONLY="$(new_fixture pr-root-only)"
@@ -332,7 +339,113 @@ if ! { git init -q -b main "$ROOT_ONLY" && git -C "$ROOT_ONLY" add -A && git -C 
   fail=$((fail + 1))
 fi
 classify "$ROOT_ONLY" pull_request
-expect "pull_request with no parent commit" true true true true
+expect "pull_request with no parent commit" true true true true false
+
+# --- 7. release= follows release.yml's own pull_request path filter. The fixture holds the
+# REAL release.yml, so a pattern added there is proved here without editing this test.
+# rel_fixture <name> [release.yml to copy]: a fixture holding the given (default: real) file.
+rel_fixture() {
+  local fix
+  fix="$(new_fixture "$1")"
+  mkdir -p "$fix/.github/workflows"
+  cp "${2:-$REPO_ROOT/.github/workflows/release.yml}" "$fix/.github/workflows/release.yml"
+  printf '%s\n' "$fix"
+}
+
+# expect_release <case name> <want release>: for the cases whose other four outputs are
+# proved above.
+expect_release() {
+  if [ "$RC" -ne 0 ] || [ "$RELEASE" != "$2" ]; then
+    echo "FAIL: $1: got rc=$RC release=$RELEASE, want rc=0 release=$2" >&2
+    fail=$((fail + 1))
+  fi
+}
+
+REL="$(rel_fixture rel)"
+
+# Every pattern in the real filter, read here by a parse independent of the script's, matches a
+# path built from it (`**` -> a/b.txt, `*` -> x). Fewer than twenty patterns means this parse,
+# or the filter, changed shape: look before trusting the rest.
+REL_PATTERNS="$(sed -n '/^  pull_request:/,/^[^ ]/p' "$REPO_ROOT/.github/workflows/release.yml" \
+  | sed -n 's/^      - //p')"
+if [ "$(grep -c . <<<"$REL_PATTERNS")" -lt 20 ]; then
+  echo "FAIL: found $(grep -c . <<<"$REL_PATTERNS") pattern(s) in release.yml's pull_request paths, want at least 20" >&2
+  fail=$((fail + 1))
+fi
+while IFS= read -r pat; do
+  [ -n "$pat" ] || continue
+  sample=${pat//\*\*/a/b.txt}
+  sample=${sample//\*/x}
+  classify "$REL" "" "$sample"
+  expect_release "release filter pattern $pat (as $sample)" true
+done <<<"$REL_PATTERNS"
+
+# Neighbours the filter does not name stay false: `*` does not cross a `/`, a `.` is literal,
+# and source outside the packaging directories and the manifests is not in the filter.
+for p in scripts/install-matrix-a/b.sh scripts/build-packagesXsh daemon/src/main.rs \
+  relay/cmd/relay/main.go relay/packagingX/relay.service docs/specs/daemon-installation.md \
+  scripts/check-docs.sh .github/workflows/ci.yml; do
+  classify "$REL" "" "$p"
+  expect_release "path outside the release filter $p" false
+done
+
+# Full verdicts: the packaged unit is packaging and release; a docs change beside it still is.
+classify "$REL" "" daemon/packaging/relay-daemon.service
+expect "packaged unit with the real release filter" true false false true true
+classify "$REL" "" docs/adr/0001-example.md daemon/packaging/relay-daemon.service
+expect "docs and the packaged unit with the real release filter" true false false true true
+classify "$REL" "" daemon/src/main.rs
+expect "daemon source with the real release filter" true false false true false
+
+# Off a pull request, release is false whatever the filter says: main runs CI's own matrix.
+classify "$REL" push
+expect "push event with the real release filter" true true true true false
+
+# Past 300 changed paths GitHub stops evaluating a path filter, so the dry run may not run.
+MANY=(daemon/packaging/relay-daemon.service)
+for i in $(seq 1 300); do MANY+=("docs/adr/n$i.md"); done
+classify "$REL" "" "${MANY[@]}"
+expect "301 changed paths, one in the release filter" true false false true false
+
+# A trigger the script cannot model exactly is false, never a guess.
+REAL_WF="$REPO_ROOT/.github/workflows/release.yml"
+VARIANTS="$WORKDIR/variants"
+mkdir -p "$VARIANTS"
+awk '{ print } /^  pull_request:/ { print "    branches: [main]" }' "$REAL_WF" >"$VARIANTS/branches.yml"
+awk '{ print } /^    paths:/ { print "      - '"'"'!daemon/packaging/**'"'"'" }' "$REAL_WF" >"$VARIANTS/negation.yml"
+awk '{ print } /^    paths:/ { print "      - daemon/packaging/?.service" }' "$REAL_WF" >"$VARIANTS/question.yml"
+awk '{ print } /^    paths:/ { print "      - LICENSE # the payload" }' "$REAL_WF" >"$VARIANTS/comment.yml"
+sed 's/^  pull_request:/  pull_request_target:/' "$REAL_WF" >"$VARIANTS/no-pull-request.yml"
+for v in branches negation question comment no-pull-request; do
+  if cmp -s "$REAL_WF" "$VARIANTS/$v.yml"; then
+    echo "FAIL: release.yml variant $v is identical to the real file; its anchor moved" >&2
+    fail=$((fail + 1))
+  fi
+  fix="$(rel_fixture "rel-$v" "$VARIANTS/$v.yml")"
+  classify "$fix" "" daemon/packaging/relay-daemon.service
+  expect "release.yml variant $v" true false false true false
+done
+
+# The pull_request path: the filter is read from the checked-out merge commit's release.yml.
+rel_pr_fixture() { # <name> <commit-2 action...>
+  local fix
+  fix="$(rel_fixture "$1")"
+  shift
+  mkdir -p "$fix/docs/adr"
+  echo base >"$fix/docs/adr/0001-example.md"
+  if ! { git init -q -b main "$fix" && git -C "$fix" add -A && git -C "$fix" commit -q -m base \
+    && (cd "$fix" && "$@") && git -C "$fix" add -A && git -C "$fix" commit -q -m change; }; then
+    echo "FAIL: $fix: cannot build the fixture commits" >&2
+    fail=$((fail + 1))
+  fi
+  PR_FIX="$fix"
+}
+rel_pr_fixture rel-pr-unit sh -c 'mkdir -p daemon/packaging && echo x >daemon/packaging/relay-daemon.service'
+classify "$PR_FIX" pull_request
+expect "pull_request touching the packaged unit, with release.yml" true false false true true
+rel_pr_fixture rel-pr-docs sh -c 'echo changed >>docs/adr/0001-example.md'
+classify "$PR_FIX" pull_request
+expect "pull_request touching only a doc, with release.yml" false false false false false
 
 if [ "$fail" -ne 0 ]; then
   echo "FAIL: $fail case(s) failed" >&2

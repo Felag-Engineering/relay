@@ -65,7 +65,9 @@ on:
   # A maintainer's dry run, from a BRANCH. A dispatch on a tag is refused (see `build`).
   workflow_dispatch: {}
   # A dry run on every change to what a release builds, so a break shows on the PR
-  # rather than on the tag. Drafts are skipped.
+  # rather than on the tag. Drafts are skipped. scripts/ci-changed-paths.sh reads this
+  # filter to decide that this dry run carries the PR's install matrix, so CI skips its own
+  # copy; it models only `types`, `paths` and `*`/`**` globs, and runs CI's copy otherwise.
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
