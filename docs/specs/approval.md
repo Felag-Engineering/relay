@@ -160,8 +160,7 @@ where it replaces any.
   channels.
 - **Holding a gated call open until it is released:** #643.
 - **What ADR-0047 cuts, and where each waits:** ADR-0047, *What changes* and its amendment.
-- **Residual risk:** the threat model's register, R18 (overlapping rules union their audiences),
-  R21 (an answer is only as honest as the client), R23 (a fresh install gates nothing), R24, R26, R27, R43 and R45 (an answer on a token session proves only
+- **Residual risk:** the threat model's register, R21 (an answer is only as honest as the client), R23 (a fresh install gates nothing), R24, R26, R27, R43 and R45 (an answer on a token session proves only
   the session).
 - **The Freeze:** a global stop, not a per-request judgement (`freeze.md`).
 
