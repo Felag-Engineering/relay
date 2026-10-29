@@ -765,6 +765,7 @@ func TestAccountsWrite_OnlyTheMintViewHasAFieldASecretCouldOccupy(t *testing.T) 
 		reflect.TypeOf(tokenRow{}),
 		reflect.TypeOf(accountsWriteControls{}),
 		reflect.TypeOf(accountCreateForm{}),
+		reflect.TypeOf(accountPageView{}),
 		reflect.TypeOf(accountsWriteResultView{}),
 	} {
 		for i := range typ.NumField() {
@@ -792,6 +793,15 @@ func TestAccountsWrite_OnlyTheMintViewHasAFieldASecretCouldOccupy(t *testing.T) 
 	for i := range create.NumField() {
 		if strings.Contains(create.Field(i).Name, "Password") {
 			t.Errorf("accountCreateForm.%s could hold the password the form is never to echo", create.Field(i).Name)
+		}
+	}
+
+	// The Account page is re-drawn after a refused edit with the caller's
+	// inputs echoed back, so the step-up password has no field there either.
+	page := reflect.TypeOf(accountPageView{})
+	for i := range page.NumField() {
+		if strings.Contains(page.Field(i).Name, "Password") {
+			t.Errorf("accountPageView.%s could hold the password the page is never to echo", page.Field(i).Name)
 		}
 	}
 
@@ -2374,8 +2384,60 @@ func TestAccountsWrite_ACapabilityRefusalIsRenderedNotReinterpreted(t *testing.T
 				t.Errorf("the refusal does not carry the capability layer's own text:\n%s",
 					contentOf(rec.Body.String()))
 			}
+			// The layer's refusal is rendered as it made it, on the plain page,
+			// never as the edit view (invariant 10).
+			if strings.Contains(rec.Body.String(), "<h2>Role</h2>") {
+				t.Errorf("a capability refusal re-rendered the Account page:\n%s", contentOf(rec.Body.String()))
+			}
 		})
 	}
+}
+
+// TestAccountsWrite_ARefusedEditWritesExactlyOneQueryAuditReadThroughTheRealLane
+// proves, through the real read lane, that the re-rendered Account page leaves
+// the one query_audit record GET /console/accounts/{account_name} leaves, and
+// that a refusal drawn on the result page leaves none.
+func TestAccountsWrite_ARefusedEditWritesExactlyOneQueryAuditReadThroughTheRealLane(t *testing.T) {
+	t.Run("a re-rendered refusal records the page's read", func(t *testing.T) {
+		x := newRealWriteFixWithReadLane(t)
+		rec := x.post(t, setAccountRoleAction(x.target.ID), url.Values{"role": {""}})
+		body := rec.Body.String()
+		if rec.Code != http.StatusBadRequest || !strings.Contains(body, "<h2>Role</h2>") ||
+			!strings.Contains(body, `class="fielderr"`) {
+			t.Fatalf("status %d, want the 400 edit view:\n%s", rec.Code, contentOf(body))
+		}
+		var reads []audit.Record
+		for _, r := range x.records(t) {
+			if r.Kind == audit.KindRead {
+				reads = append(reads, r)
+			}
+		}
+		if len(reads) != 1 {
+			t.Fatalf("the re-render recorded %d read records, want exactly 1: %+v", len(reads), reads)
+		}
+		got := reads[0]
+		if got.OperationName != "query_audit" {
+			t.Errorf("the read is %q, want query_audit", got.OperationName)
+		}
+		if got.Attribution.Verified.AccountID != x.actor.ID || got.Attribution.Verified.AccountName != x.actor.Name {
+			t.Errorf("the read is attributed to %+v, want the signed-in Account %s/%s",
+				got.Attribution.Verified, x.actor.ID, x.actor.Name)
+		}
+	})
+
+	t.Run("a fallback to the result page records none", func(t *testing.T) {
+		x := newRealWriteFixWithReadLane(t)
+		rec := x.post(t, setAccountEnabledAction("acct-does-not-exist"), url.Values{"enabled": {"false"}})
+		body := rec.Body.String()
+		if rec.Code != http.StatusNotFound || strings.Contains(body, "<h2>Role</h2>") {
+			t.Fatalf("status %d, want the 404 result page:\n%s", rec.Code, contentOf(body))
+		}
+		for _, r := range x.records(t) {
+			if r.Kind == audit.KindRead {
+				t.Errorf("a result-page fallback recorded a read: %+v", r)
+			}
+		}
+	})
 }
 
 // TestAccountsWrite_AnUnchangedOrMissingRoleIsRefusedAndNeverWrites: a role
@@ -2442,6 +2504,20 @@ type realWriteFix struct {
 const realWritePassword = "a real console password"
 
 func newRealWriteFix(t *testing.T, opts ...func(*Deps)) *realWriteFix {
+	t.Helper()
+	return buildRealWriteFix(t, false, opts...)
+}
+
+// newRealWriteFixWithReadLane is newRealWriteFix with the Console's read lane
+// the real capability.ReadLane over the same trail, so a page that reads
+// through it leaves its query_audit record there. The default fixture keeps the
+// fake lane so tests that assert the trail's exact records see no read rows.
+func newRealWriteFixWithReadLane(t *testing.T, opts ...func(*Deps)) *realWriteFix {
+	t.Helper()
+	return buildRealWriteFix(t, true, opts...)
+}
+
+func buildRealWriteFix(t *testing.T, realLane bool, opts ...func(*Deps)) *realWriteFix {
 	t.Helper()
 	ctx := context.Background()
 
@@ -2513,6 +2589,9 @@ func newRealWriteFix(t *testing.T, opts ...func(*Deps)) *realWriteFix {
 	temporaryPasswords := capability.NewTemporaryPasswords(capSvc.Control, st.PasswordStatuses())
 	temporaryPasswords.EndSessionsWith(sessions)
 	d.TemporaryPasswords = temporaryPasswords
+	if realLane {
+		d.Queries = capSvc.ReadLane
+	}
 	for _, opt := range opts {
 		opt(&d)
 	}

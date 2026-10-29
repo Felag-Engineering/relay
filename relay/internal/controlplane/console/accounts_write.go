@@ -275,12 +275,7 @@ func renderWriteResult(w http.ResponseWriter, pg Page, status int, heading, href
 // earlier: after a successful step-up pg holds the rotated session's token.
 func createRefusal(form accountCreateForm) writeRefusalRender {
 	return func(w http.ResponseWriter, pg Page, status int, heading, href, label string) {
-		answerable := status == http.StatusBadRequest ||
-			status == http.StatusUnauthorized ||
-			status == http.StatusConflict ||
-			status == http.StatusTooManyRequests ||
-			status == http.StatusInternalServerError
-		if href != "" || !answerable {
+		if href != "" || !refusalAnswerable(status) {
 			renderWriteResult(w, pg, status, heading, href, label)
 			return
 		}
@@ -288,6 +283,118 @@ func createRefusal(form accountCreateForm) writeRefusalRender {
 		form.Refusal = heading
 		form.CSRFToken = pg.CSRFToken
 		renderScreen(w, pg, newAccountTmpl, form)
+	}
+}
+
+// refusalAnswerable reports whether a refusal of this status is one the form
+// can answer by editing or retrying (createRefusal, editRefusal).
+func refusalAnswerable(status int) bool {
+	switch status {
+	case http.StatusBadRequest, http.StatusUnauthorized, http.StatusConflict,
+		http.StatusTooManyRequests, http.StatusInternalServerError:
+		return true
+	}
+	return false
+}
+
+// editSection names the section of the Account page a refused act was made
+// from, which is where editRefusal draws the refusal.
+type editSection int
+
+const (
+	editRole editSection = iota
+	editState
+	editMint
+)
+
+// editRefusal draws a refused role change, Enable or mint as the Account's edit
+// view, with the refusal in the section it came from, above that section's
+// button. mintName and mintTTL are the refused mint's inputs, echoed when they
+// are ones the form could have sent; the step-up password is never echoed.
+//
+// The edit view re-renders for a refusal the caller can answer by editing or
+// retrying it, and only when the refusal carries no link, or the 409 whose link
+// is Back to Accounts (a self-targeted act, the last administrator, a role that
+// changed): the re-render shows the Account's current state, which those ask
+// the operator to read, and the page carries its own Back to Accounts. The
+// plain result page renders everything else:
+//   - authz.ErrUnauthorized (403): the capability layer refused the caller and
+//     no edit changes that (invariant 10);
+//   - a session that ended, which links to sign-in;
+//   - "could not confirm" (500 with a link): the outcome is unknown, and a
+//     re-render would invite a duplicate grant;
+//   - 404, where the Account is gone.
+//
+// The re-render is the Account page, so it makes that page's recorded
+// query_audit read (auditAccountPageRead) and falls back to the result page,
+// carrying the refusal, when that read fails or cannot be recorded, when the
+// Account or its tokens cannot be read, or when the page has no write controls.
+// Its Account, password-status and API Token reads are the capability layer's
+// ControlAccountRead and ControlAPITokenRead, which record only on refusal, so
+// a re-render whose read the layer refuses may add a refuseControl row to the
+// trail beside the act's own refusal (for example after a refused step-up).
+//
+// The CSRF token comes from the pg passed in, never from anything captured
+// earlier: after a successful step-up pg holds the rotated session's token.
+func editRefusal(d Deps, r *http.Request, caller capability.Principal, accountID string, section editSection, fresh bool, mintName, mintTTL string) writeRefusalRender {
+	return func(w http.ResponseWriter, pg Page, status int, heading, href, label string) {
+		linkIsBackToAccounts := status == http.StatusConflict && href == accountsScreenPath
+		if !refusalAnswerable(status) || (href != "" && !linkIsBackToAccounts) {
+			renderWriteResult(w, pg, status, heading, href, label)
+			return
+		}
+		if d.Queries == nil || d.Accounts == nil {
+			renderWriteResult(w, pg, status, heading, href, label)
+			return
+		}
+		// The trail read comes before any Account read: the page's content is
+		// never served without its query_audit row.
+		d, lane, err := auditAccountPageRead(r.Context(), d, caller)
+		if err != nil {
+			renderWriteResult(w, pg, status, heading, href, label)
+			return
+		}
+		a, err := d.Accounts.Account(r.Context(), caller, accountID)
+		if err != nil {
+			renderWriteResult(w, pg, status, heading, href, label)
+			return
+		}
+		v, err := accountPageFor(r.Context(), d, caller, pg, a, fresh)
+		if err != nil || v.Write == nil {
+			renderWriteResult(w, pg, status, heading, href, label)
+			return
+		}
+		// Nothing above reads through d.Queries after the audited read; the
+		// check keeps a later lane read from being served unrecorded.
+		if lane.unaudited {
+			renderWriteResult(w, pg, status, heading, href, label)
+			return
+		}
+
+		switch section {
+		case editRole:
+			v.RoleRefusal = heading
+		case editState:
+			v.StateRefusal = heading
+		case editMint:
+			v.MintRefusal = heading
+			if len(mintName) >= 1 && len(mintName) <= maxTokenNameBytes {
+				v.MintName = mintName
+			}
+			// An unrecognised lifetime leaves ttlOptions' own preselection: the
+			// default for a human Account, none for a machine Account, so a
+			// forgotten lifetime is never defaulted in.
+			if _, ok := ttlFor(mintTTL); ok {
+				for i := range v.Write.TTLs {
+					v.Write.TTLs[i].Selected = v.Write.TTLs[i].Value == mintTTL
+				}
+			}
+		}
+
+		pg.Title = a.Name
+		pg.Banner = banner(d, r)
+		w.WriteHeader(status)
+		renderScreen(w, pg, accountPageTmpl, v)
 	}
 }
 
@@ -543,13 +650,6 @@ func pathID(w http.ResponseWriter, r *http.Request, name string, max int) (strin
 	return id, true
 }
 
-// badRequest renders a refusal of THIS SURFACE'S OWN input bounds — never a
-// domain rule, which belongs to the single write path.
-func badRequest(w http.ResponseWriter, pg Page, heading string) {
-	w.WriteHeader(http.StatusBadRequest)
-	renderScreen(w, pg, accountsWriteResultTmpl, accountsWriteResultView{Heading: heading})
-}
-
 // handleCreateAccount implements POST /console/new-account/create.
 //
 // ALWAYS step-up. Creating an Account of ANY role and ANY kind brings a new
@@ -662,15 +762,19 @@ func handleSetAccountRole(d Deps) http.HandlerFunc {
 			return
 		}
 
+		refuse := func(fresh bool) writeRefusalRender {
+			return editRefusal(d, r, caller, id, editRole, fresh, "", "")
+		}
 		if r.PostFormValue("role") == "" {
-			badRequest(w, pg, noRoleRefusal)
+			refuse(stepUpFresh(d, r))(w, pg, http.StatusBadRequest, noRoleRefusal, "", "")
 			return
 		}
 		// Role.Valid, not a hand-restated set: the domain owns what the
 		// three roles are (accounts.Role).
 		role := accounts.Role(r.PostFormValue("role"))
 		if !role.Valid() {
-			badRequest(w, pg, "This form did not carry a recognisable role. The role was not changed.")
+			refuse(stepUpFresh(d, r))(w, pg, http.StatusBadRequest,
+				"This form did not carry a recognisable role. The role was not changed.", "", "")
 			return
 		}
 
@@ -684,12 +788,15 @@ func handleSetAccountRole(d Deps) http.HandlerFunc {
 		couldGrant := true
 		if readErr == nil {
 			if !capability.SelfTargeted(caller, id) && role == target.Role {
-				badRequest(w, pg, "That is already this Account's role. The role was not changed.")
+				refuse(stepUpFresh(d, r))(w, pg, http.StatusBadRequest,
+					"That is already this Account's role. The role was not changed.", "", "")
 				return
 			}
 			couldGrant = roleChangeCouldGrant(target.Role, role)
 		}
-		if couldGrant && !requireStepUp(d, w, r, &pg, accountsStepUp("The role was not changed.")) {
+		ask := accountsStepUp("The role was not changed.")
+		ask.render = refuse(false)
+		if couldGrant && !requireStepUp(d, w, r, &pg, ask) {
 			return
 		}
 
@@ -708,7 +815,10 @@ func handleSetAccountRole(d Deps) http.HandlerFunc {
 			err = d.AccountAdmin.SetAccountRole(r.Context(), caller, id, role)
 		}
 		if err != nil {
-			writeFailed(w, pg, err, setAccountRolePattern, id, "The role was not changed.", "Account")
+			// After a successful step-up the window is fresh; an unstepped
+			// lower reads the window.
+			writeFailedWith(w, pg, err, setAccountRolePattern, id, "The role was not changed.", "Account",
+				refuse(couldGrant || stepUpFresh(d, r)))
 			return
 		}
 		if readErr == nil {
@@ -745,18 +855,27 @@ func handleSetAccountEnabled(d Deps) http.HandlerFunc {
 		// silence in EITHER direction.
 		submitted := r.PostFormValue("enabled")
 		if submitted != "true" && submitted != "false" {
-			badRequest(w, pg, "This form did not say whether to enable or disable the Account. Nothing was changed.")
+			editRefusal(d, r, caller, id, editState, stepUpFresh(d, r), "", "")(w, pg, http.StatusBadRequest,
+				"This form did not say whether to enable or disable the Account. Nothing was changed.", "", "")
 			return
 		}
 		enabled := submitted == "true"
 
 		undone := "The Account was not changed."
-		if enabled && !requireStepUp(d, w, r, &pg, accountsStepUp(undone)) {
+		ask := accountsStepUp(undone)
+		ask.render = editRefusal(d, r, caller, id, editState, false, "", "")
+		if enabled && !requireStepUp(d, w, r, &pg, ask) {
 			return
 		}
 
 		if err := d.AccountAdmin.SetAccountEnabled(r.Context(), caller, id, enabled); err != nil {
-			writeFailed(w, pg, err, setAccountEnabledPattern, id, undone, "Account")
+			// A Disable made from the list's row was not made from the edit view.
+			if !enabled && cameFromList(r.PostFormValue(fromField)) {
+				writeFailed(w, pg, err, setAccountEnabledPattern, id, undone, "Account")
+				return
+			}
+			writeFailedWith(w, pg, err, setAccountEnabledPattern, id, undone, "Account",
+				editRefusal(d, r, caller, id, editState, enabled || stepUpFresh(d, r), "", ""))
 			return
 		}
 		key := doneDisabled
@@ -874,19 +993,27 @@ func handleMintAPIToken(d Deps) http.HandlerFunc {
 		}
 
 		name := r.PostFormValue("name")
+		ttl := r.PostFormValue("ttl")
+		refuse := func(fresh bool) writeRefusalRender {
+			return editRefusal(d, r, caller, id, editMint, fresh, name, ttl)
+		}
 		if name == "" || len(name) > maxTokenNameBytes {
-			badRequest(w, pg, "A token needs a name of 1 to 128 bytes, so it can be audited and "+
-				"pruned later. Nothing was minted.")
+			refuse(stepUpFresh(d, r))(w, pg, http.StatusBadRequest,
+				"A token needs a name of 1 to 128 bytes, so it can be audited and "+
+					"pruned later. Nothing was minted.", "", "")
 			return
 		}
-		lifetime, ok := ttlFor(r.PostFormValue("ttl"))
+		lifetime, ok := ttlFor(ttl)
 		if !ok {
-			badRequest(w, pg, "This form did not carry a recognisable lifetime. A token that never "+
-				"expires is a legitimate choice and has to be made deliberately. Nothing was minted.")
+			refuse(stepUpFresh(d, r))(w, pg, http.StatusBadRequest,
+				"This form did not carry a recognisable lifetime. A token that never "+
+					"expires is a legitimate choice and has to be made deliberately. Nothing was minted.", "", "")
 			return
 		}
 
-		if !requireStepUp(d, w, r, &pg, accountsStepUp("Nothing was minted.")) {
+		ask := accountsStepUp("Nothing was minted.")
+		ask.render = refuse(false)
+		if !requireStepUp(d, w, r, &pg, ask) {
 			return
 		}
 
@@ -907,7 +1034,7 @@ func handleMintAPIToken(d Deps) http.HandlerFunc {
 			// never passed to slog in any form.
 			w.Header().Set("Cache-Control", "no-store")
 			if isMintRefusal(err) {
-				writeFailed(w, pg, err, mintAPITokenPattern, id, "Nothing was minted.", "Account")
+				writeFailedWith(w, pg, err, mintAPITokenPattern, id, "Nothing was minted.", "Account", refuse(true))
 				return
 			}
 			d.logger().ErrorContext(r.Context(), "console api token mint returned an error",
