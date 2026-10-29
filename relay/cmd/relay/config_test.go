@@ -14,11 +14,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Felag-Engineering/relay/relay/internal/approval"
 	"github.com/Felag-Engineering/relay/relay/internal/approvalnotify"
 	"github.com/Felag-Engineering/relay/relay/internal/ca"
 	"github.com/Felag-Engineering/relay/relay/internal/capability"
 	"github.com/Felag-Engineering/relay/relay/internal/consoleauth"
 	"github.com/Felag-Engineering/relay/relay/internal/hostfile"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 	"github.com/Felag-Engineering/relay/relay/internal/nodestate"
 	"github.com/Felag-Engineering/relay/relay/internal/ratelimit"
 	"github.com/Felag-Engineering/relay/relay/internal/relayconfig"
@@ -99,9 +101,13 @@ account_claim = "sub"
 required_scope = "relay"
 public_url = "https://relay.example.test"
 [approval]
-gate_rules_path = "/srv/gates.json"
 webhook_url_file = "`+urlFile+`"
 webhook_secret_file = "`+secretFile+`"
+[[approval.rules]]
+name = "gate-fleet"
+risk_class = "mutate"
+min_fan_out = 2
+ttl = "1h"
 [reach]
 read_blast_cap = 11
 mutate_blast_cap = 3
@@ -129,8 +135,8 @@ max_nodes = 26
 		ExtraNames:  []string{"lb.example.test", "192.0.2.7"},
 		OAuthIssuer: "https://idp.example.test", OAuthAudience: "https://relay.example.test/mcp",
 		OAuthAccountClaim: "sub", OAuthRequiredScope: "relay", OAuthPublicURL: "https://relay.example.test",
-		ApprovalGatePath: "/srv/gates.json",
-		ReadBlastCap:     11, MutateBlastCap: 3, MinDaemonVersion: "1.2.3",
+		ApprovalRules: []approval.Rule{{Name: "gate-fleet", Match: approval.Match{RiskClass: jobs.RiskClassMutate, MinFanOut: 2}, Require: approval.Requirement{TTL: time.Hour}}},
+		ReadBlastCap:  11, MutateBlastCap: 3, MinDaemonVersion: "1.2.3",
 		MaxNodes: 26,
 		// Built in: no file key reaches these (RC-38 to RC-43).
 		ConsoleSessionMaxAge: consoleauth.DefaultAbsoluteLifetime, ConsoleStepUpWindow: consoleauth.DefaultStepUpWindow,
@@ -400,5 +406,32 @@ func TestFromFile_ConsoleWindowsAreBuiltIn(t *testing.T) {
 	}
 	if c.ConsoleSessionIdle != 20*time.Minute {
 		t.Errorf("session_idle = %v, want the configured 20m", c.ConsoleSessionIdle)
+	}
+}
+
+// A gate rule the configuration cannot load refuses start, naming the setting
+// and a line and never a value or a rule's name.
+//
+// Proves AP-8.
+func TestLoadConfig_MalformedGateRuleRefusesStart(t *testing.T) {
+	for _, tc := range []struct {
+		name, rules, want string
+	}{
+		{"a removed rule field", "[[approval.rules]]\nname = \"CANARY\"\nchannel = \"in-band\"\n", "approval.rules.channel (line"},
+		{"an unparsable ttl", "[[approval.rules]]\nname = \"CANARY\"\nttl = \"CANARY\"\n", "approval.rules.ttl (line"},
+		{"a nameless rule", "[[approval.rules]]\nttl = \"1h\"\n", "approval.rules.name"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := parseConfig([]byte(requiredTOML+tc.rules), readSecretPlain)
+			if err == nil {
+				t.Fatal("a malformed gate rule was accepted")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("err = %v, want it to contain %q", err, tc.want)
+			}
+			if strings.Contains(err.Error(), "CANARY") {
+				t.Errorf("err = %v, must not echo a rule's name or value", err)
+			}
+		})
 	}
 }

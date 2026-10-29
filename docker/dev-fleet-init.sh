@@ -145,10 +145,9 @@ ensure_account() {
     printf '%s\n' "${_rec}" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p'
 }
 
-# f. The dev gate leaves `requester_allowed` unset, so the Account that requests
-# a parked dispatch may not approve it; this is the second, human Account the
-# gate names as its audience (ADR-0027's out-of-band channel). The demo fleet's
-# in-band gate names no audience, so it is one Account among several there.
+# f. A second human Account, kept for the Control API rescue path: it decides a
+# parked dispatch from outside the requesting session. A gate rule names no
+# audience (ADR-0047), so it is one Account among several that may decide.
 log "ensuring the dev-approver Account and minting its API Token..."
 ID="$(ensure_account dev-approver admin)"
 test -n "${ID}" || die "could not resolve the dev-approver Account id"

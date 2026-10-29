@@ -112,18 +112,10 @@ services:
       # this volume must be on an allowlisted filesystem (ext4, XFS, btrfs,
       # tmpfs), because the Relay checks its state directory too.
       - relay-data:/var/lib/relay
-      # Approval gates (ADR-0027): none by default, so NOTHING NEEDS APPROVAL
-      # until you add one. To add one, write the rules
-      # (docs/operations/approval-gates.md) to a host file owned by root, not
-      # group- or world-writable, under directories only root can write,
-      # uncomment this mount, and set
-      # approval.gate_rules_path = "/etc/relay/approval-gates.json" in
-      # relay.toml. A configured gate that cannot be loaded refuses startup.
-      # - type: bind
-      #   source: /etc/relay/approval-gates.json
-      #   target: /etc/relay/approval-gates.json
-      #   read_only: true
-      #   bind: { create_host_path: false }
+      # Approval gates (ADR-0027): a configuration with no gate rules gates
+      # nothing. Gate rules are [[approval.rules]] sections of relay.toml
+      # (docs/operations/approval-gates.md), so they need no mount of their
+      # own. A rule that cannot be loaded refuses startup.
       #
       # Approval webhook signing secret, as a file: placed like relay.toml,
       # owned by root with group GID 10001, mode 0640. The Relay refuses it if

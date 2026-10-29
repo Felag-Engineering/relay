@@ -1,5 +1,5 @@
 // Package main: approval_e2e_test.go drives v0.5.0 [3/6] (#270, ADR-0027)
-// through the REAL composition root — real approval-gate file, real store, real
+// through the REAL composition root — real approval gate rules, real store, real
 // control-plane listener, real Account authentication.
 //
 // It deliberately needs no daemon. ADR-0027 makes exactly that point about the
@@ -16,37 +16,46 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Felag-Engineering/relay/relay/internal/accounts"
+	"github.com/Felag-Engineering/relay/relay/internal/approval"
 	"github.com/Felag-Engineering/relay/relay/internal/audit"
 	"github.com/Felag-Engineering/relay/relay/internal/registry"
+	"github.com/Felag-Engineering/relay/relay/internal/relayconfig"
 )
 
-// writeGateConfig writes a root-owned-shaped approval-gate file that parks
-// every mutate dispatch, and returns its path.
-func writeGateConfig(t *testing.T, rules string) string {
+// gateConfigBase is the three settings a configuration needs, so a test can
+// load its [[approval.rules]] sections through the same loader the Relay
+// starts with.
+const gateConfigBase = `[ca]
+dir = "/var/lib/relay/ca"
+[store]
+path = "/var/lib/relay/relay.db"
+[tls]
+hostname = "relay.example.internal"
+`
+
+// gateRules loads rulesTOML, [[approval.rules]] sections, as the gate rules of
+// a configuration file. A rule the loader refuses fails the test, so the
+// in-process suites never run on a rule the Relay would not start with.
+func gateRules(t testing.TB, rulesTOML string) []approval.Rule {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "approval-gates.json")
-	if err := os.WriteFile(path, []byte(rules), 0o600); err != nil {
-		t.Fatalf("write gate config: %v", err)
+	cfg, _, err := relayconfig.Load([]byte(gateConfigBase + rulesTOML))
+	if err != nil {
+		t.Fatalf("load gate rules: %v", err)
 	}
-	return path
+	return cfg.Approval.Rules
 }
 
-const gateAllMutates = `{
-  "rules": [
-    {
-      "name": "all-mutates-need-a-human",
-      "match": { "risk_class": "mutate" },
-      "require": { "count": 1, "requester_allowed": false, "channel": "out-of-band", "ttl": "1h" }
-    }
-  ]
-}`
+const gateAllMutates = `
+[[approval.rules]]
+name = "all-mutates-need-a-human"
+risk_class = "mutate"
+ttl = "1h"
+`
 
 // startGatedRelay boots the composition root with approval gating on and one
 // Node in the registry, so a dispatch resolves to a real fan-out.
@@ -57,11 +66,11 @@ const gateAllMutates = `{
 // WithConfig(func(c *Config) { c.ConsoleEnabled = true }): without it,
 // cfg.ConsoleEnabled defaults false (main.go) and consoleSurface{} is never
 // appended (main.go), so every /console/ request would 404.
-func startGatedRelay(t *testing.T, rules string, extra ...FixtureOption) *relayFixture {
+func startGatedRelay(t *testing.T, rulesTOML string, extra ...FixtureOption) *relayFixture {
 	t.Helper()
-	path := writeGateConfig(t, rules)
+	rules := gateRules(t, rulesTOML)
 	opts := append([]FixtureOption{WithControlPlane(), WithConfig(func(c *Config) {
-		c.ApprovalGatePath = path
+		c.ApprovalRules = rules
 	})}, extra...)
 	f := startRelay(t, opts...)
 	if _, err := f.Deps.registry.Upsert(registry.Report{NodeID: "node-e2e-1"}); err != nil {
@@ -77,20 +86,17 @@ type parkedBody struct {
 	PlanHash     string   `json:"plan_hash"`
 	Summary      string   `json:"summary"`
 	MatchedRules []string `json:"matched_rules"`
-	Progress     string   `json:"progress"`
 	DecisionPath string   `json:"decision_path"`
 }
 
 // approvalBody mirrors the API's approval shape, decoded as an outside caller
 // would rather than by importing package api's internal types.
 type approvalBody struct {
-	RequestID     string `json:"request_id"`
-	State         string `json:"state"`
-	PlanHash      string `json:"plan_hash"`
-	Summary       string `json:"summary"`
-	Progress      string `json:"progress"`
-	RequiredCount int    `json:"required_count"`
-	Decisions     []struct {
+	RequestID string `json:"request_id"`
+	State     string `json:"state"`
+	PlanHash  string `json:"plan_hash"`
+	Summary   string `json:"summary"`
+	Decisions []struct {
 		Account string `json:"account"`
 		Approve bool   `json:"approve"`
 		Channel string `json:"channel"`
@@ -138,8 +144,7 @@ func mintAccount(t *testing.T, f *relayFixture, name string, kind accounts.Kind,
 func TestApprovalCallout_ParkDecideRun(t *testing.T) {
 	f := startGatedRelay(t, gateAllMutates)
 
-	// The founding admin is the REQUESTER here, and the rule sets
-	// requester_allowed: false, so a second person is needed.
+	// The founding admin is the REQUESTER; a different human decides.
 	requester := f.Credential
 	approver := mintAccount(t, f, "ana", accounts.KindHuman, accounts.RoleOperator)
 
@@ -174,17 +179,7 @@ func TestApprovalCallout_ParkDecideRun(t *testing.T) {
 		t.Fatalf("queue = %+v, want exactly the parked request", list.Approvals)
 	}
 
-	// 3. The REQUESTER cannot answer their own request (requester_allowed:
-	//    false). This is the second-person rung, over the real HTTP surface.
-	selfResp := controlAPIRequest(t, f.Client(), http.MethodPost,
-		f.ControlBase+parked.DecisionPath, requester,
-		map[string]any{"approve": true, "plan_hash": parked.PlanHash})
-	defer selfResp.Body.Close()
-	if selfResp.StatusCode != http.StatusConflict {
-		t.Fatalf("self-approval status = %d, want 409", selfResp.StatusCode)
-	}
-
-	// 4. A stale plan hash cannot be replayed onto this request.
+	// 3. A stale plan hash cannot be replayed onto this request.
 	staleResp := controlAPIRequest(t, f.ClientFor(approver), http.MethodPost,
 		f.ControlBase+parked.DecisionPath, approver,
 		map[string]any{"approve": true, "plan_hash": "not-the-plan-you-were-shown"})
@@ -193,7 +188,7 @@ func TestApprovalCallout_ParkDecideRun(t *testing.T) {
 		t.Fatalf("plan-hash mismatch status = %d, want 409", staleResp.StatusCode)
 	}
 
-	// 5. The approver answers on the authenticated out-of-band endpoint.
+	// 4. The approver answers on the authenticated out-of-band endpoint.
 	decideResp := controlAPIRequest(t, f.ClientFor(approver), http.MethodPost,
 		f.ControlBase+parked.DecisionPath, approver,
 		map[string]any{"approve": true, "plan_hash": parked.PlanHash, "reason": "change ticket OPS-91"})
@@ -215,7 +210,7 @@ func TestApprovalCallout_ParkDecideRun(t *testing.T) {
 		t.Errorf("decision = %+v, want ana's human out-of-band answer", got)
 	}
 
-	// 6. The SAME dispatch, re-driven, now runs. The Node is registered but
+	// 5. The SAME dispatch, re-driven, now runs. The Node is registered but
 	//    has no Tunnel, so `unreachable` is the truthful outcome — what matters
 	//    is that a Job exists, which it could not before the approval.
 	runResp := restartMutate(t, f, requester)
@@ -240,7 +235,7 @@ func TestApprovalCallout_ParkDecideRun(t *testing.T) {
 		t.Fatalf("results = %+v, want the approved fan-out", ran.Results)
 	}
 
-	// 7. Audit answers "who asked / who approved / what ran" — the park, the
+	// 6. Audit answers "who asked / who approved / what ran" — the park, the
 	//    decision, and the dispatch are three records of one exchange.
 	records, err := f.Deps.audit.List(context.Background())
 	if err != nil {
@@ -275,18 +270,17 @@ func TestApprovalCallout_ParkDecideRun(t *testing.T) {
 
 // TestApprovalCallout_MachineCannotSatisfyItsOwnGate is docs/specs/approval.md's acceptance
 // "a machine Account can never satisfy its own gate on any channel", proven
-// against the most permissive rule the config language can express:
-// requester_allowed: true, and the machine holding the admin role.
+// with the machine holding the admin role: its own request on the Control API
+// is refused whatever the rule says.
+//
+// Proves AP-48.
 func TestApprovalCallout_MachineCannotSatisfyItsOwnGate(t *testing.T) {
-	const permissive = `{
-  "rules": [
-    {
-      "name": "self-confirmation-allowed",
-      "match": { "risk_class": "mutate" },
-      "require": { "count": 1, "requester_allowed": true, "channel": "out-of-band", "ttl": "1h" }
-    }
-  ]
-}`
+	const permissive = `
+[[approval.rules]]
+name = "self-confirmation-allowed"
+risk_class = "mutate"
+ttl = "1h"
+`
 	f := startGatedRelay(t, permissive)
 	machine := mintAccount(t, f, "gleipnir-prod", accounts.KindMachine, accounts.RoleAdmin)
 
@@ -305,7 +299,7 @@ func TestApprovalCallout_MachineCannotSatisfyItsOwnGate(t *testing.T) {
 		map[string]any{"approve": true, "plan_hash": parked.PlanHash})
 	defer selfResp.Body.Close()
 	if selfResp.StatusCode != http.StatusConflict {
-		t.Fatalf("machine self-approval status = %d, want 409 even under requester_allowed: true", selfResp.StatusCode)
+		t.Fatalf("machine self-approval status = %d, want 409: a machine never decides its own request here", selfResp.StatusCode)
 	}
 
 	// And it really did not run: the dispatch still parks.
@@ -320,15 +314,12 @@ func TestApprovalCallout_MachineCannotSatisfyItsOwnGate(t *testing.T) {
 // the floor for DECIDING is the floor the Action needed to be REQUESTED, so an
 // operator who cannot ask for Raw Exec cannot release an admin's.
 func TestApprovalCallout_OperatorCannotReleaseARawExec(t *testing.T) {
-	const gateRawExec = `{
-  "rules": [
-    {
-      "name": "raw-exec-always-asks",
-      "match": { "raw_exec": true },
-      "require": { "count": 1, "requester_allowed": false, "channel": "out-of-band", "ttl": "1h" }
-    }
-  ]
-}`
+	const gateRawExec = `
+[[approval.rules]]
+name = "raw-exec-always-asks"
+raw_exec = true
+ttl = "1h"
+`
 	f := startGatedRelay(t, gateRawExec)
 	operator := mintAccount(t, f, "opie", accounts.KindHuman, accounts.RoleOperator)
 

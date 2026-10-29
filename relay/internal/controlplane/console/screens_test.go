@@ -598,7 +598,7 @@ func TestScreens_UnwiredSeamRefusesRatherThanRenderingEmpty(t *testing.T) {
 // than merely non-conforming.
 func TestScreens_NoInlineScriptSurvivesAnywhere(t *testing.T) {
 	d := sweepFixture()
-	d.Approvals = &fakeApprovals{pending: []approval.Request{{ID: "ap-1", ExpiresAt: testNow.Add(time.Hour), Require: approval.Requirement{Count: 1}}}}
+	d.Approvals = &fakeApprovals{pending: []approval.Request{{ID: "ap-1", ExpiresAt: testNow.Add(time.Hour), Require: approval.Requirement{}}}}
 	d.Audit = fakeAudit{records: []audit.Record{{Kind: audit.KindDispatch, JobID: "job-1", NodeID: "node-web-1", OperationName: "service.restart", Timestamp: testNow}}}
 	// Job detail reads through the capability layer's query lane and refuses
 	// rather than rendering an empty Job when it is not wired (#423), so this

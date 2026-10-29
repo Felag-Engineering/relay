@@ -1,11 +1,9 @@
 package main
 
 import (
-	"os"
 	"sync"
 	"testing"
 
-	"github.com/Felag-Engineering/relay/relay/internal/approval"
 	"github.com/Felag-Engineering/relay/relay/internal/ca"
 	"github.com/Felag-Engineering/relay/relay/internal/ca/catest"
 	"github.com/Felag-Engineering/relay/relay/internal/startup"
@@ -18,8 +16,7 @@ var testCAs sync.Map
 
 // testStartupFiles stands in for startup.Open in the in-process suites. The real check
 // refuses every temporary directory a test can make (sticky, or the test's own, and a test
-// may run as root), so the CA is generated in memory and a configured gate file is parsed
-// without the check. The check itself is hostfile's table test, and the shippable binary
+// may run as root), so the CA is generated in memory. The check itself is hostfile's table test, and the shippable binary
 // meets it on the separate-uid harness.
 func testStartupFiles(t testing.TB, cfg Config) startup.Files {
 	t.Helper()
@@ -28,19 +25,7 @@ func testStartupFiles(t testing.TB, cfg Config) startup.Files {
 		t.Fatalf("generate CA: %v", err)
 	}
 	got, _ := testCAs.LoadOrStore(cfg.CADir, fresh)
-	var gate *approval.Gate
-	if cfg.ApprovalGatePath == "" {
-		gate, err = approval.NewGate(nil)
-	} else {
-		var data []byte
-		if data, err = os.ReadFile(cfg.ApprovalGatePath); err == nil {
-			gate, err = approval.Parse(data)
-		}
-	}
-	if err != nil {
-		t.Fatalf("load gate: %v", err)
-	}
-	files, err := startuptest.Files(got.(*ca.CA), gate, cfg.StorePath)
+	files, err := startuptest.Files(got.(*ca.CA), cfg.StorePath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +33,7 @@ func testStartupFiles(t testing.TB, cfg Config) startup.Files {
 }
 
 // newServer refuses Files that did not come from the check — the zero value is all a
-// production file can make without startup.Open — so no path builds the server ungated.
+// production file can make without startup.Open.
 func TestNewServer_RefusesFilesNotFromTheCheck(t *testing.T) {
 	srv, deps, err := newServer(baseTestConfig(t), startup.Files{})
 	if err == nil || srv != nil || deps != nil {

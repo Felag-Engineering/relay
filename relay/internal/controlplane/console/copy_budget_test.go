@@ -92,9 +92,9 @@ const (
 // too — an unknown paragraph is presumed to be prose until classified.
 var measuredClasses = map[string]bool{
 	"p.note": true, "p.gap": true, "p.lede": true, "p.kindnote": true,
-	"p.scoped":  true,
-	"p.lanekey": true,
-	"span.note": true, "span.gap": true,
+	"p.scoped":    true,
+	"p.lanekey":   true,
+	"span.note":   true,
 	"span.jcnote": true, "span.phint": true,
 	"div.evnote": true, "p.fielderr": true, "p.unfilterednote": true, "div.fhint": true,
 	"p.confirmq": true,

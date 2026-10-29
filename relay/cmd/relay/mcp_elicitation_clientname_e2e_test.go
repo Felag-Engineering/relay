@@ -141,7 +141,7 @@ func TestMCPElicitation_AnyElicitingClientIsAskedOnAnySession(t *testing.T) {
 	})
 
 	t.Run("OAuth session of a human Account", func(t *testing.T) {
-		f, idp := startOAuthElicitingRelay(t, gateAllMutatesInBandAskable)
+		f, idp := startOAuthElicitingRelay(t, gateAllMutates)
 		createAccount(t, f, "hana", accounts.KindHuman, accounts.RoleAdmin)
 		askApproval(t, connectNamed(t, f, idp.token(t, "hana"), ""), restartNginxArgs())
 	})
@@ -192,7 +192,7 @@ func TestMCPElicitation_ClaudeCodeOnAnAPITokenSessionIsAskedAndItsAnswerCounts(t
 //
 // Proves AP-86, AP-87, AP-79.
 func TestMCPElicitation_ClaudeCodeOnAMachineOAuthSessionIsAskedButNeedsAResponder(t *testing.T) {
-	f, idp := startOAuthElicitingRelay(t, gateAllMutatesInBandAskable)
+	f, idp := startOAuthElicitingRelay(t, gateAllMutates)
 	createAccount(t, f, "bot", accounts.KindMachine, accounts.RoleAdmin)
 	token := idp.token(t, "bot")
 	session := connectClaudeCode(t, f, token)
@@ -224,10 +224,13 @@ func TestMCPElicitation_ClaudeCodeOnAMachineOAuthSessionIsAskedButNeedsAResponde
 // responder assertion, on an OAuth session of a human Account, is recorded
 // as that human's own verified in-band decision — approved dispatches, a
 // denial is terminal, and nothing lands in the asserted lane either way,
-// even when the caller sends a stray X-Relay-On-Behalf-Of header.
+// even when the caller sends a stray X-Relay-On-Behalf-Of header. The human
+// answers the park their own session created, which a human may do (AP-11).
+//
+// Proves AP-79, AP-11.
 func TestMCPElicitation_ClaudeCodeOnAnOAuthHumanSessionIsTheHumansVerifiedDecision(t *testing.T) {
 	t.Run("accept dispatches, verified as the human, nothing asserted", func(t *testing.T) {
-		f, idp := startOAuthElicitingRelay(t, gateAllMutatesInBandAskable)
+		f, idp := startOAuthElicitingRelay(t, gateAllMutates)
 		accountID := createAccount(t, f, "hana", accounts.KindHuman, accounts.RoleAdmin)
 		token := idp.token(t, "hana")
 		session := connectClaudeCode(t, f, token)
@@ -281,7 +284,7 @@ func TestMCPElicitation_ClaudeCodeOnAnOAuthHumanSessionIsTheHumansVerifiedDecisi
 	})
 
 	t.Run("decline is a terminal denial, nothing asserted", func(t *testing.T) {
-		f, idp := startOAuthElicitingRelay(t, gateAllMutatesInBandAskable)
+		f, idp := startOAuthElicitingRelay(t, gateAllMutates)
 		accountID := createAccount(t, f, "hana", accounts.KindHuman, accounts.RoleAdmin)
 		token := idp.token(t, "hana")
 		session := connectClaudeCode(t, f, token)
@@ -331,7 +334,7 @@ func TestMCPElicitation_ClaudeCodeOnAnOAuthHumanSessionIsTheHumansVerifiedDecisi
 	})
 
 	t.Run("a stray X-Relay-On-Behalf-Of header still records nothing asserted", func(t *testing.T) {
-		f, idp := startOAuthElicitingRelay(t, gateAllMutatesInBandAskable)
+		f, idp := startOAuthElicitingRelay(t, gateAllMutates)
 		accountID := createAccount(t, f, "hana", accounts.KindHuman, accounts.RoleAdmin)
 		token := idp.token(t, "hana")
 
@@ -369,68 +372,6 @@ func TestMCPElicitation_ClaudeCodeOnAnOAuthHumanSessionIsTheHumansVerifiedDecisi
 	})
 }
 
-// TestMCPElicitation_ClaudeCodeHumanAnswerMeetsTheSameRefusals is AP-79's
-// "same refusals" claim, proven end to end wherever it is reachable through
-// the real composition root.
-//
-// Requester exclusion is NOT reachable end to end and is not attempted here:
-// AP-61 never emits a question where the rule excludes the requester (the
-// gate is checked before Askable is ever set), and the seal binds an answer
-// to the Account that was asked — so no Claude Code retry can ever arrive at
-// a request its own Account was excluded from answering. That half of "the
-// same refusals" is proven at the capability seam
-// (TestDecideApproval_InBandHumanWithNoAssertedApproverIsVerified, subtest
-// "requester_allowed false") and, for the adapter's classification of it,
-// at the MCP acceptance seam (TestElicitedAnswer_VerifiedFormMeetsTheSameRefusals).
-func TestMCPElicitation_ClaudeCodeHumanAnswerMeetsTheSameRefusals(t *testing.T) {
-	t.Run("duplicate decider: a second answer from the same human records nothing new", func(t *testing.T) {
-		f, idp := startOAuthElicitingRelay(t, gateCountTwoInBandAskable)
-		createAccount(t, f, "hana", accounts.KindHuman, accounts.RoleAdmin)
-		token := idp.token(t, "hana")
-		session := connectClaudeCode(t, f, token)
-
-		q, qid, requestID, _ := askApproval(t, session, restartNginxArgs())
-
-		first := answerWithNoResponder(t, session, restartNginxArgs(), q, qid, "accept")
-		if first.NeedsInput() {
-			t.Fatalf("first answer: NeedsInput() = true, want false (a partial quorum's park is OBSERVED, not askable)")
-		}
-		if first.IsError {
-			t.Fatalf("first answer: IsError = true, content=%+v", first.Content)
-		}
-		var firstOut mcp.RunOrPlanOutput
-		relaytest.DecodeToolJSON(t, first, &firstOut)
-		if firstOut.Decision == nil || firstOut.Decision.Progress != "1 of 2" {
-			t.Fatalf("first answer decision = %+v, want progress 1 of 2", firstOut.Decision)
-		}
-		if firstOut.JobID != "" {
-			t.Errorf("JobID after the first answer = %q, want empty (still pending)", firstOut.JobID)
-		}
-
-		second := answerWithNoResponder(t, session, restartNginxArgs(), q, qid, "accept")
-		var secondOut mcp.RunOrPlanOutput
-		relaytest.DecodeToolJSON(t, second, &secondOut)
-		assertDuplicateDeciderNotRecorded(t, "second (same human) answer", secondOut)
-
-		if got := len(decisionRecordsFor(t, f, requestID)); got != 1 {
-			t.Errorf("decision records = %d, want exactly 1 (the duplicate recorded nothing new)", got)
-		}
-		if got := len(allJobs(t, f)); got != 0 {
-			t.Errorf("Jobs = %d, want 0 — count:2 never reached with only one distinct approver", got)
-		}
-	})
-
-	t.Run("an out-of-band rule is not asked (AP-13/AP-69)", func(t *testing.T) {
-		f, idp := startOAuthElicitingRelay(t, gateAllMutatesOutOfBandAskable)
-		createAccount(t, f, "hana", accounts.KindHuman, accounts.RoleAdmin)
-		token := idp.token(t, "hana")
-		session := connectClaudeCode(t, f, token)
-
-		res := relaytest.CallTool(t, session, "run_operation", restartNginxArgs())
-		assertNotAskedPendingApproval(t, res)
-	})
-}
-
 // TestMCPElicitation_SpoofedClientNamesEarnNothingBeyondBeingAsked is
 // AP-86/AP-87's anti-escalation proof: the declared name is self-reported, so
 // it earns nothing beyond being asked. On a machine OAuth session each of
@@ -442,7 +383,7 @@ func TestMCPElicitation_ClaudeCodeHumanAnswerMeetsTheSameRefusals(t *testing.T) 
 func TestMCPElicitation_SpoofedClientNamesEarnNothingBeyondBeingAsked(t *testing.T) {
 	for _, name := range []string{relaytest.ClaudeCodeClientName, relaytest.GleipnirClientName, ""} {
 		t.Run("machine OAuth session, name "+name, func(t *testing.T) {
-			f, idp := startOAuthElicitingRelay(t, gateAllMutatesInBandAskable)
+			f, idp := startOAuthElicitingRelay(t, gateAllMutates)
 			createAccount(t, f, "bot", accounts.KindMachine, accounts.RoleAdmin)
 			session := connectNamed(t, f, idp.token(t, "bot"), name)
 
@@ -492,32 +433,6 @@ func TestMCPElicitation_SpoofedClientNamesEarnNothingBeyondBeingAsked(t *testing
 	}
 }
 
-// assertDuplicateDeciderNotRecorded asserts out is the classifyElicitedDecision
-// shape a still-pending request's SECOND decision from the SAME Account
-// gets (approval.ErrDuplicateDecider, tools_approval.go's classifyElicitedDecision):
-// re-parked as an OBSERVED, non-askable pending_approval (AP-62) with a
-// Decision block whose Channel and OnBehalfOf are BLANK — nothing was
-// recorded — never an AnswerRefused block, because the request itself is
-// still open to a DIFFERENT Account.
-func assertDuplicateDeciderNotRecorded(t *testing.T, label string, out mcp.RunOrPlanOutput) {
-	t.Helper()
-	if out.AnswerRefused != nil {
-		t.Errorf("%s: AnswerRefused = %+v, want nil (a duplicate decider on a still-pending request is not a refusal)", label, out.AnswerRefused)
-	}
-	if out.PendingApproval == nil {
-		t.Fatalf("%s: PendingApproval is nil, want the still-pending, OBSERVED park", label)
-	}
-	if out.Decision == nil {
-		t.Fatalf("%s: Decision is nil, want a decision block reporting nothing new was recorded", label)
-	}
-	if out.Decision.Channel != "" || out.Decision.OnBehalfOf != "" {
-		t.Errorf("%s: Decision = %+v, want empty Channel/OnBehalfOf — this Account's answer was NOT recorded", label, out.Decision)
-	}
-	if out.JobID != "" {
-		t.Errorf("%s: JobID = %q, want empty", label, out.JobID)
-	}
-}
-
 // TestMCPElicitation_ResponderOnAnOAuthHumanSessionIsIgnored is AP-79's e2e
 // proof that a signed-in human session ignores a present
 // io.gleipnir/responder completely: the answer is recorded as the human's
@@ -539,7 +454,7 @@ func TestMCPElicitation_ResponderOnAnOAuthHumanSessionIsIgnored(t *testing.T) {
 
 	for _, c := range connectors {
 		t.Run(c.name, func(t *testing.T) {
-			f, idp := startOAuthElicitingRelay(t, gateAllMutatesInBandAskable)
+			f, idp := startOAuthElicitingRelay(t, gateAllMutates)
 			accountID := createAccount(t, f, "hana", accounts.KindHuman, accounts.RoleAdmin)
 			token := idp.token(t, "hana")
 			session := c.connect(t, f, token)
@@ -594,7 +509,7 @@ func TestMCPElicitation_ResponderOnAnOAuthHumanSessionIsIgnored(t *testing.T) {
 // TestMCPElicitation_SpoofedClientNamesEarnNothingBeyondBeingAsked.
 func TestMCPElicitation_GleipnirOnAnOAuthHumanSessionIsTheHumansVerifiedDecision(t *testing.T) {
 	t.Run("accept dispatches, verified as the human, nothing asserted", func(t *testing.T) {
-		f, idp := startOAuthElicitingRelay(t, gateAllMutatesInBandAskable)
+		f, idp := startOAuthElicitingRelay(t, gateAllMutates)
 		accountID := createAccount(t, f, "hana", accounts.KindHuman, accounts.RoleAdmin)
 		token := idp.token(t, "hana")
 		session := connectEliciting(t, f, token)
@@ -644,7 +559,7 @@ func TestMCPElicitation_GleipnirOnAnOAuthHumanSessionIsTheHumansVerifiedDecision
 	})
 
 	t.Run("decline is a terminal denial, nothing asserted", func(t *testing.T) {
-		f, idp := startOAuthElicitingRelay(t, gateAllMutatesInBandAskable)
+		f, idp := startOAuthElicitingRelay(t, gateAllMutates)
 		accountID := createAccount(t, f, "hana", accounts.KindHuman, accounts.RoleAdmin)
 		token := idp.token(t, "hana")
 		session := connectEliciting(t, f, token)
@@ -702,7 +617,7 @@ func TestMCPElicitation_GleipnirOnAnOAuthHumanSessionIsTheHumansVerifiedDecision
 // acceptElicitedAnswer for real.
 func TestMCPElicitation_MachineOAuthSessionNeverTakesTheVerifiedPath(t *testing.T) {
 	t.Run("no responder is a machine self-decision", func(t *testing.T) {
-		f, idp := startOAuthElicitingRelay(t, gateAllMutatesInBandAskable)
+		f, idp := startOAuthElicitingRelay(t, gateAllMutates)
 		createAccount(t, f, "bot", accounts.KindMachine, accounts.RoleAdmin)
 		token := idp.token(t, "bot")
 		session := connectEliciting(t, f, token)
@@ -724,7 +639,7 @@ func TestMCPElicitation_MachineOAuthSessionNeverTakesTheVerifiedPath(t *testing.
 	})
 
 	t.Run("a valid responder still takes the named path (AP-87)", func(t *testing.T) {
-		f, idp := startOAuthElicitingRelay(t, gateAllMutatesInBandAskable)
+		f, idp := startOAuthElicitingRelay(t, gateAllMutates)
 		accountID := createAccount(t, f, "bot", accounts.KindMachine, accounts.RoleAdmin)
 		token := idp.token(t, "bot")
 		session := connectEliciting(t, f, token)
@@ -764,7 +679,7 @@ func TestMCPElicitation_HumanAPITokenSessionAnswerIsTheHumansTokenSessionDecisio
 	token := mintAccount(t, f, "hana-api", accounts.KindHuman, accounts.RoleOperator)
 	session := connectEliciting(t, f, token)
 
-	// gateAllMutatesInBandAskable has requester_allowed true, so hana-api is
+	// gateAllMutates puts no limit on who may decide, so hana-api is
 	// asked about its own request.
 	q, qid, requestID, _ := askApproval(t, session, restartNginxArgs())
 	res := answerWithNoResponder(t, session, restartNginxArgs(), q, qid, "accept")

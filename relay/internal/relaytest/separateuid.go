@@ -304,7 +304,7 @@ func (l *RelayLayout) WriteConfig(t *testing.T, body string) string {
 }
 
 // WriteFile writes body to name in ConfigDir with the given owner, group and octal mode, and
-// returns its path: how a test places a secret or gate file, or a configuration file the
+// returns its path: how a test places a secret file, or a configuration file the
 // start-time check must refuse.
 func (l *RelayLayout) WriteFile(t *testing.T, name, body, owner, group, mode string) string {
 	t.Helper()

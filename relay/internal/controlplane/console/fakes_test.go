@@ -1103,7 +1103,7 @@ func sweepFixture() Deps {
 		// Partly signed, by one human and one machine decider, so the
 		// snapshot producer renders the Decisions table and both kind labels
 		// (00-foundations.md, "Kind label") rather than an empty card.
-		{ID: "ap-1", ExpiresAt: testNow.Add(time.Hour), Require: approval.Requirement{Count: 3},
+		{ID: "ap-1", ExpiresAt: testNow.Add(time.Hour),
 			Decisions: []approval.Decision{
 				{Account: "mike", AccountID: "acct-mike", Approve: true, Channel: approval.ChannelOutOfBand, DeciderHuman: true, At: testNow.Add(-time.Hour)},
 				{Account: "gleipnir-prod", AccountID: sweepMachineAccountID, Approve: true, Channel: approval.ChannelInBand, OnBehalfOf: "carol", At: testNow.Add(-30 * time.Minute)},

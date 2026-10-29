@@ -877,7 +877,7 @@ func TestRun_TemplateApprovalGateMatchesTheResolvedClass(t *testing.T) {
 	gate, err := approval.NewGate([]approval.Rule{{
 		Name:    "mutates-need-a-human",
 		Match:   approval.Match{RiskClass: jobs.RiskClassMutate},
-		Require: approval.Requirement{Count: 1, RequesterAllowed: true, Channel: approval.ChannelOutOfBand, TTL: time.Hour},
+		Require: approval.Requirement{TTL: time.Hour},
 	}})
 	if err != nil {
 		t.Fatalf("NewGate: %v", err)
@@ -916,7 +916,7 @@ func TestRun_TemplateApprovalReparksWhenTheReportingSetChanges(t *testing.T) {
 		"node-a": reported(mutateTemplate("svc.restart")),
 		"node-b": reported(mutateTemplate("svc.restart")),
 	}
-	s, disp := templateApprovalFixture(t, []string{"node-a", "node-b", "node-c"}, vocab, gateEverything(t, 1), store)
+	s, disp := templateApprovalFixture(t, []string{"node-a", "node-b", "node-c"}, vocab, gateEverything(t), store)
 
 	_, err := s.Run(context.Background(), machineRequester, Selector{}, templateAction("svc.restart", nil))
 	var first *ParkedError
@@ -956,7 +956,7 @@ func TestRun_TemplateApprovalReparksWhenAReportedClassChanges(t *testing.T) {
 		"node-a": reported(readTemplate("svc.thing")),
 		"node-b": reported(readTemplate("svc.thing")),
 	}
-	s, disp := templateApprovalFixture(t, []string{"node-a", "node-b"}, vocab, gateEverything(t, 1), store)
+	s, disp := templateApprovalFixture(t, []string{"node-a", "node-b"}, vocab, gateEverything(t), store)
 
 	_, err := s.Run(context.Background(), machineRequester, Selector{}, templateAction("svc.thing", nil))
 	var first *ParkedError

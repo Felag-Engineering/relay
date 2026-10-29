@@ -168,7 +168,7 @@ func TestRun_ReservedDispatchIsAuditedWhenTheClientDropsMidDispatch(t *testing.T
 	s := build(t, seams{reg: reg,
 		authz: &spyAuthorizer{}, cap: &spyCapChecker{},
 		audit: auditSink, freeze: &fakeFreezeStore{},
-		gate: gateEverything(t, 1), approvals: approvalsRepo, approvalAuthz: &spyApprovalAuthorizer{},
+		gate: gateEverything(t), approvals: approvalsRepo, approvalAuthz: &spyApprovalAuthorizer{},
 		jobsRepo: st.Jobs(), tasksRepo: st.Tasks(), conduit: conduit,
 		now: func() time.Time { return apNow },
 	})
@@ -257,7 +257,7 @@ func TestRun_ReservedDispatchAuditWriteFailureIsLoggedForAnOperator(t *testing.T
 	s := build(t, seams{reg: reg,
 		authz: &spyAuthorizer{}, cap: &spyCapChecker{},
 		audit: auditSink, freeze: &fakeFreezeStore{},
-		gate: gateEverything(t, 1), approvals: store, approvalAuthz: &spyApprovalAuthorizer{},
+		gate: gateEverything(t), approvals: store, approvalAuthz: &spyApprovalAuthorizer{},
 		now: func() time.Time { return apNow },
 	})
 	s.disp = disp

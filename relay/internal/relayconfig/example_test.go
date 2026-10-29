@@ -67,6 +67,11 @@ func TestExampleRelayTOML_MatchesConfig(t *testing.T) {
 	t.Run("every schema key is in the example", func(t *testing.T) {
 		idx := keyLines([]byte(all))
 		for _, key := range schemaKeys() {
+			// The example carries no gate rule of its own: the packaged rules
+			// are a separate decision, so it only describes the section.
+			if key == "approval.rules" {
+				continue
+			}
 			if _, ok := idx.lines[key]; !ok {
 				t.Errorf("%s is a schema key missing from relay.toml.example", key)
 			}

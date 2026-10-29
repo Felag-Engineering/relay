@@ -83,7 +83,7 @@ func TestPreflightNeverConsultsTheApprovalGate(t *testing.T) {
 
 	jobsRepo, tasksRepo := testEngineStore(t)
 	store := newMemApprovals()
-	gate := &countingApprovalGate{inner: gateEverything(t, 1)}
+	gate := &countingApprovalGate{inner: gateEverything(t)}
 
 	svc := build(t, seams{reg: reg,
 		authz:  &spyAuthorizer{},
@@ -132,7 +132,7 @@ func TestPreflightNeverConsultsTheApprovalGate(t *testing.T) {
 }
 
 // TestPlanPreflightNeverEmitsAQuestion is PF-23's guard against S2b's askable
-// park (docs/specs/approval.md AP-61/AP-62/AP-69): a preflight of an Action a
+// park (docs/specs/approval.md AP-62/AP-81): a preflight of an Action a
 // gate rule would park ASKABLY is still answered like any other preflight —
 // it consults the gate zero times and writes nothing to the approval store —
 // exactly as TestPreflightNeverConsultsTheApprovalGate proves for a plain
@@ -157,7 +157,7 @@ func TestPlanPreflightNeverEmitsAQuestion(t *testing.T) {
 
 	jobsRepo, tasksRepo := testEngineStore(t)
 	store := newMemApprovals()
-	gate := &countingApprovalGate{inner: ruleGate(t, inBandRule("askable"))}
+	gate := &countingApprovalGate{inner: ruleGate(t, gatingRule("askable"))}
 
 	svc := build(t, seams{reg: reg,
 		authz:  &spyAuthorizer{},

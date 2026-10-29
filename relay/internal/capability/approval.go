@@ -3,7 +3,6 @@ package capability
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/Felag-Engineering/relay/relay/internal/approval"
@@ -94,9 +93,6 @@ type ApprovalNotice struct {
 	Summary     string
 	RequestedBy string
 	Rules       []string
-	Progress    string
-	Count       int
-	Channel     string
 	ExpiresAt   time.Time
 }
 
@@ -236,9 +232,6 @@ type ParkedError struct {
 	// Summary is the Relay-authored description of what is waiting.
 	Summary string
 
-	// Progress renders partial quorum ("0 of 2").
-	Progress string
-
 	// Rules names the gate rules that parked this dispatch, so the answer to
 	// "why is this waiting?" travels with the error.
 	Rules []string
@@ -246,26 +239,18 @@ type ParkedError struct {
 	// ExpiresAt is when the parked request lapses.
 	ExpiresAt time.Time
 
-	// Askable reports whether THIS park can be asked about in-band by THIS
-	// caller, on THIS call — the fact an MCP surface needs to decide whether to
-	// render an actual question or the opaque `pending_approval` result (S2b;
-	// docs/specs/approval.md AP-61, AP-62, AP-69).
+	// Askable reports whether THIS park can be asked about in-band on THIS call
+	// — the fact an MCP surface needs to decide whether to render an actual
+	// question or the opaque `pending_approval` result (docs/specs/approval.md
+	// AP-62, AP-81).
 	//
-	// It is decided here, in checkApproval, because the capability layer is the
-	// one place the merged Requirement and the calling Principal are held
-	// together (invariant 10): a surface reads this field and never
-	// recomputes any of its terms.
-	//
-	// All four of these hold, or the park is not askable:
-	//  1. the rule's channel is satisfiable in-band;
-	//  2. the rule does not exclude the requester (RequesterAllowed) — an
-	//     in-band answer is authenticated as the requesting session's own
-	//     Account, so a requester-excluded rule refuses it unconditionally;
-	//  3. the rule's audience admits that Account (an empty audience admits
-	//     it; a malformed one admits no one);
-	//  4. this call CREATED the park, rather than observing one already
-	//     pending — the same created/observed distinction that gates
-	//     NotifyParked and AP-41's audit.
+	// It is true exactly when this call CREATED the park, rather than observing
+	// one already pending — the same created/observed distinction that gates
+	// NotifyParked and AP-41's audit. No rule term can make a park unaskable: a
+	// rule names no channel, audience or requester exclusion (AP-81). It is
+	// decided here, in checkApproval, because the capability layer is the one
+	// place that knows whether the call created the park (invariant 10): a
+	// surface reads this field and never recomputes it.
 	//
 	// There is deliberately no role-floor term: the caller already passed
 	// Authorize for this Action, and the decision floor
@@ -278,16 +263,16 @@ type ParkedError struct {
 	// created one.
 	//
 	// The zero value (false) is the safe direction: a literal-built
-	// ParkedError, an observed re-drive, and every non-askable park all render
-	// as today's opaque pending_approval.
+	// ParkedError and an observed re-drive render as the opaque
+	// pending_approval.
 	Askable bool
 }
 
 func (e *ParkedError) Error() string {
 	return fmt.Sprintf(
-		"capability: dispatch parked for approval (ADR-0027): %s — request %s, %s approved, gated by %v, expires %s. "+
+		"capability: dispatch parked for approval (ADR-0027): %s — request %s, gated by %v, expires %s. "+
 			"Nothing has been dispatched; the Job runs only once the requirement is satisfied.",
-		e.Summary, e.RequestID, e.Progress, e.Rules, e.ExpiresAt.UTC().Format(time.RFC3339))
+		e.Summary, e.RequestID, e.Rules, e.ExpiresAt.UTC().Format(time.RFC3339))
 }
 
 // approvalDecision is the internal result of consulting the gate for one
@@ -346,19 +331,6 @@ func (a *Approvals) checkApproval(ctx context.Context, p Principal, sel Selector
 	if !gated {
 		return approvalDecision{proceed: true}, nil
 	}
-	// A blank audience entry never becomes an approver: refused here, before
-	// any Request is created, so a non-validating ApprovalGate cannot park a
-	// dispatch behind a Request that reads back unrestricted. This is the
-	// single call site for whatever Evaluate returns, including a Requirement
-	// *approval.Gate merged from several matching rules (mergeStricter): that
-	// merge never lets an unrestricted rule's audience absorb a malformed one
-	// — a blank entry survives the merge (see unionAudience) — so a merge
-	// upstream cannot defeat this check. A real *approval.Gate cannot produce
-	// a malformed Requirement in the first place (approval.Rule.Validate).
-	if err := approval.ValidateAudience(req.Audience); err != nil {
-		return approvalDecision{}, fmt.Errorf("capability: dispatch approval requirement from rules %s: require.audience: %w", strings.Join(rules, ", "), err)
-	}
-
 	now := time.Now().UTC()
 	if a.now != nil {
 		now = a.now()
@@ -375,7 +347,7 @@ func (a *Approvals) checkApproval(ctx context.Context, p Principal, sel Selector
 	existing, lookupErr := a.store.ByPlanHash(ctx, planHash)
 
 	// An approval releases one execution (AP-77): a Request that is Satisfied
-	// (approved, inside its deadline, quorum met) and has already bound a Job
+	// (approved and inside its deadline) and has already bound a Job
 	// never falls into the unbound case below, so a re-drive re-attaches to that
 	// Job and dispatches nothing. Once the deadline passes, Satisfied is false,
 	// the approved row is not pending, and the dispatch falls through to a fresh
@@ -426,49 +398,10 @@ func (a *Approvals) checkApproval(ctx context.Context, p Principal, sel Selector
 		return approvalDecision{}, fmt.Errorf("capability: park dispatch for approval: %w", err)
 	}
 	// This call CREATED r (as opposed to the "already waiting" branch above,
-	// which observed one), so — and only so — Askable is computed against it.
-	// r.Require is the normalized Requirement a.gate.Evaluate returned, already
-	// merged across every matching rule for a real *approval.Gate
-	// (mergeStricter): the boolean below is read from that merge, never from
-	// one rule.
+	// which observed one), so — and only so — the park is askable.
 	pe := parkedErrorFor(r)
-	pe.Askable = askableBy(r, p)
+	pe.Askable = true
 	return approvalDecision{parked: pe, created: &r}, nil
-}
-
-// askableBy decides ParkedError.Askable's non-channel, non-created terms: does
-// r's Requirement admit p as an in-band decider? It mirrors
-// approval.Request.inAudience's own reading of an audience exactly —
-// TestAskableAudienceReadsAsDecideDoes pins the two together — rather than
-// exporting inAudience out of package approval, which is out of this issue's
-// scope.
-func askableBy(r approval.Request, p Principal) bool {
-	// Equality, not "at least in-band": the stored Requirement is normalized
-	// (approval.Requirement.normalized), so ChannelUnspecified cannot occur
-	// here, and if it somehow did it must fail closed rather than read as
-	// satisfiable.
-	if r.Require.Channel != approval.ChannelInBand {
-		return false
-	}
-	// An in-band answer is authenticated as the requesting session's own
-	// Account, and on a created park that Account is always
-	// r.RequestedByID == p.AccountID — so a requester-excluded rule refuses it
-	// unconditionally (ErrRequesterExcluded, AP-43).
-	if !r.Require.RequesterAllowed {
-		return false
-	}
-	if r.Require.AudienceMalformed() {
-		return false
-	}
-	if len(r.Require.Audience) == 0 {
-		return true
-	}
-	for _, a := range r.Require.Audience {
-		if strings.EqualFold(a, p.Account) {
-			return true
-		}
-	}
-	return false
 }
 
 // noticeFor projects a parked Request into the value an ApprovalNotifier is
@@ -480,9 +413,6 @@ func noticeFor(r approval.Request) ApprovalNotice {
 		Summary:     r.Summary,
 		RequestedBy: r.RequestedBy,
 		Rules:       r.MatchedRules,
-		Progress:    r.Progress(),
-		Count:       r.Require.Count,
-		Channel:     r.Require.Channel.String(),
 		ExpiresAt:   r.ExpiresAt,
 	}
 }
@@ -492,7 +422,6 @@ func parkedErrorFor(r approval.Request) *ParkedError {
 		RequestID: r.ID,
 		PlanHash:  r.PlanHash,
 		Summary:   r.Summary,
-		Progress:  r.Progress(),
 		Rules:     r.MatchedRules,
 		ExpiresAt: r.ExpiresAt,
 	}

@@ -34,10 +34,7 @@ func testNotice() capability.ApprovalNotice {
 		PlanHash:    "hash-abc",
 		Summary:     `service.restart(service="nginx") [mutate] on 12 node(s): node-a, node-b`,
 		RequestedBy: "gleipnir-prod",
-		Rules:       []string{"prod-mutates-need-two-people"},
-		Progress:    "0 of 2",
-		Count:       2,
-		Channel:     "out-of-band",
+		Rules:       []string{"prod-mutates-need-a-human"},
 		ExpiresAt:   notifyNow.Add(2 * time.Hour),
 	}
 }
@@ -113,8 +110,15 @@ func TestDeliversTheRelayAuthoredNotice(t *testing.T) {
 	if body.DecisionPath != "/api/v1/approvals/req-1/decision" {
 		t.Errorf("decision_path = %q, want the authenticated decision endpoint", body.DecisionPath)
 	}
-	if body.RequiredCount != 2 || body.Progress != "0 of 2" {
-		t.Errorf("body = %+v, want the quorum state visible", body)
+	// One Decision ends a request, so the body names no progress, count or channel.
+	var raw map[string]any
+	if err := json.Unmarshal(got.body, &raw); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	for _, key := range []string{"progress", "required_count", "channel"} {
+		if _, present := raw[key]; present {
+			t.Errorf("body carries %q, want it dropped", key)
+		}
 	}
 }
 

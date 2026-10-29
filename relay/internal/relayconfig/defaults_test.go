@@ -55,20 +55,6 @@ func TestDefaults_ReadAndMutateCapsAreThePinnedValues(t *testing.T) {
 	}
 }
 
-// Proves RC-22.
-func TestApprovalGatePathAbsentMeansNoGate(t *testing.T) {
-	if got := mustLoad(t, minimal).Approval.GateRulesPath; got != "" {
-		t.Fatalf("GateRulesPath = %q, want none", got)
-	}
-	cfg := mustLoad(t, minimal+"[approval]\ngate_rules_path = \"/etc/relay/approval-gates.json\"\n")
-	if cfg.Approval.GateRulesPath != "/etc/relay/approval-gates.json" {
-		t.Fatalf("GateRulesPath = %q", cfg.Approval.GateRulesPath)
-	}
-	if got := loadErr(t, minimal+"[approval]\ngate_rules_path = \"\"\n"); !strings.Contains(got, "approval.gate_rules_path (line 8)") {
-		t.Fatalf("an empty path must be refused, not read as no gate: %q", got)
-	}
-}
-
 // variantOAuth builds a control plane with OAuth; an empty argument leaves
 // that key out.
 func variantOAuth(issuer, audience, claim, scope, publicURL string) string {
@@ -118,7 +104,7 @@ func TestEveryKeyReachesConfig(t *testing.T) {
 		"oauth.account_claim":           oauth(oauthIssuer, "relay", "sub", "", oauthPublic),
 		"oauth.required_scope":          oauth(oauthIssuer, "relay", "", "relay.operate", oauthPublic),
 		"oauth.public_url":              oauth(oauthIssuer, "relay", "", "", "https://other.example.internal"),
-		"approval.gate_rules_path":      m("[approval]\ngate_rules_path = \"/etc/relay/gates.json\"\n"),
+		"approval.rules":                m("[[approval.rules]]\nname = \"r\"\n"),
 		"approval.webhook_url_file":     m("[approval]\nwebhook_url_file = \"/etc/relay/hook.url\"\n"),
 		"approval.webhook_secret_file":  webhook("webhook_secret_file = \"/etc/relay/hook.secret\"\n"),
 		"log.level":                     m("[log]\nlevel = \"debug\"\n"),
@@ -145,7 +131,7 @@ func TestEveryKeyReachesConfig(t *testing.T) {
 		"oauth.account_claim":           func(c Config) any { return c.OAuth.AccountClaim },
 		"oauth.required_scope":          func(c Config) any { return c.OAuth.RequiredScope },
 		"oauth.public_url":              func(c Config) any { return c.OAuth.PublicURL },
-		"approval.gate_rules_path":      func(c Config) any { return c.Approval.GateRulesPath },
+		"approval.rules":                func(c Config) any { return c.Approval.Rules },
 		"approval.webhook_url_file":     func(c Config) any { return c.Approval.WebhookURL },
 		"approval.webhook_secret_file":  func(c Config) any { return c.Approval.WebhookSecret },
 		"log.level":                     func(c Config) any { return c.Log.Level },

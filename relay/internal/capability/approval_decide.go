@@ -65,11 +65,11 @@ var ErrApprovalUnavailable = errors.New("capability: approvals are not configure
 // PendingApprovals returns every Request still awaiting a decision, oldest
 // deadline first.
 //
-// Every authenticated caller may read the queue; the audience on a rule
-// restricts who may DECIDE, not who may see that a decision is owed. Narrowing
-// visibility to the audience would hide the fleet's pending state from the
-// operators watching it, and the queue's contents are Relay-authored summaries
-// of actions those operators can already read in the audit trail.
+// Every authenticated caller may read the queue; the role floor restricts who
+// may DECIDE, not who may see that a decision is owed. Narrowing visibility
+// would hide the fleet's pending state from the operators watching it, and the
+// queue's contents are Relay-authored summaries of actions those operators can
+// already read in the audit trail.
 //
 // Requests whose deadline has passed are filtered out even if the sweeper has
 // not retired them yet, so the queue never advertises something undecidable.
@@ -121,13 +121,13 @@ func (a *Approvals) Approval(ctx context.Context, id string) (approval.Request, 
 //  2. Authorize p for that Action kind — an operator may not release a Raw Exec
 //     they could not have requested (ApprovalAuthorizer).
 //  3. Hand the whole eligibility question to the domain, inside the store's
-//     transaction (requester exclusion, machine self-decision, audience,
-//     duplicate decider, plan hash, channel strength, quorum arithmetic).
+//     transaction (pending, machine self-decision, plan hash). The first
+//     Decision no refusal stops ends the request (AP-82).
 //
 // Nothing dispatches here. A satisfied Requirement means the next drive of the
 // same Plan proceeds; see this file's header.
 //
-// On ErrNotPending or ErrDuplicateDecider, the returned Request is the one as
+// On ErrNotPending, the returned Request is the one as
 // it now stands, read atomically with the refusal (state, decisions, bound
 // JobID) — see requestOnRefusal and the rationale on Approvals.Approval. A
 // lapsed Request the sweeper has not retired yet comes back as StatePending
@@ -136,11 +136,10 @@ func (a *Approvals) Approval(ctx context.Context, id string) (approval.Request, 
 // the zero value.
 //
 // On ErrNotPending specifically, this Request comes back whether or not p
-// would have been eligible to decide it: eligibility (requester exclusion,
-// machine self-decision, audience, channel strength) is checked after
-// Terminal/Expired inside the domain, so a caller who fails every eligibility
-// check still gets the terminal or lapsed Request here — it is a read of what
-// the Request now is, not proof p could have decided it. A surface that
+// would have been eligible to decide it: eligibility (machine self-decision)
+// is checked after Terminal/Expired inside the domain, so a caller who fails
+// every eligibility check still gets the terminal or lapsed Request here. It is
+// a read of what the Request now is, not proof p could have decided it. A surface that
 // exposes this value must narrow it to what that surface may already read.
 func (a *Approvals) DecideApproval(ctx context.Context, p Principal, in ApprovalDecision) (approval.Request, error) {
 	return a.decide(ctx, p, in, approval.IdentifiedByUnrecorded)
@@ -210,9 +209,8 @@ func (a *Approvals) decide(ctx context.Context, p Principal, in ApprovalDecision
 	}
 
 	// The decision is audited whether it approved or denied, and whether or not
-	// it completed a quorum: ADR-0027 makes each decision its own first-class
-	// record, so "1 of 2 signed and then it expired" is answerable rather than
-	// being an absence.
+	// it ended the request: ADR-0027 makes each decision its own first-class
+	// record.
 	//
 	// The audit write is attempted after the decision is durably recorded, and
 	// its failure is joined to the (real, already-persisted) result rather than
@@ -328,12 +326,8 @@ func isApprovalDomainError(err error) bool {
 	for _, sentinel := range []error{
 		approval.ErrNotFound,
 		approval.ErrNotPending,
-		approval.ErrRequesterExcluded,
-		approval.ErrNotInAudience,
-		approval.ErrDuplicateDecider,
 		approval.ErrPlanChanged,
 		approval.ErrMachineSelfDecision,
-		approval.ErrWeakChannel,
 	} {
 		if errors.Is(err, sentinel) {
 			return true
@@ -347,22 +341,19 @@ func isApprovalDomainError(err error) bool {
 // sentinel has to be classified deliberately rather than inheriting a value by
 // accident.
 //
-// Only ErrNotPending and ErrDuplicateDecider get r: those are exactly the
-// refusals where "what became of it" is the caller's next question — S4a's
-// answered retry branches on the bound Job, the resolved state, or the
-// still-open deadline. Every other refusal keeps the zero value it always
-// returned, because nothing downstream needs to distinguish, say, one
-// audience mismatch from another.
+// Only ErrNotPending gets r: it is exactly the refusal where "what became of
+// it" is the caller's next question — S4a's answered retry branches on the
+// bound Job, the resolved state, or the still-open deadline. Every other
+// refusal keeps the zero value it always returned.
 //
 // r on ErrNotPending is not proof that the caller was eligible to decide it:
-// the domain checks Terminal/Expired before requester exclusion, machine
-// self-decision, audience, and channel strength, so an ineligible caller
-// hitting an already-terminal or lapsed Request gets the same r an eligible
-// one would. An adapter that exposes r must narrow it to what that surface
+// the domain checks Terminal/Expired before machine self-decision, so an
+// ineligible caller hitting an already-terminal or lapsed Request gets the same
+// r an eligible one would. An adapter that exposes r must narrow it to what that surface
 // may already read (state, JobID, deadline — never raw Decisions to a caller
 // who could not otherwise see them).
 func requestOnRefusal(r approval.Request, err error) approval.Request {
-	if errors.Is(err, approval.ErrNotPending) || errors.Is(err, approval.ErrDuplicateDecider) {
+	if errors.Is(err, approval.ErrNotPending) {
 		return r
 	}
 	return approval.Request{}
@@ -381,7 +372,7 @@ func approvalAnswerOf(approve bool) ApprovalAnswer {
 }
 
 // approvalDecisionReason renders the audit Reason for one decision: the answer,
-// the resulting state, the quorum progress, and the decider's own note.
+// the resulting state, and the decider's own note.
 //
 // The decider's note is included because it is the only part of the record that
 // says WHY; it is caller-supplied text, bounded by the surface, and it goes into
@@ -398,8 +389,8 @@ func approvalDecisionReason(r approval.Request, d approval.Decision) string {
 	if d.IdentifiedBy != approval.IdentifiedByUnrecorded {
 		identified = ", decider identified by " + d.IdentifiedBy.String()
 	}
-	line := fmt.Sprintf("approval request %s %s by %s over %s%s (%s, request now %s): %s",
-		r.ID, answer, d.Account, d.Channel, identified, r.Progress(), r.State, r.Summary)
+	line := fmt.Sprintf("approval request %s %s by %s over %s%s (request now %s): %s",
+		r.ID, answer, d.Account, d.Channel, identified, r.State, r.Summary)
 	if note := strings.TrimSpace(d.Reason); note != "" {
 		line += " — reason: " + note
 	}

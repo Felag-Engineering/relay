@@ -17,7 +17,7 @@
 #   runtime    the LAST stage, so the default for a build that names no
 #              target: the Relay and nothing else, as an unprivileged user,
 #              compiled from this checkout: what a local build gets, and no
-#              committed stack runs it. No fixture, gate file or credential is
+#              committed stack runs it. No fixture, gate rule or credential is
 #              baked into it.
 
 # ---- build stage: compile the Relay (Go) as a static binary --------------------

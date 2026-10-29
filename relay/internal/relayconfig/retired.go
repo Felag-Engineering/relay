@@ -30,7 +30,7 @@ var retiredEnv = map[string]string{
 	"RELAY_OAUTH_ACCOUNT_CLAIM":          "oauth.account_claim",
 	"RELAY_OAUTH_REQUIRED_SCOPE":         "oauth.required_scope",
 	"RELAY_OAUTH_PUBLIC_URL":             "oauth.public_url",
-	"RELAY_APPROVAL_GATE_CONFIG":         "approval.gate_rules_path",
+	"RELAY_APPROVAL_GATE_CONFIG":         "approval.rules",
 	"RELAY_APPROVAL_WEBHOOK_URL":         keyWebhookURLFile,
 	"RELAY_APPROVAL_WEBHOOK_SECRET_FILE": keyWebhookSecFile,
 	"RELAY_APPROVAL_WEBHOOK_TIMEOUT":     "",

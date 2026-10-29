@@ -31,26 +31,20 @@ func parseStoredRiskClass(s string) jobs.RiskClass {
 
 // Create persists a new pending Request.
 func (a *sqliteApprovals) Create(ctx context.Context, r approval.Request) error {
-	// The comma-joined require_audience column cannot represent a lone blank
-	// entry: strings.Join([]string{""}, ",") == "", which encodes identically
-	// to an unrestricted audience. So a Request whose audience contains a
-	// blank entry must be impossible to store. This is the one write chokepoint
-	// for the park path (capability.checkApproval).
-	if err := approval.ValidateAudience(r.Require.Audience); err != nil {
-		return fmt.Errorf("insert approval request %q: require_audience: %w", r.ID, err)
-	}
+	// require_count, require_audience, requester_allowed and require_channel are
+	// historical columns (ADR-0047): written as constants because the schema
+	// declares them NOT NULL, and never read. A gate rule names none of them.
 	_, err := a.db.ExecContext(ctx, `
 		INSERT INTO approval_requests (
 			request_id, job_id, plan_hash, requested_by_id, requested_by,
 			plan_summary, matched_rules, action_kind, risk_class,
 			require_count, require_audience, requester_allowed, require_channel, require_ttl_ns,
 			state, created_at, expires_at, resolved_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, '', 1, 0, ?, ?, ?, ?, ?)`,
 		r.ID, nullIfEmpty(r.JobID), r.PlanHash, r.RequestedByID, r.RequestedBy,
 		r.Summary, strings.Join(r.MatchedRules, ","),
 		approval.ActionKindName(r.ActionKind), jobs.RiskClassName(r.RiskClass),
-		r.Require.Count, strings.Join(r.Require.Audience, ","), boolToInt(r.Require.RequesterAllowed),
-		int(r.Require.Channel), int64(r.Require.TTL),
+		int64(r.Require.TTL),
 		int(r.State), formatTime(roundTripTime(r.CreatedAt)), formatTime(roundTripTime(r.ExpiresAt)),
 		formatTime(roundTripTime(r.ResolvedAt)),
 	)
@@ -66,7 +60,7 @@ func (a *sqliteApprovals) Create(ctx context.Context, r approval.Request) error 
 const approvalSelect = `
 	SELECT request_id, job_id, plan_hash, requested_by_id, requested_by,
 	       plan_summary, matched_rules, action_kind, risk_class,
-	       require_count, require_audience, requester_allowed, require_channel, require_ttl_ns,
+	       require_ttl_ns,
 	       state, created_at, expires_at, resolved_at
 	  FROM approval_requests`
 
@@ -122,12 +116,9 @@ func scanApproval(scan func(dest ...any) error) (approval.Request, error) {
 	var (
 		r          approval.Request
 		jobID      sql.NullString
-		audience   string
 		matched    string
 		actionKind string
 		riskClass  string
-		reqAllowed int
-		channel    int
 		ttlNS      int64
 		state      int
 		created    sql.NullString
@@ -137,7 +128,7 @@ func scanApproval(scan func(dest ...any) error) (approval.Request, error) {
 	if err := scan(
 		&r.ID, &jobID, &r.PlanHash, &r.RequestedByID, &r.RequestedBy,
 		&r.Summary, &matched, &actionKind, &riskClass,
-		&r.Require.Count, &audience, &reqAllowed, &channel, &ttlNS,
+		&ttlNS,
 		&state, &created, &expires, &resolved,
 	); err != nil {
 		return approval.Request{}, err
@@ -151,15 +142,6 @@ func scanApproval(scan func(dest ...any) error) (approval.Request, error) {
 	// interpret becomes undecidable instead of decidable by the weakest floor.
 	r.ActionKind = approval.ParseActionKind(actionKind)
 	r.RiskClass = parseStoredRiskClass(riskClass)
-	// Blank entries in a non-empty column (e.g. "ana,", ",", " ") are
-	// deliberately PRESERVED here, never filtered: the domain fails closed on
-	// them (approval.Requirement.AudienceMalformed), and this read never
-	// errors on one, since erroring would break Pending and ExpirePending for
-	// every row in the queue — including the malformed one, which must still
-	// be able to expire.
-	r.Require.Audience = splitList(audience)
-	r.Require.RequesterAllowed = reqAllowed != 0
-	r.Require.Channel = approval.Channel(channel)
 	r.Require.TTL = time.Duration(ttlNS)
 	r.State = approval.State(state)
 
@@ -258,18 +240,15 @@ func (a *sqliteApprovals) listWith(ctx context.Context, q querier, query string,
 // RecordDecision appends d and persists the resulting transition atomically.
 //
 // The whole read-modify-write runs in one transaction. Without it, two
-// approvers answering a count:2 Request at the same moment could each read
-// "0 approvals recorded" and each append one, leaving a Request that never
-// reaches StateApproved — or, with a different interleaving, one that reaches
-// it while a decision row is lost. Quorum arithmetic done outside a
-// transaction is quorum theatre.
+// deciders answering one Request at the same moment could each read "pending"
+// and each append, and a decision row could be recorded without its state
+// change.
 //
-// On a domain eligibility refusal (ErrNotPending, ErrRequesterExcluded,
-// ErrNotInAudience, ErrDuplicateDecider, ErrPlanChanged, ErrMachineSelfDecision,
-// ErrWeakChannel) the returned Request is cur — the one read inside this
-// transaction, unchanged, with nothing persisted — so a caller never needs a
-// second lookup that could race the refusal it was judged against. On
-// ErrNotFound or a store failure it is the zero value.
+// On a domain refusal (ErrNotPending, ErrPlanChanged, ErrMachineSelfDecision)
+// the returned Request is cur — the one read inside this transaction,
+// unchanged, with nothing persisted — so a caller never needs a second lookup
+// that could race the refusal it was judged against. On ErrNotFound or a store
+// failure it is the zero value.
 func (a *sqliteApprovals) RecordDecision(ctx context.Context, id string, d approval.Decision, now time.Time) (approval.Request, error) {
 	tx, err := a.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -439,11 +418,8 @@ func (a *sqliteApprovals) ExpirePending(ctx context.Context, now time.Time) ([]a
 }
 
 // splitList is the inverse of strings.Join for every comma-separated list
-// column (matched_rules and require_audience). An empty column is an empty
-// slice, never []string{""}, and it must never drop an empty element from a
-// non-empty column: callers that need blank entries treated as malformed
-// (approval.Requirement.AudienceMalformed) rely on this function preserving
-// rather than filtering them.
+// column (matched_rules). An empty column is an empty slice, never
+// []string{""}.
 func splitList(s string) []string {
 	if s == "" {
 		return nil

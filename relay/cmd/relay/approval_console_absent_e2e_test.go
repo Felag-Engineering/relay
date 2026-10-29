@@ -1,8 +1,8 @@
 // Package main: approval_console_absent_e2e_test.go proves docs/specs/approval.md
 // AP-80 against the REAL composition root with a live Console mounted beside
 // the Control API: the Console renders no approval request and decides none,
-// while a parked request is still decided end to end on the Control API, and a
-// request's partial quorum is read from the Control API alone.
+// while a parked request is still decided end to end on the Control API, which
+// alone reads the one Decision that ended it.
 //
 // The Console is opted in with WithConfig(func(c *Config) { c.ConsoleEnabled =
 // true }); without it every /console/ request would 404 for the wrong reason.
@@ -19,19 +19,6 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/relay/relay/internal/audit"
 )
-
-// gateCountTwoOutOfBand parks every mutate dispatch until two humans have
-// answered on the out-of-band channel, so a single answer leaves a partial
-// quorum.
-const gateCountTwoOutOfBand = `{
-  "rules": [
-    {
-      "name": "two-humans-out-of-band",
-      "match": { "risk_class": "mutate" },
-      "require": { "count": 2, "requester_allowed": false, "channel": "out-of-band", "ttl": "1h" }
-    }
-  ]
-}`
 
 // withConsole enables the Console listener on the fixture.
 func withConsole() FixtureOption {
@@ -190,12 +177,15 @@ func TestApprovalCallout_TheConsoleHasNoApprovalSurface(t *testing.T) {
 	assertRestartRuns(t, f, requester)
 }
 
-// TestApprovalCallout_PartialQuorumIsReadFromTheControlAPI: a two-person gate
-// answered once is pending with progress "1 of 2" and names who signed, on
-// the Control API's read of the request and its listing; the Console, with the
-// first signer signed in, shows nothing of it (AP-73, AP-80).
-func TestApprovalCallout_PartialQuorumIsReadFromTheControlAPI(t *testing.T) {
-	f := startGatedRelay(t, gateCountTwoOutOfBand, withConsole())
+// TestApprovalCallout_OneDecisionEndsTheRequest: the first Decision ends a
+// request, a second from another Account is refused as not pending, and the
+// Control API's read shows exactly the one Decision, its channel, and none of
+// the removed rule terms. The Console, with the first decider signed in, shows
+// nothing of it (AP-80).
+//
+// Proves AP-82, AP-80.
+func TestApprovalCallout_OneDecisionEndsTheRequest(t *testing.T) {
+	f := startGatedRelay(t, gateAllMutates, withConsole())
 
 	requester := mintAccount(t, f, "gleipnir-prod", accounts.KindMachine, accounts.RoleAdmin)
 	parked := parkRestart(t, f, requester)
@@ -204,29 +194,46 @@ func TestApprovalCallout_PartialQuorumIsReadFromTheControlAPI(t *testing.T) {
 	_, danaToken := mintConsoleHumanAccount(t, f, "dana", password, accounts.RoleAdmin)
 	erinToken := mintAccount(t, f, "erin", accounts.KindHuman, accounts.RoleAdmin)
 
-	decideOnAPI(t, f, danaToken, parked)
-
-	got := getApproval(t, f, danaToken, parked.RequestID)
-	if got.State != "pending" || got.RequiredCount != 2 || got.Progress != "1 of 2" {
-		t.Fatalf("after one answer: state %q, required_count %d, progress %q; want pending, 2, \"1 of 2\"",
-			got.State, got.RequiredCount, got.Progress)
+	if decided := decideOnAPI(t, f, danaToken, parked); decided.State != "approved" {
+		t.Fatalf("after one answer: state %q, want approved", decided.State)
 	}
-	if len(got.Decisions) != 1 {
-		t.Fatalf("decisions = %+v, want exactly one", got.Decisions)
+
+	// A second Decision, from another Account, is refused as not pending.
+	second := controlAPIRequest(t, f.ClientFor(erinToken), http.MethodPost,
+		f.ControlBase+parked.DecisionPath, erinToken,
+		map[string]any{"approve": false, "plan_hash": parked.PlanHash})
+	defer second.Body.Close()
+	if second.StatusCode != http.StatusConflict {
+		t.Fatalf("second decision status = %d, want 409 not pending", second.StatusCode)
+	}
+	var problem struct {
+		Title string `json:"title"`
+	}
+	if err := json.NewDecoder(second.Body).Decode(&problem); err != nil {
+		t.Fatalf("decode problem: %v", err)
+	}
+	if problem.Title != "approval request is not pending" {
+		t.Errorf("second decision problem = %q, want the not-pending title", problem.Title)
+	}
+
+	getResp := controlAPIRequest(t, f.ClientFor(danaToken), http.MethodGet,
+		f.ControlBase+"/api/v1/approvals/"+parked.RequestID, danaToken, nil)
+	defer getResp.Body.Close()
+	var raw map[string]any
+	if err := json.NewDecoder(getResp.Body).Decode(&raw); err != nil {
+		t.Fatalf("decode approval: %v", err)
+	}
+	for _, key := range []string{"required_count", "progress", "audience", "requester_allowed", "channel"} {
+		if _, present := raw[key]; present {
+			t.Errorf("the approval JSON carries %q; a rule names no such term", key)
+		}
+	}
+	got := getApproval(t, f, danaToken, parked.RequestID)
+	if got.State != "approved" || len(got.Decisions) != 1 {
+		t.Fatalf("request is %q with %d decisions, want approved with exactly one", got.State, len(got.Decisions))
 	}
 	if d := got.Decisions[0]; d.Account != "dana" || !d.Approve || !d.Human || d.Channel != "out-of-band" {
 		t.Errorf("decision = %+v, want dana's human out-of-band approval", d)
-	}
-
-	listResp := controlAPIRequest(t, f.ClientFor(danaToken), http.MethodGet,
-		f.ControlBase+"/api/v1/approvals", danaToken, nil)
-	defer listResp.Body.Close()
-	var list approvalListBody
-	if err := json.NewDecoder(listResp.Body).Decode(&list); err != nil {
-		t.Fatalf("decode listing: %v", err)
-	}
-	if len(list.Approvals) != 1 || list.Approvals[0].RequestID != parked.RequestID || list.Approvals[0].Progress != "1 of 2" {
-		t.Fatalf("listing = %+v, want the one request at \"1 of 2\"", list.Approvals)
 	}
 
 	client := consoleClient(t, f)
@@ -237,20 +244,7 @@ func TestApprovalCallout_PartialQuorumIsReadFromTheControlAPI(t *testing.T) {
 	}
 	_ = readAll(t, consoleResp)
 	if consoleResp.StatusCode != http.StatusNotFound {
-		t.Errorf("the Console's request screen = %d, want 404: the partial quorum is readable on the Control API only", consoleResp.StatusCode)
-	}
-
-	decided := decideOnAPI(t, f, erinToken, parked)
-	if decided.State != "approved" || decided.Progress != "2 of 2" || len(decided.Decisions) != 2 {
-		t.Fatalf("after the second answer: state %q, progress %q, %d decisions; want approved, \"2 of 2\", 2",
-			decided.State, decided.Progress, len(decided.Decisions))
-	}
-	signers := map[string]bool{}
-	for _, d := range decided.Decisions {
-		signers[d.Account] = true
-	}
-	if !signers["dana"] || !signers["erin"] {
-		t.Errorf("decisions name %v, want dana and erin", signers)
+		t.Errorf("the Console's request screen = %d, want 404: the Control API alone reads the request", consoleResp.StatusCode)
 	}
 	assertRestartRuns(t, f, requester)
 }

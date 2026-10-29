@@ -152,7 +152,7 @@ func fromFile(rc relayconfig.Config) Config {
 		OAuthAccountClaim:      rc.OAuth.AccountClaim,
 		OAuthRequiredScope:     rc.OAuth.RequiredScope,
 		OAuthPublicURL:         rc.OAuth.PublicURL,
-		ApprovalGatePath:       rc.Approval.GateRulesPath,
+		ApprovalRules:          rc.Approval.Rules,
 		ApprovalWebhookURL:     rc.Approval.WebhookURL,
 		ApprovalWebhookSecret:  rc.Approval.WebhookSecret,
 		ReadBlastCap:           rc.Reach.ReadBlastCap,

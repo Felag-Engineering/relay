@@ -63,9 +63,23 @@ type oauthDoc struct {
 }
 
 type approvalDoc struct {
-	GateRulesPath     *string `toml:"gate_rules_path"`
-	WebhookURLFile    *string `toml:"webhook_url_file"`
-	WebhookSecretFile *string `toml:"webhook_secret_file"`
+	Rules             *[]ruleDoc `toml:"rules"`
+	WebhookURLFile    *string    `toml:"webhook_url_file"`
+	WebhookSecretFile *string    `toml:"webhook_secret_file"`
+}
+
+// ruleDoc is one [[approval.rules]] section: what the rule matches and how long
+// a parked request lives, and nothing else (AP-81). The rule is flat, so a
+// refusal names approval.rules.<field>.
+type ruleDoc struct {
+	Name              *string `toml:"name"`
+	RiskClass         *string `toml:"risk_class"`
+	MinFanOut         *int    `toml:"min_fan_out"`
+	SelectorNamespace *string `toml:"selector_namespace"`
+	Account           *string `toml:"account"`
+	Operation         *string `toml:"operation"`
+	RawExec           *bool   `toml:"raw_exec"`
+	TTL               *string `toml:"ttl"`
 }
 
 type logDoc struct {
@@ -97,7 +111,7 @@ func decode(data []byte) (document, []*Error) {
 		for i := range strict.Errors {
 			line, _ := strict.Errors[i].Position()
 			parts := strict.Errors[i].Key()
-			if key, reason, removed := removedKey(parts); removed {
+			if key, reason, _, removed := removedKey(parts); removed {
 				errs = append(errs, &Error{Key: key, Line: line, Reason: reason})
 				continue
 			}
@@ -135,6 +149,16 @@ var sections = func() map[string]bool {
 	dt := reflect.TypeFor[document]()
 	for i := range dt.NumField() {
 		set[dt.Field(i).Tag.Get("toml")] = true
+	}
+	return set
+}()
+
+// ruleFields is the set of field names a gate rule has.
+var ruleFields = func() map[string]bool {
+	set := map[string]bool{}
+	rt := reflect.TypeFor[ruleDoc]()
+	for i := range rt.NumField() {
+		set[rt.Field(i).Tag.Get("toml")] = true
 	}
 	return set
 }()

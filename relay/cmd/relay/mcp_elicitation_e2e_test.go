@@ -89,7 +89,7 @@ func startElicitingRelayWith(t *testing.T, rules string, extra ...FixtureOption)
 // Gleipnir in every test below.
 func startElicitingRelay(t *testing.T) (f *relayFixture, token string, accountID string) {
 	t.Helper()
-	return startElicitingRelayWith(t, gateAllMutatesInBandAskable)
+	return startElicitingRelayWith(t, gateAllMutates)
 }
 
 // connectEliciting opens an MRTR-capable session for token: 2026-07-28, form

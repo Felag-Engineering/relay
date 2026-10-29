@@ -23,9 +23,7 @@ func TestDecide_MachineAPITokenAnswerIsInBandSelfConfirmation(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			rule := req(1, true)
-			rule.Channel = ChannelInBand
-			r := newTestRequest(t, rule)
+			r := newTestRequest(t)
 			d := Decision{
 				AccountID: "acct-mike", Account: "mike", Approve: true,
 				Channel: tc.channel, PlanHash: "hash-abc", DeciderHuman: false,

@@ -22,16 +22,13 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/startup"
 )
 
-// reloadGate is a gate file with one rule, for a reload that changes the gate.
-const reloadGate = `{
-  "rules": [
-    {
-      "name": "all-mutates-need-a-human",
-      "match": { "risk_class": "mutate" },
-      "require": { "count": 1, "requester_allowed": false, "channel": "out-of-band", "ttl": "1h" }
-    }
-  ]
-}`
+// reloadRules is one [[approval.rules]] section, for a reload that changes the
+// gate.
+const reloadRules = `[[approval.rules]]
+name = "all-mutates-need-a-human"
+risk_class = "mutate"
+ttl = "1h"
+`
 
 // reloadFixture is a composition root built by newServer over test Files, and a
 // reloader over it whose load reads body and whose open builds test Files. The
@@ -104,12 +101,12 @@ func newReloadFixtureWith(t *testing.T, tlsExtra string) *reloadFixture {
 	f.deps = deps
 	f.r = newReloader("relay.toml", sc, deps, f.logs, f.logBuf)
 	f.r.load = func(string) (startupConfig, error) { return parseConfig([]byte(f.body), readSecretPlain) }
-	f.r.open = func(gatePath, caDir, storePath string) (startup.Files, error) {
+	f.r.open = func(caDir, storePath string) (startup.Files, error) {
 		f.opened++
 		if f.openErr != nil {
 			return startup.Files{}, f.openErr
 		}
-		return testStartupFiles(t, Config{ApprovalGatePath: gatePath, CADir: caDir, StorePath: storePath}), nil
+		return testStartupFiles(t, Config{CADir: caDir, StorePath: storePath}), nil
 	}
 	f.logBuf.Reset()
 	return f
@@ -142,23 +139,19 @@ func (f *reloadFixture) records(kind string) []audit.Record {
 
 func TestReloader_SuccessSwapsSnapshotGateAndLog(t *testing.T) {
 	f := newReloadFixture(t)
-	gatePath := filepath.Join(f.dir, "gate.json")
-	if err := os.WriteFile(gatePath, []byte(reloadGate), 0o600); err != nil {
-		t.Fatal(err)
-	}
 	liveBefore := f.deps.live.cur.Load()
 	f.logBuf.Reset()
 	slog.Debug("before the reload")
 	if out := f.logBuf.String(); out != "" {
 		t.Fatalf("a debug line was logged at the configured info level: %q", out)
 	}
-	f.body = f.toml("[reach]\nmutate_blast_cap = 7\n[log]\nlevel = \"debug\"\n[approval]\ngate_rules_path = " + strconv.Quote(gatePath) + "\n")
+	f.body = f.toml("[reach]\nmutate_blast_cap = 7\n[log]\nlevel = \"debug\"\n" + reloadRules)
 
 	changed, err := f.r.reload(context.Background())
 	if err != nil {
 		t.Fatalf("reload: %v", err)
 	}
-	if want := "reach.mutate_blast_cap log.level approval.gate_rules_path"; strings.Join(sortedByWant(changed, want), " ") != want {
+	if want := "reach.mutate_blast_cap log.level approval.rules"; strings.Join(sortedByWant(changed, want), " ") != want {
 		t.Errorf("changed = %v, want %s", changed, want)
 	}
 	if got := f.deps.live.OperatorSettings().MutateBlastCap; got != 7 {
@@ -211,12 +204,12 @@ func TestReloader_RefusalLeavesEverythingUntouched(t *testing.T) {
 		}, auditsink.ReloadRefusedRestart, []string{"tls.hostname"}},
 		{"open error", func(f *reloadFixture) {
 			f.body = f.toml("[reach]\nmutate_blast_cap = 7\n[log]\nlevel = \"debug\"\n")
-			f.openErr = errors.New("the gate file is malformed")
+			f.openErr = errors.New("the store directory is refused")
 		}, auditsink.ReloadRefusedNamedFiles, nil},
 		{"CA mismatch", func(f *reloadFixture) {
 			f.body = f.toml("[reach]\nmutate_blast_cap = 7\n[log]\nlevel = \"debug\"\n")
-			f.r.open = func(gatePath, _, storePath string) (startup.Files, error) {
-				return testStartupFiles(t, Config{ApprovalGatePath: gatePath, CADir: filepath.Join(f.dir, "replaced-ca"), StorePath: storePath}), nil
+			f.r.open = func(_, storePath string) (startup.Files, error) {
+				return testStartupFiles(t, Config{CADir: filepath.Join(f.dir, "replaced-ca"), StorePath: storePath}), nil
 			}
 		}, auditsink.ReloadRefusedCA, nil},
 		{"secret file unreadable", func(f *reloadFixture) {
@@ -313,9 +306,9 @@ func TestReloader_CAFingerprintMismatchRefuses(t *testing.T) {
 	f := newReloadFixture(t)
 	liveBefore, gateBefore := f.deps.live.cur.Load(), f.deps.gate.cur.Load()
 	f.body = f.toml("[reach]\nmutate_blast_cap = 7\n[log]\nlevel = \"debug\"\n")
-	f.r.open = func(gatePath, _, storePath string) (startup.Files, error) {
+	f.r.open = func(_, storePath string) (startup.Files, error) {
 		// A CA directory key the process is not running on: a different CA.
-		return testStartupFiles(t, Config{ApprovalGatePath: gatePath, CADir: filepath.Join(f.dir, "replaced-ca"), StorePath: storePath}), nil
+		return testStartupFiles(t, Config{CADir: filepath.Join(f.dir, "replaced-ca"), StorePath: storePath}), nil
 	}
 
 	if _, err := f.r.reload(context.Background()); err == nil {
@@ -382,7 +375,7 @@ func TestReloader_BindTimeCheckedBeforeOpen(t *testing.T) {
 func TestReloader_PanicDoesNotExit(t *testing.T) {
 	f := newReloadFixture(t)
 	good := f.r.open
-	f.r.open = func(string, string, string) (startup.Files, error) { panic("boom") }
+	f.r.open = func(string, string) (startup.Files, error) { panic("boom") }
 	f.body = f.toml("[reach]\nmutate_blast_cap = 7\n[log]\nlevel = \"debug\"\n")
 
 	hup := make(chan os.Signal, 1)
@@ -535,5 +528,109 @@ func TestReloader_RemovedKeyRefusedNamingKey(t *testing.T) {
 	}
 	if n := len(f.records(audit.KindConfigReloadRefused)); n != 1 {
 		t.Fatalf("config_reload_refused records = %d, want 1", n)
+	}
+}
+
+// A reload that adds a gate rule swaps the gate, and the config_reload record
+// names approval.rules.
+//
+// Proves AP-89.
+func TestReloader_GateRulesReloadWithTheFile(t *testing.T) {
+	f := newReloadFixture(t)
+	if n := len(f.deps.gate.rules()); n != 0 {
+		t.Fatalf("the gate holds %d rules before the reload, want 0", n)
+	}
+	f.body = f.toml("[reach]\nmutate_blast_cap = 5\n[log]\nlevel = \"info\"\n" + reloadRules)
+
+	changed, err := f.r.reload(context.Background())
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if strings.Join(changed, " ") != "approval.rules" {
+		t.Errorf("changed = %v, want only approval.rules", changed)
+	}
+	rules := f.deps.gate.rules()
+	if len(rules) != 1 || rules[0].Name != "all-mutates-need-a-human" {
+		t.Errorf("the gate holds %+v, want the one rule the file now names", rules)
+	}
+	recs := f.records(audit.KindConfigReload)
+	if len(recs) != 1 || !strings.Contains(recs[0].Reason, "approval.rules") {
+		t.Fatalf("config_reload records = %+v, want one naming approval.rules", recs)
+	}
+
+	// Removing the rules from the file removes the gate.
+	f.body = f.toml("[reach]\nmutate_blast_cap = 5\n[log]\nlevel = \"info\"\n")
+	if _, err := f.r.reload(context.Background()); err != nil {
+		t.Fatalf("reload without rules: %v", err)
+	}
+	if n := len(f.deps.gate.rules()); n != 0 {
+		t.Errorf("the gate holds %d rules after they left the file, want 0", n)
+	}
+}
+
+// A configuration naming approval.gate_rules_path is refused on reload, naming
+// the key; nothing is swapped.
+//
+// Proves RC-37.
+func TestReloader_GateRulesPathRefusedNamingKey(t *testing.T) {
+	f := newReloadFixture(t)
+	liveBefore, gateBefore := f.deps.live.cur.Load(), f.deps.gate.cur.Load()
+	f.body = f.toml("[approval]\ngate_rules_path = \"/etc/relay/CANARY.json\"\n")
+
+	if _, err := f.r.reload(context.Background()); err == nil {
+		t.Fatal("a reload naming approval.gate_rules_path succeeded")
+	}
+	if f.deps.live.cur.Load() != liveBefore || f.deps.gate.cur.Load() != gateBefore {
+		t.Error("a refused reload replaced the snapshot or the gate")
+	}
+	got := f.logBuf.String()
+	if !strings.Contains(got, "approval.gate_rules_path") {
+		t.Errorf("log = %q, want it to name approval.gate_rules_path", got)
+	}
+	if strings.Contains(got, "CANARY") {
+		t.Errorf("log = %q, must not echo the value", got)
+	}
+	if len(f.records(audit.KindConfigReload)) != 0 {
+		t.Error("a refused reload wrote a config_reload record")
+	}
+	if n := len(f.records(audit.KindConfigReloadRefused)); n != 1 {
+		t.Fatalf("config_reload_refused records = %d, want 1", n)
+	}
+}
+
+// Gate rules written in any form but [[approval.rules]] sections, and rules
+// that name a removed field, are refused on reload without a panic, nothing is
+// swapped, and no value reaches the log.
+//
+// Proves AP-89.
+func TestReloader_NonArrayGateRulesRefusedWithoutPanic(t *testing.T) {
+	for name, extra := range map[string]string{
+		"single-bracket table with a bad value": "[approval.rules]\nttl = \"CANARY\"\n",
+		"inline array":                          "[approval]\nrules = [{name = \"CANARY\", ttl = \"1h\"}]\n",
+		"removed field":                         "[[approval.rules]]\nname = \"a\"\nchannel = \"CANARY\"\n",
+		"bad value in a second rule":            "[[approval.rules]]\nname = \"a\"\n[[approval.rules]]\nname = \"b\"\nttl = \"CANARY\"\n",
+		"variant spelling empties the rules":    "[[approval.rules]]\nname = \"a\"\n[approval]\nRules = []\n",
+		"variant spelling of a rule field":      "[[approval.rules]]\nname = \"a\"\nrisk_class = \"mutate\"\nRisk_Class = \"read\"\n",
+		"non-ASCII spelling of a rule field":    "[[approval.rules]]\nname = \"a\"\nrisk_class = \"mutate\"\n\"rİsk_class\" = \"read\"\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newReloadFixture(t)
+			liveBefore, gateBefore := f.deps.live.cur.Load(), f.deps.gate.cur.Load()
+			f.body = f.toml(extra)
+
+			if _, err := f.r.reload(context.Background()); err == nil {
+				t.Fatal("the reload succeeded, want a refusal")
+			}
+			if f.deps.live.cur.Load() != liveBefore || f.deps.gate.cur.Load() != gateBefore {
+				t.Error("a refused reload replaced the snapshot or the gate")
+			}
+			got := f.logBuf.String()
+			if !strings.Contains(got, "approval.rules") {
+				t.Errorf("log = %q, want it to name approval.rules", got)
+			}
+			if strings.Contains(got, "CANARY") {
+				t.Errorf("log = %q, must not echo a value", got)
+			}
+		})
 	}
 }

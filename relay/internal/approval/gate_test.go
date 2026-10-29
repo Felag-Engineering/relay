@@ -22,7 +22,7 @@ func TestSelectorNamespaceNarrows(t *testing.T) {
 	gate, err := NewGate([]Rule{{
 		Name:    "relay-lane",
 		Match:   Match{SelectorNamespace: "relay"},
-		Require: Requirement{Count: 1},
+		Require: Requirement{},
 	}})
 	if err != nil {
 		t.Fatalf("NewGate: %v", err)
@@ -50,14 +50,14 @@ func TestSelectorNamespaceNarrows(t *testing.T) {
 // TestSelectorNamespaceState is the sibling for the state: namespace
 // (ADR-0034): a gate Rule can match "state" and narrows the same way.
 func TestSelectorNamespaceState(t *testing.T) {
-	if err := (Rule{Name: "r", Match: Match{SelectorNamespace: "state"}, Require: Requirement{Count: 1}}).Validate(); err != nil {
+	if err := (Rule{Name: "r", Match: Match{SelectorNamespace: "state"}, Require: Requirement{}}).Validate(); err != nil {
 		t.Fatalf("a rule matching selector_namespace \"state\" did not validate: %v", err)
 	}
 
 	gate, err := NewGate([]Rule{{
 		Name:    "state-lane",
 		Match:   Match{SelectorNamespace: "state"},
-		Require: Requirement{Count: 1},
+		Require: Requirement{},
 	}})
 	if err != nil {
 		t.Fatalf("NewGate: %v", err)

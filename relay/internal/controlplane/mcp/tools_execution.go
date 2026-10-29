@@ -423,7 +423,6 @@ func renderParked(parked *capability.ParkedError) *PendingApprovalOutput {
 		PlanHash:     parked.PlanHash,
 		Summary:      parked.Summary,
 		MatchedRules: rules,
-		Progress:     parked.Progress,
 		ExpiresAt:    parked.ExpiresAt.UTC().Format(time.RFC3339),
 		DecisionPath: "/api/v1/approvals/" + parked.RequestID + "/decision",
 		NextStep:     pendingApprovalNextStep,
@@ -552,7 +551,7 @@ func answerThenDispatch(
 	slog.Debug("mcp: answered retry", "tool", tool, "request_id", r.RequestID, "outcome", r.Outcome)
 
 	switch r.Outcome {
-	case elicitedApproved, elicitedLapsed, elicitedStillPending:
+	case elicitedApproved, elicitedLapsed:
 		// A concurrent approving retry, or a plain re-drive carrying no
 		// request state at all, is now resolved in the capability layer
 		// (AP-77): Execution.Run claims a single-Plan approval's release
@@ -574,9 +573,8 @@ func answerThenDispatch(
 		if parked != nil {
 			// Whether a question replaces pending_approval is the capability
 			// layer's created/observed askability call (AP-62), not this
-			// function's: a partial quorum's park is OBSERVED and renders
-			// pending_approval, while a fleet change or a lapse creates a
-			// fresh, askable park. A question result cannot carry the
+			// function's: an observed re-drive's park renders pending_approval,
+			// while a fleet change or a lapse creates a fresh, askable park. A question result cannot carry the
 			// decision block either way — the SDK forbids structured content
 			// alongside InputRequests — but the decision it answers is still
 			// audited and readable on the Control API.

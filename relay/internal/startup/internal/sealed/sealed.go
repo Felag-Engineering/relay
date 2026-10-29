@@ -7,14 +7,12 @@
 package sealed
 
 import (
-	"github.com/Felag-Engineering/relay/relay/internal/approval"
 	"github.com/Felag-Engineering/relay/relay/internal/ca"
 )
 
 // Files is what the start-time file check read.
 type Files struct {
 	CA           *ca.CA
-	Gate         *approval.Gate
 	StorePath    string
 	RecheckStore func() error
 
@@ -24,6 +22,6 @@ type Files struct {
 }
 
 // New returns Files holding its arguments.
-func New(c *ca.CA, g *approval.Gate, storePath string, recheck func() error) Files {
-	return Files{CA: c, Gate: g, StorePath: storePath, RecheckStore: recheck}
+func New(c *ca.CA, storePath string, recheck func() error) Files {
+	return Files{CA: c, StorePath: storePath, RecheckStore: recheck}
 }

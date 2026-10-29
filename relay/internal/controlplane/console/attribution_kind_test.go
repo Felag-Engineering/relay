@@ -153,7 +153,7 @@ func TestJob_EachApproverCarriesTheKindItsDecisionRecorded(t *testing.T) {
 	d := jobDeps(q)
 	d.Approvals = &fakeApprovals{pending: []approval.Request{{
 		ID: "ap-1", State: approval.StateApproved, RequestedBy: "gleipnir", RequestedByID: "acct-1",
-		Require: approval.Requirement{Count: 2}, Decisions: twoDeciders(),
+		Decisions: twoDeciders(),
 	}}}
 	body := jobBody(t, d, jobPath(""))
 	approvalSection := section(t, body, `<section class="jobapproval"`, `</section>`)

@@ -73,7 +73,6 @@ func (goldenParker) Start(context.Context, capability.Principal, capability.Sele
 		RequestID: goldenRequestID,
 		PlanHash:  "hash-golden-1",
 		Summary:   `service.restart(unit="nginx") [mutate] on 1 node(s): node-a`,
-		Progress:  "0 of 1",
 		Rules:     []string{"all-mutates-need-a-human"},
 		ExpiresAt: goldenNow.Add(4 * time.Hour),
 	}
@@ -279,7 +278,6 @@ func TestGolden_CreateForANonCapableClient(t *testing.T) {
 		"request_id":    goldenRequestID,
 		"plan_hash":     "hash-golden-1",
 		"summary":       `service.restart(unit="nginx") [mutate] on 1 node(s): node-a`,
-		"progress":      "0 of 1",
 		"expires_at":    "2026-08-17T13:00:00Z",
 		"decision_path": "/api/v1/approvals/" + goldenRequestID + "/decision",
 	}

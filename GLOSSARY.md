@@ -378,10 +378,9 @@ _Avoid_: authorization, permission, sign-off, confirmation (unqualified — name
 
 **Decision**:
 One recorded answer to a parked **Request** (never to a Job; parking mints none): who
-decided, when, over which **channel**, against which Plan hash, and whether a human decided.
-An Approval is *satisfied* by Decisions from **distinct** Accounts; one denying Decision is
-terminal, mirroring deny-beats-allow. Every Decision is its own audit record, a denial and the
-first of two included, so partial quorum is never an absence in the trail.
+decided, when, over which **channel**, against which Plan hash, and how the decider was
+identified. The first accepted Decision ends a request: an approving one releases it, a denying
+one ends it (ADR-0047). Every Decision is its own audit record.
 _Avoid_: vote, approval (for the individual answer — the Approval is the whole requirement
 being met), response
 
@@ -393,24 +392,19 @@ Decision, never an Approval grant) and so *batch* keeps its _Avoid_.
 _Avoid_: batch, batch approval (a batch is an Approval grant — ADR-0027), blanket approval
 
 **Channel** (of a Decision):
-How strongly a Decision's delivery path is trusted. **`in-band`**: the answer came back over
-the MCP session that requested the action, so it is only as trustworthy as the harness.
-**`out-of-band`**: it landed on an authenticated Relay endpoint with a credential the
-requesting session does not hold. In-band is an *assumption about the client*; out-of-band is
-*evidence*. Set by the receiving surface, never the caller, and checked as a floor: a stronger
-channel satisfies a weaker requirement, never the reverse (ADR-0027).
+The surface a Decision arrived on. **`in-band`**: an answer on the requesting client's retried
+MCP call. **`out-of-band`**: the Control API decision endpoint. Set by the receiving surface,
+never the caller, and recorded on every Decision; no gate rule demands one (ADR-0047).
 _Avoid_: transport (reserved for the gRPC/mTLS node plane), delivery envelope (that is
 *how* an approver is reached, not how strongly their answer is trusted)
 
 **Confirmation ladder**:
-The three rungs a Gate rule selects between, named so that "confirmation" unqualified never
-has to be (ADR-0027 decision 5). **No gate** — below the rule's thresholds; the request runs
-immediately. **Self-confirmation** — the requester's own side confirms: a human reviewing what
-Relay rendered, or, for an MCP request, an in-band answer carrying an asserted approver. A
-machine Account can never reach this rung on its own authority; the one relaxation is
-ADR-0029's, and it records an assertion rather than a verified human. **Second-person** — the
-audience excludes the requester, so the decider is someone else. A rung says *who must answer*;
-the **Channel** says *how strongly the answer is trusted*, and the two are set independently.
+The two rungs a gate gives, named so that "confirmation" unqualified never has to be
+(ADR-0047 decision 1). **No gate**: the request runs immediately. **Self-confirmation**: the
+requester's own side confirms, a human reviewing what Relay rendered or, for an MCP request,
+the person answering the client's elicited question. A machine Account never confirms its own
+request on its own authority. A second-person rung is cut until multi-person approval is
+designed.
 _Avoid_: confirmation (unqualified — name the rung), approval tier. In **new** prose name the
 rung rather than numbering it; ADR-0027 decision 5 numbers them and ADR-0028, ADR-0029 and
 `docs/operations/approval-gates.md` cite "rung 2", and that numbering stands wherever it is
@@ -458,18 +452,15 @@ runs or accepts can write it — no API, no request, and not the Relay process (
 _Avoid_: hard limits, static config (both also describe operator settings)
 
 **Requester exclusion**:
-The Gate-rule term (`requester_allowed: false`) under which the Account that requested a gated
-dispatch may not be among its approvers (ADR-0027). Enforced identically on every decision path.
+A gate-rule term, `requester_allowed`, that barred the requester from deciding their own
+request. Retired by ADR-0047: a gate rule naming it is refused at load.
 _Avoid_: self-approval ban, four-eyes (a count, not an exclusion)
 
 **Gate rule**:
-One rule in the Relay's approval-gate configuration, matching on risk class, blast size,
-Selector namespace, Principal and Operation, and requiring a `count`, `audience`,
-`requester_allowed`, `channel` and `ttl`. Today an optional root-owned file loaded at startup
-(no gate at all when none is configured); designed to become a section of the Relay
-configuration file that names only what it matches and how long a parked request lives, with
-the shipped configuration gating every `mutate` and Raw Exec (ADR-0047). Never reachable from an API Token or
-an MCP tool. Narrows only: it can demand approval, never grant what Policy refuses.
+One `[[approval.rules]]` section of the Relay configuration file. It matches on risk class,
+fan-out, Selector namespace, Account, Operation or Raw Exec, and carries a TTL and nothing else
+(ADR-0047). A configuration with no gate rules gates nothing. Never reachable from an API Token
+or an MCP tool. Narrows only: it can demand approval, never grant what Policy refuses.
 _Avoid_: approval policy (collides with **Policy**), approval rule, gate config (for a
 single rule)
 

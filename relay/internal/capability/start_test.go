@@ -883,7 +883,7 @@ func approvalStartFx(t *testing.T, mods ...func(*seams)) (*startFx, *memApproval
 	t.Helper()
 	store := newMemApprovals()
 	approvals := func(s *seams) {
-		s.gate = gateEverything(t, 1)
+		s.gate = gateEverything(t)
 		s.approvals = store
 		s.approvalAuthz = &spyApprovalAuthorizer{}
 		s.now = func() time.Time { return apNow }
@@ -940,7 +940,7 @@ func TestStart_ReleasedApprovalReattachesAndRebindsTheKey(t *testing.T) {
 	mem := newMemApprovals()
 	lb := &loseBind{ApprovalStore: mem}
 	f := newStartFx(t, func(s *seams) {
-		s.gate = gateEverything(t, 1)
+		s.gate = gateEverything(t)
 		s.approvals = lb
 		s.approvalAuthz = &spyApprovalAuthorizer{}
 		s.now = func() time.Time { return apNow }

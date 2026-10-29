@@ -122,7 +122,7 @@ func startOAuthElicitingRelay(t *testing.T, rules string) (f *relayFixture, idp 
 // the API-token lane) is diagnosable apart from whatever claim a consuming
 // test is actually exercising.
 func TestE2EOAuth_SessionResolvesToTheAccount(t *testing.T) {
-	f, idp := startOAuthElicitingRelay(t, gateAllMutatesInBandAskable)
+	f, idp := startOAuthElicitingRelay(t, gateAllMutates)
 	createAccount(t, f, "hana", accounts.KindHuman, accounts.RoleAdmin)
 	token := idp.token(t, "hana")
 

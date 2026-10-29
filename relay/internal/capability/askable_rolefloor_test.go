@@ -129,11 +129,9 @@ const maxSweptActionKind = jobs.ActionKind(32)
 // silently continuing to check only the two kinds it always knew about.
 func TestRoleFloorCannotRefuseAnAskablePark(t *testing.T) {
 	gate, err := approval.NewGate([]approval.Rule{{
-		Name:  "askable",
-		Match: approval.Match{},
-		Require: approval.Requirement{
-			Count: 1, RequesterAllowed: true, Channel: approval.ChannelInBand, TTL: time.Hour,
-		},
+		Name:    "askable",
+		Match:   approval.Match{},
+		Require: approval.Requirement{TTL: time.Hour},
 	}})
 	if err != nil {
 		t.Fatalf("NewGate: %v", err)

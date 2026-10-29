@@ -89,7 +89,7 @@ const (
 // EventApprovalRequested is the only event this package sends today.
 const EventApprovalRequested = "approval.requested"
 
-// Config is the notifier's startup configuration. Like the approval-gate file
+// Config is the notifier's startup configuration. Like the gate rules
 // it comes from the Relay's configuration file and is unreachable through any
 // API (invariant 11): an endpoint that could repoint its own approval
 // notifications could route them to itself.
@@ -255,17 +255,14 @@ func readOpenedSecret(f *os.File, path string) ([]byte, error) {
 // a convenience for building a link, not a capability: following it still
 // requires an Account credential and still lands on the authenticated endpoint.
 type payload struct {
-	Event         string   `json:"event"`
-	RequestID     string   `json:"request_id"`
-	PlanHash      string   `json:"plan_hash"`
-	Summary       string   `json:"summary"`
-	RequestedBy   string   `json:"requested_by"`
-	MatchedRules  []string `json:"matched_rules,omitempty"`
-	Progress      string   `json:"progress"`
-	RequiredCount int      `json:"required_count"`
-	Channel       string   `json:"channel"`
-	ExpiresAt     string   `json:"expires_at"`
-	DecisionPath  string   `json:"decision_path"`
+	Event        string   `json:"event"`
+	RequestID    string   `json:"request_id"`
+	PlanHash     string   `json:"plan_hash"`
+	Summary      string   `json:"summary"`
+	RequestedBy  string   `json:"requested_by"`
+	MatchedRules []string `json:"matched_rules,omitempty"`
+	ExpiresAt    string   `json:"expires_at"`
+	DecisionPath string   `json:"decision_path"`
 }
 
 // NotifyParked implements capability.ApprovalNotifier.
@@ -276,17 +273,14 @@ type payload struct {
 // mean the notification almost never went out.
 func (n *Notifier) NotifyParked(ctx context.Context, notice capability.ApprovalNotice) {
 	body, err := json.Marshal(payload{
-		Event:         EventApprovalRequested,
-		RequestID:     notice.RequestID,
-		PlanHash:      notice.PlanHash,
-		Summary:       notice.Summary,
-		RequestedBy:   notice.RequestedBy,
-		MatchedRules:  notice.Rules,
-		Progress:      notice.Progress,
-		RequiredCount: notice.Count,
-		Channel:       notice.Channel,
-		ExpiresAt:     notice.ExpiresAt.UTC().Format(time.RFC3339),
-		DecisionPath:  "/api/v1/approvals/" + notice.RequestID + "/decision",
+		Event:        EventApprovalRequested,
+		RequestID:    notice.RequestID,
+		PlanHash:     notice.PlanHash,
+		Summary:      notice.Summary,
+		RequestedBy:  notice.RequestedBy,
+		MatchedRules: notice.Rules,
+		ExpiresAt:    notice.ExpiresAt.UTC().Format(time.RFC3339),
+		DecisionPath: "/api/v1/approvals/" + notice.RequestID + "/decision",
 	})
 	if err != nil {
 		n.log.Error("approval webhook: marshal notice", "request_id", notice.RequestID, "err", err)

@@ -84,7 +84,7 @@ var settings = []setting{
 	{key: "oauth.account_claim", class: restartRequired, differs: differ(func(c Config) string { return c.OAuth.AccountClaim })},
 	{key: "oauth.required_scope", class: restartRequired, differs: differ(func(c Config) string { return c.OAuth.RequiredScope })},
 	{key: "oauth.public_url", class: restartRequired, differs: differ(func(c Config) string { return c.OAuth.PublicURL })},
-	{key: "approval.gate_rules_path", class: appliedByReload, differs: differ(func(c Config) string { return c.Approval.GateRulesPath })},
+	{key: "approval.rules", class: appliedByReload, differs: func(a, b Config) bool { return !slices.Equal(a.Approval.Rules, b.Approval.Rules) }},
 	{key: "approval.webhook_url_file", class: appliedByReload, secret: true, differs: secretDiffers(func(c Config) Secret { return c.Approval.WebhookURL })},
 	{key: "approval.webhook_secret_file", class: appliedByReload, secret: true, differs: secretDiffers(func(c Config) Secret { return c.Approval.WebhookSecret })},
 	{key: "log.level", class: appliedByReload, differs: differ(func(c Config) int { return int(c.Log.Level) })},
