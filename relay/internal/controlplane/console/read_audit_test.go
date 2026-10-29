@@ -248,7 +248,8 @@ var consoleReadAudit = map[string]readAuditRule{
 	// internal/capability. The write itself is recorded by the POST route's
 	// entry below.
 	// The Account page makes the same unconditional trail read the list does
-	// and refuses to render when it cannot be recorded. Its Account and
+	// (auditAccountPageRead, which the edit refusals share) and refuses to
+	// render when it cannot be recorded. Its Account and
 	// API-Token reads are the unrecorded ones the list's entry describes.
 	"GET /console/accounts/{account_name}": {
 		path: "/console/accounts/" + testAdminName,
@@ -313,20 +314,32 @@ var consoleReadAudit = map[string]readAuditRule{
 		why: "a write, not a read (#655): the capability layer records the change as " +
 			"account_role with its Principal and the new role, and consoleauth records a " +
 			"step_up event WHEN THE CHANGE RAISES THE ROLE; a demote costs no password " +
-			"and writes no step_up (owner decision 2026-09-19)",
+			"and writes no step_up (owner decision 2026-09-19); a refusal the edit view can " +
+			"answer re-renders the Account page, which makes the same recorded query_audit " +
+			"read GET /console/accounts/{account_name} makes and falls back to the plain " +
+			"result page when that read cannot be recorded (proved by " +
+			"TestAccountsWrite_ARefusedEditWritesExactlyOneQueryAuditReadThroughTheRealLane)",
 	},
 	"POST /console/accounts/{account_id}/enabled": {
 		path: "",
 		why: "a write, not a read (#655): the capability layer records it as account_enable " +
 			"or account_disable with its Principal, and consoleauth records a step_up event " +
 			"ON THE ENABLE ONLY; a disable costs no password and writes no step_up — it is " +
-			"the durable off-switch and can only reduce",
+			"the durable off-switch and can only reduce; a refusal the edit view can answer " +
+			"re-renders the Account page, which makes the same recorded query_audit read " +
+			"GET /console/accounts/{account_name} makes and falls back to the plain result " +
+			"page when that read cannot be recorded (proved by " +
+			"TestAccountsWrite_ARefusedEditWritesExactlyOneQueryAuditReadThroughTheRealLane)",
 	},
 	"POST /console/accounts/{account_id}/tokens": {
 		path: "",
 		why: "a write, not a read (#655): the capability layer records the mint as " +
 			"api_token_mint carrying the token ID and never the Plaintext " +
-			"(accountadmin.go), and consoleauth records its own step_up event",
+			"(accountadmin.go), and consoleauth records its own step_up event; a refusal the " +
+			"edit view can answer re-renders the Account page, which makes the same recorded " +
+			"query_audit read GET /console/accounts/{account_name} makes and falls back to " +
+			"the plain result page when that read cannot be recorded (proved by " +
+			"TestAccountsWrite_ARefusedEditWritesExactlyOneQueryAuditReadThroughTheRealLane)",
 	},
 	"GET " + yourAccountPath: {
 		path: "",

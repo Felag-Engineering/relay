@@ -50,6 +50,16 @@ type accountPageView struct {
 	// set their own password and the issue control is wired (ADR-0045
 	// decision 4): once they have, the section is not drawn.
 	Temporary *temporaryPasswordSection
+
+	// RoleRefusal, StateRefusal and MintRefusal carry a refused act's sentence
+	// into the section it was made from (editRefusal); at most one is set, and
+	// none on GET.
+	RoleRefusal  string
+	StateRefusal string
+	MintRefusal  string
+	// MintName echoes a refused mint's token name. The step-up password is
+	// never echoed and no field here can hold it.
+	MintName string
 }
 
 // temporaryPasswordSection is the Account page's Temporary password section.
@@ -136,6 +146,30 @@ func pageDoneSentence(raw string, enabled bool) string {
 	return doneSentence(raw)
 }
 
+// auditAccountPageRead makes the Account page's one recorded read: a
+// query_audit over agentCallKinds through the read lane (ADR-0025). It returns
+// d with its read lane latched for the rest of the request and the latch to
+// consult before rendering. A non-nil error means the page must not render; it
+// is capability.ErrReadUnaudited when the read could not be recorded. d.Queries
+// must be non-nil.
+//
+// The page records its read exactly as the list does, and unconditionally, so
+// the route stays under the audited sweeps rather than becoming an exemption.
+// The Account and API Token reads record nothing on success; this is the row
+// that does.
+func auditAccountPageRead(ctx context.Context, d Deps, caller capability.Principal) (Deps, *auditLatch, error) {
+	d, lane := latched(d)
+	if _, err := d.Queries.QueryAudit(ctx, caller,
+		capability.AuditFilter{Kinds: agentCallKinds},
+		capability.PageRequest{Limit: 1}); err != nil {
+		return d, lane, err
+	}
+	if lane.unaudited {
+		return d, lane, capability.ErrReadUnaudited
+	}
+	return d, lane, nil
+}
+
 // handleAccount implements GET /console/accounts/{account_name}.
 func handleAccount(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -157,7 +191,6 @@ func handleAccount(d Deps) http.HandlerFunc {
 			unavailable(w, "Account administration")
 			return
 		}
-		d, lane := latched(d)
 
 		name := r.PathValue("account_name")
 		if name == "" || len(name) > maxAccountNameBytes {
@@ -165,18 +198,9 @@ func handleAccount(d Deps) http.HandlerFunc {
 			return
 		}
 
-		// The page records its read exactly as the list does: one query_audit
-		// through the read lane, and a refusal to render when it cannot be
-		// recorded. It is unconditional, so the route stays under the audited
-		// sweeps rather than becoming an exemption. The Account and API Token
-		// reads below record nothing on success; this is the row that does.
-		if _, err := d.Queries.QueryAudit(r.Context(), caller,
-			capability.AuditFilter{Kinds: agentCallKinds},
-			capability.PageRequest{Limit: 1}); err != nil {
+		d, _, err := auditAccountPageRead(r.Context(), d, caller)
+		if err != nil {
 			readFailed(w, err, "the AI-agent call trail")
-			return
-		}
-		if refusedUnaudited(w, lane, "the AI-agent call trail") {
 			return
 		}
 
@@ -201,80 +225,92 @@ func handleAccount(d Deps) http.HandlerFunc {
 		}
 
 		p.Title = a.Name
-		v := accountPageView{
-			Name:  a.Name,
-			Kind:  string(a.Kind),
-			Role:  string(a.Role),
-			State: accountState(a.Enabled),
-			Done:  pageDoneSentence(r.URL.Query().Get("done"), a.Enabled),
-		}
-		if accountsOffered(d) {
-			v.Write = &accountsWriteControls{
-				CSRFToken:   p.CSRFToken,
-				StepUpFresh: stepUpFresh(d, r),
-				TTLs:        ttlOptions(a.Kind),
-			}
-			v.MintAction = mintAPITokenAction(a.ID)
-			v.LowerHint = lowerRoleHint
-			raise, lower := roleTargets(a.Role)
-			v.Change = &accountChange{
-				Role:          string(a.Role),
-				State:         accountState(a.Enabled),
-				Enabled:       a.Enabled,
-				RoleAction:    setAccountRoleAction(a.ID),
-				EnabledAction: setAccountEnabledAction(a.ID),
-				LowerAction:   confirmLowerRoleAction(a.ID),
-				DisableAction: confirmDisableAction(a.ID),
-				RaiseRoles:    raise,
-				LowerRoles:    lower,
-				Self:          capability.SelfTargeted(caller, a.ID),
-				SelfNote:      selfPanelNote,
-			}
-		}
-
-		if accountsOffered(d) && d.TemporaryPasswords != nil && a.Kind == accounts.KindHuman {
-			section, err := temporarySection(r.Context(), d, caller, a.ID, d.now())
-			if err != nil {
-				accountsReadFailed(w, p, err)
-				return
-			}
-			v.Temporary = section
-		}
-
-		tokens, tokErr := d.Accounts.APITokens(r.Context(), caller, a.ID)
-		switch {
-		case tokErr == nil:
-			for _, t := range tokens {
-				row := tokenRow{
-					ID:         t.ID,
-					Name:       t.Name,
-					CreatedAt:  t.CreatedAt,
-					LastUsedAt: t.LastUsedAt,
-					ExpiresAt:  t.ExpiresAt,
-					Revoked:    t.Revoked(),
-				}
-				// Revoke is offered for any token not ALREADY revoked,
-				// including an expired one: revoking an expired token is
-				// harmless and idempotent (capability's RevokeAPIToken), and
-				// refusing it would be a second opinion about token state this
-				// screen must not hold.
-				if v.Write != nil && !row.Revoked {
-					row.RevokeAction = confirmRevokeAction(a.ID, t.ID)
-				}
-				v.Tokens = append(v.Tokens, row)
-			}
-		case errors.Is(tokErr, authz.ErrUnauthorized):
-			accountsReadFailed(w, p, tokErr)
+		v, err := accountPageFor(r.Context(), d, caller, p, a, stepUpFresh(d, r))
+		if err != nil {
+			accountsReadFailed(w, p, err)
 			return
-		default:
-			// A store that failed degrades one section rather than refusing
-			// the page: the Account itself IS readable, and pretending
-			// otherwise would hide what this operator can still see.
-			v.TokensUnreadable = true
 		}
+		v.Done = pageDoneSentence(r.URL.Query().Get("done"), a.Enabled)
 
 		renderScreen(w, p, accountPageTmpl, v)
 	}
+}
+
+// accountPageFor builds the Account page for a, reading its password status and
+// API Tokens as caller. fresh is whether the step-up window is open, for the
+// password fields. The error is only the capability layer's refusal of a read,
+// which the caller renders as it made it; a store failure degrades one section.
+// Done is left for the caller.
+func accountPageFor(ctx context.Context, d Deps, caller capability.Principal, p Page, a accounts.Account, fresh bool) (accountPageView, error) {
+	v := accountPageView{
+		Name:  a.Name,
+		Kind:  string(a.Kind),
+		Role:  string(a.Role),
+		State: accountState(a.Enabled),
+	}
+	if accountsOffered(d) {
+		v.Write = &accountsWriteControls{
+			CSRFToken:   p.CSRFToken,
+			StepUpFresh: fresh,
+			TTLs:        ttlOptions(a.Kind),
+		}
+		v.MintAction = mintAPITokenAction(a.ID)
+		v.LowerHint = lowerRoleHint
+		raise, lower := roleTargets(a.Role)
+		v.Change = &accountChange{
+			Role:          string(a.Role),
+			State:         accountState(a.Enabled),
+			Enabled:       a.Enabled,
+			RoleAction:    setAccountRoleAction(a.ID),
+			EnabledAction: setAccountEnabledAction(a.ID),
+			LowerAction:   confirmLowerRoleAction(a.ID),
+			DisableAction: confirmDisableAction(a.ID),
+			RaiseRoles:    raise,
+			LowerRoles:    lower,
+			Self:          capability.SelfTargeted(caller, a.ID),
+			SelfNote:      selfPanelNote,
+		}
+	}
+
+	if accountsOffered(d) && d.TemporaryPasswords != nil && a.Kind == accounts.KindHuman {
+		section, err := temporarySection(ctx, d, caller, a.ID, d.now())
+		if err != nil {
+			return accountPageView{}, err
+		}
+		v.Temporary = section
+	}
+
+	tokens, tokErr := d.Accounts.APITokens(ctx, caller, a.ID)
+	switch {
+	case tokErr == nil:
+		for _, t := range tokens {
+			row := tokenRow{
+				ID:         t.ID,
+				Name:       t.Name,
+				CreatedAt:  t.CreatedAt,
+				LastUsedAt: t.LastUsedAt,
+				ExpiresAt:  t.ExpiresAt,
+				Revoked:    t.Revoked(),
+			}
+			// Revoke is offered for any token not ALREADY revoked,
+			// including an expired one: revoking an expired token is
+			// harmless and idempotent (capability's RevokeAPIToken), and
+			// refusing it would be a second opinion about token state this
+			// screen must not hold.
+			if v.Write != nil && !row.Revoked {
+				row.RevokeAction = confirmRevokeAction(a.ID, t.ID)
+			}
+			v.Tokens = append(v.Tokens, row)
+		}
+	case errors.Is(tokErr, authz.ErrUnauthorized):
+		return accountPageView{}, tokErr
+	default:
+		// A store that failed degrades one section rather than refusing
+		// the page: the Account itself IS readable, and pretending
+		// otherwise would hide what this operator can still see.
+		v.TokensUnreadable = true
+	}
+	return v, nil
 }
 
 // temporarySection reads the Account's password status and describes it. It
@@ -340,6 +376,7 @@ var accountPageTmpl = newScreen("account", `
 <section class="panel" id="role">
   <h2>Role</h2>
   <p class="rolestate">Role <b>{{.Role}}</b>.</p>
+  {{with $.RoleRefusal}}<p class="fielderr" role="alert">{{.}}</p>{{end}}
   {{with .Change}}{{$c := .}}
   {{if .Self}}
   <p class="note">{{.SelfNote}}</p>
@@ -380,6 +417,7 @@ var accountPageTmpl = newScreen("account", `
 <section class="panel" id="state">
   <h2>State</h2>
   <p class="rolestate">{{.State}}.</p>
+  {{with $.StateRefusal}}<p class="fielderr" role="alert">{{.}}</p>{{end}}
   {{with .Change}}{{$c := .}}
   {{if not .Self}}
   <div class="acctchange">
@@ -460,7 +498,7 @@ var accountPageTmpl = newScreen("account", `
     <input type="hidden" name="csrf_token" value="{{.Write.CSRFToken}}">
     <div class="fld">
       <label class="fldlabel" for="mint-name">Token name</label>
-      <input id="mint-name" name="name" maxlength="128" required autocomplete="off">
+      <input id="mint-name" name="name" maxlength="128" required autocomplete="off"{{with $.MintName}} value="{{.}}"{{end}}>
     </div>
     <div class="fld">
       <label class="fldlabel" for="mint-ttl">Lifetime</label>
@@ -472,6 +510,7 @@ var accountPageTmpl = newScreen("account", `
       <label class="fldlabel" for="mint-password">{{if .Write.StepUpFresh}}Your password to mint a token &mdash; optional, you confirmed it recently{{else}}Your password &mdash; required to mint a token{{end}}</label>
       <input id="mint-password" name="password" type="password" autocomplete="current-password"{{if not .Write.StepUpFresh}} required{{end}}>
     </div>
+    {{with $.MintRefusal}}<p class="fielderr" role="alert">{{.}}</p>{{end}}
     <button class="btn grant" type="submit">Mint API Token</button>
   </form>
   {{end}}

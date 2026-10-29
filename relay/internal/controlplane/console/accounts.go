@@ -68,7 +68,9 @@ package console
 //
 // Edit, Enable and New account are links; with the Console's external script
 // (accounts.js) they open the linked page's content in a dialog instead, and
-// nothing else about them changes.
+// nothing else about them changes. A refused act from either page re-renders
+// that page with the refusal above the act's button (accounts_write.go,
+// createRefusal and editRefusal).
 
 import (
 	"net/http"
