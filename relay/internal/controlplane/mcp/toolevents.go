@@ -5,9 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"sort"
-	"unicode/utf8"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/Felag-Engineering/relay/relay/internal/textbound"
 )
 
 // Tool-call observability (D9 in docs/design/console/99-open-decisions.md).
@@ -174,14 +175,8 @@ func argumentsFromRaw(raw json.RawMessage) (args map[string]string, truncated bo
 // boundedToolName caps name at maxToolNameBytes, truncating at a UTF-8 rune
 // boundary so the published Tool field is always valid UTF-8.
 func boundedToolName(name string) string {
-	if len(name) <= maxToolNameBytes {
-		return name
-	}
-	b := []byte(name)[:maxToolNameBytes]
-	for len(b) > 0 && !utf8.RuneStart(b[len(b)-1]) {
-		b = b[:len(b)-1]
-	}
-	return string(b)
+	bounded, _ := textbound.Truncate(name, maxToolNameBytes)
+	return bounded
 }
 
 // renderArgumentValue renders one JSON value as a string: unquoted for a
