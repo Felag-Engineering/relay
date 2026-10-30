@@ -243,6 +243,10 @@ Config management copies the files and restarts the daemon, exactly as for `poli
   notify: restart relay-daemon
 ```
 
+That handler is your play's own ([policy-as-code.md](policy-as-code.md) §3 shows it); a play
+that applies the release's `relay_daemon` role can notify `relay_daemon : Restart relay-daemon`
+instead.
+
 Never write into `templates.d/relay-read/`: the relay-daemon package owns it, and an upgrade
 replaces it. Your own packs and loose files go beside it.
 

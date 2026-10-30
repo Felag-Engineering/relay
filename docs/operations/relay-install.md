@@ -1,40 +1,65 @@
 # Installing and running the Relay
 
-How to stand up the Relay, the central Go server, from a published release artifact.
+How to stand up the Relay, the central Go server, from its OS package.
 Companions: [relay-daemon-install.md](relay-daemon-install.md) for the Node side,
 [enrollment.md](enrollment.md) for joining Nodes,
 [ca-disaster-recovery.md](ca-disaster-recovery.md) for the Relay's CA, and
 [release-artifacts.md](release-artifacts.md) for artifact naming and verification.
 
-Sections 1–6 are the recommended path: a verified binary under the hardened systemd unit.
+Sections 1–6 are the recommended path: the verified Relay package, which installs the hardened systemd unit.
 [Section 7](#7-running-it-with-docker-compose) is a supported single-host deployment beside
 it, `deploy/production/docker-compose.yml` running the signed published image (ADR-0033, amended
 2026-10-15). It states what it keeps of that posture and is not called production until its
 hardening review has closed (RC-27).
 
-## 1. Obtain and verify the artifact
+## 1. Obtain, verify and install the package
 
-Releases publish `relay-<version>-linux-amd64` and
-`relay-<version>-linux-arm64` (statically linked, no libc dependency), plus a signed
-`SHA256SUMS`. Follow the **verify-then-install** sequence in
-[release-artifacts.md](release-artifacts.md): the digest is checked **before** the binary is
-installed or run, and a mismatch aborts. That document has the full sequence, including
-`cosign verify-blob` on `SHA256SUMS` and the optional `gh attestation verify`; this is its
+Releases publish the Relay as a `.deb` (`relay_<pkgversion>-1_amd64.deb`) and an `.rpm`
+(`relay-<pkgversion>-1.x86_64.rpm`), and the same for arm64, plus a signed `SHA256SUMS`. Follow
+the **verify-then-install** sequence in
+[release-artifacts.md](release-artifacts.md#verify-then-install): the digest is checked
+**before** the package is installed or anything in it runs, and a mismatch aborts. That
+document has the full sequence, including `cosign verify-blob` on `SHA256SUMS` (the provenance check, done once when the pin is taken,
+which is when `PINNED_SHA256` is recorded) and the optional `gh attestation verify`; this is its
 checksum core:
 
-```sh
+```bash
 # Pinned by the operator, never resolved at install time: the published tag without its
 # leading `v` (see release-artifacts.md).
 VERSION="X.Y.Z"
-ARTIFACT="relay-${VERSION}-linux-amd64"
+# The package's SHA-256, recorded from the cosign-verified SHA256SUMS when the pin was taken.
+PINNED_SHA256="<64-hex digest recorded when you reviewed the release>"
+PKGVERSION="${VERSION//-/.}"        # a prerelease "-" is "." in the file name
+DEB="relay_${PKGVERSION}-1_amd64.deb"   # or relay-${PKGVERSION}-1.x86_64.rpm
 BASE="https://github.com/Felag-Engineering/relay/releases/download/v${VERSION}"
 
-curl -fsSLO "${BASE}/${ARTIFACT}"
+curl -fsSLO "${BASE}/${DEB}"
 curl -fsSLO "${BASE}/SHA256SUMS"
-sha256sum --check --ignore-missing SHA256SUMS   # verify BEFORE install; failure is fatal
-install -m 0755 "${ARTIFACT}" /usr/bin/relay    # the path relay.service runs
-/usr/bin/relay --version                        # must self-identify as the pinned version
+echo "${PINNED_SHA256}  ${DEB}" | sha256sum --check -   # the pinned digest, BEFORE install; failure is fatal
+sha256sum --check --ignore-missing SHA256SUMS           # the downloaded checksum file must agree
+sudo apt-get install -y "./${DEB}"              # or: sudo dnf install -y ./relay-${PKGVERSION}-1.x86_64.rpm
+relay --version                                 # must self-identify as the pinned version
 ```
+
+What the package did on a first install:
+
+- Created the `relay` account and group, `/etc/relay` (root `0755`) and `/var/lib/relay`
+  (`relay:relay`, `0700`).
+- Placed the binary at `/usr/bin/relay` and the hardened unit at
+  `/usr/lib/systemd/system/relay.service`.
+- Printed the configuration guide, and kept a copy at `/usr/share/relay/configuration-guide.txt`.
+  `/usr/share/relay/relay.toml.example` holds every key.
+- Generated `/etc/relay/relay.toml` (`root:relay`, `0640`), only because none existed: the
+  control plane enabled on `127.0.0.1:9443`, the Console enabled, `ca.dir` at
+  `/var/lib/relay/ca`, `store.path` at `/var/lib/relay/relay.db`, and `tls.hostname` set to this
+  host's fully qualified name.
+- Ran `systemctl preset` where systemd runs.
+
+It did not start the Relay and did not run `relay init`. If the host has no fully qualified
+name, the `hostname` line is commented out and the Relay refuses to start until you set
+`tls.hostname` (a required key; section 2). If `/etc/relay` is a symlink, isn't root's, or is
+group- or other-writable, nothing is generated, and the install still succeeds. The package is
+described in ADR-0033.
 
 `relay --version` (also `-version` and `-V`, as for relay-daemon) prints the build stamp; see
 [version-stamping.md](version-stamping.md).
@@ -50,7 +75,8 @@ The Relay reads every setting from one root-owned file, `/etc/relay/relay.toml` 
 and none from flags or the environment. `relay --config <path>` names a different file. A
 retired `RELAY_*` setting variable that is still set refuses start and names the key that
 replaces it. [`relay/packaging/relay.toml.example`](../../relay/packaging/relay.toml.example)
-covers every key, with its default and the reasoning; a drift gate keeps it complete.
+covers every key, with its default and the reasoning; a drift gate keeps it complete. The
+file the package generates is a starting point.
 
 Three keys are required and have no default: `ca.dir`, `store.path` and `tls.hostname`. An
 unknown key, or a value that cannot work, is refused.
@@ -122,6 +148,17 @@ Subcommands, checked before the configuration is read:
 
 ## 3. First start
 
+Check `/etc/relay/relay.toml`: `tls.hostname` must be the name daemons dial, and a wrong one
+fails only on the Nodes. Then start the Relay:
+
+```console
+$ sudo systemctl start relay
+$ systemctl status relay
+```
+
+Whether it is enabled at boot follows the distribution's presets; run
+`sudo systemctl enable relay` otherwise.
+
 On first start the Relay creates its CA in `ca.dir` (directory `0700`; `ca-key.pem` `0600`,
 `ca-cert.pem` `0644`) and issues itself one server certificate, presented on both listeners, for
 `tls.hostname`, each `tls.extra_names` entry, loopback and the host's addresses (up to 64, IPv4
@@ -140,42 +177,27 @@ CA:
   is set. There is no shared credential in Relay configuration (ADR-0023). API and MCP clients
   need `ca-cert.pem` as their trust anchor (e.g. `curl --cacert`).
 
-A minimal production `relay.toml`:
+The `relay.toml` the package generated already is a minimal production file; its settings are
+in [`relay/packaging/relay.toml.in`](../../relay/packaging/relay.toml.in). `journalctl -u relay`
+shows the CA fingerprint logged at start.
 
-```toml
-[node_plane]
-listen_address = ":7654"
-
-[control_plane]
-enabled = true
-listen_address = ":9443"
-
-[ca]
-dir = "/var/lib/relay/ca"
-
-[store]
-path = "/var/lib/relay/relay.db"
-
-[tls]
-hostname = "relay.example.internal"
-```
-
-That minimal file carries no gate rules, so it gates nothing; copy the two `[[approval.rules]]`
-sections from `relay.toml.example` to gate every `mutate` and every Raw Exec.
-
-Verify it is up, with `$RELAY_TOKEN` an API Token from `relay init` (section 4):
+Verify it is up, with `$RELAY_TOKEN` an API Token from `relay init` (section 4). The control
+plane listens on loopback, so copy the public `ca-cert.pem` out and resolve your `tls.hostname`
+to it:
 
 ```console
-$ curl --cacert /var/lib/relay/ca/ca-cert.pem \
+$ sudo install -m 0644 /var/lib/relay/ca/ca-cert.pem ./relay-ca-cert.pem
+$ curl --cacert relay-ca-cert.pem \
+    --resolve <tls.hostname>:9443:127.0.0.1 \
     -H "Authorization: Bearer $RELAY_TOKEN" \
-    https://relay.example.internal:9443/metrics | head
+    https://<tls.hostname>:9443/metrics | head
 ```
 
 ## 4. The packaged systemd unit
 
-Use the hardened unit in `relay/packaging/`, `relay.service`, not a hand-written one; its
-README has the install and enable steps, and its comments carry the reasoning for each
-directive. The Node-side counterpart is `daemon/packaging/relay-daemon.service`.
+The package installs the hardened unit, `relay.service`, and its comments carry the reasoning
+for each directive; use it, not a hand-written one. The Node-side counterpart is
+`daemon/packaging/relay-daemon.service`.
 
 The Relay does not need root. It needs write access to its CA directory and store and the
 ability to bind its two ports; the unit takes everything else away: a dedicated `relay` user,
@@ -186,15 +208,8 @@ an empty capability bounding set, `NoNewPrivileges`, a read-only filesystem apar
 `/etc/relay/relay.toml` is `0640 root:relay`. It holds the security floor (invariant 11):
 whoever can edit it can lower that floor at the next restart or reload.
 
-Install per `relay/packaging/README.md`, then:
-
-```console
-$ sudo systemctl daemon-reload
-$ sudo systemctl enable --now relay
-$ systemctl status relay
-```
-
-The control plane has no Account and no usable credential until you create the first admin:
+The control plane has no Account and no usable credential until you create the first admin.
+**First admin:**
 
 ```console
 $ sudo -u relay relay init --admin <your-name>
@@ -202,6 +217,23 @@ $ sudo -u relay relay init --admin <your-name>
 
 It prompts for that admin's Console password and prints its first API Token. Give your callers
 credentials of their own; see [control-plane-credential.md](control-plane-credential.md).
+
+- **Widen the control plane** only after `init` has run: edit `control_plane.listen_address`,
+  then `sudo systemctl restart relay`. It is bind-time: a SIGHUP reload refuses it (RC-21).
+- **Never image the host** after the Relay's first start: the CA key travels with every copy
+  (see the configuration guide).
+- **Upgrade:** install the newer verified package, then `sudo systemctl restart relay`. The
+  package never rewrites `relay.toml`, never changes enablement and never restarts (ADR-0033).
+  See [iac-upgrades.md](iac-upgrades.md).
+- **Remove and purge:** removing keeps the config, the state and the account. `apt purge` moves
+  `/var/lib/relay` (the CA and the store together) to `/var/lib/relay.purged-<time>` (root
+  `0700`), prints where, and removes only the `relay.toml` and `/etc/relay` it created. Delete
+  the moved directory, or destroy the host, when the Relay is gone for good (threat-model R34).
+  A reinstall after a purge starts with a new CA, and every Node must enroll again. `.rpm`
+  removal prints the paths to delete by hand.
+- **Hand-built install:** documented in
+  [`relay/packaging/README.md`](../../relay/packaging/README.md#install), with `relay.service`
+  and `relay.toml.example` verified under `SHA256SUMS`. It is not the supported path.
 
 ## 5. Operational levers on the Relay host
 
@@ -453,8 +485,9 @@ $ curl --cacert relay-ca-cert.pem \
 once the control plane is published.
 
 **7. Point real relay-daemons at it**, one host at a time, per
-[relay-daemon-install.md](relay-daemon-install.md): pipe the `join_string` from
-step 6's response to `sudo relay-daemon join`. It carries the Relay's address, its CA
+[relay-daemon-install.md](relay-daemon-install.md) (the daemon is installed from its package):
+pipe the `join_string` from step 6's response to `sudo relay-daemon join`
+(see [Moving a join string](enrollment.md#moving-a-join-string)). It carries the Relay's address, its CA
 fingerprint and the token, and is used once, by `join`, which writes it nowhere; no CA file is
 copied to the Node. A daemon with no identity logs `no identity: nothing to connect with` and
 exits 0, so enroll with `relay-daemon join` if the unit is inactive. Each

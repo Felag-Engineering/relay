@@ -1,42 +1,50 @@
 # Installing and running the relay-daemon
 
-How to install the relay-daemon, the non-AI Rust daemon on each managed Node, from a
-published release artifact in a clean environment. The short version is
+How to install the relay-daemon, the non-AI Rust daemon on each managed Node, from
+its OS package. The short version is
 [`daemon/packaging/README.md`](../../daemon/packaging/README.md). See also
 [relay-install.md](relay-install.md) (the Relay side), [enrollment.md](enrollment.md)
 (joining the fleet), [policy-as-code.md](policy-as-code.md) (the Policy file),
 [daemon-privilege-posture.md](daemon-privilege-posture.md) (the hardened unit's rationale),
 and [release-artifacts.md](release-artifacts.md) (the artifact contract).
 
-## 1. Obtain and verify the artifact
+## 1. Obtain and verify the package
 
-Releases publish `relay-daemon-<version>-linux-amd64` and
-`relay-daemon-<version>-linux-arm64` (statically linked, musl, ADR-0007) plus a
-`SHA256SUMS` signed by `SHA256SUMS.sigstore.json`; check the signature with `cosign
-verify-blob` first, as [release-artifacts.md](release-artifacts.md) shows. Then verify before
-you install; a mismatch aborts:
+Releases publish the daemon as a `.deb` (`relay-daemon_<pkgversion>-1_amd64.deb`) and an
+`.rpm` (`relay-daemon-<pkgversion>-1.x86_64.rpm`), and the same for arm64, plus a `SHA256SUMS`
+signed by `SHA256SUMS.sigstore.json`. Check the signature with `cosign verify-blob` first, when
+you take the pin and record `PINNED_SHA256`, as
+[release-artifacts.md](release-artifacts.md#verify-then-install) shows. Then verify the
+package before you install it; a mismatch aborts:
 
-```sh
+```bash
 VERSION="X.Y.Z"         # the release pinned by the operator, in config management
-ARTIFACT="relay-daemon-${VERSION}-linux-amd64"
+# The package's SHA-256, recorded from the cosign-verified SHA256SUMS when the pin was taken.
+PINNED_SHA256="<64-hex digest recorded when you reviewed the release>"
+PKGVERSION="${VERSION//-/.}"
+DEB="relay-daemon_${PKGVERSION}-1_amd64.deb"      # or relay-daemon-${PKGVERSION}-1.x86_64.rpm
 BASE="https://github.com/Felag-Engineering/relay/releases/download/v${VERSION}"
 
-curl -fsSLO "${BASE}/${ARTIFACT}"
+curl -fsSLO "${BASE}/${DEB}"
 curl -fsSLO "${BASE}/SHA256SUMS"
-sha256sum --check --ignore-missing SHA256SUMS   # verify BEFORE install; failure is fatal
-install -m 0755 "${ARTIFACT}" /usr/bin/relay-daemon
-/usr/bin/relay-daemon --version            # must self-identify as the pinned version
+echo "${PINNED_SHA256}  ${DEB}" | sha256sum --check -   # the pinned digest, BEFORE install; failure is fatal
+sha256sum --check --ignore-missing SHA256SUMS           # the downloaded checksum file must agree
 ```
 
+A package carries no signature of its own before v1.0.0: the signed `SHA256SUMS` covers it
+(DI-24, ADR-0033). For which platforms a release proves the package on, see
+[the install matrix](release-artifacts.md#the-install-matrix-gates-the-packages).
+
 In production config management runs this sequence: see [enrollment.md](enrollment.md) for
-the Ansible-flavored role and [iac-upgrades.md](iac-upgrades.md) for upgrades.
+the release's Ansible role and [iac-upgrades.md](iac-upgrades.md) for upgrades.
 
 ## 2. Configuration surface
 
 The daemon is configured entirely by environment variables, read once at startup
 (`daemon/src/config.rs`), conventionally through the unit's `EnvironmentFile`
-(`/etc/relay-daemon/relay-daemon.env`, template at
-[`daemon/packaging/relay-daemon.env.example`](../../daemon/packaging/relay-daemon.env.example)):
+(`/etc/relay-daemon/relay-daemon.env`). The package placed that file (root `0600`) on its first
+install, copied from the example, which stays at `/usr/share/relay-daemon/relay-daemon.env.example`
+([source](../../daemon/packaging/relay-daemon.env.example)). The package never rewrites it:
 
 | Variable | Default | Meaning |
 |---|---|---|
@@ -99,9 +107,11 @@ These are offline: no network, no identity, no Relay.
 
 - `relay-daemon --version` / `-version` / `-V` — print the build stamp and exit (the same
   three spellings as the Relay; [version-stamping.md](version-stamping.md)).
-- `relay-daemon policy check <file> [--policy-dir <dir>] [--strict] [--would-allow <spec>]` —
-  lint a Policy file, and with `--policy-dir` the fragments in `<dir>` together with it, and
-  optionally answer a hypothetical through the evaluator the live wire path uses (ADR-0011).
+- `relay-daemon policy check <file> [--policy-dir <dir>] [--strict] [--templates <dir>] [--would-allow <spec>]` —
+  lint a Policy file, and with `--policy-dir` the fragments in `<dir>` together with it. With
+  `--templates`, it also lints the Template files under `<dir>` and resolves Operation names
+  against them. It can optionally
+  answer a hypothetical through the evaluator the live wire path uses (ADR-0011).
   It prints the Policy fingerprint those files give. Exit codes `0` valid / `1` invalid / `2`
   would-deny. See [policy-as-code.md](policy-as-code.md).
 - `relay-daemon dump-operation-schema` — print the canonical Operation schema JSON (ADR-0015).
@@ -126,6 +136,13 @@ One subcommand changes the Node. It is the only thing that enrolls it:
   Without that file the shell's environment governs. It starts the unit only where systemd is
   running and only for the state directory the unit reads; elsewhere it says so and exits 0.
 
+  The join string's integrity rides on the channel you moved it over. The CA fingerprint
+  inside it is the only thing a Node that has never reached the Relay trusts, so whoever can
+  change the string on the way can put in their own address and fingerprint, and the Node
+  enrolls with their Relay instead (ADR-0031). Move it only over a channel that protects it
+  from alteration as well as from reading: your vault, an SSH session to the Node, the Ansible
+  role's standard input. Never over chat, email or a ticket.
+
   A failed run (a CA that does not match the fingerprint, an unreachable Relay, a rejected
   token, an interrupt) leaves the state directory as it found it, and says what, if anything,
   it could not remove. After an interrupt, a timeout, or a failure once the Relay had answered
@@ -141,36 +158,55 @@ One subcommand changes the Node. It is the only thing that enrolls it:
 
 ## 4. Install on the Node
 
-Per [`daemon/packaging/README.md`](../../daemon/packaging/README.md):
-
 ```console
-$ sudo install -m 0755 relay-daemon-${VERSION}-linux-amd64 /usr/bin/relay-daemon
-$ sudo install -m 0644 relay-daemon.service /etc/systemd/system/relay-daemon.service
-$ sudo mkdir -p /etc/relay-daemon
-$ sudo install -m 0644 -o root -g root policy.toml /etc/relay-daemon/policy.toml
-$ sudo install -m 0600 -o root -g root relay-daemon.env /etc/relay-daemon/relay-daemon.env
-$ sudo systemctl daemon-reload
+$ sudo apt-get install ./relay-daemon_<pkgversion>-1_amd64.deb   # or: sudo dnf install ./relay-daemon-<pkgversion>-1.x86_64.rpm
+$ sudoedit /etc/relay-daemon/relay-daemon.env   # set RELAY_NODE_LABELS
 $ sudo relay-daemon join      # paste the join string; it enrolls and starts the unit
 $ systemctl status relay-daemon
 ```
 
+What the package did:
+
+- Placed the binary at `/usr/bin/relay-daemon` and the hardened unit at
+  `/usr/lib/systemd/system/relay-daemon.service`.
+- Placed the shipped read catalog under `/etc/relay-daemon/templates.d/relay-read/`. The
+  package owns it and replaces it on upgrade; never write into it.
+- Placed the shipped default Policy as `/etc/relay-daemon/policy.toml`, only on a first install
+  where no Policy file and no `policy.d` already existed.
+- Created an empty `/etc/relay-daemon/policy.d`, for fragments you place.
+- Placed `/etc/relay-daemon/relay-daemon.env` (root `0600`, from the example) if none existed.
+- Created the state directory `/var/lib/relay-daemon` (`0700`).
+- Ran `systemctl preset` where systemd runs. It never starts the daemon. Whether the unit is
+  enabled at boot follows the distribution's presets, and `join` enables and starts it anyway.
+
+If `/etc/relay-daemon` is a symlink, isn't root's, or is group- or other-writable, the package
+places nothing in it and does not enable the unit.
+
 Where the pieces come from:
 
-- **The unit** is the shipped hardened one,
+- **The unit** is the shipped hardened one, installed at
+  `/usr/lib/systemd/system/relay-daemon.service` from
   [`daemon/packaging/relay-daemon.service`](../../daemon/packaging/relay-daemon.service):
   `User=root` by necessity, everything else stripped.
   [daemon-privilege-posture.md](daemon-privilege-posture.md) explains every directive, and the
   `pkg-install.conf` drop-in for Nodes that run `pkg.install` or filesystem-mutating Raw Exec.
-- **`policy.toml`** comes from your IaC repo ([policy-as-code.md](policy-as-code.md)),
-  root-owned and not group/world-writable. The package also creates the Policy directory,
-  `policy.d`, empty and never writes into it again; fragments in it are yours to place. The
-  annotated example is [`daemon/policy.example.toml`](../../daemon/policy.example.toml); the shipped default
+- **The Policy** is yours after the first install. To replace it or add fragments, see
+  [policy-as-code.md](policy-as-code.md); it stays root-owned and not group/world-writable.
+  Check the composed Policy with
+  `relay-daemon policy check /etc/relay-daemon/policy.toml --policy-dir /etc/relay-daemon/policy.d --templates /etc/relay-daemon/templates.d --strict`.
+  `--strict` passes on the shipped default only when `--templates` is given, because without
+  it the read catalog's Operation names are unknown (DI-28). The annotated example is
+  [`daemon/policy.example.toml`](../../daemon/policy.example.toml); the shipped default
   (`read` pre-allowed with a confidentiality deny-list, `mutate` and Raw Exec opt-in,
   ADR-0022) is [`daemon/policy.default.toml`](../../daemon/policy.default.toml).
-- **`relay-daemon.env`** is the filled-in example env file. It holds no secret and no join
-  string, and is `0600 root:root` as defence in depth. No CA file is installed:
-  `relay-daemon join` pins the Relay's CA from the join string and writes it into the state
-  directory at enrollment.
+- **`relay-daemon.env`** holds no secret and no join string, and is `0600 root:root` as
+  defence in depth. No CA file is installed: `relay-daemon join` pins the Relay's CA from the
+  join string and writes it into the state directory at enrollment.
+
+**Hand-built install.** It is documented in
+[`daemon/packaging/README.md`](../../daemon/packaging/README.md), and its pieces are verified
+per DI-32. It is not supported: the package is the only supported install, and no supported
+procedure moves a hand-built Node onto the package.
 
 ## 5. Verify
 
@@ -268,15 +304,20 @@ decision targets. Example: `RUST_LOG=info,relay_ops::raw_exec=debug`.
 ## 7. Lifecycle
 
 - **Upgrades:** the daemon never self-upgrades and the Relay never pushes binaries
-  (ADR-0014). Upgrading is a config-management artifact swap and restart
-  ([iac-upgrades.md](iac-upgrades.md)). **From v0.1.0, remove the `RELAY_JOIN` line from
-  `/etc/relay-daemon/relay-daemon.env` first.** That release placed the line (empty from the
-  package, the join string from `relay-daemon join`), and this daemon refuses to start while
-  it is set. Any join string it held was an Enrollment Token: let it expire.
+  (ADR-0014). Install the newer verified package through config management, then
+  `systemctl restart relay-daemon`: the package runs `daemon-reload` only and never restarts.
+  An upgrade replaces the binary, the unit and the shipped catalog, and never rewrites the
+  Policy, the env file or the state directory ([iac-upgrades.md](iac-upgrades.md)). **From
+  v0.1.0, remove the `RELAY_JOIN` line from `/etc/relay-daemon/relay-daemon.env` first.** That
+  release placed the line (empty from the package, the join string from `relay-daemon join`),
+  and this daemon refuses to start while it is set. Any join string it held was an Enrollment
+  Token: let it expire.
 - **Policy changes:** a config-management file push and daemon restart, never over the wire
   ([policy-as-code.md](policy-as-code.md)).
 - **Certificate renewal:** automatic. Identity certs live ~14 days and the daemon renews over
   its existing mTLS connection at a jittered 50–75% of cert lifetime, with retries (ADR-0006).
 - **Decommissioning:** revoke the Node on the Relay (`POST /api/v1/nodes/{node_id}/revoke`,
-  with a required JSON body `{"reason": "..."}`) and remove the daemon and state dir through
-  config management.
+  with a required JSON body `{"reason": "..."}`), then remove the package. Removing keeps the
+  Policy, `policy.d`, the env file and the state directory. `apt purge` deletes the ones the
+  package created, the Node's identity included (DI-31), and leaves any that existed before the
+  package was first installed. `.rpm` removal prints the paths to delete by hand.

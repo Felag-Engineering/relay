@@ -265,8 +265,7 @@ func TestNewRejectsAnEmptyURL(t *testing.T) {
 // package installs (root-owned, the Relay's own group), plus a foreign group;
 // each outcome is the Secret rule's verdict on that file. Group read for the
 // Relay's own group, and execute bits, grant no other account access and are
-// accepted, which is the change from the owner-only mode rule this test used to
-// pin (RC-9, whose wording is the owner's to settle).
+// accepted (RC-9).
 //
 // The process facts are fixed rather than gathered, since a test may run as
 // root, which the check refuses outright; the real gatherer and the real binary

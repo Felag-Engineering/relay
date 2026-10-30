@@ -78,20 +78,28 @@ enrollment playbook you already ran.**
    cert:
 
    ```yaml
+   # In the pre_tasks: of a play that applies the release's relay_daemon role, with the new
+   # join string as relay_daemon_join_string. It is the enrollment play from enrollment.md §3:
+   # the role asserts relay_daemon_package_dir is non-empty even on an installed Node.
    - name: Clear old identity (forces re-enrollment against the new CA)
      ansible.builtin.file:
        path: "/var/lib/relay-daemon/{{ item }}"
        state: absent
      loop: [key.pem, cert.pem, ca_bundle.pem, node_id]
-     notify: restart relay-daemon
+     notify: "relay_daemon : Restart relay-daemon"
    ```
 
-   Then run `sudo relay-daemon join` on every Node with the new join string fed from the
-   operator's side, by the SSH loop or the release's Ansible role; the string never goes in a
-   file on the Node ([enrollment.md](enrollment.md), ADR-0048). Binary, unit and Policy are
-   already in place and untouched. Each Node enrolls as a new `node_id`, with a new
-   `relay:node-id` and the token's initial tags; Policy never left the Nodes (ADR-0002), so
-   enforcement is identical the moment they reconnect.
+   The role then finds no identity on each Node and runs `join` with the new string from the
+   operator's side, so the string never goes in a file on the Node
+   ([enrollment.md](enrollment.md), ADR-0048). The restart is load-bearing: the running daemon
+   keeps retrying the cert it loaded, and `join`'s `enable --now` does not restart a unit that
+   is already active. Because the clear task is in `pre_tasks`, Ansible runs its handler before
+   the role: the daemon restarts with no identity and stops cleanly, and `join` starts it again
+   on the new identity. If you re-join with the SSH loop instead, the play notifies a restart
+   handler of its own ([policy-as-code.md](policy-as-code.md) §3 shows one), and the loop runs
+   after it. Binary, unit and Policy are already in place and untouched. Each Node enrolls as a
+   new `node_id`, with a new `relay:node-id` and the token's initial tags; Policy never left the
+   Nodes (ADR-0002), so enforcement is identical the moment they reconnect.
 7. **Verify and thaw.** Confirm the fleet with `list_nodes` (expected count, fresh `last_seen`,
    correct tags, uniform Policy fingerprints;
    [policy-as-code.md](policy-as-code.md)), then release the Freeze with an audited reason

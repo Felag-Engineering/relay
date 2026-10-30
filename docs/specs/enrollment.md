@@ -23,7 +23,7 @@ every later connection belongs to node connection.
 | Control API | An `admin` mints a token with `POST /api/v1/enrollment-tokens`, receiving the plaintext token and its **join string** once, and revokes one with `DELETE /api/v1/enrollment-tokens/{id}`. |
 | Node plane | The certless `Enrollment.Enroll` RPC accepts a token, a CSR and declared `node:` Labels; `Enrollment.Renew` is mTLS-authenticated. |
 | relay-daemon | `relay-daemon join` reads a join string, pins the Relay's CA fingerprint, enrolls in that process and persists the identity and the Relay address; the unit start reuses that identity and reads no join string (EN-30, EN-32). Where the join string comes from is `daemon-installation.md`. |
-| Console | Shows enrollment attempts and each Node's enrollment provenance. It does not mint tokens today; EN-36 (designed) gives it a mint. |
+| Console | Shows enrollment attempts and each Node's enrollment provenance. Designed: a mint form (EN-36). |
 | `relay init` | Designed: mints the first Enrollment Token on the Relay host through its mint form and shows its join string once (EN-39, EN-46). |
 | MCP | No enrollment tool: no mint and no revoke. An AI-agent may read a Node's provenance through `query.md` and nothing more. |
 
@@ -168,6 +168,7 @@ alone, it says so.
 | Claim | Statement | Milestone |
 |---|---|---|
 | EN-36 | The Console's mint form (EN-46) mints an Enrollment Token through the same capability action and `admin` floor as the Control API, and shows the join string once, apart from the command that consumes it (EN-39) (ADR-0048; #434). | MVP |
+| EN-47 | The Console shows each Node's enrollment provenance and enrollment attempts, accepted and rejected. Attempts reach it through the Event seam and are not durable records. It mints only through its mint form (EN-36) and adds no Node. Replaces EN-21 when promoted. | MVP |
 | EN-39 | `relay init` mints through its mint form (EN-46) and shows the freshly minted join string once, apart from the command that consumes it: the command is `sudo relay-daemon join`, and the string is pasted at its prompt, so it is never part of a command line (ADR-0048). | v0.6.5 — Install Path: relay init, join string, packages |
 | EN-46 | Wherever a surface offers a mint form (`relay init`, EN-39; the Console, EN-36), it asks how many Nodes the token is for. The use limit is the number given, and the form offers no unlimited option; the TTL defaults to two hours and may be changed. The form mints through the same mint action EN-31 governs, with both values explicit (ADR-0048). | v0.6.5 — Install Path: relay init, join string, packages |
 
