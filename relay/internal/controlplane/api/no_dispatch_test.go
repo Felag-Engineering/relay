@@ -35,7 +35,8 @@ import (
 // attributes its action), so the strict pure-read allowlist would be pure
 // false positives here. The rules below are exactly mcp's UNCONDITIONAL ones,
 // applied flat to every non-test file — which also means a new source file is
-// covered automatically, with no classification map to forget to update.
+// covered automatically, with no classification map to forget to update. It
+// also refuses any import of internal/enroll: no adapter holds enroll.Minter.
 
 const (
 	capabilityImportPath = "github.com/Felag-Engineering/relay/relay/internal/capability"
@@ -100,6 +101,7 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 	})
 
 	violations = append(violations, policyAliasViolations(fileName, file)...)
+	violations = append(violations, astguard.EnrollMinterViolations(fileName, file)...)
 	return append(violations, tagInternalWriteViolations(fileName, file)...)
 }
 
@@ -241,6 +243,22 @@ func TestDispatchViolations_Fixtures(t *testing.T) {
 		src        string
 		wantSubstr string // "" = expect NO violations
 	}{
+		{
+			name: "holding enroll.Minter is refused",
+			src: `package api
+import "github.com/Felag-Engineering/relay/relay/internal/enroll"
+type D struct{ M *enroll.Minter }
+`,
+			wantSubstr: "imports internal/enroll",
+		},
+		{
+			name: "an aliased enroll import is refused",
+			src: `package api
+import e2 "github.com/Felag-Engineering/relay/relay/internal/enroll"
+var _ = e2.NewMinter
+`,
+			wantSubstr: "imports internal/enroll",
+		},
 		{
 			name: "unexported newDispatch identifier",
 			src: `package api

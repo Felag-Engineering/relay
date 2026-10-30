@@ -100,8 +100,8 @@ func TestConsole_MintsOnlyThroughItsMintFormAndAddsNoNode(t *testing.T) {
 				}
 			}
 		}
-		if len(minting) != 1 || minting[0] != "EnrollmentTokens.MintEnrollmentToken" {
-			t.Errorf("Deps fields declaring an Enrollment Token method = %v, want exactly EnrollmentTokens.MintEnrollmentToken", minting)
+		if len(minting) != 1 || minting[0] != "EnrollmentTokens.MintEnrollmentTokenFromForm" {
+			t.Errorf("Deps fields declaring an Enrollment Token method = %v, want exactly EnrollmentTokens.MintEnrollmentTokenFromForm", minting)
 		}
 		if n := reflect.TypeOf((*EnrollmentTokenMinter)(nil)).Elem().NumMethod(); n != 1 {
 			t.Errorf("EnrollmentTokenMinter declares %d methods, want 1", n)

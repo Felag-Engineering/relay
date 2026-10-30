@@ -442,6 +442,7 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 		}
 		return true
 	})
+	violations = append(violations, astguard.EnrollMinterViolations(fileName, file)...)
 	violations = append(violations, tagInternalWriteViolations(fileName, file)...)
 	return append(violations, policyAliasInternalWriteViolations(fileName, file)...)
 }
@@ -577,6 +578,14 @@ func TestDispatchViolations_Fixtures(t *testing.T) {
 		file       string
 		wantSubstr string // "" = expect NO violations
 	}{
+		{
+			name: "holding enroll.Minter is refused",
+			src: `package console
+import "github.com/Felag-Engineering/relay/relay/internal/enroll"
+type D struct{ M *enroll.Minter }
+`,
+			wantSubstr: "imports internal/enroll",
+		},
 		{
 			name: "asserting the audit repository to the atomic tag write is refused",
 			src: `package console

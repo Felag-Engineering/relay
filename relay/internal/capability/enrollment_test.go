@@ -12,7 +12,10 @@ import (
 	"time"
 )
 
-const enrollmentTestJoinString = "glp_join_FAKEJOINSTRINGXYZ"
+const (
+	enrollmentTestJoinString = "glp_join_FAKEJOINSTRINGXYZ"
+	enrollmentTestCredential = "tokid.FAKECREDENTIALSECRET"
+)
 
 // fakeEnrollmentIssuer returns a token carrying enrollmentTestJoinString and
 // counts what it is asked to do.
@@ -28,7 +31,7 @@ func (f *fakeEnrollmentIssuer) IssueEnrollmentToken(_ context.Context, _ Princip
 	if f.issueErr != nil {
 		return MintedEnrollmentToken{}, f.issueErr
 	}
-	return NewMintedEnrollmentToken("tok-1", enrollmentTestJoinString, req.InitialTags, time.Now().Add(req.TTL), req.MaxUses), nil
+	return NewMintedEnrollmentToken("tok-1", enrollmentTestCredential, enrollmentTestJoinString, req.InitialTags, time.Now().Add(req.TTL), req.MaxUses, req.Unlimited), nil
 }
 
 func (f *fakeEnrollmentIssuer) WithdrawEnrollmentToken(_ context.Context, id string) error {
@@ -100,28 +103,130 @@ func TestEnrollmentTokens_AuthorizesAtTheMintActionBeforeItReadsTheRequest(t *te
 	}
 }
 
-// Proves EN-36.
+// Proves EN-36, EN-46.
 func TestEnrollmentTokens_UseLimitIsTheNumberOfNodesAndThereIsNoUnlimitedForm(t *testing.T) {
 	f := newEnrollmentFix()
-	if _, err := f.tokens.MintEnrollmentToken(context.Background(), enrollmentAdmin, EnrollmentMint{MaxUses: 7, TTL: time.Hour}); err != nil {
+	if _, err := f.tokens.MintEnrollmentTokenFromForm(context.Background(), enrollmentAdmin, EnrollmentMintForm{Nodes: 7, TTL: time.Hour}); err != nil {
 		t.Fatalf("mint: %v", err)
 	}
-	if len(f.issuer.issued) != 1 || f.issuer.issued[0].MaxUses != 7 {
-		t.Fatalf("issued = %+v, want one request for 7", f.issuer.issued)
+	if len(f.issuer.issued) != 1 || f.issuer.issued[0].MaxUses != 7 || f.issuer.issued[0].Unlimited {
+		t.Fatalf("issued = %+v, want one request for 7, not unlimited", f.issuer.issued)
 	}
 
 	for _, n := range []int{0, -1} {
 		f := newEnrollmentFix()
-		_, err := f.tokens.MintEnrollmentToken(context.Background(), enrollmentAdmin, EnrollmentMint{MaxUses: n, TTL: time.Hour})
-		if !errors.Is(err, ErrEnrollmentUseLimit) || len(f.issuer.issued) != 0 {
-			t.Errorf("MaxUses %d: err = %v, issued = %d, want ErrEnrollmentUseLimit and no issue", n, err, len(f.issuer.issued))
+		_, err := f.tokens.MintEnrollmentTokenFromForm(context.Background(), enrollmentAdmin, EnrollmentMintForm{Nodes: n, TTL: time.Hour})
+		if !errors.Is(err, ErrEnrollmentFormNodes) || len(f.issuer.issued) != 0 {
+			t.Errorf("Nodes %d: err = %v, issued = %d, want ErrEnrollmentFormNodes and no issue", n, err, len(f.issuer.issued))
 		}
 	}
 
-	typ := reflect.TypeOf(EnrollmentMint{})
+	typ := reflect.TypeOf(EnrollmentMintForm{})
 	for i := 0; i < typ.NumField(); i++ {
 		if strings.Contains(strings.ToLower(typ.Field(i).Name), "unlimited") || typ.Field(i).Type.Kind() == reflect.Bool {
-			t.Errorf("EnrollmentMint has a field %s that could ask for unlimited use", typ.Field(i).Name)
+			t.Errorf("EnrollmentMintForm has a field %s that could ask for unlimited use", typ.Field(i).Name)
+		}
+	}
+}
+
+// Proves EN-31.
+func TestEnrollmentTokens_TheUseLimitIsNamedOrExplicitlyUnlimited(t *testing.T) {
+	accepted := []struct {
+		name string
+		req  EnrollmentMint
+	}{
+		{"a named limit", EnrollmentMint{MaxUses: 3}},
+		{"explicitly unlimited", EnrollmentMint{Unlimited: true}},
+		{"zero uses with unlimited", EnrollmentMint{MaxUses: 0, Unlimited: true}},
+	}
+	for _, tc := range accepted {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newEnrollmentFix()
+			tc.req.TTL = time.Hour
+			minted, err := f.tokens.MintEnrollmentToken(context.Background(), enrollmentAdmin, tc.req)
+			if err != nil {
+				t.Fatalf("mint: %v", err)
+			}
+			if len(f.issuer.issued) != 1 || !reflect.DeepEqual(f.issuer.issued[0], tc.req) || minted.Unlimited() != tc.req.Unlimited {
+				t.Errorf("issued = %+v, unlimited = %v, want one request %+v passed through", f.issuer.issued, minted.Unlimited(), tc.req)
+			}
+		})
+	}
+
+	refused := []struct {
+		name string
+		req  EnrollmentMint
+	}{
+		{"no limit named", EnrollmentMint{}},
+		{"a limit and unlimited", EnrollmentMint{MaxUses: 2, Unlimited: true}},
+		{"a negative limit", EnrollmentMint{MaxUses: -1}},
+		{"a negative limit and unlimited", EnrollmentMint{MaxUses: -1, Unlimited: true}},
+	}
+	for _, tc := range refused {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newEnrollmentFix()
+			tc.req.TTL = time.Hour
+			_, err := f.tokens.MintEnrollmentToken(context.Background(), enrollmentAdmin, tc.req)
+			if !errors.Is(err, ErrEnrollmentUseLimit) {
+				t.Fatalf("err = %v, want ErrEnrollmentUseLimit", err)
+			}
+			if len(f.issuer.issued) != 0 || len(f.sink.events) != 0 || len(f.sink.entries) != 0 {
+				t.Errorf("issued = %d, events = %d, entries = %d, want nothing", len(f.issuer.issued), len(f.sink.events), len(f.sink.entries))
+			}
+		})
+	}
+
+	for _, want := range []string{"max_uses", "unlimited"} {
+		if !strings.Contains(ErrEnrollmentUseLimit.Error(), want) {
+			t.Errorf("ErrEnrollmentUseLimit %q does not name %q", ErrEnrollmentUseLimit, want)
+		}
+	}
+}
+
+// Proves EN-46.
+func TestEnrollmentTokens_AFormMintIsForAtMost256Nodes(t *testing.T) {
+	f := newEnrollmentFix()
+	if _, err := f.tokens.MintEnrollmentTokenFromForm(context.Background(), enrollmentAdmin, EnrollmentMintForm{Nodes: 256, TTL: time.Hour}); err != nil {
+		t.Fatalf("256: %v", err)
+	}
+	if len(f.issuer.issued) != 1 || f.issuer.issued[0].MaxUses != 256 || len(f.sink.events) != 1 {
+		t.Fatalf("issued = %+v, events = %d, want one request for 256 and one record", f.issuer.issued, len(f.sink.events))
+	}
+
+	f = newEnrollmentFix()
+	_, err := f.tokens.MintEnrollmentTokenFromForm(context.Background(), enrollmentAdmin, EnrollmentMintForm{Nodes: 257, TTL: time.Hour})
+	if !errors.Is(err, ErrEnrollmentFormNodes) || !strings.Contains(err.Error(), "256") {
+		t.Fatalf("257: err = %v, want ErrEnrollmentFormNodes naming 256", err)
+	}
+	if len(f.issuer.issued) != 0 || len(f.sink.events) != 0 {
+		t.Errorf("257: issued = %d, events = %d, want nothing", len(f.issuer.issued), len(f.sink.events))
+	}
+}
+
+// Proves EN-36, EN-46.
+func TestEnrollmentTokens_AFormMintAuthorizesBeforeItChecksTheCount(t *testing.T) {
+	f := newEnrollmentFix()
+	refused := errors.New("authz: not an admin")
+	f.authz.controlErr = refused
+	_, err := f.tokens.MintEnrollmentTokenFromForm(context.Background(), enrollmentAdmin, EnrollmentMintForm{Nodes: 257, TTL: time.Hour})
+	if !errors.Is(err, refused) || errors.Is(err, ErrEnrollmentFormNodes) {
+		t.Errorf("err = %v, want the authorization refusal, not the count error", err)
+	}
+	if len(f.sink.entries) != 1 || f.sink.entries[0].Kind != AuditKindRefusal {
+		t.Errorf("entries = %+v, want one audited refusal", f.sink.entries)
+	}
+}
+
+// Proves EN-46.
+func TestCheckEnrollmentFormNodes(t *testing.T) {
+	for _, n := range []int{1, MaxEnrollmentFormNodes} {
+		if err := CheckEnrollmentFormNodes(n); err != nil {
+			t.Errorf("%d: %v", n, err)
+		}
+	}
+	for _, n := range []int{0, -1, MaxEnrollmentFormNodes + 1} {
+		if err := CheckEnrollmentFormNodes(n); !errors.Is(err, ErrEnrollmentFormNodes) {
+			t.Errorf("%d: err = %v, want ErrEnrollmentFormNodes", n, err)
 		}
 	}
 }
@@ -160,14 +265,18 @@ func TestEnrollmentTokens_RecordsTheTokenIDAndNeverTheJoinString(t *testing.T) {
 	}
 
 	for _, verb := range []string{"%v", "%+v", "%#v", "%s"} {
-		if got := fmt.Sprintf(verb, minted); strings.Contains(got, enrollmentTestJoinString) {
-			t.Errorf("fmt %s of a minted token shows the join string: %s", verb, got)
+		got := fmt.Sprintf(verb, minted)
+		if strings.Contains(got, enrollmentTestJoinString) || strings.Contains(got, enrollmentTestCredential) {
+			t.Errorf("fmt %s of a minted token shows the join string or credential: %s", verb, got)
 		}
 	}
 	var buf bytes.Buffer
 	slog.New(slog.NewJSONHandler(&buf, nil)).Info("minted", "token", minted)
-	if strings.Contains(buf.String(), enrollmentTestJoinString) {
-		t.Errorf("slog shows the join string: %s", buf.String())
+	if strings.Contains(buf.String(), enrollmentTestJoinString) || strings.Contains(buf.String(), enrollmentTestCredential) {
+		t.Errorf("slog shows the join string or credential: %s", buf.String())
+	}
+	if minted.Credential() != enrollmentTestCredential {
+		t.Error("the caller cannot read the credential it is meant to show once")
 	}
 	if minted.JoinString() != enrollmentTestJoinString {
 		t.Error("the caller cannot read the join string it is meant to show once")

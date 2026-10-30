@@ -76,6 +76,8 @@ var routeFloors = map[string]floorKind{
 	// Administrative routes (#397). admin, admin, admin; the Freeze pair is
 	// operator+/admin and is decided in the capability layer with the same
 	// RoleGate object.
+	// The mint stays floorSurface: the route asks the gate before it reads the
+	// body (EN-1), and the capability layer then asks the same RoleGate again.
 	"POST /api/v1/enrollment-tokens":        floorSurface,
 	"DELETE /api/v1/enrollment-tokens/{id}": floorSurface,
 	"POST /api/v1/nodes/{node_id}/revoke":   floorSurface,

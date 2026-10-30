@@ -7,7 +7,7 @@
 // auth path (invariant 10, ADR-0009).
 //
 // Every handler is a thin adapter: decode -> validate -> call existing
-// enroll/revocation/capability machinery -> render. No route reimplements
+// revocation/capability machinery -> render. No route reimplements
 // domain logic, and no route can reach Relay configuration, a blast cap, the
 // CA key, or a listener (invariant 11) — Deps below intentionally carries
 // none of those, and this package's import list is structurally capped by
@@ -31,16 +31,15 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/audit"
 	"github.com/Felag-Engineering/relay/relay/internal/capability"
 	"github.com/Felag-Engineering/relay/relay/internal/controlplane"
-	"github.com/Felag-Engineering/relay/relay/internal/enroll"
 	"github.com/Felag-Engineering/relay/relay/internal/harnesssetup"
 	"github.com/Felag-Engineering/relay/relay/internal/revocation"
 )
 
-// TokenMinter mints a scoped, expiring Enrollment Token together with its join
-// string. *enroll.Minter satisfies this interface. The handler passes the result
-// through and never assembles enrollment material (invariant 10).
+// TokenMinter mints an Enrollment Token through the capability layer: the floor,
+// the input bounds and the fail-closed token_mint record are decided there
+// (invariant 10, EN-36). *capability.EnrollmentTokens satisfies it with no adapter.
 type TokenMinter interface {
-	Mint(ctx context.Context, scope []string, ttl time.Duration, limit enroll.UseLimit, opts ...enroll.Option) (enroll.Minted, error)
+	MintEnrollmentToken(ctx context.Context, p capability.Principal, m capability.EnrollmentMint) (capability.MintedEnrollmentToken, error)
 }
 
 // TokenRevoker revokes an Enrollment Token by id. *revocation.Service
@@ -138,6 +137,8 @@ func (d Deps) logger() *slog.Logger {
 // listener field — every dependency here is a purpose-built interface over
 // existing runtime-object machinery, never Relay configuration.
 type Deps struct {
+	// Tokens mints through the capability layer. Nil answers the mint route
+	// with a 500, on the same unwired-gate posture as AccountAdmin and Tags.
 	Tokens       TokenMinter
 	TokenRevoker TokenRevoker
 	Nodes        NodeRevoker
@@ -157,9 +158,10 @@ type Deps struct {
 	//
 	// Freeze is NOT gated here: it goes through Deps.Freeze into the
 	// capability layer, which consults the same object itself. This package
-	// gates its mint and revoke here, before the body is read (EN-1). The
-	// Console's mint goes through capability.EnrollmentTokens, which asks this
-	// same RoleGate at the same ControlAction.
+	// gates its mint and revoke here, before the body is read (EN-1). The mint
+	// then goes through Tokens, which asks the same RoleGate at the same
+	// ControlAction and writes the token_mint record. The Console's form goes
+	// through the same action.
 	//
 	// Nil refuses every route that needs it with a 500 rather than proceeding
 	// ungated: an unwired gate is a composition-root bug, and an ungated path

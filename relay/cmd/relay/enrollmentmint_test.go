@@ -140,3 +140,65 @@ func TestEnrollmentTokenIssuer_WithdrawRevokesTheToken(t *testing.T) {
 		t.Errorf("Validate after withdraw = %v, want ErrRevoked", err)
 	}
 }
+
+// Proves EN-31.
+func TestEnrollmentTokenIssuer_PassesUnlimitedThrough(t *testing.T) {
+	issuer, repo, _ := newMintTestIssuer(t)
+	minted, err := issuer.IssueEnrollmentToken(context.Background(), mintTestHuman,
+		capability.EnrollmentMint{Unlimited: true, TTL: time.Hour})
+	if err != nil {
+		t.Fatalf("IssueEnrollmentToken: %v", err)
+	}
+	if !minted.Unlimited() {
+		t.Error("the minted token is not unlimited")
+	}
+	stored, err := repo.ByID(context.Background(), minted.ID())
+	if err != nil {
+		t.Fatalf("ByID: %v", err)
+	}
+	if !stored.Unlimited() {
+		t.Error("the stored token is not unlimited")
+	}
+	js, err := enroll.DecodeJoinString(minted.JoinString())
+	if err != nil {
+		t.Fatalf("DecodeJoinString: %v", err)
+	}
+	if minted.Credential() == "" || minted.Credential() != js.EnrollmentToken() {
+		t.Errorf("Credential() = %q, want the token inside the join string %q", minted.Credential(), js.EnrollmentToken())
+	}
+}
+
+// The use-limit rule is held by the capability core and, underneath it, by
+// enroll.UseLimit. This table is the one capability's
+// TestEnrollmentTokens_TheUseLimitIsNamedOrExplicitlyUnlimited holds, so the two
+// cannot drift apart on the same inputs.
+//
+// Proves EN-31.
+func TestEnrollmentTokenIssuer_AgreesWithTheCapabilityUseLimitRule(t *testing.T) {
+	cases := []struct {
+		name string
+		req  capability.EnrollmentMint
+		ok   bool
+	}{
+		{"a named limit", capability.EnrollmentMint{MaxUses: 3}, true},
+		{"explicitly unlimited", capability.EnrollmentMint{Unlimited: true}, true},
+		{"zero uses with unlimited", capability.EnrollmentMint{MaxUses: 0, Unlimited: true}, true},
+		{"no limit named", capability.EnrollmentMint{}, false},
+		{"a limit and unlimited", capability.EnrollmentMint{MaxUses: 2, Unlimited: true}, false},
+		{"a negative limit", capability.EnrollmentMint{MaxUses: -1}, false},
+		{"a negative limit and unlimited", capability.EnrollmentMint{MaxUses: -1, Unlimited: true}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			issuer, _, _ := newMintTestIssuer(t)
+			tc.req.TTL = time.Hour
+			_, err := issuer.IssueEnrollmentToken(context.Background(), mintTestHuman, tc.req)
+			if tc.ok && err != nil {
+				t.Fatalf("err = %v, want accepted", err)
+			}
+			if !tc.ok && !errors.Is(err, capability.ErrEnrollmentUseLimit) {
+				t.Fatalf("err = %v, want ErrEnrollmentUseLimit", err)
+			}
+		})
+	}
+}

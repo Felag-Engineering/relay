@@ -3,7 +3,10 @@
 // surface and the Console (invariant 10's `no_dispatch` structural guard,
 // ADR-0009/0010/0025/0026), accounts' secret-logging guard, and the
 // risk-class guard that keeps any adapter from setting an Action's class
-// (RiskClassViolations, invariant 13, ADR-0012).
+// (RiskClassViolations, invariant 13, ADR-0012), and the guard that keeps any
+// adapter from importing internal/enroll (EnrollMinterViolations, invariant
+// 10), the go-test twin of a depguard entry so a planted fixture can prove it
+// fires.
 //
 // These guards hold only what an import path or a resolved identifier cannot
 // express; .golangci.yml's depguard rules and "adapter boundary" forbidigo

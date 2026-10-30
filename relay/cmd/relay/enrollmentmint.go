@@ -19,10 +19,10 @@ type enrollmentTokenIssuer struct {
 
 var _ capability.EnrollmentTokenIssuer = enrollmentTokenIssuer{}
 
-// IssueEnrollmentToken mints a token for req.MaxUses Nodes. It never sets
-// enroll.UseLimit.Unlimited.
+// IssueEnrollmentToken mints a token for req.MaxUses Nodes. The token is
+// unlimited only when the request names it; the form entry cannot.
 func (i enrollmentTokenIssuer) IssueEnrollmentToken(ctx context.Context, p capability.Principal, req capability.EnrollmentMint) (capability.MintedEnrollmentToken, error) {
-	minted, err := i.minter.Mint(ctx, req.InitialTags, req.TTL, enroll.UseLimit{MaxUses: req.MaxUses}, enroll.WithMinter(p.AccountID, p))
+	minted, err := i.minter.Mint(ctx, req.InitialTags, req.TTL, enroll.UseLimit{MaxUses: req.MaxUses, Unlimited: req.Unlimited}, enroll.WithMinter(p.AccountID, p))
 	switch {
 	case err == nil:
 	case errors.Is(err, enroll.ErrInvalidInitialTags):
@@ -37,7 +37,7 @@ func (i enrollmentTokenIssuer) IssueEnrollmentToken(ctx context.Context, p capab
 		return capability.MintedEnrollmentToken{}, fmt.Errorf("enrollment mint: %w", err)
 	}
 	tok := minted.Token()
-	return capability.NewMintedEnrollmentToken(tok.ID, minted.JoinString(), tok.InitialTags, tok.ExpiresAt, tok.MaxUses), nil
+	return capability.NewMintedEnrollmentToken(tok.ID, minted.Plaintext(), minted.JoinString(), tok.InitialTags, tok.ExpiresAt, tok.MaxUses, tok.Unlimited()), nil
 }
 
 // WithdrawEnrollmentToken revokes a token nobody holds, the primitive
