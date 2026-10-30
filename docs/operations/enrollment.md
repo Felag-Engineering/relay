@@ -23,10 +23,15 @@ TTL, `max_uses`, and instant revocation bound the risk of reuse.
 ## 1. Mint a token
 
 `POST /api/v1/enrollment-tokens` on the Relay's control plane (`$RELAY_TOKEN` is an API
-Token; [control-plane-credential.md](control-plane-credential.md)):
+Token; [control-plane-credential.md](control-plane-credential.md)). Run this on the Relay host
+while the control plane listens on loopback, the package's default. `relay-ca-cert.pem` is the
+copy of the CA certificate made in [relay-install.md](relay-install.md) §3, and
+`relay.example.internal` stands for your `tls.hostname`. Once you have widened
+`control_plane.listen_address`, drop `--resolve`.
 
 ```console
-$ curl --cacert ca-cert.pem \
+$ curl --cacert relay-ca-cert.pem \
+    --resolve relay.example.internal:9443:127.0.0.1 \
     -H "Authorization: Bearer $RELAY_TOKEN" \
     -H "Content-Type: application/json" \
     -d '{"initial_tags": ["tag:env=prod", "tag:cohort=web"], "ttl_seconds": 86400, "max_uses": 200}' \
@@ -66,15 +71,30 @@ $ curl --cacert ca-cert.pem \
   SHA-256 fingerprint of its CA certificate. A secret, returned once, here only. A Node
   enrolls with it: `relay-daemon join` reads it from a prompt or standard input, pins the
   Relay's CA from the fingerprint before sending the token, and needs no CA file configured by
-  hand. It is never written to the Node or placed in an environment file.
+  hand. It is never written to the Node or placed in an environment file. Its integrity rides on
+  the channel you moved it over: see [Moving a join string](#moving-a-join-string).
 
 Revoke a token at any time. This also cascade-revokes every Node it enrolled:
 
 ```console
-$ curl --cacert ca-cert.pem \
+$ curl --cacert relay-ca-cert.pem \
+    --resolve relay.example.internal:9443:127.0.0.1 \
     -H "Authorization: Bearer $RELAY_TOKEN" \
     -X DELETE https://relay.example.internal:9443/api/v1/enrollment-tokens/<id>
 ```
+
+### Moving a join string
+
+The join string's integrity rides on the channel you moved it over. The CA fingerprint inside
+it is the only thing a Node that has never reached the Relay trusts, so whoever can change the
+string on the way can put in their own address and fingerprint, and the Node enrolls with
+their Relay instead (ADR-0031). Move it only over a channel that protects it from alteration
+as well as from reading: your vault, an SSH session to the Node, the Ansible role's standard
+input. Never over chat, email or a ticket.
+
+The string is a bearer credential until it is used or expires (threat-model R41). Size
+`max_uses` and `ttl_seconds` to the run. Mint through the Control API, the only mint surface
+today.
 
 ### Upgrading from a Relay that stamped a token's scope
 
@@ -168,16 +188,18 @@ affected Node is the only fix.
 
 ## 2. Enroll one Node by hand
 
-Install the daemon per [relay-daemon-install.md](relay-daemon-install.md), with an env file
-that holds no join string, then give the join string from step 1 to `relay-daemon join`. The
+Install the daemon package per [relay-daemon-install.md](relay-daemon-install.md), then give
+the join string from step 1 to `relay-daemon join`. The
 string holds the Relay's address, its CA fingerprint and the token, so no CA file is copied to
 the Node; the fingerprint is what stops a MITM from impersonating the Relay to a first-boot
 Node.
 
-```sh
-# /etc/relay-daemon/relay-daemon.env   (0600 root:root; no secret in it)
-RELAY_POLICY_PATH=/etc/relay-daemon/policy.toml
-RELAY_NODE_LABELS=env=prod,role=web,site=us-east-1
+The package placed `/etc/relay-daemon/relay-daemon.env` (0600 root:root; no secret in it), which
+already carries `RELAY_POLICY_PATH` and `RELAY_TEMPLATE_DIR`. Add this Node's labels to it:
+
+```console
+$ sudoedit /etc/relay-daemon/relay-daemon.env
+# add: RELAY_NODE_LABELS=env=prod,role=web,site=us-east-1
 ```
 
 ```console
@@ -212,79 +234,79 @@ Selector term is refused.
 
 ## 3. Bulk enrollment via config management
 
-One reusable token and a loop over inventory. An Ansible-flavored role (tasks
-abbreviated; the artifact pin and digest live in group_vars, the token in Vault):
+One reusable token and a loop over inventory. Config management installs the daemon package and
+runs `relay-daemon join` with the join string from your vault; the string never goes in a file
+on the Node.
+
+**The release's Ansible role (DI-45).** Download `relay_daemon-<version>.tar.gz` and the
+daemon package(s) for your architectures from the same release, and verify them per
+[release-artifacts.md](release-artifacts.md#verify-then-install). Extract the role into a roles
+path. Put the verified packages in one controller directory: it may hold both architectures,
+but only one version, because the role installs the single package that matches the Node. Put
+the join string in the vault with
+`ansible-vault encrypt_string --stdin-name relay_daemon_join_string`, and paste its output (a
+`relay_daemon_join_string: !vault |` block) into `group_vars/new_nodes/vault.yml` beside the
+playbook. Ansible loads that file for every host in `new_nodes`, which is how the play below
+defines the variable the role requires; run it with `--ask-vault-pass` or a vault password file.
 
 ```yaml
-# group_vars/prod.yml
-relay_daemon_version: "X.Y.Z"   # the published tag without its leading `v`
-relay_daemon_sha256: "<digest copied from SHA256SUMS at pin time>"
-relay_join: "{{ vault_relay_join }}"   # the join_string from the mint
+- hosts: new_nodes
+  become: true
+  pre_tasks:
+    - name: Create the daemon's configuration directory
+      ansible.builtin.file:
+        path: /etc/relay-daemon
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Write env file (settings only, no secret, 0600)
+      ansible.builtin.template:
+        src: templates/relay-daemon.env.j2    # relative to this playbook
+        dest: /etc/relay-daemon/relay-daemon.env
+        owner: root
+        group: root
+        mode: "0600"
+  roles:
+    - role: relay_daemon
+      vars:
+        relay_daemon_package_dir: /srv/relay-daemon-packages
+  tasks:
+    # Optional: a Policy fragment of yours. The role places none (DI-45).
+    - name: Place a Policy fragment
+      ansible.builtin.copy:
+        src: policies/10-nginx.toml
+        dest: /etc/relay-daemon/policy.d/10-nginx.toml
+        owner: root
+        group: root
+        mode: "0644"
+      notify: "relay_daemon : Restart relay-daemon"
 ```
 
-```yaml
-# roles/relay_daemon/tasks/main.yml
-- name: Fetch relay-daemon artifact (digest verified BEFORE install)
-  ansible.builtin.get_url:
-    url: "https://github.com/Felag-Engineering/relay/releases/download/\
-          v{{ relay_daemon_version }}/relay-daemon-{{ relay_daemon_version }}-linux-amd64"
-    dest: /usr/bin/relay-daemon
-    mode: "0755"
-    # Operator-pinned digest, not fetched at install time: a mismatch fails the
-    # task before the file is moved into place (verify-then-install,
-    # release-artifacts.md).
-    checksum: "sha256:{{ relay_daemon_sha256 }}"
-
-- name: Install hardened systemd unit
-  ansible.builtin.copy:
-    src: relay-daemon.service        # daemon/packaging/relay-daemon.service
-    dest: /etc/systemd/system/relay-daemon.service
-    mode: "0644"
-
-- name: Install Policy (root-owned, never group/world-writable)
-  ansible.builtin.copy:
-    src: "{{ relay_policy_file }}"   # from the IaC repo; see policy-as-code.md
-    dest: /etc/relay-daemon/policy.toml
-    owner: root
-    group: root
-    mode: "0644"
-  notify: restart relay-daemon
-
-- name: Write env file (settings only — no secret, 0600)
-  ansible.builtin.template:
-    src: relay-daemon.env.j2
-    dest: /etc/relay-daemon/relay-daemon.env
-    owner: root
-    group: root
-    mode: "0600"
-
-- name: Reload systemd
-  ansible.builtin.systemd:
-    daemon_reload: true
-
-- name: Enroll and start relay-daemon (a no-op on an enrolled Node)
-  ansible.builtin.command:
-    cmd: /usr/bin/relay-daemon join
-    stdin: "{{ relay_join }}"
-  no_log: true
-
-- name: Enable and start relay-daemon (converges if join's own start failed)
-  ansible.builtin.systemd:
-    name: relay-daemon
-    enabled: true
-    state: started
-```
-
-`ansible.cfg` must set `pipelining = True`. This is required, not a tuning note: without it
-Ansible stages the module arguments, the join string included, in a temporary file on the
-Node, which is where this design says it never lives (DI-45). The join string goes in on
-`stdin:` and never in `cmd:`, so it is in no argument and no environment variable either.
+The env file comes first because the package places its own only when none exists, and `join`
+reads the labels from this file at enrollment. Because `/etc/relay-daemon` and the env file
+exist before the package's first install, the package treats them as yours: it never replaces
+the env file, and `apt purge` leaves both. The package still places its default `policy.toml`,
+since `policy.d` did not exist.
 
 ```jinja
-{# roles/relay_daemon/templates/relay-daemon.env.j2 #}
+{# templates/relay-daemon.env.j2, beside your playbook #}
 RELAY_POLICY_PATH=/etc/relay-daemon/policy.toml
 RELAY_NODE_LABELS=env={{ relay_env }},role={{ relay_role }}
 ```
+
+What the role guarantees and refuses:
+
+- The join string travels on standard input and reaches no file, argv or log on the Node.
+- It forces pipelining; `requiretty` in sudoers breaks that, and the task fails. It refuses a
+  Node where sudo records standard input (`log_input`).
+- It changes nothing on an enrolled Node, and fails on a partial identity.
+- It never upgrades; see [iac-upgrades.md](iac-upgrades.md).
+- A controller callback plugin that records task arguments (ARA, for example) would receive the
+  string, so don't enable one.
+
+The role's [Limits](../../daemon/packaging/ansible/relay_daemon/README.md#limits) hold the rest.
 
 Run it across the fleet:
 
@@ -292,7 +314,28 @@ Run it across the fleet:
 $ ansible-playbook -i inventory/prod site.yml --limit 'new_nodes'
 ```
 
-Each Node enrolls when `join` runs; already-enrolled Nodes are no-ops. The Relay
+**Without Ansible: an SSH loop** (ADR-0048 decision 3). Install the verified package on each
+Node first. Then, from your workstation:
+
+```bash
+read -rsp 'Join string: ' JOIN; echo   # nothing echoes, nothing reaches shell history
+failed=()
+for host in $(cat new-nodes.txt); do
+  printf '%s\n' "$JOIN" | ssh "$host" sudo -n relay-daemon join || failed+=("$host")
+done
+unset JOIN
+(( ${#failed[@]} )) && printf 'failed: %s\n' "${failed[@]}"
+```
+
+`printf` is a shell builtin, so the string is in no process's arguments. `ssh` without `-t`
+means `join` reads standard input as piped text. `sudo -n` needs passwordless sudo: without it
+sudo fails rather than prompts, and `requiretty` in sudoers makes it refuse with no terminal, so
+that host fails. Never pass `-o StrictHostKeyChecking=no`: an unverified host key could hand
+the string to a host that is not yours. Unlike the role, the loop does not check for sudo
+`log_input` or a session recorder on the Node, and either would record the string. A rerun is
+safe: `join` on an enrolled Node changes nothing and exits 0.
+
+Each Node enrolls when `join` runs; already-enrolled Nodes are no-ops. Either way the Relay
 rate-limits enrollment per IP and globally ([relay-install.md](relay-install.md)). Both
 limits are fixed: about 60 a minute per source address and 300 a minute overall, so some 200 Nodes behind one NAT address join in about three minutes. A
 `join` the Relay refuses for rate persists nothing and is simply run again; for a much larger

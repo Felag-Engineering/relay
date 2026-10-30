@@ -14,53 +14,74 @@ pipeline.
 
 ## The upgrade loop
 
-1. **A release is cut.** Pushing `v<version>` publishes
-   `relay-daemon-<version>-linux-<arch>`,
-   `relay-<version>-linux-<arch>` (`<arch>` is `amd64` or `arm64`), `SHA256SUMS`
-   and its cosign bundle `SHA256SUMS.sigstore.json` ([release-artifacts.md](release-artifacts.md)).
+1. **A release is cut.** Pushing `v<version>` publishes the daemon and Relay packages
+   (`.deb` and `.rpm`, each for `amd64` and `arm64`), the binaries
+   (`relay-daemon-<version>-linux-<arch>`, `relay-<version>-linux-<arch>`), the Ansible role,
+   `SHA256SUMS` and its cosign bundle `SHA256SUMS.sigstore.json`
+   ([release-artifacts.md](release-artifacts.md)).
 2. **The operator updates the pin** in config management: the version string *and* the expected
-   sha256 line copied from `SHA256SUMS`. The operator's copy of the digest is the trust anchor:
-   pinning only the version proves download integrity, not provenance. `cosign verify-blob` on
-   `SHA256SUMS` adds provenance, as release-artifacts.md shows.
+   sha256 digest for each package file you install, copied from `SHA256SUMS`. The operator's copy
+   of the digest is the trust anchor: pinning only the version proves download integrity, not
+   provenance. `cosign verify-blob` on `SHA256SUMS` adds provenance, as release-artifacts.md
+   shows, and is checked when the pin is taken, before the digest goes into config management.
 3. **The Relay upgrades first** (ADR-0014: daemons lag behind within the min-version window,
-   never the other way around), by the same verify-then-install sequence on the Relay hosts
-   ([relay-install.md](relay-install.md)).
-4. **Config management rolls the daemon artifact** across the fleet and restarts the unit. The
-   daemon's graceful shutdown drains in-flight Tasks (bounded by `RELAY_SHUTDOWN_GRACE_SECS`,
-   default 30 s) and the at-most-once dedup store survives the restart (ADR-0004), so a restart
-   mid-Job never re-executes a Task.
+   never the other way around). A packaged Relay: install the newer verified Relay package on
+   its host, then `systemctl restart relay` (the package runs `daemon-reload` only;
+   [relay-install.md](relay-install.md)). A Compose-deployed Relay: bump the deployment pin to
+   the new release's image digest ([release-artifacts.md](release-artifacts.md), "Bump the
+   deployment pin after each release"; [relay-install.md](relay-install.md) §7, "Upgrades").
+4. **Config management installs the newer daemon package** across the fleet and restarts the
+   unit. The daemon's graceful shutdown drains in-flight Tasks (bounded by
+   `RELAY_SHUTDOWN_GRACE_SECS`, default 30 s) and the at-most-once dedup store survives the
+   restart (ADR-0004), so a restart mid-Job never re-executes a Task.
 5. **The operator raises `reach.min_daemon_version`** in the Relay's `relay.toml` once the
    rollout should be complete, applies it with a SIGHUP, and watches the registry.
 
 ## Ansible-flavored rollout
 
-The role from [enrollment.md](enrollment.md) upgrades by pin change: the `get_url` task's
-`checksum:` fails before install on any mismatch, and the restart handler completes the swap.
+The release's `relay_daemon` role ([enrollment.md](enrollment.md)) never upgrades: it installs
+only where `/usr/bin/relay-daemon` is absent, so an upgrade is your own task. In this example the
+signature was checked when the pin was taken (step 2), and `get_url`'s `checksum:` checks the
+downloaded file on the Node against the pinned digest before it lands; a mismatch fails the
+task.
 
 ```yaml
 # group_vars/prod.yml — the upgrade IS this diff, reviewed like any other
 relay_daemon_version: "X.Y.Z"          # was: the previously pinned release
-relay_daemon_sha256: "<sha256 line for the new artifact, from SHA256SUMS>"
+relay_daemon_pkgversion: "{{ relay_daemon_version | replace('-', '.') }}"   # a prerelease's "-" is "." in the file name (release-artifacts.md)
+relay_daemon_deb_sha256: "<64-hex sha256 digest of the new .deb, from SHA256SUMS>"
+relay_daemon_rpm_sha256: "<64-hex sha256 digest of the new .rpm, from SHA256SUMS>"
 ```
 
 ```yaml
-# roles/relay_daemon/handlers/main.yml
-- name: restart relay-daemon
-  ansible.builtin.systemd:
-    name: relay-daemon
-    state: restarted
+# Goes in your play's `handlers:`. It is yours, not the role's.
+handlers:
+  - name: restart relay-daemon
+    ansible.builtin.systemd:
+      name: relay-daemon
+      state: restarted
 ```
 
+A play that also applies the release's role can notify `relay_daemon : Restart relay-daemon`
+instead.
+
 ```yaml
-# The fetch task from enrollment.md already notifies the handler on change:
-- name: Fetch relay-daemon artifact (digest verified BEFORE install)
+- name: Fetch relay-daemon package (digest verified BEFORE install)
   ansible.builtin.get_url:
     url: "https://github.com/Felag-Engineering/relay/releases/download/\
-          v{{ relay_daemon_version }}/relay-daemon-{{ relay_daemon_version }}-linux-amd64"
-    dest: /usr/bin/relay-daemon
-    mode: "0755"
-    checksum: "sha256:{{ relay_daemon_sha256 }}"
+          v{{ relay_daemon_version }}/relay-daemon_{{ relay_daemon_pkgversion }}-1_amd64.deb"
+    dest: "/var/tmp/relay-daemon_{{ relay_daemon_pkgversion }}-1_amd64.deb"
+    mode: "0644"
+    checksum: "sha256:{{ relay_daemon_deb_sha256 }}"
+
+- name: Install the verified package
+  ansible.builtin.apt:
+    deb: "/var/tmp/relay-daemon_{{ relay_daemon_pkgversion }}-1_amd64.deb"
   notify: restart relay-daemon
+
+# On an rpm Node: the same two tasks with the .x86_64.rpm file,
+# relay_daemon_rpm_sha256 and ansible.builtin.dnf. On arm64: the arm64 / aarch64
+# file and its own digest.
 
 - name: Confirm installed binary self-identifies as the pin
   ansible.builtin.command: /usr/bin/relay-daemon --version
