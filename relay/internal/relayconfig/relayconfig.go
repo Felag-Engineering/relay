@@ -141,7 +141,7 @@ func (c Config) EffectiveAdvertisedAddress() string {
 // failure it returns the zero Config and every problem at once, ordered by
 // line. Warnings are settings that are accepted and likely wrong.
 func Load(data []byte) (Config, []Warning, error) {
-	if errs := ruleForm(data); len(errs) > 0 {
+	if errs := preDecode(data); len(errs) > 0 {
 		return Config{}, nil, joinErrors(errs)
 	}
 	doc, errs := decode(data)
