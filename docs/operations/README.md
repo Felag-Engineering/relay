@@ -5,18 +5,18 @@ local development fleet is a separate document, [docs/dev-fleet.md](../dev-fleet
 
 ## Installing
 
-- **[relay-install.md](relay-install.md)** — installing and running the Relay from a released artifact: verify-then-install, `relay.toml`, the packaged `systemd` unit, and the Docker Compose path.
-- **[relay-daemon-install.md](relay-daemon-install.md)** — installing and running the relay-daemon on a Node: artifact, environment config, Policy, the shipped unit.
+- **[relay-install.md](relay-install.md)** — installing and running the Relay from its OS package: verify-then-install, the generated `relay.toml`, `relay init`, upgrade and purge, and the Docker Compose path.
+- **[relay-daemon-install.md](relay-daemon-install.md)** — installing the relay-daemon package on a Node: verify, install, the environment file, `relay-daemon join`, the shipped unit, upgrade and removal.
 - **[release-artifacts.md](release-artifacts.md)** — release artifact naming, pinning, and verify-then-install.
 - **[version-stamping.md](version-stamping.md)** — what a build reports for `--version`, and how the daemon's version feeds the ADR-0014 `min-daemon-version` gate.
 - **[daemon-privilege-posture.md](daemon-privilege-posture.md)** — the hardened `systemd` unit and per-Operation privilege map for running relay-daemon in production.
 
 ## Joining Nodes and shaping what they run
 
-- **[enrollment.md](enrollment.md)** — joining Nodes to the fleet: `sudo relay-daemon join`, Enrollment Tokens and their initial tags, one Node and a fleet.
+- **[enrollment.md](enrollment.md)** — joining Nodes to the fleet: `sudo relay-daemon join`, Enrollment Tokens and their initial tags, one Node and a fleet, through the release's Ansible role or an SSH loop.
 - **[policy-as-code.md](policy-as-code.md)** — Policy files in the IaC repo: `policy check` in CI, config-management distribution, fingerprint-verified rollout.
 - **[template-packs.md](template-packs.md)** — Template Operations: authoring typed parameter slots, the template-pack convention, fingerprint-verified rollout, and the `unsupported` outcome.
-- **[iac-upgrades.md](iac-upgrades.md)** — daemon upgrades through config management, consuming the CD artifacts, observed by the `min-daemon-version` gate (ADR-0014).
+- **[iac-upgrades.md](iac-upgrades.md)** — daemon upgrades through config management, installing the newer packages, observed by the `min-daemon-version` gate (ADR-0014).
 
 ## Credentials, approval and audit
 

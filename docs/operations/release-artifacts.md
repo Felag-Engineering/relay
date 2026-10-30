@@ -17,8 +17,8 @@ For tag `v<version>` (e.g. `v0.1.0`, `v0.1.0-beta`), the GitHub Release carries:
 
 | File | What it is |
 |---|---|
-| `relay-daemon-<version>-linux-amd64`, `relay-daemon-<version>-linux-arm64` | The relay-daemon, statically linked (musl, ADR-0007). No libc or distro expectations; drops onto any Linux Node of that architecture. |
-| `relay-<version>-linux-amd64`, `relay-<version>-linux-arm64` | The Relay server binary, statically linked (`CGO_ENABLED=0`). It has no libc dependency. |
+| `relay-daemon-<version>-linux-amd64`, `relay-daemon-<version>-linux-arm64` | The relay-daemon, statically linked (musl, ADR-0007). No libc or distro expectations; drops onto any Linux Node of that architecture. The package wraps this binary, and a hand-built install (documented, not supported) takes it directly. |
+| `relay-<version>-linux-amd64`, `relay-<version>-linux-arm64` | The Relay server binary, statically linked (`CGO_ENABLED=0`). It has no libc dependency. The package wraps this binary, and a hand-built install (documented, not supported) takes it directly. |
 | `<artifact>.spdx.json` | An SPDX SBOM for each of the four binaries. The Relay's lists the exact Go modules in the binary. The daemon's is derived from `Cargo.lock` — a superset (every target, dev and build dependencies) — because a stripped Rust binary carries no dependency metadata to read. |
 | `relay-image-<version>-linux-<arch>.spdx.json` | An SPDX SBOM for each platform of the Relay image. |
 | `relay-daemon_<pkgversion>-1_amd64.deb`, `relay-daemon_<pkgversion>-1_arm64.deb`, `relay-daemon-<pkgversion>-1.x86_64.rpm`, `relay-daemon-<pkgversion>-1.aarch64.rpm` | The relay-daemon's packages: the release binary byte for byte, the hardened unit, the shipped Template catalog and the default Policy. `<pkgversion>` is the version with a prerelease's `-` written `~`, so a prerelease sorts below its release, and then with every `~` written `.` in the file name, because GitHub rewrites such characters in an asset's name (`0.2.0-beta` is `0.2.0.beta` in the file name and `0.2.0~beta` inside the package). |
@@ -69,19 +69,30 @@ deployment names it. There is no daemon image, ever (ADR-0033, amended 2026-10-1
 
 ## Verify, then install
 
-An unverified binary dropped onto a privileged fleet is the supply-chain failure this product
-exists to argue against. The digest check happens **before** the binary is installed or
-executed. The IaC role that distributes the daemon should encode exactly this sequence:
+An unverified package dropped onto a privileged fleet is the supply-chain failure this product
+exists to argue against. The digest check happens **before** the package is installed or
+anything in it runs. Config management encodes this sequence. The signature is checked by a
+person when the pin is updated, and that person records the package's SHA-256 from the verified
+`SHA256SUMS` as the pin; the package is checked directly against that pinned digest before every
+install. Where that happens depends on the tool: a `get_url` task with `checksum:` checks it on
+the Node before the file lands ([iac-upgrades.md](iac-upgrades.md)), while the release's Ansible
+role takes packages already verified on the controller from `relay_daemon_package_dir` and
+downloads or verifies nothing itself.
 
-```sh
+```bash
 # Pinned by the operator, in config management — not resolved at install time.
 VERSION="0.1.0"
-ARTIFACT="relay-daemon-${VERSION}-linux-amd64"
+# The package's SHA-256, recorded by the person who verified SHA256SUMS (step 2) when taking
+# this pin, and kept in config management beside VERSION. It is the trust anchor.
+PINNED_SHA256="<64-hex digest recorded when you reviewed the release>"
+# A prerelease's "~" is "." in the file name; for a release, the two are the same.
+PKGVERSION="${VERSION//-/.}"   # a prerelease "-" is "~" in the package, "." in the file name
+DEB="relay-daemon_${PKGVERSION}-1_amd64.deb"
 BASE="https://github.com/Felag-Engineering/relay/releases/download/v${VERSION}"
 
-# 1. Fetch the binary, the checksum file and its signature into a staging dir (not the
+# 1. Fetch the package, the checksum file and its signature into a staging dir (not the
 #    install path).
-curl -fsSLO "${BASE}/${ARTIFACT}"
+curl -fsSLO "${BASE}/${DEB}"
 curl -fsSLO "${BASE}/SHA256SUMS"
 curl -fsSLO "${BASE}/SHA256SUMS.sigstore.json"
 
@@ -93,41 +104,34 @@ cosign verify-blob --bundle SHA256SUMS.sigstore.json \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   SHA256SUMS
 
-# 3. Verify the binary against it BEFORE install. --ignore-missing checks only the files present.
+# 3. Verify the package against the pinned digest BEFORE install; the file name must match.
+echo "${PINNED_SHA256}  ${DEB}" | sha256sum --check -
+#    The downloaded SHA256SUMS must agree too. --ignore-missing checks only the files present.
 sha256sum --check --ignore-missing SHA256SUMS
 
-# 4. Only a verified binary is installed (atomic: install(1) writes then renames).
-install -m 0755 "${ARTIFACT}" /usr/bin/relay-daemon
+# 4. Only a verified package is installed.
+apt-get install -y "./${DEB}"      # or: dnf install -y ./relay-daemon-${PKGVERSION}-1.x86_64.rpm
 
 # 5. Confirm the installed binary self-identifies as the pinned version.
 /usr/bin/relay-daemon --version   # "relay-daemon 0.1.0 (commit ..., built ...)"
 ```
 
-The packages and the role are verified the same way, with the same download, `cosign
-verify-blob` and `sha256sum --check --ignore-missing` against the signed `SHA256SUMS`, and only
-then installed:
-
-```sh
-# A prerelease's "~" is "." in the file name; for a release, the two are the same.
-PKGVERSION="${VERSION//-/.}"   # a prerelease "-" is "~" in the package, "." in the file name
-DEB="relay-daemon_${PKGVERSION}-1_amd64.deb"
-curl -fsSLO "${BASE}/${DEB}"
-# ... SHA256SUMS and SHA256SUMS.sigstore.json fetched and verified as in steps 1 to 3 ...
-sha256sum --check --ignore-missing SHA256SUMS
-apt-get install -y "./${DEB}"      # or: dnf install -y ./relay-daemon-${PKGVERSION}-1.x86_64.rpm
-```
+The same sequence verifies the Relay package (`relay_${PKGVERSION}-1_amd64.deb` or
+`relay-${PKGVERSION}-1.x86_64.rpm`) on the Relay host, the Ansible role's tarball, and, for a
+hand-built install (DI-32), the bare binary, the standalone unit and the env example.
 
 The Ansible role is the file `relay_daemon-${VERSION}.tar.gz`: verify it as above, extract it
 (`tar -xzf`) into a roles path, and point the role's `relay_daemon_package_dir` at the
-directory holding the verified package of the same release. The role installs the package it
-finds there, so the pairing of role and package is the operator's, here.
+directory holding the verified package of the same release. `relay_daemon_package_dir` may hold
+both architectures but exactly one version, because the role installs the single package it
+finds for the Node. The pairing of role and package is the operator's, here.
 
 The build-provenance attestation can be checked too, and is stronger on one point: it names
 the commit the artifact was built from. **Always pin `--signer-workflow` and `--source-ref`**;
 without them any workflow in the repository could satisfy the check.
 
 ```sh
-gh attestation verify "${ARTIFACT}" --repo Felag-Engineering/relay \
+gh attestation verify "${DEB}" --repo Felag-Engineering/relay \
   --signer-workflow Felag-Engineering/relay/.github/workflows/release.yml \
   --source-ref "refs/tags/v${VERSION}"
 ```
@@ -142,18 +146,16 @@ cosign verify ghcr.io/felag-engineering/relay@sha256:<digest> \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
-Two hardening rules for the IaC role:
+Two hardening rules for config management:
 
 - **Pin the digest itself, not just the version.** `SHA256SUMS` is served from the same origin
-  as the binary, so fetching both at install time proves download integrity, not provenance.
+  as the packages, so fetching both at install time proves download integrity, not provenance.
   Copy the expected `sha256` line into config management when the pin is updated (a human
   step, once per upgrade) and compare against that. The pinned digest is the primary trust
   anchor; the signature adds provenance (built by this repository's release workflow from
   this tag) and does not replace the pin.
 - **Failure is fatal.** A digest mismatch must abort the run and page a human, never retry
   with `--insecure`-style fallbacks or install the unverified file.
-
-The same sequence applies to the `relay` binary on the Relay hosts.
 
 Signing is keyless, so there is no long-lived signing key to hold or rotate. The cost: each
 signature writes its metadata (organization, repository, workflow path, tag, commit, artifact
@@ -219,7 +221,7 @@ digest), verifies it with cosign v3 or later exactly as in
 [Verify, then install](#verify-then-install) against `refs/tags/v<version>`, and changes the
 `image:` line to `ghcr.io/felag-engineering/relay:<version>@sha256:<digest>` in a reviewed pull
 request. An unattended run never pins a digest it resolved itself: the pin is a trust anchor,
-so a person checks it first, the same human step as the IaC role's pinned digest above. The
+so a person checks it first, the same human step as config management's pinned digest above. The
 stack is pinned to whichever release a human last verified, pre-releases included.
 
 The release jobs cannot be run from a tag by hand: `workflow_dispatch` is refused on a tag

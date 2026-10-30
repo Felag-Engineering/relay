@@ -258,7 +258,10 @@ vocabulary the fleet enforces.
 
 ## 3. Distribute: config management, never the wire
 
-The role that installs the daemon pushes the Policy file ([enrollment.md](enrollment.md)):
+The Policy file is your config management's own task: the release's `relay_daemon` role places
+no Policy fragment (DI-45), and the package places its shipped default `policy.toml` only on a
+first install where neither it nor a `policy.d` existed ([relay-daemon-install.md](relay-daemon-install.md) §4). Your
+task replaces it:
 
 ```yaml
 - name: Install Policy (root-owned, never group/world-writable)
