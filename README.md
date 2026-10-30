@@ -19,7 +19,10 @@ MCP tool. Each managed server still decides for itself what may run.
 - **Blast cap and approval.** A hard cap limits how many Nodes one call can reach. Approval
   gates make chosen dispatches wait for a human.
 
-## Quickstart
+## Try it locally
+
+To run Relay on real servers, start with [docs/quickstart.md](docs/quickstart.md), about
+thirty minutes. What follows is the one-machine dev fleet.
 
 You need Docker Engine with the Compose v2.18+ plugin. The first run compiles both programs
 inside Docker images, which takes a few minutes. After that, bringing the fleet up takes
@@ -107,7 +110,7 @@ The same refusal in the Console, at `https://127.0.0.1:9443/console/` (sign in a
 This fleet is dev-only: committed credentials, a fixture Policy, one host.
 [docs/dev-fleet.md](docs/dev-fleet.md) covers Claude Code, the approval gate and the Console
 in depth. A real deployment starts at
-[docs/operations/relay-install.md](docs/operations/relay-install.md). `make dev-fleet-down`
+[docs/quickstart.md](docs/quickstart.md). `make dev-fleet-down`
 stops the fleet.
 
 ## How it works

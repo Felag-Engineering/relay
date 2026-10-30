@@ -32,7 +32,7 @@ labels.
 | #400 — `relay init` | **E4** | closed |
 | #401 — the join command | **E5 + E6** | closed |
 | #399 — container image | **E9** | closed |
-| #402 — quickstart | **E12** | open |
+| #402 — quickstart | **E12** | closed |
 | #361 — thin Ansible role | closed as superseded | E3 renders the same playbook from the capability layer (owner decision, 2026-08-18) |
 | #397 — enrollment mint has no role gate | prerequisite of E3 | closed by PR #447 |
 
@@ -152,7 +152,8 @@ trust-store instructions from ADR-0031. Planned as v0.6.5 step S17.
 Done: the entry records that a join string is *not* a synonym for Enrollment Token.
 
 ### E12 · Quickstart (#402)
-Ties E4, E5, E7, E8 together. Four commands, two artifacts. Open.
+Ties E4, E5, E7, E8 together. Four commands, two artifacts.
+Done: docs/quickstart.md; init's join string (EN-39) is still to come.
 
 ---
 

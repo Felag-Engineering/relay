@@ -84,5 +84,6 @@ each is a deliberate no, recorded in `AGENTS.md`.
   [`docs/security/threat-model.md`](security/threat-model.md).
 - A decision and its reasons: the ADR in [`docs/adr/`](adr/), and the decision record behind
   it in [`docs/proposals/`](proposals/).
-- Running it: [`docs/operations/`](operations/) for a real deployment,
+- Running it: [`quickstart.md`](quickstart.md) for the thirty-minute path,
+  [`docs/operations/`](operations/) for a real deployment,
   [`dev-fleet.md`](dev-fleet.md) for a local one.
