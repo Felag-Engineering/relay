@@ -136,6 +136,7 @@ a reload or restart. The Relay installs from an OS package or as a container ima
 | RC-26 | Removing the Relay package keeps configuration and state. `apt purge` removes configuration and moves the CA and the store aside together, re-owned by root and readable by nobody else, and prints where; it never deletes them, never splits them, and never deletes the Relay's Unix account. Purge deletes only paths the package itself created. `.rpm` removal never deletes state and prints the paths to delete by hand. | MVP |
 | RC-34 | Per-Account Console preferences are stored per Account, not fleet-wide. | After MVP |
 | RC-45 | The quickstart installs the Relay from its OS package. The container image with its deployment stack (RC-7, RC-27) stays a supported install, as built. | MVP |
+| RC-54 | A key that differs from a key the Relay accepts only in letter case (`TLS.hostname` for `tls.hostname`) is refused at start and on reload, and so is a file that spells one key two such ways. The refusal names the key as written and never its value (RC-18). Extends RC-53 when promoted. | MVP |
 
 ## Out of scope
 
