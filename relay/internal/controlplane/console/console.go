@@ -204,6 +204,13 @@ type Deps struct {
 	// create with this nil is refused as unavailable rather than made
 	// passwordless. Nil also means no re-issue control renders.
 	TemporaryPasswords TemporaryPasswordIssuer
+
+	// EnrollmentTokens is the Console's sixth write seam (addnodes.go): the
+	// same capability action and admin floor as the Control API's mint,
+	// through capability.EnrollmentTokens. It is paired with Auth, because a
+	// mint whose step-up cannot be verified is not offered. Nil means the
+	// screen answers unavailable.
+	EnrollmentTokens EnrollmentTokenMinter
 }
 
 // logger resolves Deps.Logger, falling back to slog.Default() when unset.
@@ -303,31 +310,18 @@ func Routes(d Deps) []Route {
 		// menu, and marks Fleet current (Fleet's Under).
 		{"GET", "/console/compare", NavEntry{}, accounts.RoleViewer, handleCompare},
 
-		// Add Nodes (spec 09) is not built; Policy Author and the Incident
-		// screen are cut from the MVP (docs/design/console/README.md). They do
-		// not get a placeholder row: a v0.6.0 nav must not advertise a route
-		// that answers "not built yet", and Register needs no
-		// mounted-but-refusing row to keep a session from reaching one — the
-		// route is simply absent until its screen ships, with its own row and
-		// its own MinRole.
+		// Policy Author and the Incident screen are cut from the MVP
+		// (docs/design/console/README.md) and get no row.
 		//
-		// Add Nodes was /console/nodes/add — a LITERAL segment under
-		// GET /console/nodes/{node_id} (above). With that row gone, the path
-		// now falls through to handleNode with node_id="add" and renders the
-		// Console shell's ordinary "Node not found" page instead of a plain
-		// absence — not a new disclosure (any /console/nodes/<anything>
-		// unknown already renders that page). Whoever re-adds this screen
-		// cannot accept the shadow knowingly, though: a route that
-		// constrains reach gets a second, bare-path registration from
-		// [methodMismatch], and a bare "/console/nodes/add" would collide
-		// with the already-registered "GET /console/nodes/{node_id}" —
-		// net/http panics at Register time rather than letting the shadow
-		// through silently. That is fail-closed and loud (a startup panic,
-		// caught by any test that calls Register with this table), not a
-		// danger to guard against — it just means a route that constrains
-		// reach must own its path exclusively. Pick a path outside
-		// /console/nodes/ instead, as /console/compare, above, already did
-		// for the same reason.
+		// Add Nodes (spec 09, addnodes.go) lives outside /console/nodes/: a
+		// constrained literal there collides with GET /console/nodes/{node_id}
+		// at registration. The POST has its own path because two constrained
+		// routes on one path panic. MinRole admin narrows to authz's
+		// ControlMintEnrollmentToken floor and widens nothing. Order 10 puts it
+		// before Accounts (20) and Access (30), as 00-foundations.md draws it;
+		// Under makes the POST's reveal page mark Add Nodes current.
+		{"GET", "/console/add-nodes", NavEntry{Group: NavAdminister, Label: "Add Nodes", Order: 10, Under: []string{"/console/add-nodes"}}, accounts.RoleAdmin, handleAddNodes},
+		{"POST", "/console/add-nodes/tokens", NavEntry{}, accounts.RoleAdmin, handleMintEnrollmentToken},
 
 		// Accounts, read half (spec 15). The first route in the
 		// Administer group.

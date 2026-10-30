@@ -687,6 +687,12 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 		enroll.WithServerLogger(logger),
 		enroll.WithInitialTagWriter(initialTagWriter{tags: tagWriter}))
 
+	// The Console's Enrollment Token mint, over the same Control (so the same
+	// RoleGate and trail) and the same Minter the Control API holds. Only the
+	// Console is handed it; MCP has no mint (EN-22).
+	enrollmentTokens := capability.NewEnrollmentTokens(freezeControl,
+		enrollmentTokenIssuer{minter: enrollmentMinter, tokens: tokenSvc})
+
 	// The Policy alias write: the one alias writer, over the same Control,
 	// Recorder and trail. Only the Console holds it (QRY-36).
 	policyAliasAdmin := capability.NewPolicyAliasAdmin(freezeControl, st.PolicyAliases())
@@ -902,6 +908,7 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 			accountAdmin:       accountAdmin,
 			tagWriter:          tagWriter,
 			temporaryPasswords: temporaryPasswords,
+			enrollmentTokens:   enrollmentTokens,
 			policyAliasAdmin:   policyAliasAdmin,
 			approvals:          approvals,
 			jobs:               st.Jobs(),

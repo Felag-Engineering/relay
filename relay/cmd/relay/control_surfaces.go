@@ -89,6 +89,9 @@ type surfaceDeps struct {
 	// temporaryPasswords backs console.Deps.TemporaryPasswords only; the Control
 	// API and MCP never hold it (ADR-0045 decision 11).
 	temporaryPasswords *capability.TemporaryPasswords
+	// enrollmentTokens backs console.Deps.EnrollmentTokens only; the Control API
+	// keeps its own mint route (EN-1) and MCP has none (EN-22).
+	enrollmentTokens *capability.EnrollmentTokens
 	// policyAliasAdmin backs console.Deps.AliasWriter only; the Control API and
 	// MCP never hold it.
 	policyAliasAdmin *capability.PolicyAliasAdmin
@@ -100,10 +103,10 @@ type surfaceDeps struct {
 	auditSink        *auditsink.Sink
 	// roleGate is the ONE authz.RoleGate the process holds — the same object
 	// the capability layer authorizes dispatches and Freeze with. The Control
-	// API needs it directly for the administrative routes that never reach the
-	// capability layer at all (enrollment-token mint/revoke, Node revoke),
-	// so that their floor is read from the same table rather than a
-	// second one kept per surface (invariant 10).
+	// API gates its enrollment-token mint and revoke routes (and Node revoke)
+	// with it directly; the Console's mint reaches the same RoleGate through
+	// capability.EnrollmentTokens. The floor is read from the same table
+	// rather than a second one kept per surface (invariant 10).
 	roleGate *authz.RoleGate
 	now      func() time.Time
 	metrics  *metrics.Metrics
@@ -368,6 +371,10 @@ func (consoleSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		// mount is not handed it, so the API creates humans with no password
 		// (ADR-0045 decision 11); MCP has no Account administration at all.
 		TemporaryPasswords: consoleTemporaryPasswordsOrNil(d.temporaryPasswords),
+		// EnrollmentTokens: the Console's sixth write seam. The admin floor, the
+		// bounds and the token_mint record are the capability layer's. Through
+		// the helper for the typed-nil reason consoleTagsOrNil documents.
+		EnrollmentTokens: consoleEnrollmentTokensOrNil(d.enrollmentTokens),
 	})
 	mux.Handle("/console/", console.Secure(consoleMux, d.logger))
 }
@@ -549,6 +556,15 @@ func consoleTemporaryPasswordsOrNil(t *capability.TemporaryPasswords) console.Te
 		return nil
 	}
 	return t
+}
+
+// consoleEnrollmentTokensOrNil returns e as a console.EnrollmentTokenMinter, or
+// an untyped nil when e is nil, for the reason consoleTagsOrNil documents.
+func consoleEnrollmentTokensOrNil(e *capability.EnrollmentTokens) console.EnrollmentTokenMinter {
+	if e == nil {
+		return nil
+	}
+	return e
 }
 
 // readAuditorOrNil returns s as an api.ReadAuditor, or an untyped nil when s

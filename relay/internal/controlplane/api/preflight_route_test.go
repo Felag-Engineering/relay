@@ -225,6 +225,11 @@ func TestConsoleServesNoSeparatePreflightRoute(t *testing.T) {
 		// reaching the capability layer's PolicyAliasAdmin. It evaluates no
 		// Policy and dispatches nothing (PF-1 reviewed).
 		"POST /console/policy-aliases": true,
+		// Add Nodes: a form, and a POST that mints an Enrollment Token through
+		// the capability layer's EnrollmentTokens. Neither evaluates Policy,
+		// dispatches nor previews anything (PF-1 reviewed).
+		"GET /console/add-nodes":         true,
+		"POST /console/add-nodes/tokens": true,
 	}
 
 	if !reflect.DeepEqual(seen, want) {

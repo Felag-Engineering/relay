@@ -39,6 +39,8 @@ func TestNav_ChildScreenMarksItsParentCurrent(t *testing.T) {
 		"/console/accounts/acct-mike/tokens/tok-live/revoke": "Accounts",
 		"/console/api-tokens/tok-live/revoke":                "Accounts",
 		"/console/access":                                    "Access",
+		"/console/add-nodes":                                 "Add Nodes",
+		"/console/add-nodes/tokens":                          "Add Nodes",
 		"/console/tags/confirm":                              "Fleet",
 		"/console/tags":                                      "Fleet",
 		"/console/policy-aliases":                            "Fleet",
@@ -50,6 +52,7 @@ func TestNav_ChildScreenMarksItsParentCurrent(t *testing.T) {
 		"/console/nonesuch":     "",
 		"/console/accountsx":    "",
 		"/console/new-accountx": "",
+		"/console/add-nodesx":   "",
 		"/console/compare-x":    "",
 		"/console/jobsx/1":      "",
 		"/console/tagsx":        "",
@@ -112,6 +115,7 @@ func TestNav_EveryMountedScreenMarksExactlyOneItemCurrent(t *testing.T) {
 		"/console/accounts/{account_id}/lower":                    "Accounts",
 		"/console/accounts/{account_id}/tokens/{token_id}/revoke": "Accounts",
 		"/console/access":                                         "Access",
+		"/console/add-nodes":                                      "Add Nodes",
 		"/console/tags/confirm":                                   "Fleet",
 		// Your account is reached from the signed-in block, not the nav, so
 		// no nav item is current on it.

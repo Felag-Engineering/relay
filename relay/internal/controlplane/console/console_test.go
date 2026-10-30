@@ -115,10 +115,11 @@ func request(t *testing.T, h http.Handler, method, path string) *httptest.Respon
 // ADR-0009's insight is that ABSENT BEATS FORBIDDEN. So the assertion is about
 // what is not drawn, not about what refuses.
 //
-// Three of the six items in the `absent` list still hold for EVERY role, not
+// Two of the six items in the `absent` list still hold for EVERY role, not
 // only a viewer: Run, because the Console has no execution route (ADR-0052),
-// and Policy and Add Nodes, which #464 unmounted. For those this test still
-// holds, but it is not the only thing keeping the property true.
+// and Policy, which #464 unmounted. For those this test still
+// holds, but it is not the only thing keeping the property true. Add Nodes is
+// absent for a viewer by its admin MinRole, like Accounts below.
 //
 // Accounts is now the first item here that is absent FOR THE REASON THIS TEST
 // IS ABOUT. #654 mounted GET /console/accounts at admin, so the screen exists
@@ -923,8 +924,8 @@ func TestApprovalReader_ReadsOneRecordAndCannotListOrDecide(t *testing.T) {
 // TestConsole_V060MountsNoUnbuiltScreen is a regression pin for the exact
 // defect #464 fixed, not a derived property: these specific screens must not
 // be reachable, however the route table changes around them: Policy Author
-// (06) and Incident (16), cut from the MVP, and Add Nodes (09), not built. A
-// hand-written list is correct here.
+// (06) and Incident (16), cut from the MVP, and Add Nodes' old path under
+// /console/nodes/, which is not served. A hand-written list is correct here.
 //
 // Spec 15 (Accounts) was the fourth entry until #654 mounted its read half at
 // GET /console/accounts. It leaves this list because the screen now EXISTS —

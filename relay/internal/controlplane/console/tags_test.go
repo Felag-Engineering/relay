@@ -794,7 +794,8 @@ var (
 	ariaLabelAttr = regexp.MustCompile(`\baria-label="([^"]*)"`)
 
 	// pinnedPostActions are the only POST targets any screen draws: sign in
-	// and out, Cancel, the Account writes, the password change, the two tag writes and the Policy
+	// and out, Cancel, the Account writes, the password change, the two tag writes, the mint
+	// form (which takes tag: initial tags, ADR-0050) and the Policy
 	// alias write. A future route that writes a label fails here until it is
 	// named.
 	pinnedPostActions = regexp.MustCompile(`^(` + strings.Join([]string{
@@ -807,12 +808,14 @@ var (
 		`/console/nodes/[^/]+/tags`,
 		`/console/tags`,
 		`/console/policy-aliases`,
+		`/console/add-nodes/tokens`,
 	}, "|") + `)$`)
 )
 
 // TestConsole_NoScreenOffersAnEditForANodeRelayOrStateLabel is the render test
 // over every screen: the only label a form ever writes is a tag: label, and the
-// only routes that take one are the tag routes (invariant 7, ADR-0050).
+// only routes that take one are the tag routes and the mint form's initial tags
+// (invariant 7, ADR-0050).
 func TestConsole_NoScreenOffersAnEditForANodeRelayOrStateLabel(t *testing.T) {
 	targets := map[string]bool{}
 	for _, role := range sessionRoles {
@@ -875,6 +878,7 @@ func TestConsole_NoScreenOffersAnEditForANodeRelayOrStateLabel(t *testing.T) {
 		"POST " + changePasswordPath,
 		"POST /console/api-tokens/{token_id}/revoke",
 		nodeTagsPattern, bulkTagsPattern, policyAliasesPattern,
+		mintEnrollmentTokenPattern,
 	}
 	slices.Sort(want)
 	if !slices.Equal(writes, want) {

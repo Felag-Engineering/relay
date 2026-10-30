@@ -156,6 +156,20 @@ func TestConsoleTagsOrNil_ANilWriterIsAnUntypedNil(t *testing.T) {
 	}
 }
 
+// TestConsoleEnrollmentTokensOrNil_ANilServiceIsAnUntypedNil is the same
+// typed-nil trap for the mint seam: a nil *capability.EnrollmentTokens inside a
+// non-nil console.EnrollmentTokenMinter would pass the Console's nil check and
+// panic in MintEnrollmentToken.
+func TestConsoleEnrollmentTokensOrNil_ANilServiceIsAnUntypedNil(t *testing.T) {
+	if got := consoleEnrollmentTokensOrNil(nil); got != nil {
+		t.Errorf("consoleEnrollmentTokensOrNil(nil) = %#v, want an untyped nil", got)
+	}
+	e := &capability.EnrollmentTokens{}
+	if got := consoleEnrollmentTokensOrNil(e); got != console.EnrollmentTokenMinter(e) {
+		t.Errorf("consoleEnrollmentTokensOrNil(e) = %#v, want the service it was given", got)
+	}
+}
+
 // TestConsolePolicyAliasesOrNil_ANilWriterIsAnUntypedNil is the same typed-nil
 // trap for the alias seam: a nil *capability.PolicyAliasAdmin inside a non-nil
 // console.PolicyAliasWriter would pass the Console's `d.AliasWriter == nil`

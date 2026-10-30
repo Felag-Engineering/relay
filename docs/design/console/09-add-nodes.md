@@ -11,13 +11,12 @@
 
 **Milestone v0.7.0.**
 
-**Governing:** ADR-0006, ADR-0030, ADR-0031, ADR-0032, ADR-0033, invariants #7, #11.
-**Backend:** `POST /api/v1/enrollment-tokens` with the `render` field and `renderings` response
-(ADR-0032); the pure renderer; `admin` gating (`requiredControlRole` floors
-`ControlMintEnrollmentToken` at `admin`).
+**Governing:** ADR-0006, ADR-0030, ADR-0031, ADR-0032, ADR-0033, ADR-0048, ADR-0050, invariants #7, #11.
+**Backend:** the Console mints through the capability layer's Enrollment Token mint, at
+`ControlMintEnrollmentToken` and the `admin` floor (`requiredControlRole`), the same action as
+`POST /api/v1/enrollment-tokens`; no renderer (ADR-0048).
 
-**Only the `admin` gate exists.** Read *Backend prerequisites* below before planning this screen:
-they are why #434 is blocked.
+**Built:** the mint form, the reveal and the step-up below (enrollment.md EN-36, EN-47).
 
 ## What this screen is for
 
@@ -83,11 +82,17 @@ Three steps, stated on screen because they are the trust story:
 - A re-render control, in any form, for any token.
 - The token plaintext anywhere outside the one-time reveal — not in a list, not in an audit view,
   not in a log.
-- Any Relay configuration.
+- Any Relay configuration. The address a Node dials appears only inside the opaque join string
+  ADR-0048 requires the reveal to show, never decoded or shown on its own.
 
 ## Backend prerequisites
 
-**This screen is blocked, and the blockers are backend, not design.** Recorded on 2026-09-20 after
+**Resolved.** B1 and B2 are dissolved by ADR-0048 (no renderer; the join string is built). B3 is
+resolved by a capability-layer mint over a proto-free seam the composition root implements. B4 (a
+token inventory with revoke) is not built and no claim asks for it. B5 is the daemon's EN-27. The
+table below stays as history.
+
+**This screen was blocked, and the blockers were backend, not design.** Recorded on 2026-09-20 after
 a dev-loop attempt on #434 escalated; the E-numbers are `docs/design/self-serve-enrollment.md`'s.
 ADR-0032 said what this would mean:
 
@@ -131,9 +136,10 @@ the replayed thing is a fleet join credential; and an adapter may be stricter th
 
 ## Acceptance
 
-- [ ] Minting requires `admin`; a `viewer` and an `operator` are refused.
-- [ ] Exactly one audit event per mint, recording what was rendered.
-- [ ] The renderer has **no store dependency** — assert it structurally.
-- [ ] Navigating away from the reveal and back does not show the artifacts again.
-- [ ] The token plaintext appears in exactly one response and is never persisted.
-- [ ] A daemon given a wrong CA fingerprint refuses enrollment and exits without falling back.
+- [x] Minting requires `admin`; a `viewer` and an `operator` are refused.
+- [x] Exactly one audit event per mint.
+- [ ] ~~The renderer has **no store dependency**~~ — retired by ADR-0048 (no renderer).
+- [x] Navigating away from the reveal and back does not show the artifacts again.
+- [x] The token plaintext appears in exactly one response and is never persisted.
+- [ ] ~~A daemon given a wrong CA fingerprint refuses enrollment and exits without falling back.~~
+  Proven by EN-27 (the daemon's own test).

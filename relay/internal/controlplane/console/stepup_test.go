@@ -295,8 +295,9 @@ func TestStepUp_TheWindowIsReadFromConsoleauth(t *testing.T) {
 }
 
 // requireStepUp's own per-act empty-password branch, called directly with a
-// test-local ask: no production route uses stepUpPerAct yet, and the composer's
-// mutate apply must. A fresh window must not stand in for a per-act password.
+// test-local ask; the Enrollment Token mint (addnodes.go) is the production
+// route that uses stepUpPerAct. A fresh window must not stand in for a per-act
+// password.
 func TestStepUp_APerActAskRefusesAnEmptyPasswordInsideTheWindow(t *testing.T) {
 	x := newWriteFix(t, nil)
 	x.auth.fresh = true

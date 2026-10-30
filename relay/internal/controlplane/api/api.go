@@ -156,10 +156,10 @@ type Deps struct {
 	// answer, it never decides one.
 	//
 	// Freeze is NOT gated here: it goes through Deps.Freeze into the
-	// capability layer, which consults the same object itself. The split is
-	// not a preference — capability's import allowlist bars internal/enroll
-	// and internal/revocation, so mint and revoke have no capability-layer
-	// method to be gated inside.
+	// capability layer, which consults the same object itself. This package
+	// gates its mint and revoke here, before the body is read (EN-1). The
+	// Console's mint goes through capability.EnrollmentTokens, which asks this
+	// same RoleGate at the same ControlAction.
 	//
 	// Nil refuses every route that needs it with a 500 rather than proceeding
 	// ungated: an unwired gate is a composition-root bug, and an ungated path

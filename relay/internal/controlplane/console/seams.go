@@ -32,10 +32,10 @@ package console
 // configuration, OAuthConfigured, mirrors a startup value the composition root
 // sets. This package cannot read it from anywhere.
 //
-// There are FIVE write seams on Deps — JobCanceller (cancel.go),
+// There are SIX write seams on Deps — JobCanceller (cancel.go),
 // AccountAdministrator (accounts_write.go), TagWriter (tags.go),
-// PolicyAliasWriter (policyaliases.go) and TemporaryPasswordIssuer
-// (temporarypassword.go) — and none lives in this file, on
+// PolicyAliasWriter (policyaliases.go), TemporaryPasswordIssuer
+// (temporarypassword.go) and EnrollmentTokenMinter (addnodes.go) — and none lives in this file, on
 // purpose: each gets its own file so this file's "every seam here is read-only"
 // claim stays true of seams.go without qualification.
 //
@@ -228,9 +228,10 @@ type QueryReader interface {
 //
 // Note what is still absent, because this is the seam most likely to grow into
 // the settings page invariant 11 and foundations rule 7 both forbid: no
-// address, no listener, no port, no certificate validity, no CA object. The
-// address a Node dials is delivered by whatever installs the daemon, not by
-// this Console — and ADR-0031's join string, once built, will carry it.
+// address, no listener, no port, no certificate validity, no CA object. This
+// seam carries none of them. The address a Node dials reaches a screen only
+// inside the opaque join string the Add Nodes reveal shows once (ADR-0048),
+// never decoded and never shown on its own.
 type TrustReader interface {
 	CAFingerprint() string
 	ServerFingerprint() string

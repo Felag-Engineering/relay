@@ -30,7 +30,9 @@ import (
 type ControlAction string
 
 const (
-	// ControlMintEnrollmentToken is POST /api/v1/enrollment-tokens. A token's
+	// ControlMintEnrollmentToken is POST /api/v1/enrollment-tokens and the
+	// Console's Add Nodes mint, which reaches it through EnrollmentTokens
+	// (enrollment.go). A token's
 	// initial tags become the enrolling Node's first tags (ADR-0050), and the
 	// token is the credential that lets a Node into the fleet at all, so
 	// minting is a claim the control plane vouches for, not a convenience.
@@ -193,6 +195,32 @@ type TagWriteEvent struct {
 // registry.Repository satisfies it.
 type TagNodeReader interface {
 	Get(nodeID string) (registry.Node, bool)
+}
+
+// EnrollmentTokenIssuer mints an Enrollment Token and its join string. The
+// composition root implements it over enroll.Minter: the capability layer
+// cannot import internal/enroll, which carries the wire protocol
+// (capability-imports). It decides nothing; authorization and the record are
+// EnrollmentTokens'.
+type EnrollmentTokenIssuer interface {
+	IssueEnrollmentToken(ctx context.Context, minter Principal, req EnrollmentMint) (MintedEnrollmentToken, error)
+	WithdrawEnrollmentToken(ctx context.Context, tokenID string) error
+}
+
+// EnrollmentMintRecorder records a mint the issuer has already made. It is kept
+// off AuditSink so existing AuditSink implementers are untouched, and
+// EnrollmentTokens asserts it at construction. It is not atomic with the mint:
+// an error makes EnrollmentTokens withdraw the token.
+type EnrollmentMintRecorder interface {
+	RecordEnrollmentTokenMint(ctx context.Context, e EnrollmentMintEvent) error
+}
+
+// EnrollmentMintEvent is one mint. It carries the token's public ID and has no
+// field a join string or a credential could occupy.
+type EnrollmentMintEvent struct {
+	Principal Principal
+	TokenID   string
+	Asserted  Assertions
 }
 
 // AccountStore is the Account half of the collaborator accountadmin.go needs:

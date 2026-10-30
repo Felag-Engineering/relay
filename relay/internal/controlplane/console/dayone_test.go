@@ -70,6 +70,9 @@ func TestDayOne_NoScreenRendersAZeroedStatisticOnAFreshRelay(t *testing.T) {
 		"/console/new-account": "A form for creating an Account, which measures nothing. This " +
 			"fixture wires no Account administration, so the page honestly answers that it is " +
 			"not wired; its form is drawn by the Accounts write tests.",
+		"/console/add-nodes": "A form for minting an Enrollment Token, which measures nothing. " +
+			"This fixture wires no mint, so the page honestly answers that it is not wired; " +
+			"its form is drawn by the Add Nodes tests.",
 		"/console/tags/confirm": "A confirmation step for a filtered selection, which measures " +
 			"nothing. With no filter it refuses rather than counting anything, this fixture wires " +
 			"no tag writes so the page honestly answers that it is not wired, and a fresh Relay " +
