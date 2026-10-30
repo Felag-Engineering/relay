@@ -237,6 +237,8 @@ func TestDecideApproval_StampsOutOfBand(t *testing.T) {
 // field, and an attempt to supply one is a 400 rather than being ignored —
 // decodeJSON rejects unknown fields, so a client believing it chose in-band is
 // told otherwise instead of silently getting out-of-band.
+//
+// Proves AP-12.
 func TestDecideApproval_BodyCannotNameAChannel(t *testing.T) {
 	req := testApprovalRequest("req-1", jobs.Action{Kind: jobs.ActionOperation, RiskClass: jobs.RiskClassMutate})
 	ap := &fakeApprovals{byID: map[string]approval.Request{"req-1": req}}

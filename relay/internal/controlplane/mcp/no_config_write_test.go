@@ -99,6 +99,8 @@ func TestMCP_NoToolRequestsAnApprovalGrant(t *testing.T) {
 
 // TestNoToolWritesConfiguration is RC-11 for MCP: no tool writes Relay
 // configuration. See the header above for how the absence is asserted.
+//
+// Proves AP-5.
 func TestNoToolWritesConfiguration(t *testing.T) {
 	t.Run("every tool writes a runtime object or nothing", func(t *testing.T) {
 		found := collectMCPEntryPoints(t)

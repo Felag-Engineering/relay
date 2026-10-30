@@ -128,6 +128,12 @@ func TestGather_FIFOLeafDoesNotBlock(t *testing.T) {
 	}
 }
 
+// TestGather_DecisionAndReadShareDescriptor: ReadSecretFile opens the webhook
+// secret with Open under the Secret rule, and Open decides on the facts gather
+// took from one descriptor and returns that same descriptor for the read. A file
+// swapped in after gather is never what is read.
+//
+// Proves RC-48.
 func TestGather_DecisionAndReadShareDescriptor(t *testing.T) {
 	b := base(t)
 	path := filepath.Join(b, "f")

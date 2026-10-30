@@ -42,6 +42,8 @@ func TestHashPlanIsStableAcrossOrdering(t *testing.T) {
 // An approval binds to the resolved node set; if the fleet drifts between
 // approval and dispatch, the hash must differ so the Job re-parks instead of
 // silently landing on Nodes the approver never saw.
+//
+// Proves AP-20, AP-22, AP-3.
 func TestHashPlanChangesWithFanOut(t *testing.T) {
 	approved := HashPlan(restart("nginx"), []string{"node-a", "node-b", "node-c"})
 
@@ -61,6 +63,10 @@ func TestHashPlanChangesWithFanOut(t *testing.T) {
 	}
 }
 
+// TestHashPlanChangesWithAction: a different Action over the same Nodes is a
+// different Plan, so an approval for one never releases the other.
+//
+// Proves AP-20.
 func TestHashPlanChangesWithAction(t *testing.T) {
 	nodes := []string{"node-a"}
 	base := HashPlan(restart("nginx"), nodes)
@@ -276,6 +282,8 @@ func TestPlanHashNeverWritesTheGrantKind(t *testing.T) {
 
 // TestSummaryNeverUnderstatesBlastRadius: the sample is truncated for
 // legibility, but the count is the truth and must always be present.
+//
+// Proves AP-3.
 func TestSummaryNeverUnderstatesBlastRadius(t *testing.T) {
 	nodes := make([]string, 0, 40)
 	for i := 0; i < 40; i++ {

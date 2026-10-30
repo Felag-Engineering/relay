@@ -412,7 +412,7 @@ func TestFromFile_ConsoleWindowsAreBuiltIn(t *testing.T) {
 // A gate rule the configuration cannot load refuses start, naming the setting
 // and a line and never a value or a rule's name.
 //
-// Proves AP-8.
+// Proves AP-8, AP-54.
 func TestLoadConfig_MalformedGateRuleRefusesStart(t *testing.T) {
 	for _, tc := range []struct {
 		name, rules, want string

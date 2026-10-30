@@ -84,6 +84,8 @@ func await(t *testing.T, ch <-chan received) received {
 
 // TestDeliversTheRelayAuthoredNotice: the body carries what an approver needs
 // to act, and the path to the one place they can answer.
+//
+// Proves AP-38.
 func TestDeliversTheRelayAuthoredNotice(t *testing.T) {
 	srv, ch := notifyServer(t, http.StatusOK)
 	n, err := New(Config{URL: srv.URL}, WithHTTPClient(srv.Client()), WithLogger(quietLogger()))
@@ -166,6 +168,8 @@ func TestSignsWithTheConfiguredSecret(t *testing.T) {
 
 // TestNotifyParkedDoesNotBlock: a park must never stall on someone else's HTTP
 // server, so NotifyParked returns before the request completes.
+//
+// Proves AP-38.
 func TestNotifyParkedDoesNotBlock(t *testing.T) {
 	release := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -212,6 +216,8 @@ func TestDeliverySurvivesACancelledCaller(t *testing.T) {
 
 // TestARefusingEndpointIsNotAnError: notification is best-effort. A receiver
 // that 500s costs an approver a poll and must not affect the Relay.
+//
+// Proves AP-38.
 func TestARefusingEndpointIsSurvivable(t *testing.T) {
 	srv, ch := notifyServer(t, http.StatusInternalServerError)
 	n, err := New(Config{URL: srv.URL}, WithHTTPClient(srv.Client()), WithLogger(quietLogger()))
@@ -270,6 +276,8 @@ func TestNewRejectsAnEmptyURL(t *testing.T) {
 // The process facts are fixed rather than gathered, since a test may run as
 // root, which the check refuses outright; the real gatherer and the real binary
 // meet it on the separate-uid harness (TestStart_RefusesSecretReadableByOthers).
+//
+// Proves RC-48.
 func TestSecretFilePermissionsAreEnforced(t *testing.T) {
 	const relayUID, relayGID, wheel = 4242, 4243, 10
 	proc := hostfile.Process{
@@ -331,6 +339,35 @@ func TestSecretFilePermissionsAreEnforced(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "s3cret") {
 		t.Errorf("refusal carries the content: %v", err)
+	}
+}
+
+// TestSecretRule_RefusesADirectory: ReadSecretFile is hostfile.Open(path,
+// hostfile.Secret), so the Secret rule's verdict on a leaf that is a directory
+// is what ReadSecretFile meets. The process facts are fixed because a real
+// directory under a test temp dir is refused earlier, for an ancestor the test
+// user owns or for running as root.
+//
+// Proves RC-48.
+func TestSecretRule_RefusesADirectory(t *testing.T) {
+	const relayUID, relayGID = 4242, 4243
+	const ext4 = 0xEF53
+	facts := hostfile.Facts{
+		Process: hostfile.Process{
+			UIDs:   [3]uint32{relayUID, relayUID, relayUID},
+			GIDs:   [3]uint32{relayGID, relayGID, relayGID},
+			Groups: []uint32{relayGID},
+		},
+		Path: []hostfile.Node{
+			{Name: "/", Kind: hostfile.KindDir, Mode: 0o755, FSType: ext4},
+			{Name: "etc", Kind: hostfile.KindDir, Mode: 0o755, FSType: ext4},
+			{Name: "secret", Kind: hostfile.KindDir, GID: relayGID, Mode: 0o750, FSType: ext4},
+		},
+	}
+	err := hostfile.Decide(facts, hostfile.Secret)
+	var r *hostfile.Refusal
+	if !errors.As(err, &r) || r.Clause != hostfile.ClauseNotRegular {
+		t.Fatalf("Decide(directory leaf) = %v, want the not-a-regular-file refusal", err)
 	}
 }
 

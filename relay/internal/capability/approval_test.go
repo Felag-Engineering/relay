@@ -3,6 +3,7 @@ package capability
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -245,6 +246,8 @@ func mutateAct() jobs.Action {
 
 // TestGatedDispatchParksAndSendsNothing is the core of #269: a gated dispatch
 // must stop BEFORE the dispatcher, not after.
+//
+// Proves AP-1, AP-2.
 func TestGatedDispatchParksAndSendsNothing(t *testing.T) {
 	store := newMemApprovals()
 	s, disp := approvalFixture(t, []string{"node-a", "node-b"}, gateEverything(t), store, func() time.Time { return apNow })
@@ -272,6 +275,154 @@ func TestGatedDispatchParksAndSendsNothing(t *testing.T) {
 	}
 }
 
+// TestRun_GateIsConsultedAfterAuthorizationAndTheCap: the gate sits behind
+// authorization and the blast-radius cap, so a dispatch either of them refuses
+// never parks, and a park is made only once both have passed, before any Job or
+// Task exists.
+//
+// Proves AP-1.
+func TestRun_GateIsConsultedAfterAuthorizationAndTheCap(t *testing.T) {
+	type rig struct {
+		s     *testSvc
+		authz *spyAuthorizer
+		capc  *spyCapChecker
+		audit *spyAuditSink
+		store *memApprovals
+		disp  *spyDispatcher
+	}
+	newRig := func(t *testing.T) rig {
+		t.Helper()
+		reg := registry.NewInMemory()
+		for _, id := range []string{"node-a", "node-b"} {
+			if _, err := reg.Upsert(registry.Report{NodeID: id}); err != nil {
+				t.Fatalf("seed registry: %v", err)
+			}
+		}
+		r := rig{
+			authz: &spyAuthorizer{}, capc: &spyCapChecker{}, audit: &spyAuditSink{},
+			store: newMemApprovals(), disp: &spyDispatcher{jobID: "job-1"},
+		}
+		r.s = build(t, seams{reg: reg,
+			authz: r.authz, cap: r.capc, audit: r.audit, freeze: &fakeFreezeStore{},
+			gate: gateEverything(t), approvals: r.store, approvalAuthz: &spyApprovalAuthorizer{},
+			now: func() time.Time { return apNow },
+		})
+		r.s.disp = r.disp
+		return r
+	}
+	run := func(r rig) error {
+		_, err := r.s.Run(context.Background(), machineRequester, Selector{}, mutateAct())
+		return err
+	}
+
+	t.Run("an unauthorized dispatch is refused and never parks", func(t *testing.T) {
+		r := newRig(t)
+		r.authz.err = errors.New("denied")
+		err := run(r)
+		var parked *ParkedError
+		if err == nil || errors.As(err, &parked) {
+			t.Fatalf("err = %v, want a refusal that is not a park", err)
+		}
+		if !hasAuditKind(r.audit.entries, AuditKindRefusal) {
+			t.Error("the refusal was not audited")
+		}
+		if hasAuditKind(r.audit.entries, AuditKindApprovalRequested) {
+			t.Error("an approval request was audited for a dispatch authorization refused")
+		}
+		if len(r.store.byID) != 0 {
+			t.Errorf("stored %d requests, want none", len(r.store.byID))
+		}
+		if r.capc.called {
+			t.Error("the cap was consulted after authorization refused")
+		}
+		if r.disp.called {
+			t.Error("the dispatcher was called")
+		}
+	})
+
+	t.Run("a dispatch over the cap is refused and never parks", func(t *testing.T) {
+		r := newRig(t)
+		r.capc.err = errors.New("blast radius exceeded")
+		err := run(r)
+		var parked *ParkedError
+		if err == nil || errors.As(err, &parked) {
+			t.Fatalf("err = %v, want a refusal that is not a park", err)
+		}
+		if !r.capc.called || r.capc.gotMatched != 2 {
+			t.Errorf("cap called = %v with matched %d, want it to see the resolved fan-out of 2", r.capc.called, r.capc.gotMatched)
+		}
+		if !hasAuditKind(r.audit.entries, AuditKindRefusal) {
+			t.Error("the refusal was not audited")
+		}
+		if len(r.store.byID) != 0 {
+			t.Errorf("stored %d requests, want none", len(r.store.byID))
+		}
+		if r.disp.called {
+			t.Error("the dispatcher was called")
+		}
+	})
+
+	t.Run("a dispatch past both parks before any Task exists", func(t *testing.T) {
+		r := newRig(t)
+		err := run(r)
+		var parked *ParkedError
+		if !errors.As(err, &parked) {
+			t.Fatalf("err = %v, want a park", err)
+		}
+		if !r.capc.called {
+			t.Error("the cap was not consulted before the park")
+		}
+		if len(r.store.byID) != 1 {
+			t.Fatalf("stored %d requests, want exactly 1", len(r.store.byID))
+		}
+		for _, req := range r.store.byID {
+			if !strings.Contains(req.Summary, "on 2 node(s)") {
+				t.Errorf("Summary = %q, want the resolved fan-out", req.Summary)
+			}
+		}
+		if r.disp.called {
+			t.Error("the dispatcher was called: a park must precede any Job or Task")
+		}
+	})
+}
+
+// TestPark_SummaryShowsTheResolvedCountAndACappedSample: what an approver reads
+// states the real fan-out and a capped sample of it, and the stored request is
+// bound to the plan hash the park reports.
+//
+// Proves AP-3.
+func TestPark_SummaryShowsTheResolvedCountAndACappedSample(t *testing.T) {
+	nodes := make([]string, 0, 12)
+	for i := 1; i <= 12; i++ {
+		nodes = append(nodes, fmt.Sprintf("node-%02d", i))
+	}
+	store := newMemApprovals()
+	s, _ := approvalFixture(t, nodes, gateEverything(t), store, func() time.Time { return apNow })
+
+	_, err := s.Run(context.Background(), machineRequester, Selector{}, mutateAct())
+	var parked *ParkedError
+	if !errors.As(err, &parked) {
+		t.Fatalf("err = %v, want a park", err)
+	}
+	for _, want := range []string{"on 12 node(s)", "node-01", "node-10", "and 2 more"} {
+		if !strings.Contains(parked.Summary, want) {
+			t.Errorf("Summary = %q, want it to contain %q", parked.Summary, want)
+		}
+	}
+	for _, unwanted := range []string{"node-11", "node-12"} {
+		if strings.Contains(parked.Summary, unwanted) {
+			t.Errorf("Summary = %q names %q, past the sample cap", parked.Summary, unwanted)
+		}
+	}
+	stored, ok := store.byID[parked.RequestID]
+	if !ok {
+		t.Fatalf("no stored request %q", parked.RequestID)
+	}
+	if stored.PlanHash != parked.PlanHash {
+		t.Errorf("stored plan hash %q != parked %q", stored.PlanHash, parked.PlanHash)
+	}
+}
+
 // TestUngatedDispatchIsUntouched: an empty gate must leave the pre-approval
 // pipeline exactly as it was.
 func TestUngatedDispatchIsUntouched(t *testing.T) {
@@ -295,6 +446,8 @@ func TestUngatedDispatchIsUntouched(t *testing.T) {
 
 // TestApprovedPlanDispatchesAndBindsTheJob: once the requirement is satisfied,
 // the same dispatch proceeds and the approval is joined to the Job it released.
+//
+// Proves AP-28.
 func TestApprovedPlanDispatchesAndBindsTheJob(t *testing.T) {
 	store := newMemApprovals()
 	s, disp := approvalFixture(t, []string{"node-a", "node-b"}, gateEverything(t), store, func() time.Time { return apNow })
@@ -325,6 +478,8 @@ func TestApprovedPlanDispatchesAndBindsTheJob(t *testing.T) {
 // TestRegistryDriftReParksAnApprovedPlan is ADR-0027's park-something-innocuous-
 // then-mutate-the-world guard, end to end. An approval covering two Nodes must
 // not release a dispatch that now reaches three.
+//
+// Proves AP-21, AP-22.
 func TestRegistryDriftReParksAnApprovedPlan(t *testing.T) {
 	reg := registry.NewInMemory()
 	for _, id := range []string{"node-a", "node-b"} {
@@ -367,6 +522,124 @@ func TestRegistryDriftReParksAnApprovedPlan(t *testing.T) {
 	}
 	if disp.called {
 		t.Error("dispatcher was called — nothing may run against a fan-out nobody approved")
+	}
+}
+
+// TestRun_ANodeSwappedForAnotherReParks: an approval binds which Nodes, not how
+// many. Swapping one Node for another leaves the count at two and must still
+// park a fresh request.
+//
+// Proves AP-22.
+func TestRun_ANodeSwappedForAnotherReParks(t *testing.T) {
+	store := newMemApprovals()
+	s, disp, reg := shapeFixture(t, map[string]map[string]string{
+		"node-a": {"role": "web"},
+		"node-b": {"role": "web"},
+	}, gateEverything(t), store)
+	sel, err := ParseSelector("node:role=web")
+	if err != nil {
+		t.Fatalf("ParseSelector: %v", err)
+	}
+
+	_, err = s.Run(context.Background(), machineRequester, sel, mutateAct())
+	var first *ParkedError
+	if !errors.As(err, &first) {
+		t.Fatalf("first Run: err = %v, want a park", err)
+	}
+	store.approve(t, first.RequestID, "acct-ana", "ana", apNow.Add(time.Minute))
+
+	if _, err := reg.Upsert(registry.Report{NodeID: "node-b"}.WithNodeLabels(map[string]string{"role": "db"})); err != nil {
+		t.Fatalf("relabel node-b: %v", err)
+	}
+	if _, err := reg.Upsert(registry.Report{NodeID: "node-c"}.WithNodeLabels(map[string]string{"role": "web"})); err != nil {
+		t.Fatalf("add node-c: %v", err)
+	}
+
+	_, err = s.Run(context.Background(), machineRequester, sel, mutateAct())
+	var second *ParkedError
+	if !errors.As(err, &second) {
+		t.Fatalf("second Run: err = %v, want a fresh park: the approved Nodes are not the ones reached", err)
+	}
+	if second.RequestID == first.RequestID {
+		t.Error("the re-park reused the approved request")
+	}
+	if second.PlanHash == first.PlanHash {
+		t.Error("a swapped Node at an unchanged count left the plan hash unchanged")
+	}
+	if disp.called {
+		t.Error("the dispatcher was called against a Node set nobody approved")
+	}
+	if got := store.byID[second.RequestID].Summary; !strings.Contains(got, "on 2 node(s)") {
+		t.Errorf("re-park Summary = %q, want the same count of 2", got)
+	}
+}
+
+// TestRun_AnApprovalNeverWaivesAGuardrail: an approved request releases only
+// the gate. Authorization, the blast-radius cap and the Freeze are consulted
+// again on the re-drive, and a refusal there runs nothing and leaves the
+// approval unspent.
+//
+// Proves AP-6.
+func TestRun_AnApprovalNeverWaivesAGuardrail(t *testing.T) {
+	cases := []struct {
+		name       string
+		wantFrozen bool
+		trip       func(authz *spyAuthorizer, capc *spyCapChecker, freeze *fakeFreezeStore)
+	}{
+		{"authorization", false, func(a *spyAuthorizer, _ *spyCapChecker, _ *fakeFreezeStore) { a.err = errors.New("denied") }},
+		{"blast cap", false, func(_ *spyAuthorizer, c *spyCapChecker, _ *fakeFreezeStore) {
+			c.err = errors.New("blast radius exceeded")
+		}},
+		{"freeze", true, func(_ *spyAuthorizer, _ *spyCapChecker, f *fakeFreezeStore) { f.frozen = true }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			reg := registry.NewInMemory()
+			for _, id := range []string{"node-a", "node-b"} {
+				if _, err := reg.Upsert(registry.Report{NodeID: id}); err != nil {
+					t.Fatalf("seed registry: %v", err)
+				}
+			}
+			authz, capc, freeze := &spyAuthorizer{}, &spyCapChecker{}, &fakeFreezeStore{}
+			audit, store := &spyAuditSink{}, newMemApprovals()
+			s := build(t, seams{reg: reg,
+				authz: authz, cap: capc, audit: audit, freeze: freeze,
+				gate: gateEverything(t), approvals: store, approvalAuthz: &spyApprovalAuthorizer{},
+				now: func() time.Time { return apNow },
+			})
+			disp := &spyDispatcher{jobID: "job-1"}
+			s.disp = disp
+
+			_, err := s.Run(context.Background(), machineRequester, Selector{}, mutateAct())
+			var parked *ParkedError
+			if !errors.As(err, &parked) {
+				t.Fatalf("first Run: err = %v, want a park", err)
+			}
+			store.approve(t, parked.RequestID, "acct-ana", "ana", apNow.Add(time.Minute))
+			n := len(audit.entries)
+
+			tc.trip(authz, capc, freeze)
+			_, err = s.Run(context.Background(), machineRequester, Selector{}, mutateAct())
+			var reparked *ParkedError
+			if err == nil || errors.As(err, &reparked) {
+				t.Fatalf("re-drive: err = %v, want a refusal that is not a park", err)
+			}
+			if tc.wantFrozen {
+				var frozen *FrozenError
+				if !errors.As(err, &frozen) {
+					t.Errorf("err = %v, want a FrozenError", err)
+				}
+			}
+			if disp.called {
+				t.Error("the dispatcher ran on an approval that must not waive the guardrail")
+			}
+			if _, spent := store.bound[parked.RequestID]; spent {
+				t.Error("the approval was spent by a refused re-drive")
+			}
+			if !hasAuditKind(audit.entries[n:], AuditKindRefusal) {
+				t.Error("the refusal was not audited")
+			}
+		})
 	}
 }
 

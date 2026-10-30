@@ -295,6 +295,7 @@ func principalAs(p capability.Principal, method capability.AuthMethod, kind stri
 // AP-63: an accepted answer is recorded against the sealed request
 // -----------------------------------------------------------------------
 
+// Proves AP-10, AP-39.
 func TestElicitedAnswer_RecordsTheSealedRequestAndTheAssertedResponder(t *testing.T) {
 	principal := capturedPrincipal(t)
 
@@ -941,6 +942,11 @@ func TestElicitedAnswer_OnATokenSessionAnUnusableAnswerIsRefusedAccurately(t *te
 	})
 }
 
+// TestElicitedAnswer_RefusesRatherThanTruncatesAMalformedResponder: a responder
+// over 256 bytes or carrying a control character is refused, never truncated,
+// and the decider is never called.
+//
+// Proves AP-10.
 func TestElicitedAnswer_RefusesRatherThanTruncatesAMalformedResponder(t *testing.T) {
 	p := capturedPrincipal(t)
 	sealer, err := requeststate.Mint()
@@ -1237,6 +1243,8 @@ func TestElicitedAnswer_OAuthHumanSessionCancelIsRefusedAsToday(t *testing.T) {
 // not — is ignored completely (AP-79): it is never parsed, and the answer is
 // still recorded as the human's own verified decision. Run against both
 // client names, because acceptance never reads the name (AP-86).
+//
+// Proves AP-10.
 func TestElicitedAnswer_ResponderOnAnOAuthHumanSessionIsIgnored(t *testing.T) {
 	p := oauthHumanPrincipal(t)
 	sealer, err := requeststate.Mint()
