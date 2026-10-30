@@ -202,7 +202,7 @@ type appDeps struct {
 	tasks      jobs.TaskRepository
 	audit      audit.Repository
 	tokens     *enroll.Service
-	// minter is the one enrollment Minter the Control API mints through; the
+	// minter is the one enroll.Minter, behind the capability layer's issuer; the
 	// devharness and tests mint join strings through it too, never by hand.
 	minter     *enroll.Minter
 	denylist   *revocation.Denylist
@@ -687,9 +687,9 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 		enroll.WithServerLogger(logger),
 		enroll.WithInitialTagWriter(initialTagWriter{tags: tagWriter}))
 
-	// The Console's Enrollment Token mint, over the same Control (so the same
-	// RoleGate and trail) and the same Minter the Control API holds. Only the
-	// Console is handed it; MCP has no mint (EN-22).
+	// The one Enrollment Token mint, over the same Control (so the same RoleGate
+	// and trail). The Control API and the Console's form are both handed it; MCP
+	// has no mint (EN-22).
 	enrollmentTokens := capability.NewEnrollmentTokens(freezeControl,
 		enrollmentTokenIssuer{minter: enrollmentMinter, tokens: tokenSvc})
 
@@ -913,7 +913,6 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 			approvals:          approvals,
 			jobs:               st.Jobs(),
 			tasks:              st.Tasks(),
-			enrollmentMinter:   enrollmentMinter,
 			revocation:         revocationSvc,
 			audit:              st.Audit(),
 			// The read-access sink (ADR-0025), for the MCP read tools and the

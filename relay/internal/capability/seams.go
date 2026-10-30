@@ -31,7 +31,7 @@ type ControlAction string
 
 const (
 	// ControlMintEnrollmentToken is POST /api/v1/enrollment-tokens and the
-	// Console's Add Nodes mint, which reaches it through EnrollmentTokens
+	// mint forms, which both reach it through EnrollmentTokens
 	// (enrollment.go). A token's
 	// initial tags become the enrolling Node's first tags (ADR-0050), and the
 	// token is the credential that lets a Node into the fleet at all, so
@@ -200,8 +200,8 @@ type TagNodeReader interface {
 // EnrollmentTokenIssuer mints an Enrollment Token and its join string. The
 // composition root implements it over enroll.Minter: the capability layer
 // cannot import internal/enroll, which carries the wire protocol
-// (capability-imports). It decides nothing; authorization and the record are
-// EnrollmentTokens'.
+// (capability-imports). It decides nothing and passes Unlimited through as
+// given; authorization and the record are EnrollmentTokens'.
 type EnrollmentTokenIssuer interface {
 	IssueEnrollmentToken(ctx context.Context, minter Principal, req EnrollmentMint) (MintedEnrollmentToken, error)
 	WithdrawEnrollmentToken(ctx context.Context, tokenID string) error

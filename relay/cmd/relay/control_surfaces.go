@@ -35,7 +35,6 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/controlplane/api"
 	"github.com/Felag-Engineering/relay/relay/internal/controlplane/console"
 	"github.com/Felag-Engineering/relay/relay/internal/controlplane/mcp"
-	"github.com/Felag-Engineering/relay/relay/internal/enroll"
 	"github.com/Felag-Engineering/relay/relay/internal/events"
 	"github.com/Felag-Engineering/relay/relay/internal/eventsink"
 	"github.com/Felag-Engineering/relay/relay/internal/harnesssetup"
@@ -89,23 +88,22 @@ type surfaceDeps struct {
 	// temporaryPasswords backs console.Deps.TemporaryPasswords only; the Control
 	// API and MCP never hold it (ADR-0045 decision 11).
 	temporaryPasswords *capability.TemporaryPasswords
-	// enrollmentTokens backs console.Deps.EnrollmentTokens only; the Control API
-	// keeps its own mint route (EN-1) and MCP has none (EN-22).
+	// enrollmentTokens backs api.Deps.Tokens and console.Deps.EnrollmentTokens;
+	// MCP has none (EN-22).
 	enrollmentTokens *capability.EnrollmentTokens
 	// policyAliasAdmin backs console.Deps.AliasWriter only; the Control API and
 	// MCP never hold it.
 	policyAliasAdmin *capability.PolicyAliasAdmin
 	jobs             jobs.JobRepository
 	tasks            jobs.TaskRepository
-	enrollmentMinter *enroll.Minter
 	revocation       *revocation.Service
 	audit            audit.Repository
 	auditSink        *auditsink.Sink
 	// roleGate is the ONE authz.RoleGate the process holds — the same object
 	// the capability layer authorizes dispatches and Freeze with. The Control
-	// API gates its enrollment-token mint and revoke routes (and Node revoke)
-	// with it directly; the Console's mint reaches the same RoleGate through
-	// capability.EnrollmentTokens. The floor is read from the same table
+	// API asks it before reading the mint body, then mints through
+	// capability.EnrollmentTokens, which asks it again; the Console reaches it
+	// through the same action. The floor is read from the same table
 	// rather than a second one kept per surface (invariant 10).
 	roleGate *authz.RoleGate
 	now      func() time.Time
@@ -215,7 +213,7 @@ type apiSurface struct{}
 
 func (apiSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 	api.Register(mux, api.Deps{
-		Tokens:       d.enrollmentMinter,
+		Tokens:       apiEnrollmentTokensOrNil(d.enrollmentTokens),
 		Logger:       d.logger,
 		TokenRevoker: d.revocation,
 		Nodes:        d.revocation,
@@ -558,13 +556,33 @@ func consoleTemporaryPasswordsOrNil(t *capability.TemporaryPasswords) console.Te
 	return t
 }
 
-// consoleEnrollmentTokensOrNil returns e as a console.EnrollmentTokenMinter, or
-// an untyped nil when e is nil, for the reason consoleTagsOrNil documents.
-func consoleEnrollmentTokensOrNil(e *capability.EnrollmentTokens) console.EnrollmentTokenMinter {
+// apiEnrollmentTokensOrNil returns e as an api.TokenMinter, or an untyped nil
+// when e is nil, for the reason consoleTagsOrNil documents.
+func apiEnrollmentTokensOrNil(e *capability.EnrollmentTokens) api.TokenMinter {
 	if e == nil {
 		return nil
 	}
 	return e
+}
+
+// consoleEnrollmentTokensOrNil returns e as a console.EnrollmentTokenMinter, or
+// an untyped nil when e is nil, for the reason consoleTagsOrNil documents.
+//
+// The value is a wrapper, not e itself: a *capability.EnrollmentTokens behind
+// the Console's narrow interface could be type-asserted to the Control API's
+// mint, which accepts an unlimited token (EN-31). The wrapper has no such method.
+func consoleEnrollmentTokensOrNil(e *capability.EnrollmentTokens) console.EnrollmentTokenMinter {
+	if e == nil {
+		return nil
+	}
+	return consoleEnrollmentMint{tokens: e}
+}
+
+// consoleEnrollmentMint exposes only the mint-form entry of the capability mint.
+type consoleEnrollmentMint struct{ tokens *capability.EnrollmentTokens }
+
+func (m consoleEnrollmentMint) MintEnrollmentTokenFromForm(ctx context.Context, p capability.Principal, f capability.EnrollmentMintForm) (capability.MintedEnrollmentToken, error) {
+	return m.tokens.MintEnrollmentTokenFromForm(ctx, p, f)
 }
 
 // readAuditorOrNil returns s as an api.ReadAuditor, or an untyped nil when s

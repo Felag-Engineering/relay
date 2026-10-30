@@ -29,7 +29,7 @@ const fakeJoinString = "glp_join_FAKEJOINSTRINGXYZ"
 
 type enrollmentMintCall struct {
 	Principal capability.Principal
-	Mint      capability.EnrollmentMint
+	Form      capability.EnrollmentMintForm
 }
 
 // fakeEnrollmentTokens is the mint seam: it records each call and returns a
@@ -42,17 +42,17 @@ type fakeEnrollmentTokens struct {
 	order *[]string
 }
 
-func (f *fakeEnrollmentTokens) MintEnrollmentToken(_ context.Context, p capability.Principal, m capability.EnrollmentMint) (capability.MintedEnrollmentToken, error) {
+func (f *fakeEnrollmentTokens) MintEnrollmentTokenFromForm(_ context.Context, p capability.Principal, m capability.EnrollmentMintForm) (capability.MintedEnrollmentToken, error) {
 	f.mu.Lock()
-	f.recd = append(f.recd, enrollmentMintCall{Principal: p, Mint: m})
+	f.recd = append(f.recd, enrollmentMintCall{Principal: p, Form: m})
 	if f.order != nil {
-		*f.order = append(*f.order, "MintEnrollmentToken")
+		*f.order = append(*f.order, "MintEnrollmentTokenFromForm")
 	}
 	f.mu.Unlock()
 	if f.err != nil {
 		return capability.MintedEnrollmentToken{}, f.err
 	}
-	return capability.NewMintedEnrollmentToken("tok-fake-1", fakeJoinString, m.InitialTags, testNow.Add(m.TTL), m.MaxUses), nil
+	return capability.NewMintedEnrollmentToken("tok-fake-1", "fake-credential", fakeJoinString, m.InitialTags, testNow.Add(m.TTL), m.Nodes, false), nil
 }
 
 func (f *fakeEnrollmentTokens) calls() []enrollmentMintCall {
@@ -173,8 +173,8 @@ func TestAddNodes_EveryMintCostsAPassword(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Fatalf("status = %d, want 200", rec.Code)
 		}
-		if len(order) != 2 || order[0] != "StepUp" || order[1] != "MintEnrollmentToken" {
-			t.Errorf("call order = %v, want StepUp then MintEnrollmentToken", order)
+		if len(order) != 2 || order[0] != "StepUp" || order[1] != "MintEnrollmentTokenFromForm" {
+			t.Errorf("call order = %v, want StepUp then MintEnrollmentTokenFromForm", order)
 		}
 	})
 }
@@ -185,7 +185,7 @@ func TestAddNodes_TheFormAsksHowManyNodesAndOffersNoUnlimitedOption(t *testing.T
 	x := addNodesFix(t, tokens)
 
 	form := x.get(t, addNodesPath).Body.String()
-	if !strings.Contains(form, `name="nodes" type="number" min="1" step="1" required`) {
+	if !strings.Contains(form, `name="nodes" type="number" min="1" max="256" step="1" required`) {
 		t.Errorf("the form's nodes input is not a required number of at least 1: %s", contentOf(form))
 	}
 	if strings.Contains(strings.ToLower(form), "unlimited") {
@@ -196,8 +196,8 @@ func TestAddNodes_TheFormAsksHowManyNodesAndOffersNoUnlimitedOption(t *testing.T
 	if rec.Code != http.StatusOK {
 		t.Fatalf("nodes=7: status = %d", rec.Code)
 	}
-	if c := tokens.calls(); len(c) != 1 || c[0].Mint.MaxUses != 7 {
-		t.Fatalf("calls = %+v, want one with MaxUses 7", c)
+	if c := tokens.calls(); len(c) != 1 || c[0].Form.Nodes != 7 {
+		t.Fatalf("calls = %+v, want one with Nodes 7", c)
 	}
 
 	for _, bad := range []string{"", "0", "-1", "abc", "unlimited", "1.5"} {
@@ -213,6 +213,42 @@ func TestAddNodes_TheFormAsksHowManyNodesAndOffersNoUnlimitedOption(t *testing.T
 		if strings.Contains(body, consolePassword) {
 			t.Errorf("nodes=%q: the password was echoed", bad)
 		}
+	}
+}
+
+// Proves EN-46.
+func TestAddNodes_ACountAbove256IsRefusedNamingTheLimitAndMintsNothing(t *testing.T) {
+	tokens := &fakeEnrollmentTokens{}
+	x := addNodesFix(t, tokens)
+
+	rec := x.post(t, mintEnrollmentTokenAction, mintForm(url.Values{"nodes": {"257"}}))
+	body := rec.Body.String()
+	if rec.Code != http.StatusBadRequest || !strings.Contains(body, "256") || !strings.Contains(body, "Nothing was minted.") {
+		t.Fatalf("nodes=257: status = %d, body %s", rec.Code, contentOf(body))
+	}
+	if strings.Contains(body, fakeJoinString) || len(tokens.calls()) != 0 {
+		t.Errorf("nodes=257 revealed a join string or reached the mint (%d calls)", len(tokens.calls()))
+	}
+
+	rec = x.post(t, mintEnrollmentTokenAction, mintForm(url.Values{"nodes": {"256"}}))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), fakeJoinString) {
+		t.Fatalf("nodes=256: status = %d, want 200 with the reveal", rec.Code)
+	}
+	if c := tokens.calls(); len(c) != 1 || c[0].Form.Nodes != 256 {
+		t.Errorf("calls = %+v, want one with Nodes 256", c)
+	}
+}
+
+// Proves EN-46.
+func TestAddNodes_ACapabilityFormRefusalNamesTheLimit(t *testing.T) {
+	x := addNodesFix(t, &fakeEnrollmentTokens{err: capability.ErrEnrollmentFormNodes})
+	rec := x.post(t, mintEnrollmentTokenAction, mintForm(nil))
+	body := rec.Body.String()
+	if rec.Code != http.StatusBadRequest || !strings.Contains(body, "256") {
+		t.Errorf("status = %d, body %s", rec.Code, contentOf(body))
+	}
+	if strings.Contains(body, fakeJoinString) {
+		t.Error("a refused mint shows the join string")
 	}
 }
 
@@ -234,7 +270,7 @@ func TestAddNodes_TheExpiryDefaultsToTwoHoursAndMayBeChanged(t *testing.T) {
 			t.Fatalf("ttl=%s: status = %d", value, rec.Code)
 		}
 		c := tokens.calls()
-		if got := c[len(c)-1].Mint.TTL; got != want {
+		if got := c[len(c)-1].Form.TTL; got != want {
 			t.Errorf("ttl=%s reached the seam as %v, want %v", value, got, want)
 		}
 	}
@@ -267,12 +303,12 @@ func TestAddNodes_InitialTagsArePassedAsWrittenAndARefusedOneIsNamed(t *testing.
 	if len(c) != 4 {
 		t.Fatalf("calls = %d, want 4", len(c))
 	}
-	if got := strings.Join(c[3].Mint.InitialTags, "|"); got != " tag:env=prod |tag:team=web" {
-		t.Fatalf("padded/blank lines: tags = %q, want the padded entry unchanged, blanks dropped, no CR", c[3].Mint.InitialTags)
+	if got := strings.Join(c[3].Form.InitialTags, "|"); got != " tag:env=prod |tag:team=web" {
+		t.Fatalf("padded/blank lines: tags = %q, want the padded entry unchanged, blanks dropped, no CR", c[3].Form.InitialTags)
 	}
 	c = c[:3]
-	if len(c) != 3 || strings.Join(c[0].Mint.InitialTags, "|") != "tag:env=prod|tag:team=web" || c[1].Mint.InitialTags != nil ||
-		strings.Join(c[2].Mint.InitialTags, "|") != "tag:env=pro d" {
+	if len(c) != 3 || strings.Join(c[0].Form.InitialTags, "|") != "tag:env=prod|tag:team=web" || c[1].Form.InitialTags != nil ||
+		strings.Join(c[2].Form.InitialTags, "|") != "tag:env=pro d" {
 		t.Fatalf("calls = %+v, want the two tags as written, nil, then the entry with its inner space whole", c)
 	}
 

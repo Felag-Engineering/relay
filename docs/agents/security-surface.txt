@@ -149,3 +149,9 @@ docker/install-matrix/**
 # every bound on what a Node reports about itself at Hello and Enroll, and the node:
 # namespace gate of invariant 7, so a change that loosens one must escalate.
 relay/internal/protoconv/**
+
+# Added 2026-10-30 (#1254): the composition-root files that hold the raw enroll.Minter behind the
+# capability layer's Enrollment Token issuer, and that write an Enrollment Token's initial tags as
+# the minting Account.
+relay/cmd/relay/enrollmentmint.go
+relay/cmd/relay/initialtags.go

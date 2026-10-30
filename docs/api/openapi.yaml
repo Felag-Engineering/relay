@@ -380,7 +380,8 @@ paths:
 
         **Requires the `admin` role** (ADR-0032 §5). Minting admits Nodes that
         carry the named tags, so it is an act the control plane vouches for; a
-        refusal is recorded in the audit trail.
+        refusal is recorded in the audit trail. A mint the Relay cannot record
+        is withdrawn and answers `500`; no credential is returned.
       requestBody:
         required: true
         content:

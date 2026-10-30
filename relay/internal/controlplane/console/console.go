@@ -207,9 +207,9 @@ type Deps struct {
 
 	// EnrollmentTokens is the Console's sixth write seam (addnodes.go): the
 	// same capability action and admin floor as the Control API's mint,
-	// through capability.EnrollmentTokens. It is paired with Auth, because a
-	// mint whose step-up cannot be verified is not offered. Nil means the
-	// screen answers unavailable.
+	// through capability.EnrollmentTokens' mint-form entry. It is paired with
+	// Auth, because a mint whose step-up cannot be verified is not offered. Nil
+	// means the screen answers unavailable.
 	EnrollmentTokens EnrollmentTokenMinter
 }
 

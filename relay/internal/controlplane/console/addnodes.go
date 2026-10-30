@@ -2,11 +2,11 @@ package console
 
 // addnodes.go is Add Nodes (design spec 09), the Console's sixth write seam:
 // the form that mints an Enrollment Token. It decides nothing. The admin floor,
-// the input bounds, the record and the withdrawal of an unrecorded token are
-// capability.EnrollmentTokens' (invariant 10, ADR-0026 decision 4). Step-up is
-// per act, a password on every mint (owner decision 2026-10-29), because a
-// window would let one password mint a burst of fleet-admitting join
-// credentials. The reveal answers the POST itself: no post-redirect-get and no
+// the bounds (capability.EnrollmentTokens' mint-form entry), the record and the
+// withdrawal of an unrecorded token are the capability layer's (invariant 10,
+// ADR-0026 decision 4). Step-up is per act, a password on every mint (owner
+// decision 2026-10-29), because a window would let one password mint a burst of
+// fleet-admitting join credentials. The reveal answers the POST itself: no post-redirect-get and no
 // GET that renders it, because the join string is returned once and the Relay
 // keeps only its hash (EN-4). It imports authz only for ErrUnauthorized.
 
@@ -24,10 +24,12 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/registry"
 )
 
-// EnrollmentTokenMinter is the write seam this file holds.
-// *capability.EnrollmentTokens satisfies it with no adapter.
+// EnrollmentTokenMinter is the write seam this file holds. It carries only the
+// mint-form entry, so the Console cannot ask for unlimited use.
+// The composition root passes a narrowing wrapper (consoleEnrollmentMint)
+// holding only this method.
 type EnrollmentTokenMinter interface {
-	MintEnrollmentToken(ctx context.Context, p capability.Principal, m capability.EnrollmentMint) (capability.MintedEnrollmentToken, error)
+	MintEnrollmentTokenFromForm(ctx context.Context, p capability.Principal, f capability.EnrollmentMintForm) (capability.MintedEnrollmentToken, error)
 }
 
 const (
@@ -39,6 +41,14 @@ const (
 	addNodesNothingMintedSuffix  = " Nothing was minted."
 	addNodesRefusedByRelayPrefix = "The Relay refused this mint: "
 )
+
+// addNodesTooManyNodes is the sentence for a count above the form's limit.
+var addNodesTooManyNodes = "A token from this form is for at most " + strconv.Itoa(capability.MaxEnrollmentFormNodes) +
+	" Nodes." + addNodesNothingMintedSuffix
+
+// addNodesTamperedRequest is the sentence for a use limit or expiry the form
+// does not offer.
+const addNodesTamperedRequest = "This request is not one the form offers." + addNodesNothingMintedSuffix
 
 // enrollmentTTLChoices is the expiry select's CLOSED vocabulary. The submitted
 // value is looked up by exact string and never parsed as a duration. The default
@@ -81,6 +91,7 @@ type addNodesForm struct {
 	CSRFToken   string
 	Action      string
 	Nodes       string
+	MaxNodes    int
 	TTL         string
 	InitialTags string
 	Refusal     string
@@ -90,7 +101,7 @@ type addNodesForm struct {
 func newAddNodesForm(csrf, nodes, ttl, initialTags string) addNodesForm {
 	f := addNodesForm{
 		CSRFToken: csrf, Action: mintEnrollmentTokenAction,
-		Nodes: nodes, TTL: ttl, InitialTags: initialTags,
+		Nodes: nodes, MaxNodes: capability.MaxEnrollmentFormNodes, TTL: ttl, InitialTags: initialTags,
 	}
 	for _, c := range enrollmentTTLChoices {
 		f.Choices = append(f.Choices, addNodesChoice{Value: c.Value, Label: c.Label, Selected: c.Value == ttl})
@@ -181,6 +192,10 @@ func handleMintEnrollmentToken(d Deps) http.HandlerFunc {
 				"Say how many Nodes this token is for: a whole number, 1 or more."+addNodesNothingMintedSuffix, "", "")
 			return
 		}
+		if capability.CheckEnrollmentFormNodes(count) != nil {
+			refuse(w, pg, http.StatusBadRequest, addNodesTooManyNodes, "", "")
+			return
+		}
 		ttl, ok := enrollmentTTLFor(ttlValue)
 		if !ok {
 			refuse(w, pg, http.StatusBadRequest,
@@ -212,8 +227,8 @@ func handleMintEnrollmentToken(d Deps) http.HandlerFunc {
 		}
 
 		w.Header().Set("Cache-Control", "no-store")
-		minted, err := d.EnrollmentTokens.MintEnrollmentToken(r.Context(), caller,
-			capability.EnrollmentMint{MaxUses: count, TTL: ttl, InitialTags: tags})
+		minted, err := d.EnrollmentTokens.MintEnrollmentTokenFromForm(r.Context(), caller,
+			capability.EnrollmentMintForm{Nodes: count, TTL: ttl, InitialTags: tags})
 		if err != nil {
 			mintEnrollmentFailed(d, w, r, pg, err, form)
 			return
@@ -239,9 +254,12 @@ func mintEnrollmentFailed(d Deps, w http.ResponseWriter, r *http.Request, pg Pag
 			addNodesRefusedByRelayPrefix+firstJoinedErr(err).Error()+"."+addNodesNothingMintedSuffix, "", "")
 	case errors.Is(err, capability.ErrEnrollmentInitialTags):
 		refuse(w, pg, http.StatusBadRequest, initialTagsRefusalText(err), "", "")
+	case errors.Is(err, capability.ErrEnrollmentFormNodes):
+		refuse(w, pg, http.StatusBadRequest, addNodesTooManyNodes, "", "")
 	case errors.Is(err, capability.ErrEnrollmentUseLimit), errors.Is(err, capability.ErrEnrollmentTTL):
-		// Unreachable from the form; this is a tampered request.
-		refuse(w, pg, http.StatusBadRequest, sentenceCase(strings.TrimPrefix(err.Error(), "capability: "))+"."+addNodesNothingMintedSuffix, "", "")
+		// Unreachable from the form; this is a tampered request. The sentence is
+		// constant: the form never offers a use limit, so none is named.
+		refuse(w, pg, http.StatusBadRequest, addNodesTamperedRequest, "", "")
 	case errors.Is(err, capability.ErrEnrollmentTokenMayBeLive):
 		var live *capability.EnrollmentTokenLiveError
 		id := ""
@@ -295,7 +313,7 @@ var addNodesTmpl = newScreen("add-nodes", `
   <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
   <div class="fld">
     <label class="fldlabel" for="mint-nodes">How many Nodes</label>
-    <input id="mint-nodes" name="nodes" type="number" min="1" step="1" required{{with .Nodes}} value="{{.}}"{{end}}>
+    <input id="mint-nodes" name="nodes" type="number" min="1" max="{{.MaxNodes}}" step="1" required{{with .Nodes}} value="{{.}}"{{end}}>
   </div>
   <div class="fld">
     <label class="fldlabel" for="mint-ttl">Expires after</label>

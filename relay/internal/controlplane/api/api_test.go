@@ -17,6 +17,7 @@ import (
 
 	"github.com/Felag-Engineering/relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/relay/relay/internal/audit"
+	"github.com/Felag-Engineering/relay/relay/internal/auditsink"
 	"github.com/Felag-Engineering/relay/relay/internal/authz"
 	"github.com/Felag-Engineering/relay/relay/internal/capability"
 	"github.com/Felag-Engineering/relay/relay/internal/controlplane"
@@ -374,22 +375,13 @@ type fakeFingerprint struct{}
 
 func (fakeFingerprint) Fingerprint() string { return strings.Repeat("ab", 32) }
 
-// newTestMinter wraps svc in the enroll.Minter the mint route requires.
-func newTestMinter(t *testing.T, svc *enroll.Service) *enroll.Minter {
-	t.Helper()
-	m, err := enroll.NewMinter(svc, fakeFingerprint{}, "relay.test:7654")
-	if err != nil {
-		t.Fatalf("enroll.NewMinter: %v", err)
-	}
-	return m
-}
-
 // Proves EN-1, EN-4, EN-40.
 func TestHandleMintToken_Success(t *testing.T) {
 	repo := enroll.NewMemoryRepository()
 	tokenSvc := enroll.NewService(repo)
 	auditor := &fakeAuditor{}
-	d := Deps{Tokens: newTestMinter(t, tokenSvc), Audit: auditor, Now: fixedNow}
+	sink := newMintSink()
+	d := Deps{Tokens: newTestEnrollmentTokensWithSink(t, tokenSvc, sink), Audit: auditor, Now: fixedNow}
 	h := newTestHandler(d)
 
 	rec := do(t, h, http.MethodPost, "/api/v1/enrollment-tokens", mintTokenRequest{
@@ -446,24 +438,21 @@ func TestHandleMintToken_Success(t *testing.T) {
 		t.Error("stored token does not record that a human Account minted it")
 	}
 
-	// Exactly one KindTokenMint audit Record, attributed to the principal,
-	// and the plaintext must never appear anywhere in it.
-	records := auditor.all()
-	if len(records) != 1 {
-		t.Fatalf("audit records = %d, want 1", len(records))
+	// Exactly one token_mint record, the capability layer's, naming the token
+	// and attributed to the principal. The surface writes none, and the
+	// record has no field the plaintext could occupy.
+	events := sink.mintEvents()
+	if len(events) != 1 {
+		t.Fatalf("capability mint events = %d, want 1", len(events))
 	}
-	got := records[0]
-	if got.Kind != audit.KindTokenMint {
-		t.Errorf("audit Kind = %q, want %q", got.Kind, audit.KindTokenMint)
+	if events[0].TokenID != resp.ID || events[0].TokenID == "" {
+		t.Errorf("mint event TokenID = %q, want %q", events[0].TokenID, resp.ID)
 	}
-	if got.Principal != testAdmin().Attribution() {
-		t.Errorf("audit Principal = %q, want %q", got.Principal, testAdmin().Attribution())
+	if events[0].Principal.Account != testAdmin().Account || events[0].Principal.Role != testAdmin().Role {
+		t.Errorf("mint event Principal = %+v, want the caller %+v", events[0].Principal, testAdmin())
 	}
-	if got.ID == "" {
-		t.Error("audit Record.ID is empty")
-	}
-	if strings.Contains(fmt.Sprintf("%+v", got), resp.Token) {
-		t.Errorf("audit Record contains the token plaintext: %+v", got)
+	if got := auditor.all(); len(got) != 0 {
+		t.Errorf("the surface wrote %d audit records, want 0: a token_mint record is the capability layer's", len(got))
 	}
 }
 
@@ -492,7 +481,7 @@ func TestHandleMintToken_InvalidInitialTagOrTTL(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			tokenSvc := enroll.NewService(enroll.NewMemoryRepository())
 			auditor := &fakeAuditor{}
-			d := Deps{Tokens: newTestMinter(t, tokenSvc), Audit: auditor, Now: fixedNow}
+			d := Deps{Tokens: newTestEnrollmentTokens(t, tokenSvc), Audit: auditor, Now: fixedNow}
 			h := newTestHandler(d)
 
 			rec := do(t, h, http.MethodPost, "/api/v1/enrollment-tokens", tc.req)
@@ -541,7 +530,7 @@ func TestHandleMintToken_UseLimit(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			repo := &countingTokenRepo{Repository: enroll.NewMemoryRepository()}
 			auditor := &fakeAuditor{}
-			d := Deps{Tokens: newTestMinter(t, enroll.NewService(repo)), Audit: auditor, Now: fixedNow}
+			d := Deps{Tokens: newTestEnrollmentTokens(t, enroll.NewService(repo)), Audit: auditor, Now: fixedNow}
 			h := newTestHandler(d)
 
 			rec := doRaw(t, h, http.MethodPost, "/api/v1/enrollment-tokens", tc.body)
@@ -597,7 +586,7 @@ func TestHandleMintToken_UseLimit(t *testing.T) {
 // Proves EN-42.
 func TestHandleMintToken_MalformedOrUnknownField(t *testing.T) {
 	tokenSvc := enroll.NewService(enroll.NewMemoryRepository())
-	d := Deps{Tokens: newTestMinter(t, tokenSvc), Audit: &fakeAuditor{}, Now: fixedNow}
+	d := Deps{Tokens: newTestEnrollmentTokens(t, tokenSvc), Audit: &fakeAuditor{}, Now: fixedNow}
 	h := newTestHandler(d)
 
 	t.Run("malformed JSON", func(t *testing.T) {
@@ -633,7 +622,7 @@ func TestHandleMintToken_RelayLabelRefusedNamingIt(t *testing.T) {
 		t.Run(string(kind)+" admin", func(t *testing.T) {
 			tokenSvc := enroll.NewService(enroll.NewMemoryRepository())
 			auditor := &fakeAuditor{}
-			h := newRoleFixture(t, accounts.RoleAdmin, kind, Deps{Tokens: newTestMinter(t, tokenSvc), Audit: auditor})
+			h := newRoleFixture(t, accounts.RoleAdmin, kind, Deps{Tokens: newTestEnrollmentTokens(t, tokenSvc), Audit: auditor})
 
 			rec := do(t, h, http.MethodPost, "/api/v1/enrollment-tokens",
 				mintTokenRequest{InitialTags: []string{"relay:env=prod"}, TTLSeconds: 3600, MaxUses: 1})
@@ -655,8 +644,9 @@ func TestHandleMintToken_MachineAccountInitialTags(t *testing.T) {
 	t.Run("naming a tag is refused", func(t *testing.T) {
 		repo := enroll.NewMemoryRepository()
 		auditor := &fakeAuditor{}
+		sink := newMintSink()
 		h := newRoleFixture(t, accounts.RoleAdmin, accounts.KindMachine,
-			Deps{Tokens: newTestMinter(t, enroll.NewService(repo)), Audit: auditor})
+			Deps{Tokens: newTestEnrollmentTokensWithSink(t, enroll.NewService(repo), sink), Audit: auditor})
 
 		rec := do(t, h, http.MethodPost, "/api/v1/enrollment-tokens",
 			mintTokenRequest{InitialTags: []string{"tag:env=prod"}, TTLSeconds: 3600, MaxUses: 1})
@@ -666,16 +656,18 @@ func TestHandleMintToken_MachineAccountInitialTags(t *testing.T) {
 		if !strings.Contains(rec.Body.String(), "only a human Account writes tags") {
 			t.Errorf("the refusal does not say only a human Account writes tags: %s", rec.Body.String())
 		}
-		records := auditor.all()
-		if len(records) != 1 || records[0].Kind != audit.KindRefusal {
-			t.Errorf("audit records = %+v, want exactly one refusal", records)
+		if refusals := sink.refusals(); len(refusals) != 1 {
+			t.Errorf("capability refusals = %+v, want exactly one", refusals)
+		}
+		if got := auditor.all(); len(got) != 0 {
+			t.Errorf("the surface wrote %d audit records, want 0", len(got))
 		}
 	})
 
 	t.Run("naming none is minted", func(t *testing.T) {
 		auditor := &fakeAuditor{}
 		h := newRoleFixture(t, accounts.RoleAdmin, accounts.KindMachine, Deps{
-			Tokens: newTestMinter(t, enroll.NewService(enroll.NewMemoryRepository())), Audit: auditor})
+			Tokens: newTestEnrollmentTokens(t, enroll.NewService(enroll.NewMemoryRepository())), Audit: auditor})
 
 		rec := do(t, h, http.MethodPost, "/api/v1/enrollment-tokens",
 			mintTokenRequest{TTLSeconds: 3600, MaxUses: 1})
@@ -1511,7 +1503,7 @@ func TestMintThenRevokeToken_BothProduceAuditRows(t *testing.T) {
 
 	tokenSvc := enroll.NewService(enroll.NewMemoryRepository())
 	tr := &fakeTokenRevoker{}
-	d := Deps{Tokens: newTestMinter(t, tokenSvc), TokenRevoker: tr, Audit: st.Audit(), Now: fixedNow}
+	d := Deps{Tokens: newTestEnrollmentTokensWithWithdrawErr(t, tokenSvc, auditsink.New(st.Audit()), nil), TokenRevoker: tr, Audit: st.Audit(), Now: fixedNow}
 	h := newTestHandler(d)
 
 	mintRec := do(t, h, http.MethodPost, "/api/v1/enrollment-tokens", mintTokenRequest{

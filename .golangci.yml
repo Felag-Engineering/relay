@@ -175,6 +175,8 @@ linters:
               desc: "an adapter reaches a Node only through the capability layer's execution seam (invariant 10)"
             - pkg: github.com/Felag-Engineering/relay/relay/internal/policyalias
               desc: "an adapter never builds a Policy alias change; aliases are changed only through the capability layer (invariant 10)"
+            - pkg: github.com/Felag-Engineering/relay/relay/internal/enroll
+              desc: "an adapter never holds enroll.Minter or enrollment machinery; it mints through the capability layer's EnrollmentTokens seam (invariant 10)"
 
         # The Control API is a thin adapter that manages runtime objects, never Relay
         # configuration: it never reaches the CA key, a listener, a rate limiter or the
@@ -205,7 +207,6 @@ linters:
             - github.com/Felag-Engineering/relay/relay/internal/authz$
             - github.com/Felag-Engineering/relay/relay/internal/capability$
             - github.com/Felag-Engineering/relay/relay/internal/controlplane$
-            - github.com/Felag-Engineering/relay/relay/internal/enroll$
             - github.com/Felag-Engineering/relay/relay/internal/harnesssetup$
             - github.com/Felag-Engineering/relay/relay/internal/jobs$
             - github.com/Felag-Engineering/relay/relay/internal/nodestate$

@@ -6,11 +6,11 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/Felag-Engineering/relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/relay/relay/internal/audit"
 	"github.com/Felag-Engineering/relay/relay/internal/authz"
+	"github.com/Felag-Engineering/relay/relay/internal/capability"
 	"github.com/Felag-Engineering/relay/relay/internal/controlplane"
 	"github.com/Felag-Engineering/relay/relay/internal/enroll"
 )
@@ -27,22 +27,22 @@ import (
 // own is that each route reaches the gate, refuses with 403, changes nothing,
 // and leaves the refusal in the audit trail.
 
-// recordingMinter is a TokenMinter that counts calls and delegates to a real
-// enroll.Minter. The mint path's happy case is covered in api_test.go; a
+// recordingMinter is a TokenMinter that counts calls and delegates to the real
+// capability mint. The mint path's happy case is covered in api_test.go; a
 // refusal test needs only "was it reached at all".
 type recordingMinter struct {
 	calls int
-	inner *enroll.Minter
+	inner TokenMinter
 }
 
 func newRecordingMinter(t *testing.T) *recordingMinter {
 	t.Helper()
-	return &recordingMinter{inner: newTestMinter(t, enroll.NewService(enroll.NewMemoryRepository()))}
+	return &recordingMinter{inner: newTestEnrollmentTokens(t, enroll.NewService(enroll.NewMemoryRepository()))}
 }
 
-func (m *recordingMinter) Mint(ctx context.Context, initialTags []string, ttl time.Duration, limit enroll.UseLimit, opts ...enroll.Option) (enroll.Minted, error) {
+func (m *recordingMinter) MintEnrollmentToken(ctx context.Context, p capability.Principal, req capability.EnrollmentMint) (capability.MintedEnrollmentToken, error) {
 	m.calls++
-	return m.inner.Mint(ctx, initialTags, ttl, limit, opts...)
+	return m.inner.MintEnrollmentToken(ctx, p, req)
 }
 
 // newRoleFixture mounts the full route table behind a real Authenticator that
@@ -118,16 +118,20 @@ func TestMintToken_RequiresAdmin(t *testing.T) {
 
 	t.Run("admin is permitted", func(t *testing.T) {
 		auditor := &fakeAuditor{}
+		sink := newMintSink()
 		h := newRoleFixture(t, accounts.RoleAdmin, accounts.KindMachine, Deps{
-			Tokens: newTestMinter(t, enroll.NewService(enroll.NewMemoryRepository())), Audit: auditor,
+			Tokens: newTestEnrollmentTokensWithSink(t, enroll.NewService(enroll.NewMemoryRepository()), sink), Audit: auditor,
 		})
 
 		rec := do(t, h, http.MethodPost, "/api/v1/enrollment-tokens", body)
 		if rec.Code != http.StatusCreated {
 			t.Fatalf("admin mint: status = %d, want 201; body = %s", rec.Code, rec.Body.String())
 		}
-		if records := auditor.all(); len(records) != 1 || records[0].Kind != audit.KindTokenMint {
-			t.Errorf("audit records = %+v, want exactly one token_mint", records)
+		if events := sink.mintEvents(); len(events) != 1 {
+			t.Errorf("capability mint events = %+v, want exactly one", events)
+		}
+		if records := auditor.all(); len(records) != 0 {
+			t.Errorf("audit records = %+v, want none from the surface", records)
 		}
 	})
 }
@@ -334,7 +338,7 @@ func TestAdministrativeRoutes_RefuseWithoutAGate(t *testing.T) {
 	}{
 		{http.MethodPost, "/api/v1/enrollment-tokens",
 			mintTokenRequest{InitialTags: []string{"tag:env=prod"}, TTLSeconds: 3600, MaxUses: 1},
-			Deps{Tokens: newTestMinter(t, enroll.NewService(enroll.NewMemoryRepository())), Audit: &fakeAuditor{}}},
+			Deps{Tokens: newTestEnrollmentTokens(t, enroll.NewService(enroll.NewMemoryRepository())), Audit: &fakeAuditor{}}},
 		{http.MethodDelete, "/api/v1/enrollment-tokens/tok-1", nil,
 			Deps{TokenRevoker: &fakeTokenRevoker{}, Audit: &fakeAuditor{}}},
 		{http.MethodPost, "/api/v1/nodes/node-abc/revoke", nil,

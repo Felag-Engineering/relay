@@ -49,7 +49,7 @@ func (c *countingIssuer) IssueEnrollmentToken(_ context.Context, p capability.Pr
 	defer c.mu.Unlock()
 	c.issued = append(c.issued, req)
 	c.minters = append(c.minters, p)
-	return capability.NewMintedEnrollmentToken("tok-1", "join", req.InitialTags, time.Now().Add(req.TTL), req.MaxUses), nil
+	return capability.NewMintedEnrollmentToken("tok-1", "cred", "join", req.InitialTags, time.Now().Add(req.TTL), req.MaxUses, req.Unlimited), nil
 }
 
 func (c *countingIssuer) WithdrawEnrollmentToken(context.Context, string) error { return nil }

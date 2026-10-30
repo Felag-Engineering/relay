@@ -148,6 +148,8 @@ func dispatchViolations(fileName string, file *ast.File, strictCapabilityIdents 
 		return true
 	})
 
+	// Unconditional, outside the strict/exec partition: no MCP file holds enroll.Minter.
+	violations = append(violations, astguard.EnrollMinterViolations(fileName, file)...)
 	violations = append(violations, policyAliasViolations(fileName, file)...)
 	return append(violations, tagWriteViolations(fileName, file)...)
 }
@@ -306,6 +308,15 @@ func TestDispatchViolations_Fixtures(t *testing.T) {
 		strict     bool
 		wantSubstr string // substring expected in one of the returned violations
 	}{
+		{
+			name: "holding enroll.Minter is refused",
+			src: `package mcp
+import "github.com/Felag-Engineering/relay/relay/internal/enroll"
+type D struct{ M *enroll.Minter }
+`,
+			strict:     false,
+			wantSubstr: "imports internal/enroll",
+		},
 		{
 			name: "capability selector not on the pure-read allow-list (strict)",
 			src: `package mcp

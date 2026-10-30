@@ -23,6 +23,7 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/controlplane"
 	"github.com/Felag-Engineering/relay/relay/internal/controlplane/console"
 	"github.com/Felag-Engineering/relay/relay/internal/controlplane/mcp"
+	"github.com/Felag-Engineering/relay/relay/internal/enroll"
 	"github.com/Felag-Engineering/relay/relay/internal/events"
 	"github.com/Felag-Engineering/relay/relay/internal/nodevocab"
 	"github.com/Felag-Engineering/relay/relay/internal/policyview"
@@ -165,8 +166,21 @@ func TestConsoleEnrollmentTokensOrNil_ANilServiceIsAnUntypedNil(t *testing.T) {
 		t.Errorf("consoleEnrollmentTokensOrNil(nil) = %#v, want an untyped nil", got)
 	}
 	e := &capability.EnrollmentTokens{}
-	if got := consoleEnrollmentTokensOrNil(e); got != console.EnrollmentTokenMinter(e) {
-		t.Errorf("consoleEnrollmentTokensOrNil(e) = %#v, want the service it was given", got)
+	if got := consoleEnrollmentTokensOrNil(e); got == nil {
+		t.Error("consoleEnrollmentTokensOrNil(e) = nil, want a minter for a real service")
+	}
+}
+
+// TestConsoleEnrollmentTokensOrNil_CannotBeAssertedToTheUnlimitedMint proves
+// EN-46: the Console's dependency exposes only the mint-form entry, so no type
+// assertion reaches the Control API's mint, which accepts an unlimited token.
+func TestConsoleEnrollmentTokensOrNil_CannotBeAssertedToTheUnlimitedMint(t *testing.T) {
+	got := consoleEnrollmentTokensOrNil(&capability.EnrollmentTokens{})
+	if _, ok := got.(*capability.EnrollmentTokens); ok {
+		t.Fatal("the Console is handed the concrete *capability.EnrollmentTokens")
+	}
+	if _, ok := reflect.TypeOf(got).MethodByName("MintEnrollmentToken"); ok {
+		t.Fatal("the Console's enrollment dependency has MintEnrollmentToken")
 	}
 }
 
@@ -322,6 +336,29 @@ func TestSurfaceDeps_NoSurfaceIsHandedTheRegistryOrACache(t *testing.T) {
 				"surface may be handed the registry or a display-only cache directly; read through "+
 				"d.readLane (invariant 10, QRY-28)",
 				f.Name, f.Type, elem)
+		}
+	}
+}
+
+// TestSurfaceDeps_NoSurfaceIsHandedTheEnrollmentMinter is the composition-root
+// half of the enroll.Minter guard: the root constructs the minter behind the
+// capability layer's issuer and hands no surface that package, so an adapter
+// mints an Enrollment Token only through capability.EnrollmentTokens
+// (invariant 10).
+func TestSurfaceDeps_NoSurfaceIsHandedTheEnrollmentMinter(t *testing.T) {
+	banned := reflect.TypeOf(enroll.Minter{}).PkgPath()
+
+	typ := reflect.TypeOf(surfaceDeps{})
+	for i := 0; i < typ.NumField(); i++ {
+		f := typ.Field(i)
+		elem := f.Type
+		for elem.Kind() == reflect.Pointer || elem.Kind() == reflect.Slice {
+			elem = elem.Elem()
+		}
+		if elem.PkgPath() == banned {
+			t.Errorf("surfaceDeps.%s has type %s, whose element %s is from %s — no surface may "+
+				"be handed enrollment machinery; mint through capability.EnrollmentTokens (invariant 10)",
+				f.Name, f.Type, elem, banned)
 		}
 	}
 }
