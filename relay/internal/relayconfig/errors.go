@@ -9,7 +9,9 @@ import (
 // schema facts: key names, bounds and allowed values. Error and Warning have no
 // field that could carry a configuration value or a line of source text, so a
 // secret on a bad line cannot reach a log or an exit message (ADR-0043,
-// invariant 11).
+// invariant 11). The one exception is a key spelled in another case than the
+// schema's: its spelling is rendered because every rune of it folds to a schema
+// name's (RC-54), so it still cannot carry a value.
 
 // Error is one refused setting: the key, the line it was written on, and why.
 type Error struct {
@@ -58,7 +60,8 @@ func render(key string, line int, reason string) string {
 
 // safeKey renders a key only if it is an exact path of the schema: a section
 // or a section's key. Those names come from the schema; any other segment is
-// source text and is never rendered.
+// source text and is never rendered. The case-variant check renders a spelling
+// only after proving it folds to a schema name.
 func safeKey(parts []string) (string, bool) {
 	if key, _, depth, removed := removedKey(parts); removed && len(parts) == depth {
 		return key, true
