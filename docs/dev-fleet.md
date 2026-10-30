@@ -20,7 +20,9 @@ and it must never run on a machine that holds a development checkout like this o
 
 > **DEV-ONLY — no production posture.** Committed credentials, a fixture Policy, one
 > host. Ports are bound to `127.0.0.1`; exposing `9443` (`RELAY_PUBLISH_ADDR`) is
-> remote code execution for your network. The deployment story is [relay-install.md](operations/relay-install.md).
+> remote code execution for your network. To run Relay on real servers,
+> start with [quickstart.md](quickstart.md); the deployment reference is
+> [relay-install.md](operations/relay-install.md).
 
 ## Prerequisites
 

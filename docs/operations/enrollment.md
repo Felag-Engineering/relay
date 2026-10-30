@@ -93,8 +93,8 @@ as well as from reading: your vault, an SSH session to the Node, the Ansible rol
 input. Never over chat, email or a ticket.
 
 The string is a bearer credential until it is used or expires (threat-model R41). Size
-`max_uses` and `ttl_seconds` to the run. Mint through the Control API, the only mint surface
-today.
+`max_uses` and `ttl_seconds` to the run. Mint through the Control API or the Console's Add Nodes
+form.
 
 ### Upgrading from a Relay that stamped a token's scope
 
@@ -151,7 +151,7 @@ The tag alphabet is narrower than what the Selector parser accepts, so a `relay:
 Relay stops serving it on read-back: it disappears from the Console, the Control API, MCP, and
 Selector matching, and a `relay:tier=pci/1` Selector then resolves to fewer Nodes, with nothing
 logged when it happens. The quarantine label, `relay:quarantine=on`, is inside the alphabet and
-is kept. Before upgrading, record `GET /api/v1/nodes` and compare the `relay_labels` you get
+is kept. Before upgrading, record `list_nodes` over MCP and compare the `relay_labels` you get
 back afterwards; that comparison is the audit.
 
 After an upgrade, the Relay names affected Nodes at every startup: a read-only scan logs each

@@ -3,6 +3,9 @@
 Operator-facing runbooks: installing, enrolling, upgrading and recovering a Relay fleet. The
 local development fleet is a separate document, [docs/dev-fleet.md](../dev-fleet.md).
 
+New to Relay? [../quickstart.md](../quickstart.md) is the thirty-minute path, and these
+runbooks are the detail it links.
+
 ## Installing
 
 - **[relay-install.md](relay-install.md)** — installing and running the Relay from its OS package: verify-then-install, the generated `relay.toml`, `relay init`, upgrade and purge, and the Docker Compose path.

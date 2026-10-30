@@ -81,9 +81,10 @@ pin. The Relay logs the CA fingerprint at startup (`relay certificate authority`
 criterion checkable. One certificate serves both listeners (ADR-0031 decision 1), so the leaf
 shown is the one the browser is talking to.
 
-**The quickstart is named, not linked.** `docs/quickstart.md` does not exist (#402), so the screen
-renders its path in mono, as a placeholder screen names its specification. A link that 404s on the
-first screen a new operator sees is worse than a path they can look for.
+**The quickstart is named, not linked.** `docs/quickstart.md` is a file in the repository, which the
+Relay does not serve, so the screen renders its path in mono, as a placeholder screen names its
+specification, rather than as a link that would 404. A broken link on the first screen a new
+operator sees is worse than a path they can look for.
 
 **The CA fingerprint is described as a value to compare, not as a value anything pins.** ADR-0031
 decision 3 makes it the number a daemon pins, through a join string. The screen's copy says only
