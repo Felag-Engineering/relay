@@ -242,8 +242,11 @@ on the Node.
 daemon package(s) for your architectures from the same release, and verify them per
 [release-artifacts.md](release-artifacts.md#verify-then-install). Extract the role into a roles
 path. Put the verified packages in one controller directory: it may hold both architectures,
-but only one version, because the role installs the single package that matches the Node. Put
-the join string in the vault with
+but only one version, because the role installs the single package that matches the Node. The
+role checks the package's version, read from its metadata, against its own release and refuses
+another: the refusal names the package's version, the role's release and the directory, and
+changes nothing on the Node. The fix is to put that release's package in the directory and run
+again. Put the join string in the vault with
 `ansible-vault encrypt_string --stdin-name relay_daemon_join_string`, and paste its output (a
 `relay_daemon_join_string: !vault |` block) into `group_vars/new_nodes/vault.yml` beside the
 playbook. Ansible loads that file for every host in `new_nodes`, which is how the play below
@@ -301,6 +304,9 @@ What the role guarantees and refuses:
 - The join string travels on standard input and reaches no file, argv or log on the Node.
 - It forces pipelining; `requiretty` in sudoers breaks that, and the task fails. It refuses a
   Node where sudo records standard input (`log_input`).
+- Before it changes anything on the Node, it refuses a daemon package whose version is not the
+  role's release, naming both versions and the directory, and refuses a directory holding several packages for the Node's
+  platform.
 - It changes nothing on an enrolled Node, and fails on a partial identity.
 - It never upgrades; see [iac-upgrades.md](iac-upgrades.md).
 - A controller callback plugin that records task arguments (ARA, for example) would receive the

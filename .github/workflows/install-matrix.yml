@@ -10,7 +10,8 @@
 # jobs run the enroll, connect, execute syscall trace against the packaged unit on the runner
 # VM (DI-3's check of the packaged unit); a human signs off its first green report. The
 # ansible-role job runs the Ansible role against a container Node and a real Relay and proves
-# the join string reaches no file, argument list or log there (DI-45).
+# the join string reaches no file, argument list or log there, and that it refuses a daemon
+# package from another release (DI-45).
 #
 # How it is called. ci.yml calls this workflow for a change in the `packaging=` path class
 # (scripts/ci-changed-paths.sh: daemon, Relay and proto source, the packaging and the matrix
@@ -280,7 +281,8 @@ jobs:
         run: bash scripts/install-matrix-host.sh --no-systemd debian-13 deb "$PWD/pkgs"
 
   # The ansible-role job runs the Ansible role against a systemd container Node and a real
-  # Relay (DI-45), proving the join string reaches no file, argument list or log there.
+  # Relay (DI-45), proving the join string reaches no file, argument list or log there and that
+  # the role refuses a daemon package from another release.
   ansible-role:
     name: Ansible role (debian-13 x86_64)
     needs: build

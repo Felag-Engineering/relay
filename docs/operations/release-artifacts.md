@@ -24,7 +24,7 @@ For tag `v<version>` (e.g. `v0.1.0`, `v0.1.0-beta`), the GitHub Release carries:
 | `relay-daemon_<pkgversion>-1_amd64.deb`, `relay-daemon_<pkgversion>-1_arm64.deb`, `relay-daemon-<pkgversion>-1.x86_64.rpm`, `relay-daemon-<pkgversion>-1.aarch64.rpm` | The relay-daemon's packages: the release binary byte for byte, the hardened unit, the shipped Template catalog and the default Policy. `<pkgversion>` is the version with a prerelease's `-` written `~`, so a prerelease sorts below its release, and then with every `~` written `.` in the file name, because GitHub rewrites such characters in an asset's name (`0.2.0-beta` is `0.2.0.beta` in the file name and `0.2.0~beta` inside the package). |
 | `relay_<pkgversion>-1_amd64.deb`, `relay_<pkgversion>-1_arm64.deb`, `relay-<pkgversion>-1.x86_64.rpm`, `relay-<pkgversion>-1.aarch64.rpm` | The Relay's packages, named the same way. |
 | `<package>.spdx.json` | An SPDX SBOM for each of the eight packages, listing the dependencies of the binary the package wraps: the Relay's from its Go build info, the daemon's from `Cargo.lock`. |
-| `relay_daemon-<version>.tar.gz` | The Ansible role that installs the daemon package on a Node (DI-45). Built from the tagged commit (members sorted, owner 0, the commit's time as every mtime) and checked equal to it, it holds `relay_daemon/` and nothing else. |
+| `relay_daemon-<version>.tar.gz` | The Ansible role that installs the daemon package on a Node (DI-45). Built from the tagged commit (members sorted, owner 0, the commit's time as every mtime) and checked equal to it but for the one line carrying its release version. It holds `relay_daemon/` and nothing else, and the role uses that line to install only a package whose version is that release's. |
 | `relay-daemon.service`, `relay-daemon.env.example` | The hardened systemd unit and the example environment file a hand-built install takes, byte-equal to the copies inside the daemon packages (DI-32). |
 | `relay.service`, `relay.toml.example` | The Relay's hardened systemd unit and its example configuration file, which a hand-built install takes, byte-equal to the copies inside the Relay packages. |
 | `SHA256SUMS` | `sha256sum`-format digests of every file above, bare filenames. Packages carry no signature of their own before v1.0.0 (DI-24, ADR-0033): this file's signature and the provenance attestation over its files cover them. |
@@ -124,7 +124,8 @@ The Ansible role is the file `relay_daemon-${VERSION}.tar.gz`: verify it as abov
 (`tar -xzf`) into a roles path, and point the role's `relay_daemon_package_dir` at the
 directory holding the verified package of the same release. `relay_daemon_package_dir` may hold
 both architectures but exactly one version, because the role installs the single package it
-finds for the Node. The pairing of role and package is the operator's, here.
+finds for the Node. The role refuses a package of any other version, and a directory with
+more than one package for a Node's platform.
 
 The build-provenance attestation can be checked too, and is stronger on one point: it names
 the commit the artifact was built from. **Always pin `--signer-workflow` and `--source-ref`**;
@@ -291,7 +292,8 @@ bytes (see [The install matrix gates the packages](#the-install-matrix-gates-the
 The Ansible role tarball compiles nothing and carries repository files only, so it is not built
 twice. It is built from the tagged commit (members sorted, owner 0, every mtime the commit's
 time), and the workflow fails unless what the tarball extracts to equals
-`daemon/packaging/ansible/relay_daemon/` in the checkout.
+`daemon/packaging/ansible/relay_daemon/` in the checkout but for the stamped release-version
+line.
 
 The **image is not byte-reproducible** (Alpine's package index and file timestamps float).
 What is guaranteed is that its `/usr/local/bin/relay` is the released, rebuild-verified

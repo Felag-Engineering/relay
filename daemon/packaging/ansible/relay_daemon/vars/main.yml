@@ -22,3 +22,9 @@ relay_daemon_guard_dir: /dev/null/relay-daemon-role-stages-nothing
 # NOLOG_INPUT). The sudoers pattern is for grep -E with -i, and skips comment lines.
 relay_daemon_input_logging_listing_pattern: '(?i)(?<![!A-Za-z_])log_input'
 relay_daemon_input_logging_pattern: '^[[:space:]]*([^#[:space:]].*[^!A-Za-z_]|)log_input'
+
+# This role's release version, written here by the release workflow when it builds the role's
+# tarball. A role from the checkout carries the placeholder and installs nothing (DI-45). The
+# version check reads this file at check time, not the variable, so an extra-var cannot move
+# it; the variable is not an interface.
+relay_daemon_release_version: "@RELEASE_VERSION@"
