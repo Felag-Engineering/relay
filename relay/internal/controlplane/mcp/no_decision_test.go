@@ -27,7 +27,9 @@ import (
 //
 // The elicited answer reaches the capability layer only through
 // AnswerElicited, which sets the channel itself. The package renders the
-// channel the capability layer recorded and never names one.
+// channel the capability layer recorded and never names one. The entry point is
+// pinned as a reference, not only as a call: a method value or method
+// expression is refused like a call from an unpinned site.
 //
 // "We just won't call it from here" is a convention, and conventions are what
 // get forgotten when someone wires a decision tool to close a loop. This test
@@ -70,6 +72,7 @@ func packageDir(t *testing.T) string {
 	return filepath.Dir(thisFile)
 }
 
+// Proves AP-83.
 func TestMCPCannotAcceptAnApprovalDecision(t *testing.T) {
 	findings, _ := scanForDecisionPaths(t, packageDir(t))
 	for _, finding := range findings {
@@ -201,6 +204,107 @@ func recordedChannel(req approval.Request) string { return req.Decisions[0].Chan
 	}
 }
 
+// TestNoDecisionGuardCatchesAnswerElicitedTakenAsAValue plants each selector
+// form of naming the in-band entry point other than a direct call — a method
+// value, a method expression on a concrete or an interface type, a value passed
+// or stored — and shows the guard refuses each, including inside a pinned call
+// site and inside a method of a generic type that borrows a pinned name.
+//
+// Proves AP-83.
+func TestNoDecisionGuardCatchesAnswerElicitedTakenAsAValue(t *testing.T) {
+	const answerer = "type Answerer interface{ AnswerElicited(a, b any, c, d string, e bool) }\n"
+	cases := map[string]string{
+		"an interface method value in a local": `package planted
+func newTool(a Answerer) { f := a.AnswerElicited; f(nil, nil, "id", "hash", true) }
+` + answerer,
+
+		"a method value passed as an argument": `package planted
+func newTool(a Answerer) { register(a.AnswerElicited) }
+func register(f func(a, b any, c, d string, e bool)) {}
+` + answerer,
+
+		"a method value stored in a struct field": `package planted
+type tool struct{ answer func(a, b any, c, d string, e bool) }
+func newTool(a Answerer) tool { return tool{answer: a.AnswerElicited} }
+` + answerer,
+
+		"a package-level method value": `package planted
+var adapter Answerer
+var answer = adapter.AnswerElicited
+` + answerer,
+
+		"a method expression on a pointer type": `package planted
+import "capability"
+var answer = (*capability.Approvals).AnswerElicited`,
+
+		"a method expression on an interface type": `package planted
+var answer = Answerer.AnswerElicited
+` + answerer,
+
+		"a method value inside acceptElicitedAnswer": `package planted
+func acceptElicitedAnswer(a Answerer) func(a, b any, c, d string, e bool) { return a.AnswerElicited }
+` + answerer,
+
+		"a method value inside the adapter's pass-through": `package planted
+type approvalAnswererAdapter struct{ r Answerer }
+func (a approvalAnswererAdapter) AnswerElicited(x, y any, c, d string, e bool) { f := a.r.AnswerElicited; f(x, y, c, d, e) }
+` + answerer,
+
+		"a direct call in a generic type's method with a value receiver": `package planted
+type sneaky[T any] struct{ r Answerer }
+func (s sneaky[T]) acceptElicitedAnswer() { s.r.AnswerElicited(nil, nil, "id", "hash", true) }
+` + answerer,
+
+		"a direct call in a generic type's method with a pointer receiver": `package planted
+type sneaky[T any] struct{ r Answerer }
+func (s *sneaky[T]) acceptElicitedAnswer() { s.r.AnswerElicited(nil, nil, "id", "hash", true) }
+` + answerer,
+
+		"a direct call in a two-parameter generic type's method": `package planted
+type sneaky[K comparable, V any] struct{ r Answerer }
+func (s *sneaky[K, V]) acceptElicitedAnswer() { s.r.AnswerElicited(nil, nil, "id", "hash", true) }
+` + answerer,
+
+		"a parenthesised callee is a value": `package planted
+func acceptElicitedAnswer(a Answerer) { (a.AnswerElicited)(nil, nil, "id", "hash", true) }
+` + answerer,
+	}
+	for name, src := range cases {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "planted.go"), []byte(src), 0o600); err != nil {
+				t.Fatalf("write planted source: %v", err)
+			}
+			findings, scanned := scanForDecisionPaths(t, dir)
+			if len(findings) == 0 {
+				t.Errorf("the guard did not catch AnswerElicited taken as a value:\n%s", src)
+			}
+			if !slices.Contains(scanned, "planted.go") {
+				t.Errorf("the guard did not scan planted.go (scanned %v)", scanned)
+			}
+		})
+	}
+
+	// Declaring the method names it without reaching it.
+	permitted := map[string]string{
+		"declaring the method on an interface is not a reference": "package planted\n" + answerer,
+		"declaring the adapter's method is not a reference": `package planted
+type approvalAnswererAdapter struct{}
+func (approvalAnswererAdapter) AnswerElicited(x, y any, c, d string, e bool) {}`,
+	}
+	for name, src := range permitted {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "planted.go"), []byte(src), 0o600); err != nil {
+				t.Fatalf("write planted source: %v", err)
+			}
+			if findings, _ := scanForDecisionPaths(t, dir); len(findings) != 0 {
+				t.Errorf("the guard refused a declaration: %v", findings)
+			}
+		})
+	}
+}
+
 // scanForDecisionPaths returns one finding per forbidden reference in dir's
 // non-test Go files, and the base name of every file it parsed. It returns
 // rather than fails so the guard can be tested against planted source (see
@@ -228,15 +332,30 @@ func scanForDecisionPaths(t *testing.T, dir string) (findings, scanned []string)
 
 		for _, decl := range file.Decls {
 			owner := declOwner(decl)
+			// ast.Inspect is pre-order, so a CallExpr marks its callee before the
+			// callee's SelectorExpr is visited.
+			called := map[*ast.SelectorExpr]bool{}
 			ast.Inspect(decl, func(n ast.Node) bool {
 				switch node := n.(type) {
 				case *ast.CallExpr:
-					sel, ok := node.Fun.(*ast.SelectorExpr)
-					if ok && sel.Sel.Name == answerEntryPoint && !slices.Contains(answerCallSites, owner) {
-						findings = append(findings, fmt.Sprintf("%s calls %s from %q; the only call sites are %v, "+
-							"which run after the sealed state opens (ADR-0047 decision 4)", name, answerEntryPoint, owner, answerCallSites))
+					// A parenthesised callee is deliberately not unwrapped: it counts
+					// as a value and is refused.
+					if sel, ok := node.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == answerEntryPoint {
+						called[sel] = true
 					}
 				case *ast.SelectorExpr:
+					if node.Sel.Name == answerEntryPoint {
+						switch {
+						case !slices.Contains(answerCallSites, owner):
+							findings = append(findings, fmt.Sprintf("%s references %s from %q; a call, a method value and a method "+
+								"expression all reach the entry point, and the only call sites are %v, "+
+								"which run after the sealed state opens (ADR-0047 decision 4)", name, answerEntryPoint, owner, answerCallSites))
+						case !called[node]:
+							findings = append(findings, fmt.Sprintf("%s takes %s as a value in %q; a pinned call site may only call "+
+								"it directly, so the entry point never leaves the site that checked the sealed state "+
+								"(ADR-0047 decision 4)", name, answerEntryPoint, owner))
+						}
+					}
 					if why, bad := forbiddenDecisionIdents[node.Sel.Name]; bad {
 						findings = append(findings, fmt.Sprintf("%s references %q, which %s", name, node.Sel.Name, why))
 					}
@@ -265,17 +384,25 @@ func scanForDecisionPaths(t *testing.T, dir string) (findings, scanned []string)
 }
 
 // answerEntryPoint is the capability layer's in-band entry point. It is a
-// decision write, so the guard pins where this package may call it: only from
+// decision write, so the guard pins every reference to it, not just calls: only
 // acceptElicitedAnswer, which runs after the sealed state opens and binds to
-// the call, and from the adapter's one-line pass-through. A tool that took a
-// request id and plan hash and called it directly would re-create the retired
-// decision tool.
+// the call, and the adapter's one-line pass-through may name it, and only as
+// the direct callee of a call. A method value or method expression would let
+// the entry point be stored or passed to code the pin does not cover. A tool
+// that took a request id and plan hash and called it directly would re-create
+// the retired decision tool.
+//
+// The pin does not stop a pinned owner from wrapping its direct call in a
+// closure and returning or storing that; the owners are two reviewed
+// functions, and the guard does not claim to follow data flow out of them.
 const answerEntryPoint = "AnswerElicited"
 
 var answerCallSites = []string{"acceptElicitedAnswer", "approvalAnswererAdapter.AnswerElicited"}
 
 // declOwner names the function a declaration defines ("Recv.Name" for a
-// method), or "" for anything else.
+// method), or "" for anything else. A receiver that is not a plain type name,
+// such as a generic type's, yields an owner no pinned name can match, so the
+// guard fails closed.
 func declOwner(decl ast.Decl) string {
 	fn, ok := decl.(*ast.FuncDecl)
 	if !ok {
@@ -291,7 +418,7 @@ func declOwner(decl ast.Decl) string {
 	if id, ok := recv.(*ast.Ident); ok {
 		return id.Name + "." + fn.Name.Name
 	}
-	return fn.Name.Name
+	return "?." + fn.Name.Name
 }
 
 // scanForStaleToolPointers returns one finding per string literal in dir's
