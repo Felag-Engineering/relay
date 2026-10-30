@@ -10,11 +10,13 @@ package console
 //     password proceeds only while consoleauth says this session's step-up
 //     stamp is fresh (owner decision 2026-10-05: one password per
 //     window).
-//   - stepUpPerAct: reserved for the composer's mutate apply (ADR-0026
-//     decision 3). A password is always required and verified in that
-//     request, and the window is never consulted. Moving that apply to
-//     stepUpWindowed first needs ADR-0026 decision 3 and threat-model R11
-//     amended by a human, not a code edit.
+//   - stepUpPerAct: used by the Enrollment Token mint (addnodes.go; owner
+//     decision 2026-10-29: a password on every mint, never the window), and
+//     the mode any future mutate apply would take under invariant 10
+//     (ADR-0026 decision 3, ADR-0052). A password is always required and
+//     verified in that request, and the window is never consulted. Moving
+//     that apply to stepUpWindowed first needs ADR-0026 decision 3 and
+//     threat-model R11 amended by a human, not a code edit.
 //
 // Known and deliberate: a successful step-up in EITHER mode stamps the
 // session, so a per-act password also opens the window for the Account

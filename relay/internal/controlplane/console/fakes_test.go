@@ -1123,6 +1123,9 @@ func sweepFixture() Deps {
 	// not ship. The default fake is permissive; a test that asserts on calls
 	// builds a fresh one.
 	d.Tags = &fakeTagWriter{}
+	// EnrollmentTokens is wired for the same reason: an unwired mint would make
+	// the sweeps render Add Nodes' unavailable branch, not the form that ships.
+	d.EnrollmentTokens = &fakeEnrollmentTokens{}
 	d.Audit = fakeAudit{records: []audit.Record{
 		{Kind: audit.KindDispatch, JobID: "job-1", NodeID: "node-web-1", OperationName: "service.restart", Timestamp: testNow},
 	}}

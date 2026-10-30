@@ -51,9 +51,9 @@ package console
 // The CA fingerprint is rendered first, as the value to check: it identifies
 // the trust root every Node's certificate chains to, and it survives the server
 // leaf's daily re-issue. ADR-0031 decision 3 makes it the number a daemon will
-// PIN, through a join string — neither is built (nothing in relay/, daemon/ or
-// proto/ carries a CA fingerprint today), so this screen says what the value is
-// for without claiming a mechanism the tree does not have.
+// PIN, through the join string a mint reveals. This screen does not draw that
+// string, so it says what the value is for without claiming a mechanism it
+// does not show.
 //
 // The server leaf, the one both listeners present, is rendered beside it,
 // labelled honestly as re-issued about daily and explicitly not a thing to pin
@@ -66,7 +66,7 @@ package console
 // startup and unreachable from any API, which is a property seams.go states and
 // this screen must not be the first thing to weaken. The address a Node dials
 // is delivered by whatever installs the daemon (RELAY_ADDRESS, daemon/src/config.rs),
-// and ADR-0031's join string will carry it once that lands.
+// and ADR-0031's join string carries it.
 
 import (
 	"net/http"
@@ -203,7 +203,7 @@ var dayOneTmpl = newScreen("dayone", `
 
   <div class="firststep">
     {{if .CanMint}}
-    <p><b>Add Nodes</b> is not built yet.</p>
+    <p>Next: <a href="/console/add-nodes">Add Nodes</a>.</p>
     {{else}}
     <p>An <code>admin</code> mints the Enrollment Token; the initial tags it names become each joining Node&#39;s first tags.</p>
     {{end}}

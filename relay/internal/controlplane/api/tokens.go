@@ -16,7 +16,7 @@ import (
 // maxTTLSeconds bounds ttl_seconds: it guards against
 // time.Duration(req.TTLSeconds)*time.Second overflowing on an absurd input,
 // and there is no legitimate need for an Enrollment Token to outlive a year.
-const maxTTLSeconds = 365 * 24 * 60 * 60
+const maxTTLSeconds = int64(capability.MaxEnrollmentTokenTTL / time.Second)
 
 // mintTokenRequest is the POST /api/v1/enrollment-tokens request body.
 // InitialTags is optional: each entry is a tag in written form, tag:key=value,

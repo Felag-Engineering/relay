@@ -87,6 +87,8 @@ var (
 	_ capability.PolicyAliasRecorder = (*Sink)(nil)
 	_ capability.TagWriteRecorder    = (*Sink)(nil)
 
+	_ capability.EnrollmentMintRecorder = (*Sink)(nil)
+
 	_ capability.TemporaryPasswordRecorder = (*Sink)(nil)
 	_ consoleauth.PasswordChangeRecorder   = (*Sink)(nil)
 )
@@ -658,6 +660,21 @@ func (s *Sink) RecordTagWrite(ctx context.Context, e capability.TagWriteEvent) e
 	default:
 		return fmt.Errorf("auditsink: record tag write: %w", err)
 	}
+}
+
+// RecordEnrollmentTokenMint implements capability.EnrollmentMintRecorder: one
+// token_mint record, in the Kind, Reason and Principal form the Control API
+// writes for its own mint, so the trail and the read lane see both the same
+// way. It carries the token's public ID only, never the credential or join
+// string (EN-4).
+func (s *Sink) RecordEnrollmentTokenMint(ctx context.Context, e capability.EnrollmentMintEvent) error {
+	return s.append(ctx, audit.Record{
+		Timestamp:   s.now(),
+		Kind:        audit.KindTokenMint,
+		Principal:   e.Principal.Attribution(),
+		Attribution: attribution(e.Principal, e.Asserted),
+		Reason:      "token_id=" + e.TokenID,
+	})
 }
 
 // baseRecord builds the audit.Record fields common to every Kind: attributed

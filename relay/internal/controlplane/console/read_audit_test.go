@@ -255,6 +255,17 @@ var consoleReadAudit = map[string]readAuditRule{
 		path: "/console/accounts/" + testAdminName,
 		tool: "query_audit",
 	},
+	"GET /console/add-nodes": {
+		path: "",
+		why: "renders the mint form and reads no fleet, trail or Account data; " +
+			"POST /console/add-nodes/tokens records the mint",
+	},
+	"POST /console/add-nodes/tokens": {
+		path: "",
+		why: "a write, not a read: the capability layer records the mint as token_mint " +
+			"carrying the token ID and never the join string, and consoleauth records its " +
+			"own step_up event",
+	},
 	"GET /console/new-account": {
 		path: "",
 		why: "renders the create form and reads no fleet, trail or Account data; " +
