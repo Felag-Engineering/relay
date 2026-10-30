@@ -98,20 +98,19 @@ protected by the filesystem and by a lint the operator runs, never by a hidden d
 
 **Protecting the daemon's own files**
 
-14. **A lint, not a floor.** `relay-daemon policy check` runs a self-reference lint: concrete
-    probe actions against the daemon's own paths, each evaluated by the real Policy engine, so
-    a finding proves that exact action is allowed and no second matcher can drift (ADR-0011).
-    Read probes (`file.read`, `file.checksum`, path-taking Templates) target only the
-    secret-bearing files, the identity private key and the environment file. Write probes, the
-    Raw Exec shapes from edit-in-place to symlink, target the whole trust root by exact path:
-    the Policy file and directory, the environment file, the state directory's key,
-    certificate, CA bundle and address, the template root, `/usr/bin/relay-daemon`,
-    `/usr/lib/systemd/system/relay-daemon.service`, the override at
-    `/etc/systemd/system/relay-daemon.service`, and the `override.conf` drop-in. The binary at
-    the path the check runs from gets a write probe only, so a CI checkout answers as
-    `/usr/bin` does. Findings are warnings that `--strict` fails; absence of one is not proof
-    of unreachability (R38), and a Raw Exec deny pattern over a directory is the operator's
-    control (ADR-0019). A Template body read by `file.read` under the default wildcard is R37.
+14. **A lint, not a floor.** `relay-daemon policy check` runs a self-reference lint: concrete probe
+    actions against the daemon's own paths, each evaluated by the real Policy engine, so a finding
+    proves that exact action is allowed and no second matcher can drift (ADR-0011). Read probes
+    (`file.read`, `file.checksum`, path-taking Templates) target only the secret-bearing files, the
+    identity private key and the environment file. Write probes, the Raw Exec shapes from
+    edit-in-place to symlink, target the whole trust root by exact path: the Policy file and
+    directory, the environment file, the state directory's key, certificate, CA bundle and address,
+    the template root, `/usr/bin/relay-daemon`, `/usr/lib/systemd/system/relay-daemon.service`, the
+    override at `/etc/systemd/system/relay-daemon.service`, and the `override.conf` drop-in. The
+    binary at the path the check runs from gets a write probe only, so a CI checkout answers as
+    `/usr/bin` does. Findings are warnings that `--strict` fails; absence of one is not proof of
+    unreachability (R38), and a Raw Exec deny pattern over a directory is the operator's control
+    (ADR-0019). A Template body read by `file.read` under the default wildcard is R37.
 15. **No daemon-side deny floor** over the daemon's own paths: path matching is what ADR-0018
     and ADR-0019 each hardened after a bypass, it cannot tell an audit read from a rewrite, it
     would silently beat an operator's explicit allow, and root-owned files under
@@ -147,3 +146,5 @@ and Node output steering the AI-agent.
 | 2026-10-15 (#977), decisions 1 to 3 | 6, 9, 7 |
 | 2026-10-15, ADR-0033: the catalog's own package | 11, 12 |
 | 2026-10-16: read probes stop at secrets; no RPC carries a body | 14, 3 |
+
+## Amendment (2026-10-30): once DI-49 is built, read probes also target the temporary identity key

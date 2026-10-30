@@ -266,8 +266,8 @@ the `glp_` prefix so a leak is greppable. Minting an Enrollment Token returns on
 enrolls by it, pinning the CA fingerprint before it sends the token. A join string contains a
 live Enrollment Token and is handled as a secret. Where it reaches a Node it is consumed by
 `relay-daemon join`, which enrolls in the process that read it, and is persisted nowhere
-(ADR-0031 and ADR-0033, amended 2026-10-21); until that lands the daemon reads it from
-`RELAY_JOIN` in its root-owned environment file, inert once the Node holds an identity.
+(ADR-0031 and ADR-0033, amended 2026-10-21); `RELAY_JOIN` is not a setting
+(`daemon-installation.md` DI-43).
 _Avoid_: join token, enrollment string, bootstrap string
 
 **CA fingerprint**:

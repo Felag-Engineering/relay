@@ -23,7 +23,7 @@ every later connection belongs to node connection.
 | Control API | An `admin` mints a token with `POST /api/v1/enrollment-tokens`, receiving the plaintext token and its **join string** once, and revokes one with `DELETE /api/v1/enrollment-tokens/{id}`. |
 | Node plane | The certless `Enrollment.Enroll` RPC accepts a token, a CSR and declared `node:` Labels; `Enrollment.Renew` is mTLS-authenticated. |
 | relay-daemon | `relay-daemon join` reads a join string, pins the Relay's CA fingerprint, enrolls in that process and persists the identity and the Relay address; the unit start reuses that identity and reads no join string (EN-30, EN-32). Where the join string comes from is `daemon-installation.md`. |
-| Console | Shows enrollment attempts and each Node's enrollment provenance. Designed: a mint form (EN-36). |
+| Console | Shows enrollment attempts and each Node's enrollment provenance, and mints Enrollment Tokens through its mint form (EN-36). |
 | `relay init` | Designed: mints the first Enrollment Token on the Relay host through its mint form and shows its join string once (EN-39, EN-46). |
 | MCP | No enrollment tool: no mint and no revoke. An AI-agent may read a Node's provenance through `query.md` and nothing more. |
 
@@ -131,7 +131,7 @@ alone, it says so.
   behind one NAT address join in minutes. The global limit, about 300 a minute with a burst well
   above one address's, stays the guard against a flood, and no single address can exhaust it.
   Both still apply before token validation (EN-10).
-- **EN-36** The Console's mint form (EN-46) mints an Enrollment Token through the same capability action and `admin` floor as the Control API, and shows the join string once, apart from the command that consumes it (EN-39) (ADR-0048; #434).
+- **EN-36** The Console's mint form (EN-46) mints an Enrollment Token through the same capability action and `admin` floor as the Control API, and shows the join string once, apart from the command that consumes it (EN-39) (ADR-0048).
 - **EN-47** The Console shows each Node's enrollment provenance and enrollment attempts, accepted and rejected. Attempts reach it through the Event seam and are not durable records. It mints only through its mint form (EN-36) and adds no Node.
 - **EN-22** MCP registers no enrollment tool: no mint and no revoke.
 
@@ -166,8 +166,8 @@ alone, it says so.
 
 | Claim | Statement | Milestone |
 |---|---|---|
-| EN-39 | `relay init` mints through its mint form (EN-46) and shows the freshly minted join string once, apart from the command that consumes it: the command is `sudo relay-daemon join`, and the string is pasted at its prompt, so it is never part of a command line (ADR-0048). | v0.6.5 — Install Path: relay init, join string, packages |
-| EN-46 | Wherever a surface offers a mint form (`relay init`, EN-39; the Console, EN-36), it asks how many Nodes the token is for. The use limit is the number given, at most 256, and the form offers no unlimited option; a number above 256 is refused, naming the limit. The TTL defaults to two hours and may be changed. The form mints through the same mint action EN-31 governs, with both values explicit (ADR-0048). | v0.6.5 — Install Path: relay init, join string, packages |
+| EN-39 | `relay init` mints through its mint form (EN-46) and shows the freshly minted join string once, apart from the command that consumes it: the command is `sudo relay-daemon join`, and the string is pasted at its prompt, so it is never part of a command line (ADR-0048). | MVP |
+| EN-46 | Wherever a surface offers a mint form (`relay init`, EN-39; the Console, EN-36), it asks how many Nodes the token is for. The use limit is the number given, at most 256, and the form offers no unlimited option; a number above 256 is refused, naming the limit. The TTL defaults to two hours and may be changed. The form mints through the same mint action EN-31 governs, with both values explicit (ADR-0048). | MVP |
 
 ## Out of scope
 
@@ -179,8 +179,7 @@ alone, it says so.
   the Label namespaces themselves: `selectors-and-labels.md`.
 - **Which Relay settings exist**: `relay-configuration.md`. Enrollment's rate limits are not
   among them once EN-43 lands.
-- **Durable audit records**: `audit-and-read-lane.md`. Enrollment attempts are not durable
-  (EN-21).
+- **Durable audit records**: `audit-and-read-lane.md`.
 - **Dispatch approvals and approval gates**: `approval.md`.
 - **Fencing off a token's Nodes without revoking them**: `roadmap: relay/quarantine`.
   Containment today is revoking the token (EN-19); once EN-38 lands, each Node stays

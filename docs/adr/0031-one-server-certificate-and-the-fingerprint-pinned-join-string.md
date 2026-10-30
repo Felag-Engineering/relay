@@ -185,7 +185,7 @@ reads "the Relay can read them". The daemon's enrollment secret is a different o
 different life. It is consumed once, when no identity exists, and is inert on every later start
 (decision 4; `daemon-installation.md`, DI-38). It lives in the daemon's root-owned `0600`
 environment file, where `RELAY_ENROLLMENT_TOKEN` always lived; the daemon's default Policy hides
-that file and the process environment from the wire (ADR-0022, amended 2026-10-16); and
+that file and the process environment from the wire (ADR-0022); and
 `relay-daemon join` writes the line without echo and never takes the string in argv. The
 residual is R16, widened by R36, and this amendment changes neither. Delivering the string
 through systemd `LoadCredential=` or a fetch from the customer's secret store stays the named
