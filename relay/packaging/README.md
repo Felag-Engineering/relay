@@ -50,8 +50,9 @@ On a first install only, the package:
   absent;
 - generates `/etc/relay/relay.toml`, `root:relay 0640`, only if none exists. It sets the host's
   fully qualified name as `tls.hostname`, the CA directory and the store path inside
-  `/var/lib/relay`, the control plane and the Admin Console enabled, and the control-plane
-  listener on `127.0.0.1:9443`. With no fully qualified name the hostname line is written
+  `/var/lib/relay`, the control plane and the Admin Console enabled, the control-plane
+  listener on `127.0.0.1:9443`, and two gate rules, one gating every `mutate` and one every
+  Raw Exec. With no fully qualified name the hostname line is written
   commented out, and the Relay refuses to start, naming `tls.hostname`, until it is set;
 - prints the configuration guide and the hostname it chose;
 - where systemd is running, runs `systemctl preset`.

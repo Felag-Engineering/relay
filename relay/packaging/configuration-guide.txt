@@ -3,6 +3,8 @@ The Relay is installed and has not been started.
 1. Check /etc/relay/relay.toml. It was written once from this host's fully qualified name
    and is never rewritten. tls.hostname must be the name the relay-daemons dial: a wrong one
    fails only on the Nodes. Every other setting is in /usr/share/relay/relay.toml.example.
+   Every mutate and every Raw Exec waits for a person's answer; delete a gate rule to stop
+   gating what it matches (see docs/operations/approval-gates.md).
 
 2. Start the Relay:
 
