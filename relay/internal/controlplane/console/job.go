@@ -745,20 +745,10 @@ func buildJobView(ctx context.Context, d Deps, r *http.Request, caller capabilit
 // captured stdout and stderr: at 10,000 Nodes and the daemon's 1 MiB output
 // cap, a single page view could ask the store for gigabytes.
 func dispatchRecord(ctx context.Context, d Deps, caller capability.Principal, jobID string) (capability.AuditRow, bool, error) {
-	trail, err := d.Queries.QueryAudit(ctx, caller, capability.AuditFilter{
-		JobID: jobID,
-		Kinds: []string{audit.KindDispatch},
-	}, capability.PageRequest{Limit: 1})
-	if err != nil {
-		return capability.AuditRow{}, false, err
-	}
-	if len(trail.Rows) == 0 {
-		// NORMAL, not an error: the Job engine writes the dispatch record
-		// after the dispatch returns, so an in-flight Job has none yet. The
-		// aggregate above still describes it completely.
-		return capability.AuditRow{}, false, nil
-	}
-	return trail.Rows[0], true, nil
+	// An absent row is NORMAL, not an error: the Job engine writes the
+	// dispatch record after the dispatch returns, so an in-flight Job has none
+	// yet. The aggregate still describes it completely.
+	return newestJobAuditRecord(ctx, d, caller, jobID, audit.KindDispatch)
 }
 
 // cancelRecord reads the newest job_cancel audit record for jobID — one
@@ -768,18 +758,22 @@ func dispatchRecord(ctx context.Context, d Deps, caller capability.Principal, jo
 // The read lane orders newest first, so Limit 1 is the most recent request
 // if more than one was ever made.
 func cancelRecord(ctx context.Context, d Deps, caller capability.Principal, jobID string) (capability.AuditRow, bool, error) {
+	// An absent row is NORMAL, not an error: a Job whose Tasks read cancelled
+	// without ever being asked to (a halted mutate Job, say) has no job_cancel
+	// row at all, and the page must not invent one.
+	return newestJobAuditRecord(ctx, d, caller, jobID, audit.KindJobCancel)
+}
+
+// newestJobAuditRecord reads the newest audit record of one kind for jobID —
+// a single row, filtered by the trail's own indexes. The bool is false when
+// the Job has no such record.
+func newestJobAuditRecord(ctx context.Context, d Deps, caller capability.Principal, jobID, kind string) (capability.AuditRow, bool, error) {
 	trail, err := d.Queries.QueryAudit(ctx, caller, capability.AuditFilter{
 		JobID: jobID,
-		Kinds: []string{audit.KindJobCancel},
+		Kinds: []string{kind},
 	}, capability.PageRequest{Limit: 1})
-	if err != nil {
+	if err != nil || len(trail.Rows) == 0 {
 		return capability.AuditRow{}, false, err
-	}
-	if len(trail.Rows) == 0 {
-		// NORMAL, not an error: a Job whose Tasks read cancelled without ever
-		// being asked to (a halted mutate Job, say) has no job_cancel row at
-		// all, and the page must not invent one.
-		return capability.AuditRow{}, false, nil
 	}
 	return trail.Rows[0], true, nil
 }
