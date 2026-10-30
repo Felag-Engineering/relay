@@ -8,21 +8,31 @@
 #
 # <pkgdir> is absolute and holds old/, new/ and VERSION as the install-matrix workflow's build
 # job lays them out, the old package sorting below the new one. <roles-path> is an absolute
-# directory holding relay_daemon/; it defaults to the checkout's daemon/packaging/ansible. A
-# release passes the role extracted from its own tarball, so the role under test is the one it
-# attaches. The playbooks are always the checkout's, under test/. Needs docker, ansible-playbook,
-# ansible-vault, jq, ssh-keygen, dpkg-deb, base64, head and grep on the runner. Nothing here runs outside CI: it starts a privileged
-# container and installs packages in it.
+# directory holding relay_daemon/; without it the checkout's role is stamped with VERSION by
+# daemon/packaging/ansible/stamp-role.sh into WORK before it runs. A release passes the role
+# extracted from its own tarball, so the role under test is the one it attaches. The playbooks
+# are always the checkout's, under test/. Needs docker, ansible-playbook, ansible-vault, jq,
+# ssh-keygen, dpkg-deb, base64, head, grep, awk and cp on the runner. Nothing here runs outside
+# CI: it starts a privileged container and installs packages in it.
 #
 # One Debian 13 container runs the Relay and the Node. The role reaches the Node over ssh and
-# sudo from the runner, so the Node is the role's own target. Five runs follow:
-#   A  the old package, pipelining forced off: the role installs it, then its guard must refuse
-#      before the join task writes anything;
+# sudo from the runner, so the Node is the role's own target. Eight runs follow:
+#   V  the old package (another release): the role refuses before it writes anything, naming both
+#      versions and the directory, and the Node is unchanged;
+#   V2 the old package again, with extra-vars naming the old package's version as the role's
+#      release and as the expected package version: refused the same way, because the check
+#      reads the role's stamped file and no variable;
+#   M  a directory holding the old and the new package: refused, never resolved by picking one,
+#      and the Node is unchanged;
+#   A  the new package (this release), pipelining forced off: the role installs it, then its
+#      guard must refuse before the join task writes anything;
 #   L  a sudoers drop-in sets log_input: the role must refuse before the join task, then the
 #      drop-in is removed;
-#   B  the second run on that Node, given the new package: the role leaves the installed
+# then, outside the role and outside the trace (docker exec, not ssh), the old package is
+# installed over run A's, so the Node holds an older daemon and no identity;
+#   B  the second run on that Node, given this release's package: the role leaves the installed
 #      daemon at the old version and joins;
-#   C  the enrolled Node again, given the new package: the role changes nothing;
+#   C  the enrolled Node again, given the old package (another release): the role changes nothing;
 #   F  the enrolled Node, given a play that writes a Policy fragment and notifies the role's
 #      handler: the unit restarts and the Relay reports the new composed fingerprint.
 # A strace on the ssh daemon records every execve and every write on the Node's ssh side from
@@ -63,7 +73,7 @@ case "$ROLES_PATH" in /*) ;; *) echo "install-matrix-ansible-role: roles-path mu
   exit 2
 }
 echo "role: $ROLES_PATH"
-for tool in docker ansible-playbook ansible-vault jq ssh-keygen dpkg-deb base64 head grep; do
+for tool in docker ansible-playbook ansible-vault jq ssh-keygen dpkg-deb base64 head grep awk cp; do
   command -v "$tool" >/dev/null 2>&1 || { echo "install-matrix-ansible-role: $tool is required" >&2; exit 2; }
 done
 
@@ -83,6 +93,9 @@ REPORTED_FP=""
 PID_BEFORE_F=""
 FP_BEFORE=""
 FP_AFTER=""
+VERSION=""
+RUN_ROLES=""
+STATE_BEFORE=""
 
 node() { docker exec "$NAME" "$@"; }
 node_i() { docker exec -i "$NAME" "$@"; }
@@ -139,7 +152,7 @@ diagnostics() {
   node journalctl -b --no-pager -n 200 || true
   if [ -n "$WORK" ]; then
     local log
-    for log in run-a.log run-l.log run-b.log run-c.log run-f.log; do
+    for log in run-v.log run-v2.log run-m.log run-a.log run-l.log run-b.log run-c.log run-f.log; do
       if [ -f "$WORK/$log" ]; then
         echo "--- $log"
         cat "$WORK/$log"
@@ -261,19 +274,19 @@ trace_lines() {
 
 # --- runs --------------------------------------------------------------------------------
 
-# play_with <playbook> <log> <pkg subdirectory> [extra ansible-playbook args]: the exit status is
+# play_with <playbook> <log> <package dir> [extra ansible-playbook args]: the exit status is
 # PLAY_RC. The vault file and password file are inside WORK; the join string reaches Ansible only
 # through the vault.
 play_with() {
-  local playbook=$1 log=$2 sub=$3
+  local playbook=$1 log=$2 dir=$3
   shift 3
   PLAY_RC=0
   ansible-playbook -i "$WORK/inventory.ini" --vault-password-file "$WORK/vault-pass" \
-    -e @"$WORK/vault.yml" -e "relay_daemon_package_dir=$PKGDIR/$sub" "$@" \
+    -e @"$WORK/vault.yml" -e "relay_daemon_package_dir=$dir" "$@" \
     "$playbook" >"$WORK/$log" 2>&1 || PLAY_RC=$?
 }
 
-# play <log> <pkg subdirectory> [extra ansible-playbook args]: the role's own test playbook.
+# play <log> <package dir> [extra ansible-playbook args]: the role's own test playbook.
 play() { play_with "$ROLE_DIR/test/playbook.yml" "$@"; }
 
 recap() { grep -E '^node +: ok=' "$WORK/$1" || true; }
@@ -390,13 +403,72 @@ daemon_versions_differ() {
   [ -n "$old" ] && [ -n "$new" ] && [ "$old" != "$new" ]
 }
 
-# installed_version_is_the_old_one: no run replaced the daemon run A installed, though runs B and
-# C were given a different package. A role that installed over it would have left the new one.
-installed_version_is_the_old_one() {
+# installed_version_is <deb>: the Node's relay-daemon is that package's version.
+installed_version_is() {
   local want got
-  want=$(dpkg-deb -f "$OLD_DAEMON_DEB" Version)
-  got=$(node dpkg-query -W -f '${Version}' relay-daemon)
-  [ -n "$want" ] && [ "$got" = "$want" ] || { echo "installed '$got', first run supplied '$want'"; return 1; }
+  want=$(dpkg-deb -f "$1" Version)
+  got=$(node dpkg-query -W -f '${Version}' relay-daemon 2>/dev/null || true)
+  [ -n "$want" ] && [ "$got" = "$want" ] || { echo "installed '$got', want '$want'"; return 1; }
+}
+
+# node_install_state: what an install would change, the role's tempfile directory (ansible.* in
+# /tmp or /var/tmp) included. None of it is secret.
+node_install_state() {
+  node bash -c '
+dpkg-query -W -f "\${db:Status-Status}\n" relay-daemon 2>/dev/null || echo absent
+if [ -e /usr/bin/relay-daemon ]; then echo binary; else echo no-binary; fi
+find /etc/relay-daemon /var/lib/relay-daemon /var/lib/relay-daemon-package 2>/dev/null | sort
+find /tmp /var/tmp -maxdepth 1 -name "ansible.*" 2>/dev/null | sort
+'
+}
+
+node_install_state_is_unchanged() {
+  local now
+  now=$(node_install_state)
+  [ "$now" = "$STATE_BEFORE" ] || { echo "before: $STATE_BEFORE"; echo "now: $now"; return 1; }
+}
+
+# role_carries_version: the role under test names this release's version in its vars.
+role_carries_version() {
+  grep -qxF "relay_daemon_release_version: \"$VERSION\"" "$RUN_ROLES/relay_daemon/vars/main.yml"
+}
+
+version_is_a_release_version() {
+  [[ $VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?(\+[0-9A-Za-z.]+)?$ ]]
+}
+
+# run_refused <log> <phrase...>: the last play failed on the role's own refusal, not unreachable,
+# and its output holds every phrase.
+run_refused() {
+  local log=$1 phrase
+  shift
+  [ "$PLAY_RC" -ne 0 ] || { echo "ansible-playbook exited 0"; return 1; }
+  recap_has "$log" ' unreachable=0 ' ' failed=1 ' || return 1
+  for phrase in "$@"; do
+    log_has "$log" "$phrase" || { echo "missing '$phrase'"; return 1; }
+  done
+}
+
+# run_never_reached_the_node_write: the first task that writes to the Node never started.
+run_never_reached_the_node_write() {
+  ! log_has "$1" 'TASK [relay_daemon : Make a directory for the package on the Node]'
+}
+
+# install_the_old_package_outside_the_role: dpkg on the Node through docker exec, which sshd is
+# never the parent of, so neither the role nor the trace sees it. It makes run B meet an
+# installed older daemon. On this upgrade-path invocation the installed package's prerm and
+# postrm do nothing, and the old package's postinst only reloads systemd, so the daemon is
+# neither started nor disabled, and the package holds no secret, so the later file and journal
+# scans are unaffected.
+install_the_old_package_outside_the_role() {
+  node_i bash -c '
+deb=/root/relay-daemon-old.deb
+cat >"$deb" || exit 1
+rc=0
+DEBIAN_FRONTEND=noninteractive dpkg --force-confdef --force-confold -i "$deb" </dev/null || rc=$?
+rm -f "$deb"
+exit "$rc"
+' <"$OLD_DAEMON_DEB"
 }
 
 unit_becomes_active_and_enabled() {
@@ -558,7 +630,7 @@ journal_holds_no_secret() {
 
 run_logs_hold_no_secret() {
   local n
-  n=$(cat "$WORK/run-a.log" "$WORK/run-l.log" "$WORK/run-b.log" "$WORK/run-c.log" "$WORK/run-f.log" | count_patterns)
+  n=$(cat "$WORK/run-v.log" "$WORK/run-v2.log" "$WORK/run-m.log" "$WORK/run-a.log" "$WORK/run-l.log" "$WORK/run-b.log" "$WORK/run-c.log" "$WORK/run-f.log" | count_patterns)
   [ "$n" = 0 ] || { echo "$n run log lines hold a secret"; return 1; }
 }
 
@@ -571,6 +643,8 @@ precondition "exactly one old relay-daemon package" exactly_one_deb "$PKGDIR/old
 NEW_RELAY_DEB=$(deb_in "$PKGDIR/new" relay)
 OLD_DAEMON_DEB=$(deb_in "$PKGDIR/old" relay-daemon)
 NEW_DAEMON_DEB=$(deb_in "$PKGDIR/new" relay-daemon)
+VERSION=$(cat "$PKGDIR/VERSION")
+precondition "VERSION is a release version" version_is_a_release_version
 precondition "the old and the new relay-daemon versions differ" daemon_versions_differ
 
 # --- step 1: the container ----------------------------------------------------------------
@@ -581,6 +655,16 @@ mkdir "$WORK/trace"
 trap on_exit EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+
+if [ "$#" -eq 1 ]; then
+  mkdir "$WORK/roles"
+  bash "$REPO/daemon/packaging/ansible/stamp-role.sh" "$VERSION" "$ROLE_DIR/relay_daemon" "$WORK/roles"
+  RUN_ROLES="$WORK/roles"
+else
+  RUN_ROLES=$ROLES_PATH
+fi
+precondition "the role under test carries this release's version" role_carries_version
+echo "role under test: $RUN_ROLES"
 
 docker build --pull -t "$IMAGE" -f "$REPO/docker/install-matrix/debian-13.Dockerfile" "$REPO/docker/install-matrix"
 # Only the Relay's package is mounted: the daemon package reaches the Node through the role.
@@ -650,7 +734,7 @@ printf 'node ansible_host=%s ansible_user=ansible ansible_ssh_private_key_file=%
   "$IP" "$WORK/id" "'-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'" >"$WORK/inventory.ini"
 # Pipelining and keep_remote_files are never set here, and no -v is ever passed: the role must
 # force pipelining itself.
-export ANSIBLE_ROLES_PATH="$ROLES_PATH" ANSIBLE_NOCOLOR=1 ANSIBLE_HOME="$WORK/ansible-home" ANSIBLE_LOCAL_TEMP="$WORK/ansible-local"
+export ANSIBLE_ROLES_PATH="$RUN_ROLES" ANSIBLE_NOCOLOR=1 ANSIBLE_HOME="$WORK/ansible-home" ANSIBLE_LOCAL_TEMP="$WORK/ansible-local"
 
 # --- step 5: the tracer, before any ssh connection ----------------------------------------
 
@@ -663,14 +747,51 @@ docker exec -d "$NAME" strace -f -qq -v -y -s 1048576 \
 precondition "the trace file exists within 10s" trace_file_exists_within_10s
 sleep 1
 
+# --- step 6a: runs V and M, a package the role must not install ---------------------------
+
+STATE_BEFORE=$(node_install_state)
+OLD_V=$(dpkg-deb -f "$OLD_DAEMON_DEB" Version)
+play run-v.log "$PKGDIR/old"
+check DI-45 "a package from another release is refused by the role's own check" run_refused run-v.log 'refusing a relay-daemon package from another release'
+check DI-45 "the refusal names the package's version" log_has run-v.log "is version $OLD_V"
+check DI-45 "the refusal names the role's release version" log_has run-v.log "from release $VERSION"
+check DI-45 "the refusal names the directory" log_has run-v.log "$PKGDIR/old"
+check DI-45 "it stopped before any task that writes to the Node" run_never_reached_the_node_write run-v.log
+check DI-45 "the Node is unchanged: no package, no daemon files, no package directory" node_install_state_is_unchanged
+check DI-45 "and the Node holds no identity" node_has_no_identity
+
+# Extra-vars outrank every variable the role holds. The old package is played again with the
+# release version and the expected package versions overridden to match it: the role must still
+# refuse, because the check reads its stamped file.
+OLD_RELEASE=${OLD_V%%-*}
+play run-v2.log "$PKGDIR/old" \
+  -e "relay_daemon_release_version=$OLD_RELEASE" \
+  -e "relay_daemon_expected_package_version=$OLD_V" \
+  -e "relay_daemon_wanted_package_version=$OLD_V"
+check DI-45 "extra-vars naming the old package's version as the release do not let it install" run_refused run-v2.log 'refusing a relay-daemon package from another release'
+check DI-45 "the refusal still names the role's own release version" log_has run-v2.log "from release $VERSION"
+check DI-45 "it stopped before any task that writes to the Node" run_never_reached_the_node_write run-v2.log
+check DI-45 "the Node is unchanged" node_install_state_is_unchanged
+check DI-45 "and the Node holds no identity" node_has_no_identity
+
+mkdir "$WORK/two-packages"
+cp "$OLD_DAEMON_DEB" "$NEW_DAEMON_DEB" "$WORK/two-packages/"
+play run-m.log "$WORK/two-packages"
+check DI-45 "a directory with two packages for the Node's platform is refused, not resolved" run_refused run-m.log "found 2 relay-daemon packages for this Node's platform" 'does not choose between packages'
+check DI-45 "the refusal names the directory" log_has run-m.log "$WORK/two-packages"
+check DI-45 "it stopped before any task that writes to the Node" run_never_reached_the_node_write run-m.log
+check DI-45 "the Node is unchanged" node_install_state_is_unchanged
+check DI-45 "and the Node holds no identity" node_has_no_identity
+
 # --- step 6: run A, the guard -------------------------------------------------------------
 
 # Extra-vars beat the task's vars, and both names are overridden because the ssh plugin takes
 # the last one it finds.
-play run-a.log old -e '{"ansible_pipelining": false, "ansible_ssh_pipelining": false}'
+play run-a.log "$PKGDIR/new" -e '{"ansible_pipelining": false, "ansible_ssh_pipelining": false}'
 check DI-45 "with pipelining off, the role refuses before join runs" [ "$PLAY_RC" -ne 0 ]
 check DI-45 "the refusal is the role's remote_tmp guard" run_a_hit_the_guard
-check DI-45 "the run reached the join task: the old package is installed" package_is_installed
+check DI-45 "the run reached the join task: this release's package is installed" package_is_installed
+check DI-45 "the existing pairing installs as before: run A installed the role's own release's package" installed_version_is "$NEW_DAEMON_DEB"
 check DI-45 "and the Node holds no identity" node_has_no_identity
 
 # --- step 6b: run L, sudo records standard input ------------------------------------------
@@ -679,29 +800,35 @@ check DI-45 "and the Node holds no identity" node_has_no_identity
 printf 'Defaults log_input\n' | node_i bash -c 'cat >/etc/sudoers.d/zz-log-input && chmod 0440 /etc/sudoers.d/zz-log-input'
 precondition "the log_input sudoers drop-in is valid" sudo_drop_in_is_valid
 PRINTENV_BEFORE_L=$(printenv_exec_count)
-play run-l.log old
+play run-l.log "$PKGDIR/new"
 node rm -f /etc/sudoers.d/zz-log-input
 check DI-45 "where sudo records standard input, the role refuses with its own message" run_l_refused_sudo_input_logging
 check DI-45 "and the Node holds no identity" node_has_no_identity
 check DI-45 "and stopped before the join task: no join execution, no join task" run_l_stopped_before_the_join_task
 check DI-45 "the trace saw run L's sudo check (control)" the_trace_saw_run_l
 
+# --- step 6c: the Node is given an older daemon, outside the role and the trace ------------
+
+precondition "the old package installs over run A's, through docker exec, not ssh" install_the_old_package_outside_the_role
+precondition "the Node's daemon is now the old package" installed_version_is "$OLD_DAEMON_DEB"
+precondition "and the Node still holds no identity" node_has_no_identity
+
 # --- step 7: run B, the second run on the same Node ---------------------------------------
 
-play run-b.log new
+play run-b.log "$PKGDIR/new"
 check DI-45 "the role exits 0 with failed=0 and unreachable=0" run_succeeded run-b.log ' unreachable=0 ' ' failed=0 '
-check DI-45 "an installed daemon is not upgraded: the version is still the old one" installed_version_is_the_old_one
+check DI-45 "an installed older daemon is not upgraded: given this release's package, the version is still the old one" installed_version_is "$OLD_DAEMON_DEB"
 check DI-45 "the identity is persisted" node_has_identity
 check DI-45 "the unit is active and enabled within 30s" unit_becomes_active_and_enabled
 check DI-45 "the role placed no Policy fragment" policy_dir_is_empty
 
-# --- step 8: run C, the enrolled Node given the new package ------------------------------
+# --- step 8: run C, the enrolled Node given another release's package --------------------
 
 SNAP=$(node_snapshot)
-play run-c.log new
+play run-c.log "$PKGDIR/old"
 check DI-45 "an enrolled Node: the role exits 0 and changes nothing" run_succeeded run-c.log ' changed=0 ' ' unreachable=0 ' ' failed=0 '
 check DI-45 "an enrolled Node is unchanged: files, package version and daemon process" [ "$(node_snapshot)" = "$SNAP" ]
-check DI-45 "and still at the old version" installed_version_is_the_old_one
+check DI-45 "and still at the old version: the version check never touches an enrolled Node" installed_version_is "$OLD_DAEMON_DEB"
 
 # --- step 9: the trace --------------------------------------------------------------------
 
@@ -741,7 +868,7 @@ precondition "policy check prints a fingerprint before run F" [ -n "$FP_BEFORE" 
 check DI-47 "before the fragment, the Relay reports the fingerprint policy check computes (control)" relay_reports_within_60s "$FP_BEFORE"
 PID_BEFORE_F=$(node_main_pid)
 precondition "the daemon has a MainPID before run F" [ "${PID_BEFORE_F:-0}" -gt 0 ]
-play_with "$ROLE_DIR/test/policy-fragment.yml" run-f.log new
+play_with "$ROLE_DIR/test/policy-fragment.yml" run-f.log "$PKGDIR/new"
 check DI-47 "the play that writes a fragment exits 0 with failed=0 and unreachable=0" run_succeeded run-f.log ' unreachable=0 ' ' failed=0 '
 check DI-47 "the fragment is in place, root-owned and 0644" fragment_is_in_place
 check DI-47 "the fragment task notified the role's restart handler and it ran" handler_ran

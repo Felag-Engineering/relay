@@ -4,7 +4,8 @@
 //! workflow that publishes the daemon as a container image (DI-2). It also proves the
 //! packages' release half: gated on the install matrix, attached under `SHA256SUMS` with an
 //! SBOM each, built twice and unsigned (DI-24, RC-23), and the Ansible role's release half and
-//! the matrix's hash-locked ansible-core and release-mode role (DI-45), reading
+//! the matrix's hash-locked ansible-core and release-mode role (DI-45), and that the role
+//! installs only its own release's package (DI-45), reading
 //! `install-matrix.yml` as well, and the role's restart handler with the matrix's fragment run
 //! (DI-47), reading the role, its test fixture and the matrix script.
 //!
@@ -1418,7 +1419,7 @@ fn release_attaches_the_ansible_role_and_the_matrix_runs_it_with_hash_locked_ans
         "--owner=0",
         "--group=0",
         "--numeric-owner",
-        "-C daemon/packaging/ansible",
+        "-C \"${stage}\"",
         "relay_daemon",
     ] {
         assert!(
@@ -1430,10 +1431,46 @@ fn release_attaches_the_ansible_role_and_the_matrix_runs_it_with_hash_locked_ans
         re(r"\bgzip\s+-\w*n").is_match(tar),
         "the role is compressed without a name or timestamp: {tar}"
     );
+    // The role is stamped with the release version before it is tarred, and the extraction is
+    // compared with the checkout's role but for that one line.
+    let tar_at = rl
+        .iter()
+        .position(|l| l.contains("tar ") && l.contains("--sort=name"))
+        .expect("the role is tarred");
+    let stamp_at = rl
+        .iter()
+        .position(|l| {
+            l.contains("daemon/packaging/ansible/stamp-role.sh")
+                && l.contains("\"${VERSION}\"")
+                && l.contains("daemon/packaging/ansible/relay_daemon")
+        })
+        .unwrap_or_else(|| panic!("the role is stamped with the release version: {rl:?}"));
+    assert!(stamp_at < tar_at, "the role is stamped before it is tarred");
     assert!(
-        rl.iter()
-            .any(|l| l.contains("diff -r") && l.contains("daemon/packaging/ansible/relay_daemon")),
-        "the tarball's extraction is compared with the checkout's role: {rl:?}"
+        rl.iter().any(|l| l.contains("diff -r")
+            && l.contains("daemon/packaging/ansible/relay_daemon")
+            && l.contains("-I '^relay_daemon_release_version: '")),
+        "the tarball's extraction is compared with the checkout's role but for the version line: {rl:?}"
+    );
+    let exact_diff_at = rl
+        .iter()
+        .position(|l| l.contains(r#"diff -r "${check}/relay_daemon" "${stage}/relay_daemon""#))
+        .unwrap_or_else(|| {
+            panic!("the extraction is compared exactly with the stamped stage: {rl:?}")
+        });
+    let stage_removed_at = rl
+        .iter()
+        .position(|l| l.contains("rm -rf") && l.contains("${stage}"))
+        .unwrap_or_else(|| panic!("the stage is removed: {rl:?}"));
+    assert!(
+        exact_diff_at < stage_removed_at,
+        "the exact diff runs before the stage is removed"
+    );
+    assert!(
+        rl.iter().any(|l| l.contains("grep -qxF")
+            && l.contains("relay_daemon_release_version: ")
+            && l.contains("${VERSION}")),
+        "the extracted role is checked to carry the release version: {rl:?}"
     );
     let writes_sums = re(r#"(^|[^>])>\s*"?SHA256SUMS"?(\s|$)"#);
     let writer_step = step_index(c, "writing SHA256SUMS", |s| {
@@ -1548,6 +1585,249 @@ fn release_attaches_the_ansible_role_and_the_matrix_runs_it_with_hash_locked_ans
         names.iter().any(|n| n.starts_with("ansible-core==")),
         "the lock names ansible-core: {names:?}"
     );
+}
+
+// Proves DI-45.
+#[test]
+fn the_ansible_role_installs_only_its_own_release_s_daemon_package() {
+    let ansible = repo().join("daemon/packaging/ansible");
+
+    // The role learns its release version from one stamped line, and derives the package
+    // version from it.
+    let vars = code(&read(&ansible.join("relay_daemon/vars/main.yml")));
+    assert_eq!(
+        vars.lines()
+            .filter(|l| *l == "relay_daemon_release_version: \"@RELEASE_VERSION@\"")
+            .count(),
+        1,
+        "the checkout's role carries the placeholder once: {vars}"
+    );
+    assert!(
+        !vars.contains("relay_daemon_expected_package_version"),
+        "no variable holds the expected package version: {vars}"
+    );
+
+    // The version is read from the package's metadata, on the controller, with argv.
+    let tasks = code(&read(&ansible.join("relay_daemon/tasks/main.yml")));
+    for needle in [
+        "dpkg-deb",
+        "--field",
+        "Version",
+        "rpm",
+        "--query",
+        "--package",
+        "EPOCHNUM",
+    ] {
+        assert!(tasks.contains(needle), "the version query names {needle}");
+    }
+    let read_start = tasks
+        .find("- name: Read the package's version")
+        .expect("a task reads the package's version");
+    let read_task = &tasks[read_start..];
+    let read_task = &read_task[..read_task[2..]
+        .find("- name:")
+        .map_or(read_task.len(), |i| i + 2)];
+    for needle in [
+        "delegate_to: localhost",
+        "connection: local",
+        "check_mode: false",
+        "ansible_python_interpreter: \"{{ ansible_playbook_python }}\"",
+    ] {
+        assert!(
+            read_task.contains(needle),
+            "the read task holds {needle}: {read_task}"
+        );
+    }
+    let refusal_start = tasks
+        .find("- name: Refuse a package from another release")
+        .expect("a task refuses a package from another release");
+    let refusal = &tasks[refusal_start..];
+
+    // The deciding conditions compare against the role's own stamped file, read at check time
+    // with a lookup on role_path, never against a variable an extra-var can set. The version
+    // query's argv is inline in the command task.
+    let release_assert_start = tasks
+        .find("- name: This role carries its release version")
+        .expect("a task checks the release version");
+    let release_assert = &tasks[release_assert_start..];
+    let release_assert = &release_assert[..release_assert[2..]
+        .find("- name:")
+        .map_or(release_assert.len(), |i| i + 2)];
+    let refusal_task = &refusal[..refusal[2..]
+        .find("- name:")
+        .map_or(refusal.len(), |i| i + 2)];
+    let deciding = [
+        ("the release assert", release_assert, "that:"),
+        ("the release refusal", refusal_task, "when:"),
+    ];
+    for (what, task, key) in deciding {
+        let at = task
+            .find(&format!("\n{key}"))
+            .or_else(|| task.find(&format!(" {key}")))
+            .unwrap_or_else(|| panic!("{what} has a {key}: {task}"));
+        let decider = &task[at..];
+        let decider = &decider[..decider
+            .find("fail_msg:")
+            .or_else(|| decider.find("msg:"))
+            .unwrap_or(decider.len())];
+        for needle in ["role_path", "ansible.builtin.file", "from_yaml"] {
+            assert!(
+                decider.contains(needle),
+                "{what}'s {key} holds {needle}: {decider}"
+            );
+        }
+        assert!(
+            !re(r"(?:^|[^.])relay_daemon_release_version").is_match(decider),
+            "{what}'s {key} reads the stamped file's key, not the variable: {decider}"
+        );
+        for banned in [
+            "relay_daemon_expected_package_version",
+            "relay_daemon_wanted_package_version",
+            "relay_daemon_wanted_shown",
+            "relay_daemon_release_shown",
+            "relay_daemon_version_query",
+        ] {
+            assert!(
+                !decider.contains(banned),
+                "{what}'s {key} does not hold {banned}: {decider}"
+            );
+        }
+    }
+    assert!(
+        re(r"relay_daemon_package_version_read\.stdout \| trim\s+!=").is_match(refusal_task),
+        "the refusal task refuses when the read version differs from the expected one"
+    );
+    assert!(
+        !tasks.contains("relay_daemon_expected_package_version")
+            && !tasks.contains("relay_daemon_version_query")
+            && !tasks.contains("relay_daemon_wanted_package_version"),
+        "no variable carries the expected version or the query argv"
+    );
+    assert!(
+        re(r"(?s)ansible\.builtin\.command:\s+argv:[^\n]*\n[^\n]*dpkg-deb").is_match(read_task),
+        "the version query's argv is inline in the command task: {read_task}"
+    );
+    assert!(
+        !re(r"relay_daemon_version_query\s*:").is_match(&tasks),
+        "no set_fact defines the version query"
+    );
+    for needle in [
+        "relay_daemon_package_dir",
+        "relay_daemon_release_version",
+        "relay_daemon_package_version_read.stdout",
+    ] {
+        assert!(refusal.contains(needle), "the refusal names {needle}");
+    }
+
+    // Every check comes before the first task that writes to the Node.
+    let first_write = tasks
+        .find("ansible.builtin.tempfile:")
+        .expect("the role makes a directory on the Node")
+        .min(
+            tasks
+                .find("ansible.builtin.copy:")
+                .expect("the role copies the package"),
+        );
+    for (what, at) in [
+        (
+            "the candidate count check",
+            tasks.find("relay_daemon_package_candidates | length != 1"),
+        ),
+        ("the version read", Some(read_start)),
+        ("the release refusal", Some(refusal_start)),
+    ] {
+        let at = at.unwrap_or_else(|| panic!("{what} is in the role"));
+        assert!(
+            at < first_write,
+            "{what} comes before the first write to the Node"
+        );
+    }
+
+    // No shell anywhere in the role's tasks.
+    assert!(
+        !tasks.contains("ansible.builtin.shell")
+            && !tasks.contains("shell:")
+            && !tasks.contains("lookup('pipe'")
+            && !tasks.contains("lookup(\"pipe\""),
+        "the role's tasks use no shell and no pipe lookup"
+    );
+
+    // The release and the matrix stamp the role with one script, and the matrix proves the
+    // refusals and the unchanged Node in the order that keeps its other evidence valid.
+    assert!(
+        ansible.join("stamp-role.sh").is_file(),
+        "the stamping script exists"
+    );
+    let script = code(&read(
+        &repo().join("scripts/install-matrix-ansible-role.sh"),
+    ));
+    assert!(
+        script.contains("stamp-role.sh"),
+        "the matrix stamps the checkout's role"
+    );
+    let lines: Vec<&str> = script.lines().collect();
+    let at = |prefix: &str| {
+        lines
+            .iter()
+            .position(|l| l.starts_with(prefix))
+            .unwrap_or_else(|| panic!("the script has a line starting {prefix}"))
+    };
+    let run_v = at("play run-v.log \"$PKGDIR/old\"");
+    let run_v2 = at("play run-v2.log \"$PKGDIR/old\"");
+    let run_a = at("play run-a.log \"$PKGDIR/new\"");
+    let run_l = at("play run-l.log");
+    let run_b = at("play run-b.log \"$PKGDIR/new\"");
+    at("play run-m.log");
+    assert!(
+        run_v < run_a,
+        "the other release's package is refused before run A"
+    );
+    assert!(
+        run_v < run_v2 && run_v2 < run_a,
+        "the extra-vars run comes after run V and before run A"
+    );
+    let v2 = lines[run_v2..run_a].join("\n");
+    for needle in [
+        "relay_daemon_release_version=",
+        "relay_daemon_expected_package_version=",
+        "relay_daemon_wanted_package_version=",
+    ] {
+        assert!(v2.contains(needle), "run V2 overrides {needle}");
+    }
+    assert!(
+        v2.contains(
+            "run_refused run-v2.log 'refusing a relay-daemon package from another release'"
+        ) && v2.contains("run_never_reached_the_node_write run-v2.log")
+            && v2.contains("node_install_state_is_unchanged"),
+        "run V2 is refused, never reaches the Node write task and leaves the Node unchanged"
+    );
+    let downgrade = lines
+        .iter()
+        .position(|l| {
+            l.starts_with("precondition") && l.contains("install_the_old_package_outside_the_role")
+        })
+        .expect("the script installs the old package outside the role");
+    assert!(
+        run_l < downgrade && downgrade < run_b,
+        "the old package is installed between run L and run B"
+    );
+    assert!(
+        lines[at("play run-c.log")].contains("$PKGDIR/old"),
+        "run C is given the other release's package"
+    );
+    for needle in [
+        "refusing a relay-daemon package from another release",
+        "does not choose between packages",
+        "installed_version_is \"$NEW_DAEMON_DEB\"",
+        "installed_version_is \"$OLD_DAEMON_DEB\"",
+    ] {
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.starts_with("check DI-45") && l.contains(needle)),
+            "a DI-45 check holds {needle}"
+        );
+    }
 }
 
 // Proves DI-47.

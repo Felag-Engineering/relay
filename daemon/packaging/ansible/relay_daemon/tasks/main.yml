@@ -45,17 +45,38 @@
 - name: Join a Node that holds no identity
   when: relay_daemon_identity_present | length == 0
   block:
-    # Read-only. The role installs the package only when the daemon is absent, at any version,
-    # and never reads the environment file to decide.
+    # Read-only. The role installs only when the daemon is absent, and then only its own
+    # release's package; an installed daemon of any version is joined as found (ADR-0014). It
+    # never reads the environment file to decide.
     - name: Look for an installed daemon
       ansible.builtin.stat:
         path: /usr/bin/relay-daemon
         get_checksum: false
       register: relay_daemon_binary
 
+    # The release version and the package version it installs come from the role's own stamped
+    # file, read here and in each deciding condition below, never from a variable: an
+    # extra-var outranks every variable the role holds. The variables under vars: are for
+    # messages only; no condition reads them. The prerelease "-" becomes "~" in the package
+    # version, and the package release is 1. rpm reports the epoch as a number, 0 for the
+    # release's packages.
     - name: Install the package on a Node that has no daemon
       when: not relay_daemon_binary.stat.exists
+      vars:
+        relay_daemon_release_shown: "{{ (lookup('ansible.builtin.file', role_path ~ '/vars/main.yml') | from_yaml).relay_daemon_release_version }}"
+        relay_daemon_wanted_shown: "{{ ('' if ansible_facts.pkg_mgr | default('apt') == 'apt' else '0:') ~ (((lookup('ansible.builtin.file', role_path ~ '/vars/main.yml') | from_yaml).relay_daemon_release_version).split('-', 1) | join('~')) ~ '-1' }}"
       block:
+        - name: This role carries its release version
+          ansible.builtin.assert:
+            that: >-
+              (lookup('ansible.builtin.file', role_path ~ '/vars/main.yml') | from_yaml).relay_daemon_release_version
+              is regex("^[0-9]+[.][0-9]+[.][0-9]+(-[0-9A-Za-z.]+)?([+][0-9A-Za-z.]+)?$")
+            fail_msg: >-
+              the role carries no release version ('{{ relay_daemon_release_shown }}');
+              only the role from a release's relay_daemon-VERSION.tar.gz installs a package.
+              The role changed nothing on the Node
+            quiet: true
+
         - name: Gather the architecture and package manager
           ansible.builtin.setup:
             gather_subset: [min]
@@ -83,11 +104,65 @@
           ansible.builtin.set_fact:
             relay_daemon_package_candidates: "{{ query('ansible.builtin.fileglob', relay_daemon_package_pattern) }}"
 
-        - name: Exactly one package matches
-          ansible.builtin.assert:
-            that: relay_daemon_package_candidates | length == 1
-            fail_msg: "expected exactly one package matching {{ relay_daemon_package_pattern }}"
-            quiet: true
+        - name: Refuse unless exactly one package is for this Node's platform
+          ansible.builtin.fail:
+            msg: >-
+              found {{ relay_daemon_package_candidates | length }} relay-daemon packages for this
+              Node's platform ({{ ansible_facts.pkg_mgr }}, {{ ansible_facts.architecture }}) in
+              {{ relay_daemon_package_dir }}{{ (': ' ~ (relay_daemon_package_candidates | map('basename') | join(', '))) if relay_daemon_package_candidates | length > 0 else '' }};
+              the role installs exactly one and does not choose between packages. Put only release
+              {{ relay_daemon_release_shown }}'s relay-daemon package for this platform in
+              {{ relay_daemon_package_dir }}. The role changed nothing on the Node
+          when: relay_daemon_package_candidates | length != 1
+
+        # argv, no shell. It runs on the controller, so nothing reaches the Node before the
+        # check. The version comes from the package's metadata, never its file name (DI-45).
+        # check_mode is off so a --check run still refuses a package from another release. The
+        # interpreter is the one running Ansible, because the inventory's interpreter setting
+        # names the Node's Python, which may not exist on the controller.
+        - name: Read the package's version from its metadata, on the controller
+          ansible.builtin.command:
+            argv: >-
+              {{ ['dpkg-deb', '--field', relay_daemon_package_candidates[0], 'Version']
+              if ansible_facts.pkg_mgr == 'apt'
+              else ['rpm', '--query', '--package', '--queryformat', '%{EPOCHNUM}:%{VERSION}-%{RELEASE}', relay_daemon_package_candidates[0]] }}
+          delegate_to: localhost
+          connection: local
+          become: false
+          check_mode: false
+          vars:
+            ansible_become: false
+            ansible_python_interpreter: "{{ ansible_playbook_python }}"
+          register: relay_daemon_package_version_read
+          changed_when: false
+          failed_when: false
+
+        - name: Refuse a package whose version cannot be read
+          ansible.builtin.fail:
+            msg: >-
+              cannot read the version of {{ relay_daemon_package_candidates[0] }}:
+              {{ relay_daemon_package_version_read.cmd[0] | default('the version query') }} exited
+              {{ relay_daemon_package_version_read.rc | default('without a status') }}:
+              {{ (relay_daemon_package_version_read.stderr | default('') | trim) or (relay_daemon_package_version_read.msg | default('')) }}.
+              The controller needs dpkg-deb to install on apt Nodes and rpm on dnf Nodes.
+              The role changed nothing on the Node
+          when: >-
+            relay_daemon_package_version_read.rc | default(1) != 0
+            or (relay_daemon_package_version_read.stdout | default('') | trim | length) == 0
+
+        - name: Refuse a package from another release
+          ansible.builtin.fail:
+            msg: >-
+              refusing a relay-daemon package from another release:
+              {{ relay_daemon_package_candidates[0] | basename }} in {{ relay_daemon_package_dir }} is
+              version {{ relay_daemon_package_version_read.stdout | trim }}, and this role is from
+              release {{ relay_daemon_release_shown }}, which installs package version
+              {{ relay_daemon_wanted_shown }}. Put release
+              {{ relay_daemon_release_shown }}'s relay-daemon package in
+              {{ relay_daemon_package_dir }}. The role changed nothing on the Node
+          when: >-
+            relay_daemon_package_version_read.stdout | trim
+            != ('' if ansible_facts.pkg_mgr == 'apt' else '0:') ~ (((lookup('ansible.builtin.file', role_path ~ '/vars/main.yml') | from_yaml).relay_daemon_release_version).split('-', 1) | join('~')) ~ '-1'
 
         - name: Make a directory for the package on the Node
           ansible.builtin.tempfile:

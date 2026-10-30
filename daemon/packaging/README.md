@@ -52,7 +52,9 @@ from a join string in your vault, with the string on standard input
 `relay_daemon-<version>.tar.gz` under `SHA256SUMS`, and the install matrix runs that tarball
 under a hash-locked ansible-core (`ansible/test/requirements.txt`) before the release
 publishes ([release-artifacts.md](../../docs/operations/release-artifacts.md)). It carries a
-restart handler for your own Policy fragment tasks to notify (DI-47).
+restart handler for your own Policy fragment tasks to notify (DI-47). The release writes its
+version into the role it attaches (`ansible/stamp-role.sh`), and the role installs only that
+release's package, judged by the version in its metadata.
 
 ## Install
 

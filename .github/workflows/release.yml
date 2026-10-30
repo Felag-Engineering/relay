@@ -582,9 +582,12 @@ jobs:
 
       # The Ansible role is a release artifact (DI-45, ADR-0048). It compiles nothing and
       # carries repository files only, so it is checked by content rather than built twice: the
-      # tarball is built from the tagged commit (sorted, owner 0, the commit's time as its
-      # mtime), and what it extracts to must equal the role in the checkout. The name stays
-      # outside the relay-* glob that the binaries' loops use.
+      # tarball is the tagged commit's role with only its release version written in
+      # (stamp-role.sh), sorted, owner 0, the commit's time as its mtime, and what it extracts
+      # to must equal the role in the checkout but for that one line, which carries VERSION and
+      # is in vars/main.yml only. The tar flags override the staged copy's metadata, so the
+      # tarball stays reproducible. The name stays outside the relay-* glob that the binaries'
+      # loops use.
       - name: Stage the Ansible role
         env:
           VERSION: ${{ steps.assemble.outputs.version }}
@@ -592,8 +595,10 @@ jobs:
           set -euo pipefail
           tarball="dist/relay_daemon-${VERSION}.tar.gz"
           epoch="$(git log -1 --format=%ct HEAD)"
+          stage="$(mktemp -d)"
+          bash daemon/packaging/ansible/stamp-role.sh "${VERSION}" daemon/packaging/ansible/relay_daemon "${stage}"
           tar --sort=name --mtime="@${epoch}" --owner=0 --group=0 --numeric-owner \
-            --mode='u=rwX,go=rX' --format=gnu -C daemon/packaging/ansible -cf - relay_daemon \
+            --mode='u=rwX,go=rX' --format=gnu -C "${stage}" -cf - relay_daemon \
             | gzip -9n > "${tarball}"
           # Every member is a regular file or a directory, inside relay_daemon/ and with no
           # ".." component. awk reads all its input, so no pipe is cut short.
@@ -606,8 +611,14 @@ jobs:
             END { exit bad }'
           check="$(mktemp -d)"
           tar -xzf "${tarball}" --no-same-owner -C "${check}"
-          diff -r "${check}/relay_daemon" daemon/packaging/ansible/relay_daemon
-          rm -rf "${check}"
+          diff -r -I '^relay_daemon_release_version: ' "${check}/relay_daemon" daemon/packaging/ansible/relay_daemon
+          diff -r "${check}/relay_daemon" "${stage}/relay_daemon"
+          grep -qxF "relay_daemon_release_version: \"${VERSION}\"" "${check}/relay_daemon/vars/main.yml" \
+            || { echo "::error::the role tarball does not carry release ${VERSION}"; exit 1; }
+          stamped="$(grep -rlx --include='*.yml' 'relay_daemon_release_version: .*' "${check}" || true)"
+          [ "${stamped}" = "${check}/relay_daemon/vars/main.yml" ] \
+            || { echo "::error::the release version is written in files other than vars/main.yml: ${stamped}"; exit 1; }
+          rm -rf "${check}" "${stage}"
 
       # One SPDX SBOM per package. A package's lists the dependencies of the binary it wraps
       # byte for byte (the content guard above proves the wrap): the Relay's from the Go build
