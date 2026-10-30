@@ -105,8 +105,10 @@ a reload or restart. The Relay installs from an OS package or as a container ima
 
 ## Refusals
 
-- **RC-9** A webhook secret file readable or writable by group or world is refused at start,
-  naming the mode.
+- **RC-9** At start the Relay refuses a webhook secret file, naming why, if a mode bit or
+  access-control list lets it or one of its Unix groups write the file, or lets any account read
+  it but root, the Relay and the group the Relay runs as. That group holds only the Relay unless
+  an operator adds an account to it (ADR-0043).
 - **RC-10** OAuth configured with an issuer but without an audience or a public URL refuses
   start.
 - **RC-11** No MCP tool and no Control API route writes any configuration, and none may be
