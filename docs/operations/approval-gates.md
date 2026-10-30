@@ -51,6 +51,30 @@ A SIGHUP reloads `relay.toml`, rules included, all-or-nothing: a reload that can
 rules is refused and the running rules stay in force. A change to the rules is recorded in the
 reload's audit entry as `approval.rules`.
 
+### What a fresh install gates
+
+The package's generated `/etc/relay/relay.toml` and `relay.toml.example` each carry two rules, so
+every `mutate` and every Raw Exec waits for a person and no `read` does:
+
+```toml
+[[approval.rules]]
+name = "mutate-needs-a-human"
+risk_class = "mutate"
+ttl = "1h"
+
+[[approval.rules]]
+name = "raw-exec-needs-a-human"
+raw_exec = true
+ttl = "1h"
+```
+
+To stop gating what a rule matches, delete its `[[approval.rules]]` section, then restart the
+Relay or send SIGHUP (the reload paragraph above applies). Delete both and nothing is gated.
+
+An upgrade never rewrites `relay.toml`, so a Relay installed before these rules shipped keeps
+the rules it had, and the Relay does not warn at start when no rule is loaded. Add the two
+sections by hand to gate it the same way.
+
 ### Moving from the rules file
 
 An earlier release read the rules from a JSON file named by `approval.gate_rules_path`. That key
@@ -210,7 +234,7 @@ webhook_secret_file = "/etc/relay/approval-webhook.key"
 | Key | Meaning |
 |---|---|
 | `webhook_url_file` | A file holding where to POST: a secret, so only ever given as a file. HTTPS required off-loopback. Unset disables notification. |
-| `webhook_secret_file` | A root-owned `0600` file holding the HMAC-SHA256 signing secret. Unset sends unsigned. |
+| `webhook_secret_file` | A file holding the HMAC-SHA256 signing secret, placed like `relay.toml` (`0640 root:relay`): one the Relay could write, or an account outside root, the Relay and the Relay's own group could read, refuses startup. Unset sends unsigned. |
 
 Each is a file. The budget for one delivery attempt is built in at `5s`. Signed deliveries carry `Relay-Timestamp` and
 `Relay-Signature: sha256=<hex>` over `"<timestamp>.<body>"`, so a receiver can check
@@ -221,8 +245,8 @@ authorizes nothing, and there is no callback for it to protect. Decisions only a
 Delivery is **one attempt, no retry, no queue**, and it never blocks or fails a park. A park
 is durable, audited and queued before the notification is attempted, so an endpoint that is
 down costs an approver a poll. Configuration fails closed: a webhook you asked for and did not
-get would leave you believing you will be paged, so an invalid URL or an unreadable or
-world-readable secret file **refuses startup**.
+get would leave you believing you will be paged, so an invalid URL or an unreadable secret
+file, or one an account outside root, the Relay and the Relay's own group could read, **refuses startup**.
 
 **What leaves the Relay.** The body carries the plan summary, including the Operation's
 *arguments*, since they are what the approver decides about. It carries no credential, no

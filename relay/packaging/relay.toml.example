@@ -1,8 +1,8 @@
 # EXAMPLE configuration for the Relay: /etc/relay/relay.toml.
 #
-# This is a template, not a shipped config. Copy it to /etc/relay/relay.toml
-# and set the values you need. The Relay reads this one file, and nothing else,
-# for the settings below.
+# This is where a hand-built or container install starts. Copy it to
+# /etc/relay/relay.toml and set the values you need. The Relay reads this one
+# file, and nothing else, for the settings below.
 #
 # WHAT THIS FILE IS, in the architecture's terms (AGENTS.md invariant 11):
 # the Relay's configuration is the operator's, set outside Relay, and NEVER
@@ -13,8 +13,10 @@
 #
 # Three keys are required and have no default: ca.dir, store.path and
 # tls.hostname. Every other key is optional and shown commented out at its
-# built-in default, or at an example value where it has none. An unknown key is
-# refused, and so is a value that cannot work.
+# built-in default, or at an example value where it has none. The two gate rules
+# in the Approval gates section are the exception: they are written
+# uncommented, because a fresh install gates every mutate and every Raw Exec.
+# An unknown key is refused, and so is a value that cannot work.
 #
 # A SECRET is given in the file as `key = "..."`, or as `key_file = "/path"`
 # naming a file that holds it. Giving both is refused. The suffix _file is
@@ -162,6 +164,21 @@ hostname = "relay.example.internal"
 # webhook_secret_file = "/etc/relay/approval-webhook.secret"
 
 # Each delivery attempt has a 5s time budget, built in.
+
+# The gate rules this file starts with: every mutate and every Raw Exec waits
+# for a person's answer before it runs, and a read never does. Delete a rule's
+# section to stop gating what it matches, then restart the Relay. With none,
+# nothing is gated. They stay below every [approval] key above, because a
+# section header ends the [approval] table.
+[[approval.rules]]
+name = "mutate-needs-a-human"
+risk_class = "mutate"
+ttl = "1h"
+
+[[approval.rules]]
+name = "raw-exec-needs-a-human"
+raw_exec = true
+ttl = "1h"
 
 # ---------------------------------------------------------------------------
 # Log

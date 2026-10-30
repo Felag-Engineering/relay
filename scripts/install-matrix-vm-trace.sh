@@ -18,10 +18,13 @@
 # manual step; pkg.install is dispatched here and must FAIL under the strict unit, with the
 # sandbox's refusal in its stderr.
 #
-# Coupling: the mutate and Raw Exec dispatches below expect the packaged configuration not to
-# gate them (HTTP 200). When the packaged Relay gates every mutate and Raw Exec (RC-37), they
-# return 202 and this script fails naming the approval gate: the trace then needs an approval
-# step added here.
+# Coupling: the packaged configuration gates every mutate and every Raw Exec (AP-90), so those
+# dispatches (run through dispatch_gated) must return 202 first; a 200 there FAILS, since it ran
+# without parking. The trace answers each park on the
+# Control API as the founding admin (a human Account, which clears the Raw Exec floor and may
+# confirm its own request) and re-drives the same call, which the approval now lets through to
+# dispatch. A read dispatch never parks: a 202 on one FAILS, so a regression that gates a read
+# is caught rather than approved away. Both directions are checked.
 #
 # Secrets: strace runs with -s 0, which keeps no read or write buffer content, and its raw log
 # stays in a root-only directory that is never uploaded. <outdir> holds only derived files
@@ -171,21 +174,56 @@ vm_api() {
 op_rows=()
 LAST_STDOUT=""
 
-# dispatch <label> <success|failure> <path> <json body> [stderr regex]: 200 records the Task
-# outcome; 202 fails naming the approval gate; any other status fails with the status. `failure`
-# means the Task outcome is exactly "failure", not merely "not success": a denied_by_policy,
-# timeout or unreachable result says the Operation never ran, so it proves nothing about the
-# sandbox. The optional regex (jq, case-insensitive) must also match the first result's stderr.
+# dispatch <label> <success|failure> <path> <json body> [stderr regex]: on a read, 200 records
+# the Task outcome and any other status fails, a 202 included. When EXPECT_GATED=yes (set by
+# dispatch_gated for the mutate and Raw Exec dispatches) the packaged gate must park it: a first
+# 200 FAILS (it ran without parking), and a 202 is answered with an approval as the founding
+# admin (require 200) and the call re-driven (require 200, the row marked approved) before the
+# outcome is recorded. `failure` means the
+# Task outcome is exactly "failure", not merely "not success": a denied_by_policy, timeout or
+# unreachable result says the Operation never ran, so it proves nothing about the sandbox. The
+# optional regex (jq, case-insensitive) must also match the first result's stderr.
 dispatch() {
-  local label=$1 expect=$2 path=$3 body=$4 stderr_re=${5:-} outcomes detail="" ok=no
+  local label=$1 expect=$2 path=$3 body=$4 stderr_re=${5:-} outcomes detail="" ok=no approved=""
   LAST_STDOUT=""
   vm_api POST "$path" "$body"
   case "$API_STATUS" in
-    200) ;;
+    200)
+      if [ "${EXPECT_GATED:-no}" = yes ]; then
+        fail "$label: ran without parking (HTTP 200): the packaged gate rules did not gate it"
+        op_rows+=("| $label | $expect | ran without parking: the packaged gate rules did not gate it | FAIL |")
+        return 0
+      fi
+      ;;
     202)
-      fail "the approval gate parked $label: the packaged config gates this Operation (see RC-37), so the trace needs an approval step"
-      op_rows+=("| $label | $expect | parked by the approval gate (202) | FAIL |")
-      return 0
+      if [ "${EXPECT_GATED:-no}" != yes ]; then
+        fail "$label: a read dispatch parked at the approval gate (HTTP 202); only a mutate or Raw Exec may"
+        op_rows+=("| $label | $expect | parked (202), a read must not be gated | FAIL |")
+        return 0
+      fi
+      local request_id plan_hash decision_path decision
+      request_id="$(printf '%s' "$API_BODY" | jq -r '.request_id // ""' || true)"
+      plan_hash="$(printf '%s' "$API_BODY" | jq -r '.plan_hash // ""' || true)"
+      decision_path="$(printf '%s' "$API_BODY" | jq -r '.decision_path // ""' || true)"
+      if [ -z "$request_id" ] || [ -z "$plan_hash" ] || [ -z "$decision_path" ]; then
+        fail "$label: the approval gate parked it, but the 202 body has no request_id, plan_hash and decision_path"
+        op_rows+=("| $label | $expect | parked (202) without an approvable request | FAIL |")
+        return 0
+      fi
+      decision="$(jq -n --arg h "$plan_hash" '{approve: true, plan_hash: $h, reason: "install-matrix syscall trace"}')"
+      vm_api POST "$decision_path" "$decision"
+      if [ "$API_STATUS" != 200 ]; then
+        fail "$label: approving $request_id returned HTTP $API_STATUS"
+        op_rows+=("| $label | $expect | approval refused: HTTP $API_STATUS | FAIL |")
+        return 0
+      fi
+      vm_api POST "$path" "$body"
+      if [ "$API_STATUS" != 200 ]; then
+        fail "$label: the re-driven call returned HTTP $API_STATUS after approval"
+        op_rows+=("| $label | $expect | re-drive after approval: HTTP $API_STATUS | FAIL |")
+        return 0
+      fi
+      approved=" (approved)"
       ;;
     *)
       fail "$label: HTTP $API_STATUS"
@@ -211,12 +249,15 @@ dispatch() {
     fi
   fi
   if [ "$ok" = yes ]; then
-    op_rows+=("| $label | $expect | $outcomes $detail | ok |")
+    op_rows+=("| $label | $expect | $outcomes$approved $detail | ok |")
   else
     fail "$label: wanted $expect, got $outcomes"
-    op_rows+=("| $label | $expect | $outcomes $detail | FAIL |")
+    op_rows+=("| $label | $expect | $outcomes$approved $detail | FAIL |")
   fi
 }
+
+# A mutate or Raw Exec dispatch: the gate parks it and the trace approves it.
+dispatch_gated() { EXPECT_GATED=yes dispatch "$@"; }
 
 op() { printf '{"selector":"%s","operation":"%s"}' "$SELECTOR" "$1"; }
 op_args() { printf '{"selector":"%s","operation":"%s","args":%s}' "$SELECTOR" "$1" "$2"; }
@@ -319,15 +360,15 @@ if [[ $LAST_STDOUT != *"$CAPCHECK_LINE"* ]]; then
   fail "file.read of $CAPCHECK did not return its content: CAP_DAC_READ_SEARCH is not doing its work"
 fi
 
-dispatch "service.restart $DUMMY_UNIT" success /api/v1/operations \
+dispatch_gated "service.restart $DUMMY_UNIT" success /api/v1/operations \
   "$(op_args service.restart "{\"unit\":\"$DUMMY_UNIT\"}")"
-dispatch "raw exec /usr/bin/true" success /api/v1/raw-exec \
+dispatch_gated "raw exec /usr/bin/true" success /api/v1/raw-exec \
   "$(printf '{"selector":"%s","argv":["/usr/bin/true"]}' "$SELECTOR")"
 # The posture document says pkg.install succeeds only under the pkg-install drop-in, never
 # under the strict baseline. The row passes only when the Operation ran and failed (outcome
 # "failure") and its stderr shows the sandbox refusing a write under the package manager's
 # state: a policy denial or an unreachable Node would otherwise read as a held sandbox.
-dispatch "pkg.install hello (strict unit)" failure /api/v1/operations \
+dispatch_gated "pkg.install hello (strict unit)" failure /api/v1/operations \
   "$(op_args pkg.install '{"name":"hello"}')" \
   '(/var/lib/dpkg|/var/cache/apt|/var/lib/apt).*(read-only file system|permission denied)|(read-only file system|permission denied).*(/var/lib/dpkg|/var/cache/apt|/var/lib/apt)'
 

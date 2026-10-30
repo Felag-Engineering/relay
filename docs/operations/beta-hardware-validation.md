@@ -123,6 +123,10 @@ credential; trust the Relay's CA cert). From the client, in order:
 7. one deliberate Policy denial (e.g. `service.restart` of a non-allowed unit) —
    `denied_by_policy` with the rule, per Node.
 
+   On a packaged Relay a mutate or Raw Exec dispatch parks at the gate first: answer the
+   client's approval question, or, if the client cannot ask, approve on the Control API at the
+   `pending_approval` result's `decision_path`; then re-drive the call.
+
 **Expect:** per-Node results and verdicts matching
 [`docs/specs/execution.md`](../specs/execution.md) and
 [`docs/specs/policy-preflight.md`](../specs/policy-preflight.md), across real machines and a

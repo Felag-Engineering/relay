@@ -375,7 +375,9 @@ equivalent) available.
 
    While attached, drive one of each Operation (`system.facts`, `file.read`,
    `service.restart`, `pkg.install`, and a representative Policy-permitted Raw Exec) from the
-   Relay. Then extract the syscall set:
+   Relay. On a packaged Relay the mutate and Raw Exec dispatches park at the gate first: approve
+   each (answer the MCP client's approval question, or POST to the pending result's
+   `decision_path` on the Control API), then re-drive it. Then extract the syscall set:
 
    ```console
    $ grep -oE '^[0-9]+ +[a-z_]+\(' /tmp/relay-trace.log \

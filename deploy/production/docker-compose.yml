@@ -112,10 +112,12 @@ services:
       # this volume must be on an allowlisted filesystem (ext4, XFS, btrfs,
       # tmpfs), because the Relay checks its state directory too.
       - relay-data:/var/lib/relay
-      # Approval gates (ADR-0027): a configuration with no gate rules gates
-      # nothing. Gate rules are [[approval.rules]] sections of relay.toml
-      # (docs/operations/approval-gates.md), so they need no mount of their
-      # own. A rule that cannot be loaded refuses startup.
+      # Approval gates (ADR-0027, ADR-0047): relay.toml.example, which this
+      # stack's relay.toml starts from, carries two [[approval.rules]]
+      # sections gating every mutate and every Raw Exec. Deleting one stops
+      # gating what it matches, and with none nothing is gated
+      # (docs/operations/approval-gates.md). They need no mount of their own.
+      # A rule that cannot be loaded refuses startup.
       #
       # Approval webhook signing secret, as a file: placed like relay.toml,
       # owned by root with group GID 10001, mode 0640. The Relay refuses it if

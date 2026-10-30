@@ -100,7 +100,7 @@ unknown key, or a value that cannot work, is refused.
 | `oauth.public_url` | *(unset)* | Externally reachable control-plane base URL, used to advertise protected-resource metadata. |
 | `oauth.account_claim` | `email` | Token claim naming the Account a session resolves to. |
 | `oauth.required_scope` | *(unset)* | Scope every OAuth token must carry. |
-| `[[approval.rules]]` | *(none)* | Gate rules, one section per rule: which dispatches wait for a human (ADR-0027, ADR-0047; [approval-gates.md](approval-gates.md)). None means nothing is gated. A rule that cannot be loaded **refuses startup**, and so does a configuration still naming `approval.gate_rules_path`. |
+| `[[approval.rules]]` | *(none)* | Gate rules, one section per rule: which dispatches wait for a human (ADR-0027, ADR-0047; [approval-gates.md](approval-gates.md)). None means nothing is gated; the packaged configuration and `relay.toml.example` each carry two, gating every `mutate` and every Raw Exec. Delete one to stop gating what it matches. A rule that cannot be loaded **refuses startup**, and so does a configuration still naming `approval.gate_rules_path`. |
 | `approval.webhook_url_file` | *(unset)* | Path of a file holding the HTTPS endpoint notified, fire-and-forget, when a dispatch parks for approval. The URL is a secret, so it is only ever given as a file. Decisions never arrive this way; they land on `/api/v1`. |
 | `approval.webhook_secret_file` | *(unset)* | Path of a file holding the shared secret that signs webhook bodies (HMAC-SHA256). Unset sends unsigned notifications. |
 | `console.enabled` | `false` | Serve the Admin Console on the control-plane listener (ADR-0009, ADR-0026); needs `control_plane.enabled`. The first admin's password is set by `relay init` (below). |
@@ -498,11 +498,11 @@ Node's Policy is authored on that Node; this stack ships none and can never writ
 
 Every command here takes `-f deploy/production/docker-compose.yml`, shortened to `…`.
 
-- **Approval gates are off** until you add one. The stack ships no gate rule, because a gate
-  is configuration the operator writes on the host. To add one, write `[[approval.rules]]`
-  sections in `relay.toml` ([approval-gates.md](approval-gates.md)), which is already on the
-  host and mounted; there is no separate gate file. A rule that cannot be loaded refuses
-  startup.
+- **Every mutate and every Raw Exec waits for a person.** `relay.toml.example`, which this
+  stack starts from, carries two gate rules, one gating every `mutate` and one every Raw Exec.
+  Delete a rule's `[[approval.rules]]` section in `relay.toml` to stop gating what it matches
+  ([approval-gates.md](approval-gates.md)). There is no separate gate file. A rule that cannot
+  be loaded refuses startup.
 - **The approval webhook's signing secret** is a file owned by root, group `10001`, mode
   `0640`, mounted read-only through the commented example in the compose file and named by
   `approval.webhook_secret_file` (the webhook URL, which carries its own token, likewise by

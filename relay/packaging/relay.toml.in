@@ -26,3 +26,18 @@ path = "/var/lib/relay/relay.db"
 # name the relay-daemons dial and uncomment it. Until then the Relay refuses to start,
 # naming tls.hostname.
 hostname = "@FQDN@"
+
+# Gate rules: every mutate and every Raw Exec waits for a person's answer before it
+# runs, and a read never does. Delete a rule's section to stop gating what it
+# matches, then restart the Relay. With no [[approval.rules]] section nothing is
+# gated. See /usr/share/relay/relay.toml.example and docs/operations/approval-gates.md.
+
+[[approval.rules]]
+name = "mutate-needs-a-human"
+risk_class = "mutate"
+ttl = "1h"
+
+[[approval.rules]]
+name = "raw-exec-needs-a-human"
+raw_exec = true
+ttl = "1h"
