@@ -194,6 +194,11 @@ func TestChipGrammars_OccupyDifferentVisualChannels(t *testing.T) {
 	}
 }
 
+// TestTrustChip_AssertedAndVerifiedAreNeverInterchangeable: an asserted value
+// and a verified one render in distinct lanes, so a claimed identity never reads
+// as an authenticated one.
+//
+// Proves AP-40.
 func TestTrustChip_AssertedAndVerifiedAreNeverInterchangeable(t *testing.T) {
 	verified := render(t, "trust-chip", Trust{Text: "mike", Verified: true})
 	asserted := render(t, "trust-chip", Trust{Text: "mike", Verified: false})

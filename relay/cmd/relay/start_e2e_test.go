@@ -295,6 +295,8 @@ func TestStart_RefusesGateRulesPath(t *testing.T) {
 // TestStart_RefusesMalformedGateRule is AP-8 and AP-81 on the shippable binary: a gate rule
 // naming a field a rule no longer has refuses start, naming the field; the Relay never runs
 // ungated because its rules did not load.
+//
+// Proves AP-54.
 func TestStart_RefusesMalformedGateRule(t *testing.T) {
 	bin, layout := shippableLayout(t)
 	cfg := layout.WriteConfig(t, layoutTOML(layout, freeAddr(t), "\n[[approval.rules]]\nname = \"CANARY\"\ncount = 1\n"))

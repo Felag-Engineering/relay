@@ -230,7 +230,7 @@ operation = "service.restart"
 // Every value a rule can get wrong is refused naming approval.rules.<field> and
 // the field's own line, never the value (RC-18).
 //
-// Proves AP-81, RC-37.
+// Proves AP-81, AP-6, RC-37.
 func TestValidate_GateRuleValuesRefusedNamingField(t *testing.T) {
 	cases := []struct {
 		name   string

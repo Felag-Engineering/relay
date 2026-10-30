@@ -172,6 +172,8 @@ func TestMachineMayDecideSomeoneElsesRequest(t *testing.T) {
 
 // TestMachineRelayKeepsTheAssertedLane: relaying a named human's in-band answer
 // records the asserted approver and never launders it into the verified lane.
+//
+// Proves AP-10, AP-39.
 func TestMachineRelayKeepsTheAssertedLane(t *testing.T) {
 	relayed := Decision{
 		AccountID: "acct-mike", Account: "mike", Approve: true,
@@ -221,6 +223,8 @@ func TestExpiredRequestIsNotDecidableOrSatisfiable(t *testing.T) {
 
 // TestDecisionMustCiteTheRequestsPlanHash stops a decision being replayed onto
 // a different Plan.
+//
+// Proves AP-20.
 func TestDecisionMustCiteTheRequestsPlanHash(t *testing.T) {
 	r := newTestRequest(t)
 	d := approveBy("acct-ana", "ana")

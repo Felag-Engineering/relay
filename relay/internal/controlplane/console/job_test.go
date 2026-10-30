@@ -1286,6 +1286,8 @@ func TestJob_FullPathGatedJobAnswersAttributionOnOneScreen(t *testing.T) {
 // TestJob_UnattributedApproverRendersInTheAssertedLane is the BLOCKING
 // finding 1 regression test: an approving Decision that carries a name but no
 // AccountID must never render as though the Relay authenticated it.
+//
+// Proves AP-40.
 func TestJob_UnattributedApproverRendersInTheAssertedLane(t *testing.T) {
 	tasks := []capability.TaskRow{mutateTask("node-a", jobs.OutcomeSuccess, "ok")}
 	q := &fakeQueries{

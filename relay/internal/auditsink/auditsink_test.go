@@ -1247,6 +1247,8 @@ func TestRecordRead(t *testing.T) {
 // asserted field is an audit record that quietly says less than the caller
 // said, which is the exact failure the verified/asserted split exists to
 // prevent.
+//
+// Proves AP-40.
 func TestAssertedLaneShapesAgree(t *testing.T) {
 	capType := reflect.TypeOf(capability.Assertions{})
 	auditType := reflect.TypeOf(audit.Asserted{})
@@ -1295,6 +1297,8 @@ func TestVerifiedLaneMappingIsTotal(t *testing.T) {
 // worst way for an audit trail to be wrong, and that is exactly what a branch
 // added later without the copy would produce — so this test walks every Kind
 // that can carry a link rather than sampling one.
+//
+// Proves AP-41.
 func TestRecordCarriesTheApprovalLinkOnEveryKind(t *testing.T) {
 	_, repo, _ := openSinkStore(t)
 	sink := New(repo, WithNewID(sequentialIDs("audit-")),

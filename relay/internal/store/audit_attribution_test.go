@@ -38,6 +38,8 @@ func attributedRecord(id, accountID, onBehalfOf string) audit.Record {
 // Acceptance: "A dispatch with on_behalf_of + traceparent shows both in its
 // audit record, marked asserted; the same record's Account/token fields are
 // marked verified." Both lanes survive a write and a read, intact and separate.
+//
+// Proves AP-40.
 func TestAudit_AttributionRoundTrips(t *testing.T) {
 	st, _ := openTestStore(t)
 	ctx := context.Background()

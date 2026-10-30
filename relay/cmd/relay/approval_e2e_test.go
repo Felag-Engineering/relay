@@ -273,7 +273,7 @@ func TestApprovalCallout_ParkDecideRun(t *testing.T) {
 // with the machine holding the admin role: its own request on the Control API
 // is refused whatever the rule says.
 //
-// Proves AP-48.
+// Proves AP-48, AP-11.
 func TestApprovalCallout_MachineCannotSatisfyItsOwnGate(t *testing.T) {
 	const permissive = `
 [[approval.rules]]
