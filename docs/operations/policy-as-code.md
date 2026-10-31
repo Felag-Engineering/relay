@@ -172,7 +172,9 @@ $ relay-daemon policy check policies/web-prod.toml --strict
   fragment's rule has no line.
 - **Always runs the self-reference lint**: a warning when the Policy reaches the daemon's own
   trust root. For **reads** (`file.read`, `file.checksum`, any path-taking Template Operation)
-  it probes only the secret-bearing files: the identity private key and the environment file.
+  it probes only the daemon's files the shipped default denies: the identity private key,
+  the temporary file the daemon writes a new identity key to (`key.pem.tmp` in the state
+  directory), and the environment file.
   For **writes** (Raw Exec edit in place, overwrite, copy or move over, delete, redirect,
   chmod, symlink) it probes the trust root at the packaged paths: the Policy file and
   directory, the environment file, the state directory's key, certificate, CA bundle and

@@ -145,15 +145,18 @@ args = [[
 ]]
 
 # The daemon's own files kept from the wire: the environment file (it holds no
-# secret, and is kept as defence in depth) and the Node's identity private key.
-# Its Policy, CA bundle, identity certificate, binary, unit and Template files
-# hold no secret — most are public or already in the Relay's hands — and are not
-# denied (ADR-0022).
+# secret, and is kept as defence in depth), the Node's identity private key, and
+# the temporary file the daemon writes a new identity key to before renaming it
+# into place (at enrollment and at each Certificate renewal). Its Policy, CA
+# bundle, identity certificate, binary, unit and Template files hold no secret —
+# most are public or already in the Relay's hands — and are not denied
+# (ADR-0022).
 [[deny]]
 name = "file.read"
 args = [[
     "/etc/relay-daemon/relay-daemon.env",
     "/var/lib/relay-daemon/key.pem",
+    "/var/lib/relay-daemon/key.pem.tmp",
 ]]
 
 # Template files under /etc/relay-daemon/templates.d/ are readable under
@@ -224,6 +227,7 @@ name = "file.checksum"
 args = [[
     "/etc/relay-daemon/relay-daemon.env",
     "/var/lib/relay-daemon/key.pem",
+    "/var/lib/relay-daemon/key.pem.tmp",
 ]]
 
 [[deny]]
