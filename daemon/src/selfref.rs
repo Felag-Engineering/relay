@@ -17,13 +17,14 @@
 //!
 //! This lint catches that in the IaC pipeline, before deploy.
 //!
-//! # Reads probe secrets; writes probe the trust root
+//! # Reads probe the denied files; writes probe the trust root
 //!
 //! The two halves differ on purpose (ADR-0021, amended 2026-10-16):
 //!
 //! - **Reads** — `file.read`, `file.checksum` and any supplied path-taking
-//!   Template — are probed only against the files that hold a secret: the
-//!   identity private key and the environment file. Reading a file that holds no
+//!   Template — are probed only against the daemon's files the shipped default
+//!   denies: the identity private key, the temporary file the daemon writes a
+//!   new identity key to, and the environment file. Reading a file that holds no
 //!   secret is never a finding.
 //! - **Writes** — the Raw Exec shapes — are probed against the whole packaged
 //!   trust root by exact path: the Policy file, the directory holding it, the
@@ -90,17 +91,19 @@ const OVERRIDE_DROP_IN: &str = "/etc/systemd/system/relay-daemon.service.d/overr
 const FILE_CHECKSUM: &str = "file.checksum";
 
 /// One protected target: a path inside the daemon's own trust root, and what it
-/// means for Policy's reach to include it. Every target is write-probed; only a
-/// file that holds a secret is read-probed. Conflating the two would tell an
-/// operator that a `file.read` rule "rewrites the gate", which is false and
-/// trains them to ignore the lint.
+/// means for Policy's reach to include it. A target is read-probed where the
+/// shipped default denies reading it, and write-probed where it is part of the
+/// trust root; the temporary file the daemon writes a new identity key to is
+/// read-probed only. Conflating the two would tell an operator that a
+/// `file.read` rule "rewrites the gate", which is false and trains them to
+/// ignore the lint.
 struct Target {
     path: PathBuf,
-    /// Why reading this path matters. `Some` only where the file holds a
-    /// secret; `None` means the path is write-probed only.
+    /// Why reading this path matters. `Some` only where the shipped default
+    /// denies reading the file; `None` means the path is write-probed only.
     read: Option<&'static str>,
-    /// Why writing this path matters.
-    write: &'static str,
+    /// Why writing this path matters. `None` means the path is read-probed only.
+    write: Option<&'static str>,
 }
 
 /// Where this machine's trust root lives. Built from the environment by `lint`,
@@ -120,8 +123,10 @@ fn targets_at(roots: &Roots) -> Vec<Target> {
     let mut targets = vec![Target {
         path: roots.policy_path.clone(),
         read: None,
-        write: "this daemon's own Policy file — a rule that can write it lets the wire \
+        write: Some(
+            "this daemon's own Policy file — a rule that can write it lets the wire \
                 rewrite the wire's own gate (ADR-0002)",
+        ),
     }];
 
     if let Some(dir) = roots
@@ -132,16 +137,20 @@ fn targets_at(roots: &Roots) -> Vec<Target> {
         targets.push(Target {
             path: dir.to_path_buf(),
             read: None,
-            write: "the directory holding this daemon's Policy file and Policy directory — \
+            write: Some(
+                "the directory holding this daemon's Policy file and Policy directory — \
                     replacing or removing it replaces the Policy (ADR-0002)",
+            ),
         });
     }
     targets.push(Target {
         path: roots.policy_dir.clone(),
         read: None,
-        write: "this daemon's Policy directory — a rule that can write into it adds, \
+        write: Some(
+            "this daemon's Policy directory — a rule that can write into it adds, \
                 replaces or removes a Policy fragment, which lets the wire rewrite the \
                 wire's own gate (ADR-0002)",
+        ),
     });
 
     targets.extend([
@@ -151,61 +160,89 @@ fn targets_at(roots: &Roots) -> Vec<Target> {
                 "this daemon's environment file — it configures the daemon; kept from the \
                  wire as defence in depth",
             ),
-            write: "this daemon's environment file — writing it injects configuration into \
+            write: Some(
+                "this daemon's environment file — writing it injects configuration into \
                     the daemon's next start",
+            ),
         },
         Target {
             path: roots.state_dir.join("key.pem"),
             read: Some("this Node's private key — reading it is identity theft (ADR-0006)"),
-            write: "this Node's private key — writing it is impersonation (ADR-0006)",
+            write: Some("this Node's private key — writing it is impersonation (ADR-0006)"),
+        },
+        // The staging sibling of `key.pem` that the identity writer renames into place.
+        Target {
+            path: roots.state_dir.join("key.pem.tmp"),
+            read: Some(
+                "the temporary file this daemon writes a new identity key to before renaming \
+                 it into place — reading it during enrollment or a Certificate renewal is \
+                 identity theft (ADR-0006)",
+            ),
+            write: None,
         },
         Target {
             path: roots.state_dir.join("cert.pem"),
             read: None,
-            write: "this Node's identity certificate — replacing it breaks or redirects the \
+            write: Some(
+                "this Node's identity certificate — replacing it breaks or redirects the \
                     Node's identity (ADR-0006)",
+            ),
         },
         Target {
             path: roots.state_dir.join("ca_bundle.pem"),
             read: None,
-            write: "this Node's pinned CA bundle — replacing it changes which Relay the daemon \
+            write: Some(
+                "this Node's pinned CA bundle — replacing it changes which Relay the daemon \
                     trusts (ADR-0005, ADR-0006)",
+            ),
         },
         Target {
             path: roots.state_dir.join(crate::identity::PERSISTED_ADDR_FILE),
             read: None,
-            write: "this Node's persisted Relay address — writing it redirects the daemon to \
+            write: Some(
+                "this Node's persisted Relay address — writing it redirects the daemon to \
                     another Relay",
+            ),
         },
         Target {
             path: roots.template_dir.clone(),
             read: None,
-            write: "this daemon's Template Operation directory — writing into it adds \
+            write: Some(
+                "this daemon's Template Operation directory — writing into it adds \
                     vocabulary without an operator (ADR-0021)",
+            ),
         },
         Target {
             path: PathBuf::from(PACKAGED_BINARY),
             read: None,
-            write: "the daemon binary itself — writing it replaces the enforcement engine \
+            write: Some(
+                "the daemon binary itself — writing it replaces the enforcement engine \
                     (ADR-0014: upgrades come from config management, never from the wire)",
+            ),
         },
         Target {
             path: PathBuf::from(PACKAGED_UNIT),
             read: None,
-            write: "the daemon's packaged systemd unit — writing it removes the hardening the \
+            write: Some(
+                "the daemon's packaged systemd unit — writing it removes the hardening the \
                     privilege posture depends on",
+            ),
         },
         Target {
             path: PathBuf::from(OVERRIDE_UNIT),
             read: None,
-            write: "the daemon's override systemd unit — writing it removes the hardening the \
+            write: Some(
+                "the daemon's override systemd unit — writing it removes the hardening the \
                     privilege posture depends on",
+            ),
         },
         Target {
             path: PathBuf::from(OVERRIDE_DROP_IN),
             read: None,
-            write: "the daemon's systemd drop-in — writing it removes the hardening the \
+            write: Some(
+                "the daemon's systemd drop-in — writing it removes the hardening the \
                     privilege posture depends on",
+            ),
         },
     ]);
 
@@ -217,8 +254,10 @@ fn targets_at(roots: &Roots) -> Vec<Target> {
             targets.push(Target {
                 path: exe.clone(),
                 read: None,
-                write: "the daemon binary itself, at the path this check is running from — \
+                write: Some(
+                    "the daemon binary itself, at the path this check is running from — \
                         writing it replaces the enforcement engine (ADR-0014)",
+                ),
             });
         }
     }
@@ -292,7 +331,7 @@ fn lint_at(policy: &Policy, path_slot_ops: &[String], roots: &Roots) -> Vec<Lint
     for target in targets_at(roots) {
         let path = target.path.to_string_lossy().to_string();
 
-        // --- structured Operations: reads of a secret-bearing file only ---
+        // --- structured Operations: reads of a file the shipped default denies only ---
         if let Some(why) = target.read {
             for &name in &op_names {
                 // A single-argument probe: the arg-shape a path-taking Operation
@@ -310,8 +349,8 @@ fn lint_at(policy: &Policy, path_slot_ops: &[String], roots: &Roots) -> Vec<Lint
                         location: format!("[[operation]] (name={name:?})"),
                         message: format!(
                             "self-reference: Policy allows {name} of {path} — {why}. \
-                             Reading it discloses a secret; deny it explicitly ([[deny]] beats \
-                             allow) or narrow the allowed args. (Matched rule: {rule:?}.)"
+                             The shipped default denies reading it; deny it explicitly ([[deny]] \
+                             beats allow) or narrow the allowed args. (Matched rule: {rule:?}.)"
                         ),
                     });
                     // One finding per target: the point is made.
@@ -321,6 +360,7 @@ fn lint_at(policy: &Policy, path_slot_ops: &[String], roots: &Roots) -> Vec<Lint
         }
 
         // --- Raw Exec: probe the plausible write shapes ---
+        let Some(why) = target.write else { continue };
         for argv in raw_exec_probes(&path) {
             if let Some(rule) = probe_allows(policy, &Request::RawExec { argv: &argv }) {
                 findings.push(LintFinding {
@@ -330,7 +370,7 @@ fn lint_at(policy: &Policy, path_slot_ops: &[String], roots: &Roots) -> Vec<Lint
                         "self-reference: Policy allows the Raw Exec {argv:?} — {}. \
                          Narrow the allow regex, or add a [raw_exec] deny for this path \
                          (deny beats allow). (Matched pattern: {rule:?}.)",
-                        target.write
+                        why
                     ),
                 });
                 // One finding per target: further shapes would only repeat it.
@@ -477,7 +517,7 @@ allowed_args = [["*"]]
     }
 
     /// deny-beats-allow is honored for free, because the lint asks the real
-    /// engine: an explicit deny for the secret-bearing paths silences the finding.
+    /// engine: an explicit deny for the read-probed paths silences the finding.
     #[test]
     fn an_explicit_deny_silences_the_finding() {
         let wide = parse(
@@ -513,7 +553,7 @@ args = [[{}]]
         let findings = lint_at(&denied, &[], &packaged());
         assert!(
             findings.is_empty(),
-            "an explicit deny for every secret-bearing path must silence every finding; \
+            "an explicit deny for every read-probed path must silence every finding; \
              got {findings:#?}"
         );
     }
@@ -621,9 +661,10 @@ allowed_args = [["*"]]
         assert!(lint_at(&policy, &[], &packaged()).is_empty());
     }
 
-    /// Reads stop at secrets: with wildcard reads allowed, only the identity
-    /// private key and the environment file are findings.
-    // Proves DI-39.
+    /// Reads stop at the denied files: with wildcard reads allowed, only the
+    /// identity private key, the temporary file the daemon writes a new identity
+    /// key to, and the environment file are findings.
+    // Proves DI-49.
     #[test]
     fn lint_read_probes_stop_at_secrets() {
         let findings = lint_at(&parse(WILDCARD_READS), &[], &packaged());
@@ -635,11 +676,14 @@ allowed_args = [["*"]]
             "got {findings:#?}"
         );
         let named = read_finding_paths(&findings);
-        let expected: std::collections::BTreeSet<String> =
-            ["/var/lib/relay-daemon/key.pem", ENV_FILE]
-                .iter()
-                .map(|s| s.to_string())
-                .collect();
+        let expected: std::collections::BTreeSet<String> = [
+            "/var/lib/relay-daemon/key.pem",
+            "/var/lib/relay-daemon/key.pem.tmp",
+            ENV_FILE,
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
         assert_eq!(named, expected, "got {findings:#?}");
 
         for not_a_secret in [
@@ -664,7 +708,7 @@ allowed_args = [["*"]]
 
     /// `file.checksum` is a read probe on every run, not only when `--templates`
     /// supplies it.
-    // Proves DI-39.
+    // Proves DI-49.
     #[test]
     fn checksum_is_probed_without_templates() {
         let policy = parse(
@@ -676,7 +720,7 @@ allowed_args = [["*"]]
         );
         let findings = lint_at(&policy, &[], &packaged());
 
-        assert_eq!(findings.len(), 2, "got {findings:#?}");
+        assert_eq!(findings.len(), 3, "got {findings:#?}");
         assert!(
             findings
                 .iter()
@@ -688,12 +732,16 @@ allowed_args = [["*"]]
             named.contains("/var/lib/relay-daemon/key.pem"),
             "got {named:?}"
         );
+        assert!(
+            named.contains("/var/lib/relay-daemon/key.pem.tmp"),
+            "got {named:?}"
+        );
         assert!(named.contains(ENV_FILE), "got {named:?}");
     }
 
     /// Writes cover the packaged trust root by exact path: one finding per
     /// target, every one a Raw Exec finding.
-    // Proves DI-39.
+    // Proves DI-49.
     #[test]
     fn lint_write_probes_cover_packaged_trust_root() {
         let findings = lint_at(&parse(SED_ALLOW), &[], &packaged());
@@ -728,6 +776,13 @@ allowed_args = [["*"]]
             );
         }
         assert_eq!(findings.len(), expected.len(), "got {findings:#?}");
+        let temp_key_needle = format!("{:?}]", "/var/lib/relay-daemon/key.pem.tmp");
+        assert!(
+            findings
+                .iter()
+                .all(|f| !f.message.contains(&temp_key_needle)),
+            "the temporary key file is a read probe only (DI-49); got {findings:#?}"
+        );
         assert!(
             findings
                 .iter()
@@ -744,7 +799,7 @@ allowed_args = [["*"]]
     }
 
     /// The running binary is a write probe only.
-    // Proves DI-39.
+    // Proves DI-49.
     #[test]
     fn current_exe_is_a_write_probe_only() {
         let reads = lint_at(&parse(WILDCARD_READS), &[], &packaged());
@@ -762,7 +817,7 @@ allowed_args = [["*"]]
     }
 
     /// An exe equal to a packaged path is one target, not two.
-    // Proves DI-39.
+    // Proves DI-49.
     #[test]
     fn exe_equal_to_a_packaged_path_is_not_duplicated() {
         let roots = Roots {

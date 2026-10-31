@@ -1,5 +1,5 @@
 //! The shipped default Policy passes its own `policy check --strict` with the
-//! shipped Template catalog loaded (DI-28; ADR-0022, amended 2026-10-16).
+//! shipped Template catalog loaded (DI-48; ADR-0022).
 //!
 //! It runs on 0644/0755 copies, as `dev_fleet_fixtures.rs` does: `--templates`
 //! refuses a group- or world-writable file, and a checkout's modes follow the
@@ -35,7 +35,7 @@ fn chmod(path: &Path, mode: u32) {
         .unwrap_or_else(|e| panic!("chmod {mode:o} {}: {e}", path.display()));
 }
 
-// Proves DI-28.
+// Proves DI-48.
 #[test]
 fn default_policy_passes_strict_with_catalog() {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));

@@ -195,7 +195,7 @@ Where the pieces come from:
   Check the composed Policy with
   `relay-daemon policy check /etc/relay-daemon/policy.toml --policy-dir /etc/relay-daemon/policy.d --templates /etc/relay-daemon/templates.d --strict`.
   `--strict` passes on the shipped default only when `--templates` is given, because without
-  it the read catalog's Operation names are unknown (DI-28). The annotated example is
+  it the read catalog's Operation names are unknown (DI-48). The annotated example is
   [`daemon/policy.example.toml`](../../daemon/policy.example.toml); the shipped default
   (`read` pre-allowed with a confidentiality deny-list, `mutate` and Raw Exec opt-in,
   ADR-0022) is [`daemon/policy.default.toml`](../../daemon/policy.default.toml).
