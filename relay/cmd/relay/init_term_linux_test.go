@@ -166,7 +166,7 @@ func TestInitFirstAdmin_TwoDifferentEntriesCreateNothing(t *testing.T) {
 	st := openInitStore(t)
 	io := newInitIO(t, "")
 	go typeLines(t, controller, "correct horse battery staple", "correct horse battery stapler")
-	code := initFirstAdmin(context.Background(), st, "alice", 0, term, io.stdout, io.stderr)
+	code := initFirstAdmin(context.Background(), st, "alice", 0, term, io.stdout, io.stderr, nil)
 	if code != 1 {
 		t.Fatalf("exit %d, want 1", code)
 	}
@@ -259,5 +259,27 @@ func TestReadNoEcho_RefusesALineAtTheTerminalLimit(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("readNoEcho did not return")
+	}
+}
+
+// Proves EN-39: init offers the mint form only with a terminal on both stdin and stdout.
+func TestInitInteractive_NeedsATerminalOnStdinAndStdout(t *testing.T) {
+	_, term := openPTY(t)
+	file, err := os.CreateTemp(t.TempDir(), "stdio")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	for name, c := range map[string]struct {
+		stdin, stdout *os.File
+		want          bool
+	}{
+		"both terminals":   {term, term, true},
+		"stdin is a file":  {file, term, false},
+		"stdout is a file": {term, file, false},
+	} {
+		if got := initInteractive(c.stdin, c.stdout); got != c.want {
+			t.Errorf("%s: initInteractive = %v, want %v", name, got, c.want)
+		}
 	}
 }

@@ -12,9 +12,12 @@ package main
 //
 // Every credential change it makes is in one store transaction with its audit records,
 // attributed to local-host rather than to any Account: a change the trail cannot show
-// is not made. The credential goes to stdout alone; every diagnostic goes to stderr. The
-// password is read from the terminal with echo off, or as one line from a stdin that is
-// not a terminal, and never from a flag or the environment (invariant 11).
+// is not made. On a terminal, --admin then also mints the first Enrollment Token through
+// the capability layer's mint form, as the new admin (EN-39, EN-46; ADR-0030).
+// Credentials go to stdout, each alone on its line: the API Token, then on a terminal
+// the join string. Every diagnostic goes to stderr. The password is read from the
+// terminal with echo off, or as one line from a stdin that is not a terminal, and
+// never from a flag or the environment (invariant 11).
 
 import (
 	"bufio"
@@ -47,11 +50,17 @@ Run as the Relay's own account, after the Relay has started once:
                 admin Account named NAME, its Console password (prompted for, not
                 echoed) and its first API Token, which is printed to stdout once.
                 With any human Account present it creates nothing, prints no
-                credential, and reports what is there.
+                credential, and reports what is there. Run in a terminal (stdin
+                and stdout), it then asks how many Nodes the first Enrollment
+                Token is for (1 to 256) and when it expires (default 2h), mints
+                it as NAME, and shows the command sudo relay-daemon join and,
+                apart from it, the join string, once. Without a terminal it
+                mints none: mint one on the Console's Add Nodes form or through
+                the Control API.
 --recover NAME  Mint a new API Token for NAME, an enabled human admin, and print it
                 to stdout once. For an admin who has lost every API Token.
 --ttl DURATION  Lifetime of the API Token minted, e.g. 24h. Default 168h (seven
-                days); --ttl 0 means no expiry.
+                days); --ttl 0 means no expiry. It is not the Enrollment Token's.
 --config PATH   The Relay's configuration file (default /etc/relay/relay.toml).
 
 The Console password set by --admin is the only one any surface sets, and nothing
@@ -144,15 +153,15 @@ func parseInitFlags(args []string, stderr *os.File) (opts initOptions, exitCode 
 // openRelayStoreForInit runs the server's own front door, in the server's order
 // (ADR-0043): no bypass. It returns the Relay's existing store, or the exit
 // code to stop with.
-func openRelayStoreForInit(configPath string, envErr error, stderr *os.File) (*store.Store, int) {
+func openRelayStoreForInit(configPath string, envErr error, stderr *os.File) (*store.Store, Config, int) {
 	if envErr != nil {
 		fmt.Fprintf(stderr, "relay init: %v\n", envErr)
-		return nil, 1
+		return nil, Config{}, 1
 	}
 	sc, err := loadConfig(configPath)
 	if err != nil {
 		fmt.Fprintf(stderr, "relay init: %v\n", err)
-		return nil, 1
+		return nil, Config{}, 1
 	}
 	for _, w := range sc.Warnings {
 		fmt.Fprintf(stderr, "relay init: warning: %s\n", w.String())
@@ -161,17 +170,17 @@ func openRelayStoreForInit(configPath string, envErr error, stderr *os.File) (*s
 	if err := startup.CheckExistingStore(storePath); err != nil {
 		if errors.Is(err, startup.ErrStoreAbsent) {
 			fmt.Fprintf(stderr, "relay init: the Relay's store %s does not exist yet. Start the Relay first: it creates its CA and store at its first start, and init acts only on that store.\n", storePath)
-			return nil, 1
+			return nil, Config{}, 1
 		}
 		fmt.Fprintf(stderr, "relay init: start-time file check refused: %v\n", err)
-		return nil, 1
+		return nil, Config{}, 1
 	}
 	st, err := store.Open(storePath)
 	if err != nil {
 		fmt.Fprintf(stderr, "relay init: open store: %v\n", err)
-		return nil, 1
+		return nil, Config{}, 1
 	}
-	return st, 0
+	return st, sc.Config, 0
 }
 
 // runInitCommand implements `relay init` and returns the process exit code.
@@ -181,7 +190,7 @@ func runInitCommand(args []string, envErr error, stdin, stdout, stderr *os.File)
 	if done {
 		return code
 	}
-	st, code := openRelayStoreForInit(opts.configPath, envErr, stderr)
+	st, cfg, code := openRelayStoreForInit(opts.configPath, envErr, stderr)
 	if st == nil {
 		return code
 	}
@@ -199,12 +208,19 @@ func runInitCommand(args []string, envErr error, stdin, stdout, stderr *os.File)
 	if opts.recoverName != "" {
 		return initRecover(ctx, st, opts.recoverName, ttl, stdout, stderr)
 	}
-	return initFirstAdmin(ctx, st, opts.admin, ttl, stdin, stdout, stderr)
+	// --recover never offers the form: the mint belongs to the run that creates
+	// the founding admin (ADR-0030).
+	var openForm func() (*initMintForm, error)
+	if initInteractive(stdin, stdout) {
+		openForm = func() (*initMintForm, error) { return newInitMintForm(st, cfg, stdin, stdout, stderr) }
+	}
+	return initFirstAdmin(ctx, st, opts.admin, ttl, stdin, stdout, stderr, openForm)
 }
 
 // initFirstAdmin creates the first admin on a store with no human Account, or
-// reports state and emits nothing.
-func initFirstAdmin(ctx context.Context, st *store.Store, name string, ttl time.Duration, stdin, stdout, stderr *os.File) int {
+// reports state and emits nothing. A non-nil openForm builds the mint form for
+// the first Enrollment Token; nil means not interactive.
+func initFirstAdmin(ctx context.Context, st *store.Store, name string, ttl time.Duration, stdin, stdout, stderr *os.File, openForm func() (*initMintForm, error)) int {
 	if err := accounts.ValidateName(name); err != nil {
 		fmt.Fprintf(stderr, "relay init: %q is not a valid Account name: 1 to 64 characters of letters, digits, '.', '_' and '-', starting with a letter or digit.\n", name)
 		return 2
@@ -225,6 +241,19 @@ func initFirstAdmin(ctx context.Context, st *store.Store, name string, ttl time.
 	for _, a := range all {
 		if accounts.NormalizeName(a.Name) == accounts.NormalizeName(name) {
 			fmt.Fprintf(stderr, "relay init: an Account named %q already exists (a %s Account); choose another name. Nothing was created.\n", a.Name, a.Kind)
+			return 1
+		}
+	}
+
+	// Built before anything is made, so a CA or address that cannot serve the
+	// mint refuses with nothing created, and a re-run that only reports state
+	// never opens the CA.
+	var form *initMintForm
+	if openForm != nil {
+		form, err = openForm()
+		if err != nil {
+			fmt.Fprintf(stderr, "relay init: %v\n", err)
+			fmt.Fprintln(stderr, "Nothing was created.")
 			return 1
 		}
 	}
@@ -281,9 +310,29 @@ func initFirstAdmin(ctx context.Context, st *store.Store, name string, ttl time.
 	fmt.Fprintf(stderr, "Created %s (%s), a human admin, with its Console password and its first API Token %s.\n", created.Name, created.ID, tokenID)
 	fmt.Fprintf(stderr, "Recorded on the audit trail as %s, %s and %s, attributed to %s.\n",
 		audit.KindAccountCreate, audit.KindPasswordSet, audit.KindAPITokenMint, audit.PrincipalLocalHost)
+
+	// The mint comes before the founding credential is emitted (ADR-0030); stdout
+	// still carries the API Token first and the join string last.
+	code := 0
+	var minted capability.MintedEnrollmentToken
+	var mintedOK bool
+	if form == nil {
+		fmt.Fprintln(stderr, initNoTerminalNoMint)
+	} else if minted, mintedOK = form.ask(ctx, foundingAdminPrincipal(created)); !mintedOK {
+		fmt.Fprintln(stderr, initMintLater)
+		code = 1
+	}
 	fmt.Fprintln(stderr, "The API Token below is shown once and cannot be recovered; a lost one is replaced with relay init --recover.")
 	fmt.Fprintln(stderr, "Keep the Console password safe: no surface resets it, and relay init --recover does not.")
-	return emitCredential(stdout, stderr, plaintext.Reveal(), tokenID)
+	if c := emitCredential(stdout, stderr, plaintext.Reveal(), tokenID); c != 0 {
+		code = c
+	}
+	if mintedOK {
+		if c := form.reveal(minted, foundingAdminPrincipal(created).Attribution()); c != 0 && code == 0 {
+			code = c
+		}
+	}
+	return code
 }
 
 // firstAdminRecords builds the three records of the first admin's creation, in

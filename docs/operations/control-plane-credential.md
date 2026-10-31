@@ -29,10 +29,22 @@ Console password for alice (not echoed):
 Again:
 Created alice (acct-…), a human admin, with its Console password and its first API Token 7f3c….
 Recorded on the audit trail as account_create, password_set and api_token_mint, attributed to local-host.
+Now the first Enrollment Token, for the Nodes that join first.
+If you abandon this prompt, the admin already exists: relay init --recover alice mints its API Token again.
+How many Nodes is it for? (1 to 256): 3
+It expires after (default 2h):
 The API Token below is shown once and cannot be recovered; a lost one is replaced with relay init --recover.
 Keep the Console password safe: no surface resets it, and relay init --recover does not.
 glp_7f3c….g7Kx…_Q
+…
+glp_join_…
 ```
+
+In a terminal, `init` asks for the first Enrollment Token's count and expiry and shows its join
+string after the API Token ([enrollment.md](enrollment.md)). Piped, as in the vault example
+below, stdout is not a terminal, so it mints none and stdout carries the API Token alone.
+When init mints, do not redirect or capture its output: the join string would land in the
+capture. To pipe init's output, give it a non-terminal stdin, and then it mints nothing.
 
 The name is yours to choose; no Account name is reserved. `init` reads `/etc/relay/relay.toml`
 (or `--config <path>`) through the same start-time check as the Relay, so it refuses to run as

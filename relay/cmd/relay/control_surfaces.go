@@ -575,13 +575,16 @@ func consoleEnrollmentTokensOrNil(e *capability.EnrollmentTokens) console.Enroll
 	if e == nil {
 		return nil
 	}
-	return consoleEnrollmentMint{tokens: e}
+	return formEnrollmentMint{tokens: e}
 }
 
-// consoleEnrollmentMint exposes only the mint-form entry of the capability mint.
-type consoleEnrollmentMint struct{ tokens *capability.EnrollmentTokens }
+// formEnrollmentMint exposes only the mint-form entry of the capability mint
+// (EN-46). Every mint form, the Console's and relay init's, holds this value
+// and never *capability.EnrollmentTokens, which could be asserted to the
+// Control API's entry that accepts an unlimited token (EN-31).
+type formEnrollmentMint struct{ tokens *capability.EnrollmentTokens }
 
-func (m consoleEnrollmentMint) MintEnrollmentTokenFromForm(ctx context.Context, p capability.Principal, f capability.EnrollmentMintForm) (capability.MintedEnrollmentToken, error) {
+func (m formEnrollmentMint) MintEnrollmentTokenFromForm(ctx context.Context, p capability.Principal, f capability.EnrollmentMintForm) (capability.MintedEnrollmentToken, error) {
 	return m.tokens.MintEnrollmentTokenFromForm(ctx, p, f)
 }
 

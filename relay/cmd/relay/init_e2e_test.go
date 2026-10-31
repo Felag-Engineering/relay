@@ -503,3 +503,23 @@ func TestInit_RefusesAbsentStore(t *testing.T) {
 	r.startAndStop(t)
 	r.firstAdmin(t, "alice")
 }
+
+// EN-39: without a terminal init mints no Enrollment Token and says how to mint
+// later, over the shippable binary.
+func TestInit_WithoutATerminalMintsNoEnrollmentToken(t *testing.T) {
+	r := newInitRelay(t)
+	r.start(t)
+	out, errOut, code := r.init(t, initE2EPassword+"\n", "--admin", "alice")
+	if code != 0 {
+		t.Fatalf("relay init --admin alice: exit %d\nstderr: %s", code, errOut)
+	}
+	oneCredential(t, out, errOut)
+	if !strings.Contains(errOut, "Add Nodes") {
+		t.Errorf("stderr = %q, want how to mint later", errOut)
+	}
+	for _, rec := range r.trail(t) {
+		if rec.Kind == audit.KindTokenMint {
+			t.Errorf("a token_mint record exists: %+v", rec)
+		}
+	}
+}
