@@ -26,7 +26,7 @@ import (
 
 // EnrollmentTokenMinter is the write seam this file holds. It carries only the
 // mint-form entry, so the Console cannot ask for unlimited use.
-// The composition root passes a narrowing wrapper (consoleEnrollmentMint)
+// The composition root passes a narrowing wrapper (formEnrollmentMint)
 // holding only this method.
 type EnrollmentTokenMinter interface {
 	MintEnrollmentTokenFromForm(ctx context.Context, p capability.Principal, f capability.EnrollmentMintForm) (capability.MintedEnrollmentToken, error)

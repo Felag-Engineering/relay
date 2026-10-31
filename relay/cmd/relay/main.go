@@ -516,10 +516,6 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 	}
 
 	tokenSvc := enroll.NewService(st.Tokens())
-	enrollmentMinter, err := enroll.NewMinter(tokenSvc, relayCA, advertisedAddress)
-	if err != nil {
-		return nil, nil, fmt.Errorf("enrollment minter: %w", err)
-	}
 	revocationSvc := revocation.NewService(denylist, conns, reg, tokenSvc, revocation.WithLogger(logger))
 
 	// policyCache is the display-only effective-Policy cache (invariant 12 /
@@ -622,9 +618,12 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 
 	// The one Enrollment Token mint, over the same Control (so the same RoleGate
 	// and trail). The Control API and the Console's form are both handed it; MCP
-	// has no mint (EN-22).
-	enrollmentTokens := capability.NewEnrollmentTokens(freezeControl,
-		enrollmentTokenIssuer{minter: enrollmentMinter, tokens: tokenSvc})
+	// has no mint (EN-22). relay init builds the same mint through
+	// newEnrollmentMint.
+	enrollmentTokens, enrollmentMinter, err := newEnrollmentMint(freezeControl, tokenSvc, relayCA, advertisedAddress)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	// The Policy alias write: the one alias writer, over the same Control,
 	// Recorder and trail. Only the Console holds it (QRY-36).

@@ -293,3 +293,38 @@ func TestValidCA_Refusals(t *testing.T) {
 		})
 	}
 }
+
+// Proves RC-28: OpenExisting refuses an absent CA and creates nothing.
+func TestOpenExisting_RefusesAnAbsentCAAndCreatesNothing(t *testing.T) {
+	absent := filepath.Join(t.TempDir(), "ca")
+	if _, err := openCA(absent, plainFiles{}, false); !errors.Is(err, ErrAbsent) {
+		t.Fatalf("an absent directory: err = %v, want ErrAbsent", err)
+	}
+	if _, err := os.Lstat(absent); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the directory exists afterwards: %v", err)
+	}
+
+	empty := t.TempDir()
+	if _, err := openCA(empty, plainFiles{}, false); !errors.Is(err, ErrAbsent) {
+		t.Fatalf("an empty directory: err = %v, want ErrAbsent", err)
+	}
+	if entries, _ := os.ReadDir(empty); len(entries) != 0 {
+		t.Errorf("the empty directory holds %d entries afterwards", len(entries))
+	}
+}
+
+// Proves RC-28: OpenExisting loads the CA Open created, the same one.
+func TestOpenExisting_LoadsTheCAOpenCreated(t *testing.T) {
+	dir := t.TempDir()
+	created, err := openPlain(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := openCA(dir, plainFiles{}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Fingerprint() != created.Fingerprint() {
+		t.Errorf("fingerprint = %s, want %s", loaded.Fingerprint(), created.Fingerprint())
+	}
+}

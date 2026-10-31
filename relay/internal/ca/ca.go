@@ -106,6 +106,18 @@ func Open(dir string) (*CA, error) {
 	return open(dir, checkedFiles{})
 }
 
+// ErrAbsent is returned by OpenExisting when the Relay's CA has not been created.
+var ErrAbsent = errors.New("ca: the Relay's CA does not exist yet")
+
+// OpenExisting loads the CA in dir exactly as Open does, private key included
+// and validated the same way, and creates nothing: it refuses with ErrAbsent
+// when dir is absent or holds neither CA file. It is for a caller that acts on
+// the CA the Relay created at its own first start (RC-28), and that runs as the
+// Relay's Unix user, which already reads the key.
+func OpenExisting(dir string) (*CA, error) {
+	return openCA(dir, checkedFiles{}, false)
+}
+
 // generatedFiles opens the CA directory and its private key. Open's is
 // hostfile's generated-material rule; this package's tests substitute their
 // own, because the check refuses every temporary directory a test can make.
@@ -125,8 +137,20 @@ func (checkedFiles) openKey(path string) (*os.File, error) {
 }
 
 func open(dir string, files generatedFiles) (*CA, error) {
-	if err := os.MkdirAll(dir, dirPerm); err != nil {
-		return nil, fmt.Errorf("ca: create dir: %w", err)
+	return openCA(dir, files, true)
+}
+
+// openCA is Open's body. With mayCreate false it never creates the directory
+// or the CA.
+func openCA(dir string, files generatedFiles, mayCreate bool) (*CA, error) {
+	if mayCreate {
+		if err := os.MkdirAll(dir, dirPerm); err != nil {
+			return nil, fmt.Errorf("ca: create dir: %w", err)
+		}
+	} else if _, err := os.Lstat(dir); errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("%w: %s", ErrAbsent, dir)
+	} else if err != nil {
+		return nil, fmt.Errorf("ca: stat dir: %w", err)
 	}
 	// The checked directory's descriptor stays open: the certificate is opened relative to
 	// it, so it comes from the directory that was decided on.
@@ -149,6 +173,9 @@ func open(dir string, files generatedFiles) (*CA, error) {
 	case keyExists && certExists:
 		return load(d, dir, files)
 	case !keyExists && !certExists:
+		if !mayCreate {
+			return nil, fmt.Errorf("%w: %s", ErrAbsent, dir)
+		}
 		if err := create(dir); err != nil {
 			return nil, err
 		}
