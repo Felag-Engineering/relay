@@ -386,36 +386,11 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 		return nil, nil, fmt.Errorf("open store: %w", err)
 	}
 
-	// The one-shot declined-Label startup scan (threat model R13) runs
-	// here: immediately after Open, before anything else touches the store,
-	// so the signal fires even if a later startup step fails. A failed scan
-	// is a diagnostic failure, never a startup refusal — logged and
-	// tolerated rather than returned, so the ABSENCE of the signal is itself
-	// visible instead of silently taking the whole Relay down with it. Not
-	// called from store.Open itself: Open's other caller is `relay init`, and
-	// a fleet-wide warning dump in the middle of minting a token is noise in
-	// the wrong place.
-	// Bounded, because the scan holds the process's ONLY SQLite connection
-	// (SetMaxOpenConns(1)) for O(total label rows) ahead of the listener, and
-	// nothing caps how many labels a Node may report. A hundred Nodes each
-	// holding ~10^5 well-formed labels is tens of millions of rows — invisible
-	// to the scan's OUTPUT but not to its cost, and on the startup critical
-	// path there is no request to cancel and no operator to wait for it. The
-	// failure path below is already "warn and continue", so a deadline
-	// degrades exactly as designed rather than adding a new outcome.
-	scanCtx, cancelScan := context.WithTimeout(context.Background(), declinedScanBudget)
-	defer cancelScan()
-	if _, err := st.ScanDeclinedLabels(scanCtx); err != nil {
-		slog.Warn("declined-label startup scan failed", "err", err)
-	}
-	// The same signal for the self-reported fields getNode declines on read
-	// (the Policy fingerprint, Facts, and the rest), on the same terms and
-	// within the same budget: O(Nodes), after the label scan. A label scan
-	// that spends the budget leaves this one to fail, which warns and
-	// continues like the label scan's own failure.
-	if _, err := st.ScanDeclinedSelfReports(scanCtx); err != nil {
-		slog.Warn("declined self-report startup scan failed", "err", err)
-	}
+	// Immediately after Open, before anything else touches the store, so the
+	// signal fires even if a later startup step fails. Not called from
+	// store.Open itself: Open's other caller is `relay init`, and a fleet-wide
+	// warning dump in the middle of minting a token is noise in the wrong place.
+	runDeclinedScans(st)
 
 	// denylist and conns implement immediate Node revocation (ADR-0006).
 	// denylist.Add is reached at runtime by revocationSvc.RevokeNode (the
@@ -503,51 +478,17 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 		},
 	})
 
-	// The Relay's one TLS server certificate, presented on both listeners
-	// (ADR-0031 §1) and re-issued in-process before it expires so the fleet
-	// never fail-closes on an expired leaf (ADR-0031 §5). The listeners share
-	// the certificate and nothing else: each builds its own tls.Config, and
-	// only the node plane asks for a client certificate (EN-9). Sharing a
-	// tls.Config would share ClientAuth, so never share one.
-	//
-	// Failing to list the host's addresses is a warning, not a refusal: they
-	// are a convenience on top of the configured names (tls.hostname, the
-	// advertised host, tls.extra_names), and a detector must not become an
-	// outage.
-	//
-	// The certificate names the advertised host and tls.extra_names so that no
-	// join string carries a host it does not name (RC-46): the minter below
-	// receives the same advertisedAddress.
-	advertisedAddress, err := enroll.AdvertisedAddress(cfg.AdvertisedAddress, cfg.Hostname, cfg.Addr)
+	// The Relay's one TLS server certificate, presented on both listeners and
+	// re-issued in-process before it expires so the fleet never fail-closes on
+	// an expired leaf (ADR-0031 §5). The listeners share the certificate and
+	// nothing else: each builds its own tls.Config, and only the node plane asks
+	// for a client certificate (EN-9). Sharing a tls.Config would share
+	// ClientAuth, so never share one.
+	var advertisedAddress string
+	serverCert, advertisedAddress, err = issueServerCertificate(cfg, relayCA, appMetrics)
 	if err != nil {
-		return nil, nil, fmt.Errorf("advertised node-plane address: %w", err)
+		return nil, nil, err
 	}
-	advertisedHost, _, err := net.SplitHostPort(advertisedAddress)
-	if err != nil {
-		return nil, nil, fmt.Errorf("advertised node-plane address: %w", err)
-	}
-	names, err := serverCertificateNames(cfg.Hostname, advertisedHost, cfg.ExtraNames, net.InterfaceAddrs)
-	if err != nil {
-		slog.Warn("server certificate names only tls.hostname, the advertised host, tls.extra_names and loopback: this host's addresses could not be listed; a systemd unit whose RestrictAddressFamilies omits AF_NETLINK prevents it",
-			"err", err)
-	}
-	if names.Omitted > 0 {
-		slog.Warn("server certificate omits some of this host's addresses",
-			"omitted", names.Omitted, "kept", maxDetectedAddresses)
-	}
-	presentedOn := []metrics.ServerCertListener{metrics.ListenerNodePlane}
-	if cfg.ControlEnabled {
-		presentedOn = append(presentedOn, metrics.ListenerControlPlane)
-	}
-	serverCert, err = relayCA.NewServerCertificate(names.DNSNames, names.IPAddresses,
-		ca.WithRotationObserver(serverCertObserver(appMetrics, presentedOn...)))
-	if err != nil {
-		return nil, nil, fmt.Errorf("issue server certificate: %w", err)
-	}
-	slog.Info("relay server certificate",
-		"server_cert_fingerprint", serverCert.Fingerprint(),
-		"dns_names", names.DNSNames,
-		"ip_addresses", ipStrings(names.IPAddresses))
 
 	// The real adapter to the SQLite-backed audit trail is the Recorder
 	// below, and the real persisted Relay-wide emergency stop (ADR-0013 —
@@ -570,16 +511,8 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 	// connections, not by a timer that a sleeping process could miss.
 	creds := transport.ServerCredentials(serverCert.GetCertificate, clientCAs, denylist, revokedDials)
 
-	// Rehydrate the denylist from the persisted authority before the listener
-	// accepts any connection: the Denylist is a derived cache of
-	// registry.RevokedNodeIDs(); the store is the source of truth (ADR-0006
-	// "revocation is instant" must also hold across a restart).
-	revokedIDs, err := reg.RevokedNodeIDs()
-	if err != nil {
-		return nil, nil, fmt.Errorf("load revoked node ids: %w", err)
-	}
-	for _, id := range revokedIDs {
-		denylist.Add(id)
+	if err := rehydrateDenylist(reg, denylist); err != nil {
+		return nil, nil, err
 	}
 
 	tokenSvc := enroll.NewService(st.Tokens())
