@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Felag-Engineering/relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/relay/relay/internal/audit"
 	"github.com/Felag-Engineering/relay/relay/internal/capability"
 	"github.com/Felag-Engineering/relay/relay/internal/enroll"
@@ -216,6 +217,29 @@ func TestInitMintForm_ThreeNodesJoinAndAFourthIsRefused(t *testing.T) {
 				t.Errorf("%s holds the join string or token", name)
 			}
 		}
+	}
+}
+
+// The record names relay init as a host-local act, with no token presented, so
+// the trail tells it from a mint made over the wire.
+func TestInitMintForm_TheMintRecordIsMarkedHostLocal(t *testing.T) {
+	st := openInitStore(t)
+	io := newInitIO(t, "")
+	admin := foundingAdminPrincipal(accounts.Account{ID: "a-1", Name: "alice", Role: accounts.RoleAdmin, Kind: accounts.KindHuman})
+	if _, ok := formOver(t, st, io, "1\n\n").ask(context.Background(), admin); !ok {
+		_, e := io.read(t)
+		t.Fatalf("ask did not mint: %s", e)
+	}
+	recs := tokenMintRecords(t, st)
+	if len(recs) != 1 {
+		t.Fatalf("token_mint records = %d, want one", len(recs))
+	}
+	v := recs[0].Attribution.Verified
+	if v.Method != "host_terminal" || v.Source != "relay init" {
+		t.Errorf("Method, Source = %q, %q; want host_terminal, relay init", v.Method, v.Source)
+	}
+	if v.AccountID != "a-1" || v.AccountName != "alice" || v.TokenID != "" {
+		t.Errorf("verified = %+v, want a-1, alice and no TokenID", v)
 	}
 }
 

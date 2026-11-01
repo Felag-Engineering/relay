@@ -70,8 +70,8 @@ type trailFacts struct {
 	// authority the Relay authenticated, so it must never fill this field.
 	Role       string
 	OnBehalfOf string
-	// Source is the peer address the Relay recorded for this identity,
-	// VERIFIED lane only (audit.Verified.Source / capability.VerifiedIdentity.
+	// Source is the peer address the Relay recorded for this identity, or the
+	// host-local command's name for a host-terminal act, VERIFIED lane only (audit.Verified.Source / capability.VerifiedIdentity.
 	// Source). Access renders it on sign-in rows only (spec 20's Row kinds
 	// table lists a source address for `sign-in` and not for the other
 	// families).

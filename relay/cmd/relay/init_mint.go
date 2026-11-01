@@ -34,6 +34,9 @@ const (
 	// initFormInputLimit is the total bytes the form reads.
 	initFormInputLimit = 4096
 
+	// initAuditSource is the verified Source of the mint relay init records.
+	initAuditSource = "relay init"
+
 	initMintLater        = "Nothing was minted. Mint the first join string on the Console's Add Nodes form, or with POST /api/v1/enrollment-tokens."
 	initNoTerminalNoMint = "No Enrollment Token was minted: relay init mints the first join string only when stdin and stdout are a terminal. Mint one on the Console's Add Nodes form, or with POST /api/v1/enrollment-tokens."
 )
@@ -95,10 +98,17 @@ func newInitMintForm(st *store.Store, cfg Config, stdin, stdout, stderr *os.File
 }
 
 // foundingAdminPrincipal is the founding admin as the capability layer sees it.
-// AuthMethod, Source and TokenID stay empty: this mint arrived through no
-// network or token boundary.
+// The mint is marked as made at the Relay host's terminal, so the trail tells it
+// from one made over the wire. TokenID stays empty: no token was presented.
 func foundingAdminPrincipal(a accounts.Account) capability.Principal {
-	return capability.Principal{AccountID: a.ID, Account: a.Name, Role: string(a.Role), Kind: string(a.Kind)}
+	return capability.Principal{
+		AccountID:  a.ID,
+		Account:    a.Name,
+		Role:       string(a.Role),
+		Kind:       string(a.Kind),
+		AuthMethod: capability.AuthMethodHostTerminal,
+		Source:     initAuditSource,
+	}
 }
 
 // ask puts the two questions and mints. It writes every question and refusal

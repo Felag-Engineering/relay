@@ -58,10 +58,10 @@ type Principal struct {
 	// by forgetting to set it.
 	Kind string
 
-	// AuthMethod is HOW this identity was established: a static API Token or
-	// an OAuth session. It is a verified fact — the Relay knows which
-	// of its own paths accepted the credential — and it is what makes the two
-	// session kinds distinguishable in audit.
+	// AuthMethod is HOW this identity was established: a static API Token, an
+	// OAuth session, a Console session, or the Relay host's own terminal. It is
+	// a verified fact — the Relay knows which of its own paths established the
+	// identity — and it is what makes these distinguishable in audit.
 	//
 	// Not an authorization input: authority is the Account's role, whichever
 	// way the caller authenticated. In particular an OAuth session does NOT
@@ -70,13 +70,15 @@ type Principal struct {
 	AuthMethod AuthMethod
 
 	// Source is the peer address the request arrived from, as the
-	// authentication boundary read it off the connection. It travels into the
-	// audit trail's verified lane.
+	// authentication boundary read it off the connection, or, with
+	// AuthMethodHostTerminal, the name of the host-local command that acted.
+	// AuthMethod tells the two apart, never the shape of this value. It
+	// travels into the audit trail's verified lane.
 	//
-	// Empty for a Principal built outside a network boundary (a local signal
-	// on the Relay host, a fixture). Never populated from a caller-supplied
-	// header: a claimed source is an assertion, and this is not the assertion
-	// lane.
+	// Empty for a Principal built outside a network boundary that names no
+	// command (a local signal on the Relay host, a fixture). Never populated
+	// from a caller-supplied header: a claimed source is an assertion, and this
+	// is not the assertion lane.
 	Source string
 
 	// TokenID is the public identifier of the API Token presented, empty when
@@ -95,7 +97,8 @@ type AuthMethod string
 
 const (
 	// AuthMethodUnspecified is the zero value: a Principal built outside an
-	// authentication boundary (a local signal on the Relay host, a fixture).
+	// authentication boundary that names no method (a local signal on the Relay
+	// host, a fixture).
 	AuthMethodUnspecified AuthMethod = ""
 
 	// AuthMethodAPIToken is a static per-Account API Token.
@@ -113,6 +116,14 @@ const (
 	// compromised Console session is ended by disabling the Account — which
 	// cuts sessions already in flight, not merely the next sign-in.
 	AuthMethodConsoleSession AuthMethod = "console_session"
+
+	// AuthMethodHostTerminal is an act performed at the Relay host's own
+	// terminal by someone with host access, with no session and no credential
+	// presented over the wire (relay init).
+	//
+	// Distinguishable in audit on purpose: the response is the host's access
+	// control, not revoking a token or ending a session.
+	AuthMethodHostTerminal AuthMethod = "host_terminal"
 )
 
 // PrincipalKindHuman is the one Kind value that means "a person is behind this
