@@ -4,6 +4,8 @@
 
 # Go (relay)
 /relay/bin/
+# `go build` run inside relay/ writes the binary here.
+/relay/relay
 *.test
 *.out
 
