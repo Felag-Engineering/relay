@@ -3,11 +3,15 @@ package mcp_test
 import (
 	"context"
 	"encoding/json"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
 
 	schema "github.com/google/jsonschema-go/jsonschema"
+
+	"github.com/Felag-Engineering/relay/relay/internal/capability"
+	"github.com/Felag-Engineering/relay/relay/internal/nodestate"
 )
 
 // TestMCP_ExecutionToolsInputSchemaConstraints is the schema half of the
@@ -186,4 +190,89 @@ func toolSchema(t *testing.T, toolName string, inputSchema any) *schema.Schema {
 		t.Fatalf("unmarshal %s InputSchema: %v", toolName, err)
 	}
 	return &s
+}
+
+// TestMCP_SelectorSchemaNamesEveryNamespace regresses #1258: an AI-agent learns
+// Selector grammar only from a tool's selector description, and run_operation
+// and raw_exec once told it every term needs a node: or relay: prefix. The
+// namespaces come from the parser's own type so the text and the parser cannot
+// drift (invariant 10: one parser, every surface).
+func TestMCP_SelectorSchemaNamesEveryNamespace(t *testing.T) {
+	var prefixes []string
+	for ns := capability.NamespaceNode; ns.Name() != ""; ns++ {
+		prefixes = append(prefixes, ns.Name()+":")
+	}
+	if len(prefixes) == 0 {
+		t.Fatal("no Selector namespaces derived from capability.Namespace")
+	}
+
+	// Parser to enumeration: every prefix parses to its own namespace.
+	for _, p := range prefixes {
+		term := p + "k=v"
+		if p == "state:" {
+			term = p + nodestate.MarkerKeys()[0]
+		}
+		sel, err := capability.ParseSelector(term)
+		if err != nil || len(sel.Predicates) != 1 || sel.Predicates[0].Namespace.Name()+":" != p {
+			t.Fatalf("ParseSelector(%q) = %+v, %v; want one %s predicate", term, sel, err, p)
+		}
+	}
+
+	// Enumeration to parser: the refusal text names exactly the derived
+	// prefixes, so a Namespace value with no Name() case cannot go unchecked.
+	_, err := capability.ParseSelector("bogus")
+	if err == nil {
+		t.Fatal("ParseSelector accepted an unprefixed term")
+	}
+	_, named, _ := strings.Cut(err.Error(), " has no ")
+	if got := len(regexp.MustCompile(`[a-z]+:`).FindAllString(named, -1)); got != len(prefixes) {
+		t.Fatalf("refusal text names %d prefixes, Namespace.Name() yields %d: %q", got, len(prefixes), err)
+	}
+	for _, p := range prefixes {
+		if !strings.Contains(err.Error(), p) {
+			t.Errorf("refusal text %q does not name %s", err, p)
+		}
+	}
+
+	ts := newTestServer(t)
+	session := ts.connect(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	res, err := session.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+
+	checked := map[string]bool{}
+	for _, tool := range res.Tools {
+		prop := toolSchema(t, tool.Name, tool.InputSchema).Properties["selector"]
+		if prop == nil {
+			continue
+		}
+		checked[tool.Name] = true
+		desc := prop.Description
+		for _, p := range prefixes {
+			if !strings.Contains(desc, p) {
+				t.Errorf("%s selector description does not name %s: %q", tool.Name, p, desc)
+			}
+		}
+		for _, k := range nodestate.MarkerKeys() {
+			if !strings.Contains(desc, "state:"+k) {
+				t.Errorf("%s selector description does not name state:%s", tool.Name, k)
+			}
+		}
+		for _, k := range nodestate.FactKeys() {
+			if !strings.Contains(desc, "state:"+k+"=") {
+				t.Errorf("%s selector description does not name state:%s=", tool.Name, k)
+			}
+		}
+		if strings.Contains(desc, "node: or relay:") {
+			t.Errorf("%s selector description carries the node:/relay:-only wording: %q", tool.Name, desc)
+		}
+	}
+	for _, name := range []string{"list_nodes", "run_operation", "raw_exec"} {
+		if !checked[name] {
+			t.Errorf("tool %s has no selector input to check", name)
+		}
+	}
 }

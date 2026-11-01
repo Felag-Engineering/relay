@@ -3,12 +3,16 @@ package api
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strings"
 	"testing"
 
 	"github.com/getkin/kin-openapi/openapi3"
+
+	"github.com/Felag-Engineering/relay/relay/internal/capability"
+	"github.com/Felag-Engineering/relay/relay/internal/nodestate"
 )
 
 // openapi_test.go is the published contract's gate (#358, v0.4.0 [3/7]).
@@ -218,6 +222,70 @@ func TestServedRoutes_AreAllUnderAPIV1(t *testing.T) {
 		}
 		if r.Handler == nil {
 			t.Errorf("route %q has a nil handler factory", r.Pattern())
+		}
+	}
+}
+
+// TestOpenAPISpec_SelectorNamesEveryNamespace regresses #1258: the published
+// Selector description names every namespace the parser accepts and the closed
+// state: vocabulary. The namespaces come from the parser's own type so the
+// document and the parser cannot drift (invariant 10).
+func TestOpenAPISpec_SelectorNamesEveryNamespace(t *testing.T) {
+	var prefixes []string
+	for ns := capability.NamespaceNode; ns.Name() != ""; ns++ {
+		prefixes = append(prefixes, ns.Name()+":")
+	}
+	if len(prefixes) == 0 {
+		t.Fatal("no Selector namespaces derived from capability.Namespace")
+	}
+	_, err := capability.ParseSelector("bogus")
+	if err == nil {
+		t.Fatal("ParseSelector accepted an unprefixed term")
+	}
+	_, named, _ := strings.Cut(err.Error(), " has no ")
+	if got := len(regexp.MustCompile(`[a-z]+:`).FindAllString(named, -1)); got != len(prefixes) {
+		t.Fatalf("refusal text names %d prefixes, Namespace.Name() yields %d: %q", got, len(prefixes), err)
+	}
+
+	doc := loadSpec(t)
+	selectorDesc := func(schemaName string) string {
+		ref := doc.Components.Schemas[schemaName]
+		if ref == nil || ref.Value.Properties["selector"] == nil {
+			t.Fatalf("%s has no selector property", schemaName)
+		}
+		return ref.Value.Properties["selector"].Value.Description
+	}
+
+	desc := selectorDesc("RunOperationRequest")
+	for _, p := range prefixes {
+		if !strings.Contains(desc, p) {
+			t.Errorf("RunOperationRequest.selector does not name %s: %q", p, desc)
+		}
+	}
+	for _, k := range nodestate.MarkerKeys() {
+		if !strings.Contains(desc, "state:"+k) {
+			t.Errorf("RunOperationRequest.selector does not name state:%s", k)
+		}
+	}
+	for _, k := range nodestate.FactKeys() {
+		if !strings.Contains(desc, "state:"+k+"=") {
+			t.Errorf("RunOperationRequest.selector does not name state:%s=", k)
+		}
+	}
+	if strings.Contains(desc, "node: or relay:") {
+		t.Errorf("RunOperationRequest.selector carries the node:/relay:-only wording: %q", desc)
+	}
+
+	raw := selectorDesc("RawExecRequest")
+	if strings.Contains(raw, "node: or relay:") {
+		t.Errorf("RawExecRequest.selector carries the node:/relay:-only wording: %q", raw)
+	}
+	if strings.Contains(raw, "RunOperationRequest.selector") {
+		return
+	}
+	for _, p := range prefixes {
+		if !strings.Contains(raw, p) {
+			t.Errorf("RawExecRequest.selector neither names %s nor references RunOperationRequest.selector: %q", p, raw)
 		}
 	}
 }

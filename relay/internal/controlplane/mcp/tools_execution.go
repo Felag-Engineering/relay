@@ -285,7 +285,7 @@ func buildOperationAction(ops OperationLister, name string, args map[string]stri
 // omitted or false is a real dispatch; plan=true resolves/authorizes/checks exactly as a real run would but
 // executes nothing, returning per-Node Policy verdicts instead.
 type runOperationInput struct {
-	Selector  string            `json:"selector,omitempty" jsonschema:"Selector filter, e.g. 'node:role=web, relay:quarantine=on'. Every term must carry a node: or relay: prefix. Empty or omitted matches every Node."`
+	Selector  string            `json:"selector,omitempty" jsonschema:"Selector filter, e.g. 'node:role=web, relay:quarantine=on, tag:team=payments, state:offline'. Every term must carry a node:, relay:, tag: or state: prefix. state: is a closed, Relay-derived vocabulary (ADR-0034): the boolean markers state:offline, state:outdated, state:template-unloadable, state:cert-expiring, and the facts state:daemon-version=, state:policy-fingerprint=, state:template-fingerprint=. Empty or omitted matches every Node."`
 	Operation string            `json:"operation" jsonschema:"Operation name, e.g. 'system.facts' (see list_operations for the full vocabulary and each Operation's risk class)."`
 	Args      map[string]string `json:"args,omitempty" jsonschema:"Operation arguments, validated against the Operation's own constraints (never a shell) — see list_operations for each Operation's argument names, types, and constraints."`
 	// TimeoutSeconds omitted or 0 keeps today's default (the daemon/engine
@@ -302,7 +302,7 @@ type runOperationInput struct {
 // rawExecInput is raw_exec's argument: argv only — no shell, no
 // client-side splitting, no string-command field (ADR-0001, invariant 1).
 type rawExecInput struct {
-	Selector string   `json:"selector,omitempty" jsonschema:"Selector filter, e.g. 'node:role=web, relay:quarantine=on'. Every term must carry a node: or relay: prefix. Empty or omitted matches every Node."`
+	Selector string   `json:"selector,omitempty" jsonschema:"Selector filter, e.g. 'node:role=web, relay:quarantine=on, tag:team=payments, state:offline'. Every term must carry a node:, relay:, tag: or state: prefix. state: is a closed, Relay-derived vocabulary (ADR-0034): the boolean markers state:offline, state:outdated, state:template-unloadable, state:cert-expiring, and the facts state:daemon-version=, state:policy-fingerprint=, state:template-fingerprint=. Empty or omitted matches every Node."`
 	Argv     []string `json:"argv" jsonschema:"Argv to execute verbatim on each matched Node — no shell, no client-side splitting (ADR-0001). The daemon's Policy regex decides per Node whether it is allowed."`
 	// TimeoutSeconds: see runOperationInput's field doc.
 	TimeoutSeconds int32 `json:"timeout_seconds,omitempty" jsonschema:"Optional per-Task timeout in seconds. 0 or omitted uses the daemon/engine default; max 86400 (24h)."`
