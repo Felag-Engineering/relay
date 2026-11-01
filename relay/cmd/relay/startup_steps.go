@@ -55,6 +55,16 @@ func rehydrateDenylist(reg revokedNodeLister, denylist *revocation.Denylist) err
 	return nil
 }
 
+// advertisedNodePlaneAddress is the one derivation the server certificate, the
+// server's enrollment minter and relay init's mint form all use (RC-36, RC-46).
+func advertisedNodePlaneAddress(cfg Config) (string, error) {
+	addr, err := enroll.AdvertisedAddress(cfg.AdvertisedAddress, cfg.Hostname, cfg.Addr)
+	if err != nil {
+		return "", fmt.Errorf("advertised node-plane address: %w", err)
+	}
+	return addr, nil
+}
+
 // issueServerCertificate resolves the node-plane address a join string will
 // carry and issues the Relay's one TLS server certificate naming it, which
 // both listeners present (ADR-0031 §1). It returns the advertised address
@@ -65,9 +75,9 @@ func rehydrateDenylist(reg revokedNodeLister, denylist *revocation.Denylist) err
 // convenience on top of the configured names, and a detector must not become
 // an outage.
 func issueServerCertificate(cfg Config, relayCA *ca.CA, appMetrics *metrics.Metrics) (cert *ca.ServerCertificate, advertisedAddress string, err error) {
-	advertisedAddress, err = enroll.AdvertisedAddress(cfg.AdvertisedAddress, cfg.Hostname, cfg.Addr)
+	advertisedAddress, err = advertisedNodePlaneAddress(cfg)
 	if err != nil {
-		return nil, "", fmt.Errorf("advertised node-plane address: %w", err)
+		return nil, "", err
 	}
 	advertisedHost, _, err := net.SplitHostPort(advertisedAddress)
 	if err != nil {

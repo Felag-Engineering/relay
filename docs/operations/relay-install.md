@@ -136,8 +136,13 @@ Subcommands, checked before the configuration is read:
   configuration ([control-plane-credential.md](control-plane-credential.md), ADR-0023,
   ADR-0030). Run it as the Relay's own account (`sudo -u relay relay init …`): it reads the
   configuration through the same start-time check, so it refuses root. On a Relay that already
-  has a human Account it creates nothing, prints no credential, and says what is there. The
-  password it sets is the first admin's. Every other human gets a temporary password from an
+  has a human Account it creates nothing, prints no credential, and says what is there. In a
+  terminal (stdin and stdout) it then asks how many Nodes the first Enrollment Token is for (1 to
+  256; more is refused, and there is no unlimited option) and when it expires (two hours by
+  default), mints it as the new admin (audited as `token_mint`), and shows `sudo relay-daemon
+  join` and, apart from it, the join string, once. Without a terminal it mints nothing and names
+  the Console's Add Nodes form and the Control API. The API Token's `--ttl` does not apply to the
+  Enrollment Token. The password it sets is the first admin's. Every other human gets a temporary password from an
   admin in the Console and changes it at first sign-in; no surface resets a password a human has
   set, so a forgotten one is replaced by disabling the Account and creating a new one.
 - `relay init [--config <path>] [--ttl <duration>] --recover <name>`: mint a new API Token for
@@ -215,7 +220,9 @@ The control plane has no Account and no usable credential until you create the f
 $ sudo -u relay relay init --admin <your-name>
 ```
 
-It prompts for that admin's Console password and prints its first API Token. Give your callers
+It prompts for that admin's Console password, prints its first API Token, and shows the first
+join string (consumed per [relay-daemon-install.md](relay-daemon-install.md) and
+[enrollment.md](enrollment.md)). Give your callers
 credentials of their own; see [control-plane-credential.md](control-plane-credential.md).
 
 - **Widen the control plane** only after `init` has run: edit `control_plane.listen_address`,
@@ -439,9 +446,13 @@ The Relay creates its CA on first start and logs its fingerprint
 **4. Create the first admin** with `relay init`, which runs as the Relay's own account inside
 the container: a human `admin` Account named as you choose, its Console password (prompted
 for twice, not echoed), and its first API Token
-([control-plane-credential.md](control-plane-credential.md), ADR-0030). The token is printed
-once and never stored: put it in a vault now, and hold it in `RELAY_TOKEN` for the rest of
-this procedure without echoing it:
+([control-plane-credential.md](control-plane-credential.md), ADR-0030). `exec` gives `init` a
+terminal, so it also asks for the first Enrollment Token's count and expiry and shows the first
+join string, once. When it mints, do not redirect or capture its output (the join string would
+land in the capture, and `docker compose exec` and `ssh -t` allocate the terminal that makes it
+mint); to pipe it, give it a non-terminal stdin with `exec -T`, and then it mints nothing. The
+API Token is printed once and never stored: put it in a vault now, and hold it in `RELAY_TOKEN`
+for the rest of this procedure without echoing it:
 
 ```console
 $ docker compose -f deploy/production/docker-compose.yml exec relay relay init --admin <your-name>
@@ -469,8 +480,9 @@ LAN address (or `0.0.0.0`) and run step 3's `up -d` again. Sign in at
 `https://<tls.hostname>:9443/console/`. The browser warns because the certificate chains to the
 Relay's private CA; trust `relay-ca-cert.pem` rather than clicking through.
 
-**6. Mint an Enrollment Token** ([enrollment.md](enrollment.md) explains the initial tags; they
-are written on every Node the token enrolls, as ordinary tags). From the Relay host:
+**6. Mint further Enrollment Tokens** for later batches ([enrollment.md](enrollment.md) explains
+the initial tags; they are written on every Node the token enrolls, as ordinary tags). From the
+Relay host:
 
 ```console
 $ curl --cacert relay-ca-cert.pem \
@@ -486,7 +498,8 @@ once the control plane is published.
 
 **7. Point real relay-daemons at it**, one host at a time, per
 [relay-daemon-install.md](relay-daemon-install.md) (the daemon is installed from its package):
-pipe the `join_string` from step 6's response to `sudo relay-daemon join`
+pipe the join string `relay init` showed in step 4, or a later one from step 6's response, to
+`sudo relay-daemon join`
 (see [Moving a join string](enrollment.md#moving-a-join-string)). It carries the Relay's address, its CA
 fingerprint and the token, and is used once, by `join`, which writes it nowhere; no CA file is
 copied to the Node. A daemon with no identity logs `no identity: nothing to connect with` and

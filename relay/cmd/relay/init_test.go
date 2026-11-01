@@ -79,6 +79,9 @@ func TestInitCommand_RefusesBadArguments(t *testing.T) {
 		{"--password", "hunter2hunter2", "--admin", "alice"},
 		{"--ttl", "-1h", "--admin", "alice"},
 		{"--ttl", "soon", "--recover", "alice"},
+		// ADR-0030: no flag takes a count or a join string.
+		{"--nodes", "3", "--admin", "alice"},
+		{"--join-string", "x", "--admin", "alice"},
 	} {
 		io := newInitIO(t, "")
 		if code := runInitCommand(args, nil, io.stdin, io.stdout, io.stderr); code != 2 {
@@ -118,7 +121,7 @@ func TestInitFirstAdmin_CreatesOnceAndPrintsOnlyTheCredential(t *testing.T) {
 	st := openInitStore(t)
 	ctx := context.Background()
 	io := newInitIO(t, initTestPassword+"\n")
-	if code := initFirstAdmin(ctx, st, "alice", 0, io.stdin, io.stdout, io.stderr); code != 0 {
+	if code := initFirstAdmin(ctx, st, "alice", 0, io.stdin, io.stdout, io.stderr, nil); code != 0 {
 		_, e := io.read(t)
 		t.Fatalf("exit %d: %s", code, e)
 	}
@@ -163,7 +166,7 @@ func TestInitFirstAdmin_CreatesOnceAndPrintsOnlyTheCredential(t *testing.T) {
 
 	// A re-run, under any name, creates nothing and prints nothing.
 	again := newInitIO(t, initTestPassword+"\n")
-	if code := initFirstAdmin(ctx, st, "bob", 0, again.stdin, again.stdout, again.stderr); code != 0 {
+	if code := initFirstAdmin(ctx, st, "bob", 0, again.stdin, again.stdout, again.stderr, nil); code != 0 {
 		t.Fatalf("re-run exit %d, want 0", code)
 	}
 	out, errOut = again.read(t)
@@ -181,7 +184,7 @@ func TestInitFirstAdmin_CreatesOnceAndPrintsOnlyTheCredential(t *testing.T) {
 func TestInitFirstAdmin_RefusesAShortPasswordAndCreatesNothing(t *testing.T) {
 	st := openInitStore(t)
 	io := newInitIO(t, "short\n")
-	if code := initFirstAdmin(context.Background(), st, "alice", 0, io.stdin, io.stdout, io.stderr); code != 1 {
+	if code := initFirstAdmin(context.Background(), st, "alice", 0, io.stdin, io.stdout, io.stderr, nil); code != 1 {
 		t.Fatalf("exit %d, want 1", code)
 	}
 	if out, _ := io.read(t); out != "" {
@@ -195,11 +198,11 @@ func TestInitFirstAdmin_RefusesAShortPasswordAndCreatesNothing(t *testing.T) {
 func TestInitFirstAdmin_RefusesAnEmptyStdinAndAnInvalidName(t *testing.T) {
 	st := openInitStore(t)
 	io := newInitIO(t, "")
-	if code := initFirstAdmin(context.Background(), st, "alice", 0, io.stdin, io.stdout, io.stderr); code != 1 {
+	if code := initFirstAdmin(context.Background(), st, "alice", 0, io.stdin, io.stdout, io.stderr, nil); code != 1 {
 		t.Errorf("empty stdin: exit %d, want 1", code)
 	}
 	io = newInitIO(t, initTestPassword+"\n")
-	if code := initFirstAdmin(context.Background(), st, "bad name", 0, io.stdin, io.stdout, io.stderr); code != 2 {
+	if code := initFirstAdmin(context.Background(), st, "bad name", 0, io.stdin, io.stdout, io.stderr, nil); code != 2 {
 		t.Errorf("invalid name: exit %d, want 2", code)
 	}
 	if all, _ := st.Accounts().List(context.Background()); len(all) != 0 {
@@ -291,7 +294,7 @@ func TestInit_TTLAppliesToTheFirstAndTheRecoveredToken(t *testing.T) {
 
 	io := newInitIO(t, initTestPassword+"\n")
 	before := time.Now()
-	if code := initFirstAdmin(ctx, st, "alice", 24*time.Hour, io.stdin, io.stdout, io.stderr); code != 0 {
+	if code := initFirstAdmin(ctx, st, "alice", 24*time.Hour, io.stdin, io.stdout, io.stderr, nil); code != 0 {
 		t.Fatalf("exit %d", code)
 	}
 	out, _ := io.read(t)
@@ -327,7 +330,7 @@ func TestInitFirstAdmin_RefusesATakenNameBeforeThePrompt(t *testing.T) {
 		t.Fatal(err)
 	}
 	io := newInitIO(t, "") // an empty stdin: reaching the prompt would fail differently
-	if code := initFirstAdmin(ctx, st, "Alice", 0, io.stdin, io.stdout, io.stderr); code != 1 {
+	if code := initFirstAdmin(ctx, st, "Alice", 0, io.stdin, io.stdout, io.stderr, nil); code != 1 {
 		t.Fatalf("exit %d, want 1", code)
 	}
 	out, errOut := io.read(t)
@@ -355,7 +358,7 @@ func TestInitFirstAdmin_OnlyDisabledHumansNamesTheWayOut(t *testing.T) {
 		t.Fatal(err)
 	}
 	io := newInitIO(t, initTestPassword+"\n")
-	if code := initFirstAdmin(ctx, st, "alice", 0, io.stdin, io.stdout, io.stderr); code != 0 {
+	if code := initFirstAdmin(ctx, st, "alice", 0, io.stdin, io.stdout, io.stderr, nil); code != 0 {
 		t.Fatalf("exit %d, want 0", code)
 	}
 	out, errOut := io.read(t)

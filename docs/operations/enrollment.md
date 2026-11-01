@@ -22,6 +22,10 @@ TTL, `max_uses`, and instant revocation bound the risk of reuse.
 
 ## 1. Mint a token
 
+The first join string comes from `relay init` ([relay-install.md](relay-install.md) §2), on a
+terminal, through the same mint form as the Console's: at most 256 Nodes, two hours by default.
+Every later token is minted here, through the Control API, or on the Console's Add Nodes form.
+
 `POST /api/v1/enrollment-tokens` on the Relay's control plane (`$RELAY_TOKEN` is an API
 Token; [control-plane-credential.md](control-plane-credential.md)). Run this on the Relay host
 while the control plane listens on loopback, the package's default. `relay-ca-cert.pem` is the
@@ -93,8 +97,8 @@ as well as from reading: your vault, an SSH session to the Node, the Ansible rol
 input. Never over chat, email or a ticket.
 
 The string is a bearer credential until it is used or expires (threat-model R41). Size
-`max_uses` and `ttl_seconds` to the run. Mint through the Control API or the Console's Add Nodes
-form.
+`max_uses` and `ttl_seconds` to the run. Mint through `relay init` (the first), the Control
+API or the Console's Add Nodes form.
 
 ### Upgrading from a Relay that stamped a token's scope
 

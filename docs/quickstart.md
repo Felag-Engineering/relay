@@ -23,7 +23,7 @@ reference.
   interactive `ssh <relay-vm>` session, and on a Node you run one `ssh -t <node> "..."`.
 - Network: the Nodes reach the Relay's VM on TCP 7654, the Node plane. Open it in any firewall
   or cloud security group. Nothing needs to reach 9443: the control plane stays on the Relay
-  VM's loopback and you reach it through an SSH tunnel.
+  VM's loopback and you reach it through an SSH tunnel, once, in step 5, before connecting Claude Code.
 
 Why the Nodes are VMs: the Relay runs unprivileged, as its own `relay` account with no
 capabilities. The relay-daemon runs as root, because administering the server it runs on is
@@ -91,92 +91,36 @@ $ systemctl status relay
 
 The package wrote a configuration with the control plane and the Console on `127.0.0.1:9443`,
 the CA under `/var/lib/relay/ca`, and two gate rules that make every mutate and every Raw Exec
-wait for a person (step 9). [relay-install.md §1](operations/relay-install.md#1-obtain-verify-and-install-the-package)
+wait for a person (step 8). [relay-install.md §1](operations/relay-install.md#1-obtain-verify-and-install-the-package)
 lists all of it.
 
-## 3. Create the first admin (still on the Relay's VM)
+## 3. Create the first admin and the first join string (still on the Relay's VM)
 
 ```console
 $ sudo -u relay relay init --admin <your-name>
 ```
 
-It prompts twice for a Console password (not echoed) and prints the first API Token once.
-`relay init` refuses root, hence `sudo -u relay`. The token lives seven days (`--ttl` changes
-it). Store it in your password manager now; step 4 pastes it on the workstation. A lost token is
+It prompts twice for a Console password (not echoed) and creates the admin. It then asks
+`How many Nodes is it for?`: answer `3`, or however many you will join (1 to 256), and press
+Enter at the expiry for two hours. It prints the API Token once, then the command
+`sudo relay-daemon join` and, apart from it, the join string. `relay init` refuses root, hence
+`sudo -u relay`. The API Token lives seven days (`--ttl` changes it, and only it). Store the
+token in your password manager now; step 5 pastes it on the workstation. A lost token is
 replaced with `sudo -u relay relay init --recover <your-name>`.
 
-Copy the public CA certificate where your account can read it, then leave the session:
+- The join string is a secret, shown once, and nothing shows it again. It carries the Relay's
+  address, its CA fingerprint and the Enrollment Token, and it can only enroll a Node, never
+  run anything. It stays on this terminal's screen for step 4: do not save it to a file.
+- `relay init` mints only on a terminal. Without one, it mints nothing and says how to mint
+  later.
+
+Then leave the session:
 
 ```console
-$ sudo install -m 0644 /var/lib/relay/ca/ca-cert.pem ~/relay-ca-cert.pem
 $ exit
 ```
 
-That file is the public certificate. The CA directory also holds `ca-key.pem`, which you never
-copy.
-
-## 4. Reach the control plane from your workstation
-
-```console
-$ scp <relay-vm>:relay-ca-cert.pem .
-```
-
-Open the tunnel in a **new** terminal and leave it running. The control plane stays on
-loopback, and the tunnel rides your SSH host-key check. If a dev fleet is running, it already
-binds `127.0.0.1:9443`: stop it, or forward another local port and use that port in every URL
-below.
-
-```console
-$ ssh -N -L 9443:127.0.0.1:9443 <relay-vm>
-```
-
-Every other workstation command runs in the shell you have used since step 1, in the directory
-holding the packages and `relay-ca-cert.pem`, because `$PKGVERSION` and the files live there.
-Read the token without echo, so it never reaches your shell history, then check the control
-plane.
-
-```console
-$ read -rsp 'API Token: ' RELAY_TOKEN; echo
-$ curl --cacert relay-ca-cert.pem -H "Authorization: Bearer $RELAY_TOKEN" \
-    https://127.0.0.1:9443/metrics | head
-```
-
-Prometheus metric lines mean TLS verified against your copy of the CA and the token was
-accepted. Dialling `127.0.0.1` verifies because the server certificate always names loopback.
-`curl -H` and `claude mcp add --header` put the token in that process's command line, visible
-to other users of the workstation while it runs.
-To widen the control plane beyond loopback instead, see
-[relay-install.md §4](operations/relay-install.md#4-the-packaged-systemd-unit).
-
-## 5. Mint a join string (workstation)
-
-```console
-$ curl --cacert relay-ca-cert.pem \
-    -H "Authorization: Bearer $RELAY_TOKEN" \
-    -H "Content-Type: application/json" \
-    -d '{"initial_tags": ["tag:env=quickstart"], "ttl_seconds": 7200, "max_uses": 3}' \
-    https://127.0.0.1:9443/api/v1/enrollment-tokens
-{
-  "id": "3f8a…",
-  "token": "3f8a….K7m2…",
-  "join_string": "glp_join_…",
-  "initial_tags": ["tag:env=quickstart"],
-  …
-}
-```
-
-- Set `max_uses` to the number of Nodes you will join. Two hours is the Console form's default
-  lifetime; [enrollment.md §1](operations/enrollment.md#1-mint-a-token) has every field.
-- The join string is a secret, returned once. It carries the Relay's address, its CA
-  fingerprint and the Enrollment Token, and it can only enroll a Node, never run anything. Keep
-  it on screen for step 6 and do not save it to a file.
-- `tag:env=quickstart` becomes each Node's first tag, and every later step targets it.
-- The alternative: with the tunnel up, the Console at `https://127.0.0.1:9443/console/`, Add
-  Nodes, mints the same kind of token and shows the command and the join string apart. It asks
-  for your Console password on every mint, and your browser must trust `relay-ca-cert.pem`;
-  never click through the warning.
-
-## 6. Join the Nodes (workstation)
+## 4. Join the Nodes (workstation)
 
 First write the one Policy fragment this quickstart needs, `50-quickstart.toml`:
 
@@ -211,7 +155,7 @@ done
 ```
 
 On each Node `sudo` may ask for your password, then `join` asks
-`Paste the join string (input is hidden):`. Paste the string from step 5. `ssh -t` gives `join`
+`Paste the join string (input is hidden):`. Paste the string `relay init` showed in step 3. `ssh -t` gives `join`
 a terminal, so the prompt does not echo; the string is never in a command line, a file or an
 environment variable. Success prints
 `enrolled as "<node-id>"; relay-daemon.service is enabled and started`. Running it again on an
@@ -227,7 +171,47 @@ pasted string too. If `join` says
 `the Relay's CA does not match the join string's CA fingerprint; nothing was sent`, stop: the
 Node reached something other than your Relay, or the string was changed. Mint a fresh one.
 
-## 7. Connect Claude Code (workstation)
+## 5. Reach the control plane from your workstation
+
+Claude Code and the Account steps below call the control plane, which stays on the Relay VM's
+loopback. Copy the public CA certificate where your account can read it, then fetch it:
+
+```console
+$ ssh -t <relay-vm> "sudo install -m 0644 /var/lib/relay/ca/ca-cert.pem ~/relay-ca-cert.pem"
+$ scp <relay-vm>:relay-ca-cert.pem .
+```
+
+That file is the public certificate. The CA directory also holds `ca-key.pem`, which you never
+copy.
+
+Open the tunnel in a **new** terminal and leave it running. The control plane stays on
+loopback, and the tunnel rides your SSH host-key check. If a dev fleet is running, it already
+binds `127.0.0.1:9443`: stop it, or forward another local port and use that port in every URL
+below.
+
+```console
+$ ssh -N -L 9443:127.0.0.1:9443 <relay-vm>
+```
+
+Every other workstation command runs in the shell you have used since step 1, in the directory
+holding the packages and `relay-ca-cert.pem`, because `$PKGVERSION` and the files live there.
+Read the admin's API Token without echo, so it never reaches your shell history, then check the
+control plane.
+
+```console
+$ read -rsp 'API Token: ' RELAY_TOKEN; echo
+$ curl --cacert relay-ca-cert.pem -H "Authorization: Bearer $RELAY_TOKEN" \
+    https://127.0.0.1:9443/metrics | head
+```
+
+Prometheus metric lines mean TLS verified against your copy of the CA and the token was
+accepted. Dialling `127.0.0.1` verifies because the server certificate always names loopback.
+`curl -H` and `claude mcp add --header` put the token in that process's command line, visible
+to other users of the workstation while it runs.
+To widen the control plane beyond loopback instead, see
+[relay-install.md §4](operations/relay-install.md#4-the-packaged-systemd-unit).
+
+## 6. Connect Claude Code (workstation)
 
 Claude Code gets its own Account, never the founding admin's token: an admin token reaches Raw
 Exec and the administration of every Account for as long as it lives. Make a human Account at the
@@ -235,9 +219,9 @@ lowest role that runs this page's Operations. `operator` requests every Operatio
 mutate; a `viewer` cannot run `disk.usage`. It is a human Account, not a machine Account,
 because a human Account's token answers a gate as that person's decision (AP-87), while a
 machine Account's answer is machine self-confirmation and would not stand as your approval in
-step 9. The Account needs no Console password to hold a token.
+step 8. The Account needs no Console password to hold a token.
 
-In a fresh shell, run the `read -rsp` from step 4 again first, so `RELAY_TOKEN` (the admin's) is
+In a fresh shell, run the `read -rsp` from step 5 again first, so `RELAY_TOKEN` (the admin's) is
 set. These are the first two calls of
 [the intended flow](operations/control-plane-credential.md#the-intended-flow):
 
@@ -283,13 +267,14 @@ admin's `RELAY_TOKEN`.
 Gleipnir or any other MCP client needs the same three things: the URL, the CA certificate and
 its own API Token, with a machine Account for one that runs unattended.
 
-## 8. A first read
+## 7. A first read
 
-Ask: "Using the relay tools, list the Nodes matching the Selector `tag:env=quickstart`, then run
+Ask: "Using the relay tools, list the Nodes matching the Selector `node:os=linux`, then run
 disk.usage on them." The calls it should make are
-`list_nodes(selector="tag:env=quickstart")`, which shows every Node you joined with
-`tag:env=quickstart` among its tag labels (this is your enrollment check), then
-`run_operation(selector="tag:env=quickstart", operation="disk.usage")`. `run_operation` returns
+`list_nodes(selector="node:os=linux")`, which shows every Node you joined
+(this is your enrollment check; `node:os=linux` is a default label every Node carries, so it
+selects the whole fleet), then
+`run_operation(selector="node:os=linux", operation="disk.usage")`. `run_operation` returns
 `job_status` `running` unless it is given `wait_seconds`, so the model either passes it or polls
 `get_job` before it reports results.
 
@@ -300,14 +285,11 @@ disk.usage on them." The calls it should make are
 - Optional: ask for a `file.read` of `/etc/shadow`. Each Node refuses it (`denied_by_policy`);
   the default Policy's deny rules beat its read allowance.
 
-The prompt carries the literal Selector because `run_operation`'s tool description still lists
-only `node:` and `relay:` prefixes, so a model may not write a `tag:` term unaided.
+## 8. A first mutate, approved in the client
 
-## 9. A first mutate, approved in the client
-
-Ask: "Restart systemd-journald on the Nodes matching the Selector `tag:env=quickstart`." The
+Ask: "Restart systemd-journald on the Nodes matching the Selector `node:os=linux`." The
 call is
-`run_operation(selector="tag:env=quickstart", operation="service.restart", args={"unit":"systemd-journald"})`.
+`run_operation(selector="node:os=linux", operation="service.restart", args={"unit":"systemd-journald"})`.
 
 - The package's gate rule `mutate-needs-a-human` parks it before any Task exists.
 - Claude Code advertises elicitation, so Relay answers with a question carrying its own summary
@@ -328,13 +310,15 @@ says how it waits and where a person decides.
 
 Everything this page had you copy can be replaced.
 
-- The join string: mint another, and let the old one expire.
+- The join string: mint another on the Console's Add Nodes form (with the tunnel up), and let
+  the old one expire. The form asks for your Console password, and your browser must trust
+  `relay-ca-cert.pem` first: never click through a certificate warning.
 - The admin's API Token: `sudo -u relay relay init --recover <your-name>`.
-- Claude Code's API Token: mint another for the `claude-code` Account, as step 7 did.
+- Claude Code's API Token: mint another for the `claude-code` Account, as step 6 did.
 - The CA certificate: it is public; copy it again.
 
-The Console password is different: keep it safe, because nothing resets it. Nothing on this
-page needs it. The one thing that cannot be re-minted is the Relay's CA private key,
+The Console password is different: keep it safe, because nothing resets it. Only the Console's
+mint form asks for it again. The one thing that cannot be re-minted is the Relay's CA private key,
 `/var/lib/relay/ca/ca-key.pem`, which this page never had you copy. Lose it and every Node must
 enroll again. Back up `/var/lib/relay` (the key and the store together), never image the Relay's
 VM after its first start, and see [ca-disaster-recovery.md](operations/ca-disaster-recovery.md).

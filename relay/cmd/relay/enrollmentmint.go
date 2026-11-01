@@ -46,3 +46,14 @@ func (i enrollmentTokenIssuer) IssueEnrollmentToken(ctx context.Context, p capab
 func (i enrollmentTokenIssuer) WithdrawEnrollmentToken(ctx context.Context, tokenID string) error {
 	return i.tokens.Revoke(ctx, tokenID)
 }
+
+// newEnrollmentMint is the one assembly of the one Enrollment Token mint. The
+// server and relay init both build their mint through it, so the join string
+// init shows is the one the server's mint would issue (invariant 10).
+func newEnrollmentMint(control *capability.Control, tokens *enroll.Service, ca enroll.FingerprintSource, advertisedAddress string) (*capability.EnrollmentTokens, *enroll.Minter, error) {
+	m, err := enroll.NewMinter(tokens, ca, advertisedAddress)
+	if err != nil {
+		return nil, nil, fmt.Errorf("enrollment minter: %w", err)
+	}
+	return capability.NewEnrollmentTokens(control, enrollmentTokenIssuer{minter: m, tokens: tokens}), m, nil
+}
