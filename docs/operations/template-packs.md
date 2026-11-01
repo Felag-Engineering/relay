@@ -197,8 +197,9 @@ non-root IaC checkout; the Node re-applies them. Symlinks are still refused.
 daemon's own trust root?** The two halves differ on purpose:
 
 - **Reads** (`file.read`, `file.checksum`, any path-taking Template Operation) are probed only
-  against the files that hold a secret: the Node's identity private key and the environment
-  file. Reading any other file, the Template files included, is never a finding: they disclose
+  against the daemon's files the shipped default denies: the Node's identity private key, the
+  temporary file the daemon writes a new identity key to, and the environment file.
+  Reading any other file, the Template files included, is never a finding: they disclose
   vocabulary, never a secret (residual R37 in `docs/security/threat-model.md`; the control is
   narrowing `file.read`'s wildcard to an explicit path list).
 - **Writes** (Raw Exec edit in place, overwrite, copy or move over, delete, redirect, chmod,

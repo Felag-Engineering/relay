@@ -512,11 +512,12 @@ fn web_policy_allows_reading_the_socket_table() {
 /// `--strict` also emits a summary line (`error: lint warnings present and
 /// --strict was given`) that names no operation, so a naive `grep -c warning`
 /// over-counts by one. This scopes the assertion to lines beginning
-/// `warning:`, asserts the count is exactly 2 on web/db, and that all of them
-/// name `file.read` — the two secret-bearing read targets under the fixtures'
-/// wildcard `file.read` allow: the environment file
-/// (`/etc/relay-daemon/relay-daemon.env`) and the identity private key
-/// (`/var/lib/relay-daemon/key.pem`). If this count ever moves, the correct
+/// `warning:`, asserts the count is exactly 3 on web/db, and that all of them
+/// name `file.read` — the three read targets under the fixtures' wildcard
+/// `file.read` allow: the environment file (`/etc/relay-daemon/relay-daemon.env`),
+/// the identity private key (`/var/lib/relay-daemon/key.pem`), and the temporary
+/// file the daemon writes a new identity key to
+/// (`/var/lib/relay-daemon/key.pem.tmp`). If this count ever moves, the correct
 /// response is to read the new finding, not to raise the number.
 ///
 /// The bastion fixture (#452) is asserted separately: predicted **0** — it
@@ -548,7 +549,7 @@ fn strict_warning_counts_are_pinned_per_fixture() {
         let warnings: Vec<&str> = out.lines().filter(|l| l.starts_with("warning:")).collect();
         assert_eq!(
             warnings.len(),
-            2,
+            3,
             "{} --strict warning count changed; read the new finding, don't raise this number:\n{out}",
             policy.display()
         );

@@ -39,9 +39,11 @@ const DENY_LISTED_PATHS: &[&str] = &[
     // Distribution-default TLS private keys (ADR-0022, amended 2026-10-21).
     "/etc/ssl/private/ssl-cert-snakeoil.key",
     "/etc/pki/tls/private/localhost.key",
-    // The daemon's own secret-bearing files (ADR-0022, amended 2026-10-16).
+    // The daemon's own files (ADR-0022, and its 2026-10-30 amendment for the
+    // temporary file the daemon writes a new identity key to).
     "/etc/relay-daemon/relay-daemon.env",
     "/var/lib/relay-daemon/key.pem",
+    "/var/lib/relay-daemon/key.pem.tmp",
     // Kernel/process memory and environment oracles.
     "/proc/kcore",
     "/dev/mem",
@@ -178,7 +180,7 @@ fn every_deny_listed_path_is_denied_with_attribution() {
     }
 }
 
-// Proves DI-28.
+// Proves DI-48.
 #[test]
 fn deny_list_mirrors_adr_0022_exactly() {
     // Set equality both ways: a path added to the file without the
@@ -196,7 +198,7 @@ fn deny_list_mirrors_adr_0022_exactly() {
     assert_eq!(
         in_file, expected,
         "policy.default.toml's file.read deny values must exactly mirror \
-             the ADR-0022 deny-list pinned in this test (ADR-0022, amended 2026-10-16)"
+             the ADR-0022 deny-list pinned in this test (ADR-0022)"
     );
     let checksum_in_file: std::collections::BTreeSet<String> = policy
         .deny_rules()
@@ -211,7 +213,7 @@ fn deny_list_mirrors_adr_0022_exactly() {
     );
 }
 
-// Proves DI-28.
+// Proves DI-48.
 #[test]
 fn default_policy_denies_only_secret_bearing_own_files() {
     let policy = default_policy();
@@ -219,6 +221,7 @@ fn default_policy_denies_only_secret_bearing_own_files() {
 
     for path in [
         "/var/lib/relay-daemon/key.pem",
+        "/var/lib/relay-daemon/key.pem.tmp",
         "/etc/relay-daemon/relay-daemon.env",
         "/proc/self/environ",
     ] {
