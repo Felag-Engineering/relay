@@ -73,9 +73,8 @@ func handleRevokeNode(d Deps) http.HandlerFunc {
 			return
 		}
 
-		nodeID := r.PathValue("node_id")
-		if nodeID == "" {
-			writeProblem(w, http.StatusBadRequest, "missing node id", "path parameter node_id must not be empty")
+		nodeID, ok := requirePathValue(w, r, "node_id", "missing node id", "path parameter node_id must not be empty")
+		if !ok {
 			return
 		}
 
@@ -222,9 +221,8 @@ func handleGetNode(d Deps) http.HandlerFunc {
 			return
 		}
 
-		nodeID := r.PathValue("node_id")
-		if nodeID == "" {
-			writeProblem(w, http.StatusBadRequest, "node id required", "")
+		nodeID, ok := requirePathValue(w, r, "node_id", "node id required", "")
+		if !ok {
 			return
 		}
 

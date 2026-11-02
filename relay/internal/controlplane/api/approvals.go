@@ -225,9 +225,8 @@ func handleGetApproval(d Deps) http.HandlerFunc {
 			return
 		}
 
-		id := r.PathValue("id")
-		if id == "" {
-			writeProblem(w, http.StatusBadRequest, "approval request id required", "")
+		id, ok := requirePathValue(w, r, "id", "approval request id required", "")
+		if !ok {
 			return
 		}
 
@@ -260,9 +259,8 @@ func handleDecideApproval(d Deps) http.HandlerFunc {
 			return
 		}
 
-		id := r.PathValue("id")
-		if id == "" {
-			writeProblem(w, http.StatusBadRequest, "approval request id required", "")
+		id, ok := requirePathValue(w, r, "id", "approval request id required", "")
+		if !ok {
 			return
 		}
 

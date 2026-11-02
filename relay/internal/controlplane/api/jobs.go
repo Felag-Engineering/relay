@@ -87,9 +87,8 @@ func handleGetJob(d Deps) http.HandlerFunc {
 			return
 		}
 
-		jobID := r.PathValue("id")
-		if jobID == "" {
-			writeProblem(w, http.StatusBadRequest, "job id required", "")
+		jobID, ok := requirePathValue(w, r, "id", "job id required", "")
+		if !ok {
 			return
 		}
 
@@ -148,9 +147,8 @@ func handleCancelJob(d Deps) http.HandlerFunc {
 			return
 		}
 
-		jobID := r.PathValue("id")
-		if jobID == "" {
-			writeProblem(w, http.StatusBadRequest, "job id required", "")
+		jobID, ok := requirePathValue(w, r, "id", "job id required", "")
+		if !ok {
 			return
 		}
 

@@ -96,3 +96,15 @@ func mediaType(header string) string {
 	}
 	return strings.ToLower(strings.TrimSpace(header))
 }
+
+// requirePathValue returns the named path parameter, writing a 400 problem
+// with the given title and detail when it is empty. ok=false means the
+// response is already written.
+func requirePathValue(w http.ResponseWriter, r *http.Request, name, title, detail string) (value string, ok bool) {
+	value = r.PathValue(name)
+	if value == "" {
+		writeProblem(w, http.StatusBadRequest, title, detail)
+		return "", false
+	}
+	return value, true
+}
