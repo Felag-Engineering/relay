@@ -66,24 +66,27 @@ type Verified struct {
 	TokenID string
 
 	// Source is WHERE the identity acted from: the peer address the Relay
-	// read off the connection.
+	// read off the connection, or, for an act at the Relay host's terminal,
+	// the name of the host-local command. Method tells the two apart, never
+	// the shape of this value.
 	//
 	// Verified rather than asserted because the Relay observes it directly. A
 	// value taken from a proxy header would be a claim and would belong in the
 	// other lane; nothing populates this field from a header.
 	//
-	// Empty for a record written outside a network boundary — a local signal
-	// on the Relay host, e.g. the Freeze lever.
+	// Empty for a record written outside a network boundary that names no
+	// command — a local signal on the Relay host, e.g. the Freeze lever.
 	//
 	// Required by docs/design/console/12-login.md: a sign-in trail without a
 	// source cannot tell a brute force from a forgetful operator.
 	Source string
 
-	// Method is HOW the identity was established: "api_token" or "oauth"
-	// (ADR-0024). Empty for a record written outside an authentication boundary.
+	// Method is HOW the identity was established: a capability.AuthMethod
+	// value (ADR-0024). Empty for a record written outside an authentication
+	// boundary that names no method.
 	//
-	// Recorded because the two call for different incident responses: a
-	// compromised static credential is revoked here, while a compromised IdP
+	// Recorded because each method calls for a different incident response:
+	// a compromised static credential is revoked here, while a compromised IdP
 	// account is dealt with at the IdP and only then reflected here. A trail
 	// that cannot tell them apart cannot tell you which lever to pull.
 	Method string
