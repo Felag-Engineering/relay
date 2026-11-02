@@ -141,6 +141,11 @@ func TestRoleFloorCannotRefuseAnAskablePark(t *testing.T) {
 
 	roles := []accounts.Role{accounts.RoleViewer, accounts.RoleOperator, accounts.RoleAdmin}
 
+	wholeFleet, err := capability.ParseSelector(capability.WholeFleetSelector)
+	if err != nil {
+		t.Fatalf("ParseSelector(%q): %v", capability.WholeFleetSelector, err)
+	}
+
 	kinds := make([]struct {
 		name string
 		act  jobs.Action
@@ -172,7 +177,7 @@ func TestRoleFloorCannotRefuseAnAskablePark(t *testing.T) {
 		for _, kc := range kinds {
 			t.Run(string(role)+"/"+kc.name, func(t *testing.T) {
 				reg := registry.NewInMemory()
-				if _, err := reg.Upsert(registry.Report{NodeID: "node-a"}); err != nil {
+				if _, err := reg.Upsert(registry.Report{NodeID: "node-a"}.WithNodeLabels(map[string]string{"os": "linux"})); err != nil {
 					t.Fatalf("seed registry: %v", err)
 				}
 				// A fresh Service per pair, so no pair bounces off another
@@ -192,7 +197,7 @@ func TestRoleFloorCannotRefuseAnAskablePark(t *testing.T) {
 					Role: string(role), Kind: capability.PrincipalKindHuman,
 				}
 
-				_, runErr := s.Run(context.Background(), p, capability.Selector{}, kc.act)
+				_, runErr := s.Run(context.Background(), p, wholeFleet, kc.act)
 
 				var parked *capability.ParkedError
 				authorized := errors.As(runErr, &parked)

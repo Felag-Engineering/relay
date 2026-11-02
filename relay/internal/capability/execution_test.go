@@ -815,7 +815,7 @@ func TestServiceRunDispatchPanicReachesAuditAndResults(t *testing.T) {
 	reg := st.Registry()
 	fc := newFakeConduit(nil)
 	for _, n := range []string{"node-a", "node-b"} {
-		if _, err := reg.Upsert(registry.Report{NodeID: n}); err != nil {
+		if _, err := reg.Upsert(linuxReport(n)); err != nil {
 			t.Fatalf("Upsert %s: %v", n, err)
 		}
 		fc.connected[n] = true
@@ -831,7 +831,7 @@ func TestServiceRunDispatchPanicReachesAuditAndResults(t *testing.T) {
 	})
 
 	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"}
-	results, err := svc.Run(context.Background(), Principal{Account: "alice"}, Selector{}, act)
+	results, err := svc.Run(context.Background(), Principal{Account: "alice"}, fleetSel, act)
 	if !errors.Is(err, errDispatchPanicked) {
 		t.Fatalf("Run() error = %v, want it to wrap errDispatchPanicked", err)
 	}
@@ -974,10 +974,10 @@ func TestEngineMixedFleetVersionGate(t *testing.T) {
 	t.Cleanup(func() { st.Close() })
 
 	reg := st.Registry()
-	if _, err := reg.Upsert(registry.Report{NodeID: "node-current", DaemonVersion: "1.2.0"}); err != nil {
+	if _, err := reg.Upsert(linuxReportWith(registry.Report{NodeID: "node-current", DaemonVersion: "1.2.0"})); err != nil {
 		t.Fatalf("Upsert node-current: %v", err)
 	}
-	if _, err := reg.Upsert(registry.Report{NodeID: "node-old", DaemonVersion: "1.0.0"}); err != nil {
+	if _, err := reg.Upsert(linuxReportWith(registry.Report{NodeID: "node-old", DaemonVersion: "1.0.0"})); err != nil {
 		t.Fatalf("Upsert node-old: %v", err)
 	}
 
@@ -1000,7 +1000,7 @@ func TestEngineMixedFleetVersionGate(t *testing.T) {
 		jobsRepo: st.Jobs(), tasksRepo: st.Tasks(), conduit: conduit,
 	})
 
-	sel := Selector{} // Selector{} matches every Node (see selector.go)
+	sel := fleetSel
 	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"}
 	results, err := svc.Run(context.Background(), Principal{Account: "alice"}, sel, act)
 	if err != nil {
@@ -1348,7 +1348,7 @@ func TestNewExecution_NilOptionalSeamsTakeTheirSafeDefaults(t *testing.T) {
 
 	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"}
 	p := Principal{AccountID: "a1", Account: "a1"}
-	results, err := x.Run(context.Background(), p, Selector{}, act)
+	results, err := x.Run(context.Background(), p, fleetSel, act)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -1359,7 +1359,7 @@ func TestNewExecution_NilOptionalSeamsTakeTheirSafeDefaults(t *testing.T) {
 		t.Errorf("recorded intents = %d, want 1 (taken from the Recorder's AuditSink)", n)
 	}
 
-	_, err = x.Start(context.Background(), p, Selector{}, act, StartOptions{IdempotencyKey: "k-1"})
+	_, err = x.Start(context.Background(), p, fleetSel, act, StartOptions{IdempotencyKey: "k-1"})
 	if !errors.Is(err, ErrIdempotencyUnavailable) {
 		t.Errorf("keyed Start with a nil idem: err = %v, want ErrIdempotencyUnavailable", err)
 	}
@@ -1394,7 +1394,7 @@ func TestExecution_ResolvesStateAgainstTheReadLanesWindow(t *testing.T) {
 	run := func(t *testing.T, window time.Duration) (*testSvc, []NodeResult, error) {
 		t.Helper()
 		reg := registry.NewInMemory()
-		if _, err := reg.Upsert(registry.Report{NodeID: "node-1"}); err != nil {
+		if _, err := reg.Upsert(linuxReport("node-1")); err != nil {
 			t.Fatalf("Upsert: %v", err)
 		}
 		if err := reg.RecordEnrollment("node-1", registry.Certificate{NotAfter: now.Add(time.Hour)}, now); err != nil {
@@ -1475,7 +1475,7 @@ func TestEngine_JobEvents_CreatedThenCompleted(t *testing.T) {
 	}
 
 	principal := Principal{Account: "alice"}
-	sel := Selector{}
+	sel := fleetSel
 	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"}
 	d := newDispatch(principal, sel, nodes, act)
 

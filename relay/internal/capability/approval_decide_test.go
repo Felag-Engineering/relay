@@ -23,7 +23,7 @@ func decideFixture(t *testing.T, authorizer ApprovalAuthorizer) (*testSvc, *memA
 	t.Helper()
 	reg := registry.NewInMemory()
 	for _, id := range []string{"node-a", "node-b"} {
-		if _, err := reg.Upsert(registry.Report{NodeID: id}); err != nil {
+		if _, err := reg.Upsert(linuxReport(id)); err != nil {
 			t.Fatalf("seed registry: %v", err)
 		}
 	}
@@ -50,7 +50,7 @@ func decideFixtureWithRequirement(t *testing.T, req approval.Requirement, store 
 	t.Helper()
 	reg := registry.NewInMemory()
 	for _, id := range []string{"node-a", "node-b"} {
-		if _, err := reg.Upsert(registry.Report{NodeID: id}); err != nil {
+		if _, err := reg.Upsert(linuxReport(id)); err != nil {
 			t.Fatalf("seed registry: %v", err)
 		}
 	}
@@ -99,7 +99,7 @@ func countApprovalDecided(audit *spyAuditSink) int {
 // park drives one gated dispatch and returns the resulting ParkedError.
 func park(t *testing.T, s *testSvc, p Principal) *ParkedError {
 	t.Helper()
-	_, err := s.Run(context.Background(), p, Selector{}, mutateAct())
+	_, err := s.Run(context.Background(), p, fleetSel, mutateAct())
 	var parked *ParkedError
 	if !errors.As(err, &parked) {
 		t.Fatalf("Run: err = %v, want a park", err)
@@ -373,7 +373,7 @@ func TestApprovalUnknownIDIsNotFound(t *testing.T) {
 // Proves AP-38.
 func TestNotifierFiresOncePerPark(t *testing.T) {
 	reg := registry.NewInMemory()
-	if _, err := reg.Upsert(registry.Report{NodeID: "node-a"}); err != nil {
+	if _, err := reg.Upsert(linuxReport("node-a")); err != nil {
 		t.Fatalf("seed registry: %v", err)
 	}
 	spy := &spyNotifier{}
@@ -413,7 +413,7 @@ func TestNotifierFiresOncePerPark(t *testing.T) {
 // Proves AP-41.
 func TestRedriveAuditsPendingObservedNotRequested(t *testing.T) {
 	reg := registry.NewInMemory()
-	if _, err := reg.Upsert(registry.Report{NodeID: "node-a"}); err != nil {
+	if _, err := reg.Upsert(linuxReport("node-a")); err != nil {
 		t.Fatalf("seed registry: %v", err)
 	}
 	audit := &spyAuditSink{}
@@ -464,7 +464,7 @@ func TestRedriveAuditsPendingObservedNotRequested(t *testing.T) {
 // TestNotifierIsNotConsultedWhenNothingParks.
 func TestNotifierSilentWhenNothingParks(t *testing.T) {
 	reg := registry.NewInMemory()
-	if _, err := reg.Upsert(registry.Report{NodeID: "node-a"}); err != nil {
+	if _, err := reg.Upsert(linuxReport("node-a")); err != nil {
 		t.Fatalf("seed registry: %v", err)
 	}
 	empty, err := approval.NewGate(nil)
@@ -483,7 +483,7 @@ func TestNotifierSilentWhenNothingParks(t *testing.T) {
 	})
 	s.disp = &spyDispatcher{jobID: "job-1"}
 
-	if _, err := s.Run(context.Background(), machineRequester, Selector{}, mutateAct()); err != nil {
+	if _, err := s.Run(context.Background(), machineRequester, fleetSel, mutateAct()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if len(spy.notices) != 0 {
@@ -522,7 +522,7 @@ func (s *spyNotifier) NotifyParked(_ context.Context, n ApprovalNotice) {
 // Proves AP-17, AP-27.
 func TestDecideApprovalAuditEntryCarriesTheAnswerAndChannel(t *testing.T) {
 	reg := registry.NewInMemory()
-	if _, err := reg.Upsert(registry.Report{NodeID: "node-a"}); err != nil {
+	if _, err := reg.Upsert(linuxReport("node-a")); err != nil {
 		t.Fatalf("seed registry: %v", err)
 	}
 	gate, err := approval.NewGate([]approval.Rule{{
@@ -560,7 +560,7 @@ func TestDecideApprovalAuditEntryCarriesTheAnswerAndChannel(t *testing.T) {
 
 	parkOne := func(act jobs.Action) *ParkedError {
 		t.Helper()
-		_, err := s.Run(context.Background(), machineRequester, Selector{}, act)
+		_, err := s.Run(context.Background(), machineRequester, fleetSel, act)
 		var parked *ParkedError
 		if !errors.As(err, &parked) {
 			t.Fatalf("Run: err = %v, want a park", err)
@@ -717,7 +717,7 @@ func TestDecideApproval_NotPendingReturnsTheCurrentRequest(t *testing.T) {
 		}
 		// The request is approved, so re-driving the same Plan dispatches and
 		// binds the Job the approval released.
-		if _, err := s.Run(context.Background(), machineRequester, Selector{}, mutateAct()); err != nil {
+		if _, err := s.Run(context.Background(), machineRequester, fleetSel, mutateAct()); err != nil {
 			t.Fatalf("Run after approval: %v", err)
 		}
 
@@ -1000,12 +1000,12 @@ func TestApprovalAudit_ParksAndDecisionsKeepTheTwoLanesApart(t *testing.T) {
 	machineCtx := WithAssertions(context.Background(), Assertions{OnBehalfOf: "oncall"})
 	humanCtx := WithAssertions(context.Background(), Assertions{OnBehalfOf: "alice-corp"})
 
-	_, err := s.Run(machineCtx, machineRequester, Selector{}, mutateAct())
+	_, err := s.Run(machineCtx, machineRequester, fleetSel, mutateAct())
 	var parked *ParkedError
 	if !errors.As(err, &parked) {
 		t.Fatalf("park: err = %v, want a park", err)
 	}
-	if _, err := s.Run(machineCtx, machineRequester, Selector{}, mutateAct()); !errors.As(err, &parked) {
+	if _, err := s.Run(machineCtx, machineRequester, fleetSel, mutateAct()); !errors.As(err, &parked) {
 		t.Fatalf("re-drive: err = %v, want the pending park observed", err)
 	}
 	if _, err := s.DecideApproval(humanCtx, humanApprover("acct-ana", "ana"), ApprovalDecision{
@@ -1013,7 +1013,7 @@ func TestApprovalAudit_ParksAndDecisionsKeepTheTwoLanesApart(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("DecideApproval: %v", err)
 	}
-	if _, err := s.Run(machineCtx, machineRequester, Selector{}, mutateAct()); err != nil {
+	if _, err := s.Run(machineCtx, machineRequester, fleetSel, mutateAct()); err != nil {
 		t.Fatalf("released re-drive: %v", err)
 	}
 

@@ -43,7 +43,7 @@ func TestAssertionsAreNotAnAuthorizationInput(t *testing.T) {
 	})
 
 	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"}
-	_, _ = svc.Run(ctx, Principal{AccountID: "acct-1", Account: "gleipnir", Role: "admin"}, Selector{}, act)
+	_, _ = svc.Run(ctx, Principal{AccountID: "acct-1", Account: "gleipnir", Role: "admin"}, fleetSel, act)
 
 	if !spy.called {
 		t.Fatal("the Authorizer was never called; this test proves nothing")

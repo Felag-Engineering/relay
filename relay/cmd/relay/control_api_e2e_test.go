@@ -36,7 +36,6 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/events"
 	"github.com/Felag-Engineering/relay/relay/internal/harnesssetup"
 	"github.com/Felag-Engineering/relay/relay/internal/jobs"
-	"github.com/Felag-Engineering/relay/relay/internal/registry"
 	relayv1 "github.com/Felag-Engineering/relay/relay/internal/relay/v1"
 	"github.com/Felag-Engineering/relay/relay/internal/relaytest"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -352,10 +351,10 @@ func TestControlAPI_FreezeEngageRelease(t *testing.T) {
 
 	// A Node must be enrolled for the post-release dispatch below to prove
 	// anything: the post-release check requires runErr == nil, and with an
-	// empty registry the empty Selector matches no Nodes and is refused as
+	// empty registry the Selector matches no Nodes and is refused as
 	// no_nodes_matched (#571), so that check would genuinely fail. Seeding one
 	// Node here gives the dispatch a Node to reach.
-	if _, err := deps.registry.Upsert(registry.Report{NodeID: "node-freeze-e2e"}); err != nil {
+	if _, err := deps.registry.Upsert(linuxNode("node-freeze-e2e")); err != nil {
 		t.Fatalf("seed registry: %v", err)
 	}
 
@@ -365,7 +364,7 @@ func TestControlAPI_FreezeEngageRelease(t *testing.T) {
 		t.Fatalf("freeze engage status = %d, want %d", engageResp.StatusCode, http.StatusOK)
 	}
 
-	sel := capability.Selector{}
+	sel := fleetSelector(t)
 	// A real Action kind, not a bare RiskClass: since #298 the Authorizer
 	// denies an unrecognized ActionKind for every role including admin, so a
 	// kind-less probe would be refused by authz and stop testing the Freeze.
@@ -445,11 +444,11 @@ func TestControlAPI_DispatchPublishesItsJobOnTheEventBus(t *testing.T) {
 	defer cancel()
 
 	_, deps, _, _, _ := startControlAPIServer(t)
-	if _, err := deps.registry.Upsert(registry.Report{NodeID: "node-events-e2e"}); err != nil {
+	if _, err := deps.registry.Upsert(linuxNode("node-events-e2e")); err != nil {
 		t.Fatalf("seed registry: %v", err)
 	}
 
-	results, err := deps.execution.Run(ctx, testAdmin(), capability.Selector{},
+	results, err := deps.execution.Run(ctx, testAdmin(), fleetSelector(t),
 		jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -520,7 +519,7 @@ func TestControlAPI_ExecutionRoutesAreWired(t *testing.T) {
 
 	t.Run("run_operation plan is served", func(t *testing.T) {
 		resp := controlAPIRequest(t, client, http.MethodPost, base+"/api/v1/operations",
-			credential, map[string]any{"operation": "system.facts", "plan": true})
+			credential, map[string]any{"selector": e2eFleetSelector, "operation": "system.facts", "plan": true})
 		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
@@ -544,7 +543,7 @@ func TestControlAPI_ExecutionRoutesAreWired(t *testing.T) {
 
 	t.Run("raw_exec plan is served", func(t *testing.T) {
 		resp := controlAPIRequest(t, client, http.MethodPost, base+"/api/v1/raw-exec",
-			credential, map[string]any{"argv": []string{"/bin/echo", "hi"}, "plan": true})
+			credential, map[string]any{"selector": e2eFleetSelector, "argv": []string{"/bin/echo", "hi"}, "plan": true})
 		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
@@ -558,6 +557,7 @@ func TestControlAPI_ExecutionRoutesAreWired(t *testing.T) {
 		// a Node and come back as denied_by_policy.
 		resp := controlAPIRequest(t, client, http.MethodPost, base+"/api/v1/operations",
 			credential, map[string]any{
+				"selector":  e2eFleetSelector,
 				"operation": "service.restart",
 				"args":      map[string]string{"unitt": "nginx"},
 			})
@@ -570,7 +570,7 @@ func TestControlAPI_ExecutionRoutesAreWired(t *testing.T) {
 
 	t.Run("unauthenticated is refused", func(t *testing.T) {
 		resp := controlAPIRequest(t, client, http.MethodPost, base+"/api/v1/operations",
-			"", map[string]any{"operation": "system.facts", "plan": true})
+			"", map[string]any{"selector": e2eFleetSelector, "operation": "system.facts", "plan": true})
 		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusUnauthorized {
@@ -1249,5 +1249,91 @@ func TestControlAPI_HaltRendersIdenticallyOnBothSurfaces(t *testing.T) {
 		if a.NodeID == "node-unsent" && (a.Outcome != "cancelled" || a.Stderr != apiBody.Halt["reason"]) {
 			t.Errorf("the unsent Node = {%s %q}, want cancelled with the halt's reason", a.Outcome, a.Stderr)
 		}
+	}
+}
+
+// TestControlAPI_EmptySelectorIsRefusedOnDispatchAndPlan proves a dispatch or
+// plan with an omitted, empty or whitespace-only Selector is refused on the
+// Control API as a 400 problem naming empty_selector, creates no Job, is
+// audited once as a refusal, and reads word for word as it does on MCP
+// (invariant 10) (#1274).
+func TestControlAPI_EmptySelectorIsRefusedOnDispatchAndPlan(t *testing.T) {
+	f := startRelay(t, WithControlPlane())
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	routes := map[string]map[string]any{
+		"/api/v1/operations": {"operation": "system.facts"},
+		"/api/v1/raw-exec":   {"argv": []string{"/bin/true"}},
+	}
+	empty, blank := "", "   "
+	selectors := map[string]*string{"omitted": nil, "empty": &empty, "whitespace": &blank}
+
+	calls := 0
+	var detail string
+	for path, base := range routes {
+		for selName, sel := range selectors {
+			for _, plan := range []bool{false, true} {
+				body := map[string]any{"plan": plan}
+				for k, v := range base {
+					body[k] = v
+				}
+				if sel != nil {
+					body["selector"] = *sel
+				}
+				calls++
+
+				resp := controlAPIRequest(t, f.ClientFor(""), http.MethodPost, f.ControlBase+path, f.Credential, body)
+				if resp.StatusCode != http.StatusBadRequest {
+					resp.Body.Close()
+					t.Fatalf("%s selector=%s plan=%v: status = %d, want 400", path, selName, plan, resp.StatusCode)
+				}
+				if ct := resp.Header.Get("Content-Type"); ct != "application/problem+json" {
+					t.Errorf("%s: Content-Type = %q, want application/problem+json", path, ct)
+				}
+				var p struct {
+					Title  string `json:"title"`
+					Detail string `json:"detail"`
+				}
+				err := json.NewDecoder(resp.Body).Decode(&p)
+				resp.Body.Close()
+				if err != nil {
+					t.Fatalf("%s: decode problem: %v", path, err)
+				}
+				if p.Title != "invalid selector" {
+					t.Errorf("%s: title = %q, want %q", path, p.Title, "invalid selector")
+				}
+				if !strings.Contains(p.Detail, "empty_selector") || !strings.Contains(p.Detail, capability.WholeFleetSelector) {
+					t.Errorf("%s: detail = %q, want it to carry empty_selector and name %s", path, p.Detail, capability.WholeFleetSelector)
+				}
+				detail = p.Detail
+			}
+		}
+	}
+
+	records, err := f.Deps.audit.List(ctx)
+	if err != nil {
+		t.Fatalf("audit.List: %v", err)
+	}
+	refusals := 0
+	for _, r := range records {
+		switch r.Kind {
+		case audit.KindRefusal:
+			refusals++
+		case audit.KindDispatch:
+			t.Errorf("found a KindDispatch record for an empty Selector: %+v", r)
+		}
+	}
+	if refusals != calls {
+		t.Errorf("refusal records = %d, want exactly one per call (%d)", refusals, calls)
+	}
+
+	session := relaytest.Connect(t, f.ControlBase, f.Client())
+	res := relaytest.CallTool(t, session, "run_operation", map[string]any{"operation": "system.facts"})
+	if !res.IsError {
+		t.Fatal("MCP run_operation with no selector: IsError = false, want a tool error")
+	}
+	if got := mcpToolText(t, res); got != detail {
+		t.Errorf("MCP refusal %q differs from the Control API detail %q; one refusal must read the same on both surfaces", got, detail)
 	}
 }

@@ -225,7 +225,7 @@ func newTestServerWithConcurrency(t *testing.T, accountID string, readCap, mutat
 		},
 		PolicyFingerprint: nodeAFingerprint,
 		DaemonVersion:     "1.1.0",
-	}.WithNodeLabels(map[string]string{"role": "web"})); err != nil {
+	}.WithNodeLabels(map[string]string{"role": "web", "os": "linux"})); err != nil {
 		t.Fatalf("seed node A: %v", err)
 	}
 	if err := reg.SetRelayLabels(nodeA, map[string]string{"quarantine": "on"}); err != nil {
@@ -236,7 +236,7 @@ func newTestServerWithConcurrency(t *testing.T, accountID string, readCap, mutat
 		Facts:             registry.Facts{Hostname: "db-1", OS: "linux"},
 		PolicyFingerprint: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 		DaemonVersion:     "1.3.0",
-	}.WithNodeLabels(map[string]string{"env": "prod"})); err != nil {
+	}.WithNodeLabels(map[string]string{"env": "prod", "os": "linux"})); err != nil {
 		t.Fatalf("seed node B: %v", err)
 	}
 	// Node B carries a tag. Tags are written only by a human Account through

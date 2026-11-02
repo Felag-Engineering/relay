@@ -23,7 +23,6 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/relay/relay/internal/approval"
 	"github.com/Felag-Engineering/relay/relay/internal/audit"
-	"github.com/Felag-Engineering/relay/relay/internal/registry"
 	"github.com/Felag-Engineering/relay/relay/internal/relayconfig"
 )
 
@@ -73,7 +72,7 @@ func startGatedRelay(t *testing.T, rulesTOML string, extra ...FixtureOption) *re
 		c.ApprovalRules = rules
 	})}, extra...)
 	f := startRelay(t, opts...)
-	if _, err := f.Deps.registry.Upsert(registry.Report{NodeID: "node-e2e-1"}); err != nil {
+	if _, err := f.Deps.registry.Upsert(linuxNode("node-e2e-1")); err != nil {
 		t.Fatalf("seed registry: %v", err)
 	}
 	return f
@@ -116,6 +115,7 @@ func restartMutate(t *testing.T, f *relayFixture, credential string) *http.Respo
 	t.Helper()
 	return controlAPIRequest(t, f.ClientFor(credential), http.MethodPost,
 		f.ControlBase+"/api/v1/operations", credential, map[string]any{
+			"selector":  e2eFleetSelector,
 			"operation": "service.restart",
 			"args":      map[string]string{"unit": "nginx"},
 		})
@@ -325,7 +325,7 @@ ttl = "1h"
 
 	// The founding admin (admin role) parks a Raw Exec.
 	parkResp := controlAPIRequest(t, f.Client(), http.MethodPost, f.ControlBase+"/api/v1/raw-exec",
-		f.Credential, map[string]any{"argv": []string{"/bin/echo", "hi"}})
+		f.Credential, map[string]any{"selector": e2eFleetSelector, "argv": []string{"/bin/echo", "hi"}})
 	defer parkResp.Body.Close()
 	if parkResp.StatusCode != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202; body decode follows", parkResp.StatusCode)
@@ -351,7 +351,7 @@ func TestApprovalCallout_ReadsAreNotGatedByAMutateRule(t *testing.T) {
 	f := startGatedRelay(t, gateAllMutates)
 
 	resp := controlAPIRequest(t, f.Client(), http.MethodPost, f.ControlBase+"/api/v1/operations",
-		f.Credential, map[string]any{"operation": "system.facts"})
+		f.Credential, map[string]any{"selector": e2eFleetSelector, "operation": "system.facts"})
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("read-class dispatch status = %d, want 200 — a mutate rule must not park it", resp.StatusCode)

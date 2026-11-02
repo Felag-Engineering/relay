@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -287,5 +288,30 @@ func TestOpenAPISpec_SelectorNamesEveryNamespace(t *testing.T) {
 		if !strings.Contains(raw, p) {
 			t.Errorf("RawExecRequest.selector neither names %s nor references RunOperationRequest.selector: %q", p, raw)
 		}
+	}
+}
+
+// TestOpenAPISpec_DispatchSelectorIsRequired keeps the document honest after an
+// empty Selector became a refusal for a dispatch: both request bodies list the
+// selector as required, and its description says an empty one is refused and
+// names the whole-fleet Selector rather than saying it matches every Node
+// (#1274).
+func TestOpenAPISpec_DispatchSelectorIsRequired(t *testing.T) {
+	doc := loadSpec(t)
+	for _, name := range []string{"RunOperationRequest", "RawExecRequest"} {
+		ref := doc.Components.Schemas[name]
+		if ref == nil {
+			t.Fatalf("%s is not in the document", name)
+		}
+		if !slices.Contains(ref.Value.Required, "selector") {
+			t.Errorf("%s.required = %v, want it to list selector", name, ref.Value.Required)
+		}
+	}
+	desc := doc.Components.Schemas["RunOperationRequest"].Value.Properties["selector"].Value.Description
+	if !strings.Contains(desc, "refused") || !strings.Contains(desc, capability.WholeFleetSelector) {
+		t.Errorf("RunOperationRequest.selector must say an empty Selector is refused and name %s: %q", capability.WholeFleetSelector, desc)
+	}
+	if strings.Contains(desc, "matches every Node") {
+		t.Errorf("RunOperationRequest.selector still says an empty Selector matches every Node: %q", desc)
 	}
 }

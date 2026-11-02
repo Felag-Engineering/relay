@@ -211,3 +211,24 @@ func caps(readCap, mutateCap int) *StaticOperatorSettings {
 func concurrencyOf(n int) *StaticOperatorSettings {
 	return &StaticOperatorSettings{S: OperatorSettings{DispatchConcurrency: n}}
 }
+
+// fleetSel is a Selector naming every Node linuxReport seeds. Execution refuses
+// an empty Selector, so a test that dispatches to its whole seeded fleet names
+// this one.
+var fleetSel = Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "os", Value: "linux"}}}
+
+// linuxReport is a Node report carrying the node:os=linux label fleetSel matches.
+func linuxReport(id string) registry.Report {
+	return registry.Report{NodeID: id}.WithNodeLabels(map[string]string{"os": "linux"})
+}
+
+// linuxReportWith adds node:os=linux to a report that carries other fields,
+// keeping any node labels it already has.
+func linuxReportWith(r registry.Report) registry.Report {
+	labels := r.NodeLabels()
+	if labels == nil {
+		labels = map[string]string{}
+	}
+	labels["os"] = "linux"
+	return r.WithNodeLabels(labels)
+}

@@ -197,7 +197,7 @@ func newStartFx(t *testing.T, mods ...func(*seams)) *startFx {
 
 	reg := registry.NewInMemory()
 	for _, id := range startNode {
-		if _, err := reg.Upsert(registry.Report{NodeID: id}); err != nil {
+		if _, err := reg.Upsert(linuxReport(id)); err != nil {
 			t.Fatalf("seed registry: %v", err)
 		}
 	}
@@ -279,7 +279,7 @@ type startResult struct {
 func (f *startFx) startAsync(p Principal, act jobs.Action, o StartOptions) <-chan startResult {
 	ch := make(chan startResult, 1)
 	go func() {
-		sj, err := f.svc.Start(context.Background(), p, Selector{}, act, o)
+		sj, err := f.svc.Start(context.Background(), p, fleetSel, act, o)
 		ch <- startResult{sj, err}
 	}()
 	return ch
@@ -310,7 +310,7 @@ func TestStart_ReturnsOnceTasksArePersistedBeforeAnyResolves(t *testing.T) {
 	f := newStartFx(t)
 	f.conduit.block()
 
-	sj, err := f.svc.Start(context.Background(), alice, Selector{}, factsAct, StartOptions{})
+	sj, err := f.svc.Start(context.Background(), alice, fleetSel, factsAct, StartOptions{})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -344,7 +344,7 @@ func TestStart_CallerCancellationDoesNotAbandonTheJob(t *testing.T) {
 	f.conduit.block()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	sj, err := f.svc.Start(ctx, alice, Selector{}, factsAct, StartOptions{})
+	sj, err := f.svc.Start(ctx, alice, fleetSel, factsAct, StartOptions{})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -361,7 +361,7 @@ func TestStart_CallerCancellationDoesNotAbandonTheJob(t *testing.T) {
 
 func TestStart_DoneClosesAfterTheDispatchAuditRecord(t *testing.T) {
 	f := newStartFx(t)
-	sj, err := f.svc.Start(context.Background(), alice, Selector{}, factsAct, StartOptions{})
+	sj, err := f.svc.Start(context.Background(), alice, fleetSel, factsAct, StartOptions{})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -386,7 +386,7 @@ func TestStart_DoneClosesAfterTheDispatchAuditRecord(t *testing.T) {
 func TestStart_DrainWaitsForBackgroundJobs(t *testing.T) {
 	f := newStartFx(t)
 	f.conduit.block()
-	sj, err := f.svc.Start(context.Background(), alice, Selector{}, factsAct, StartOptions{})
+	sj, err := f.svc.Start(context.Background(), alice, fleetSel, factsAct, StartOptions{})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -415,7 +415,7 @@ func TestStart_RefusesOnceDraining(t *testing.T) {
 	if err := f.svc.Drain(ctx); err != nil {
 		t.Fatalf("Drain: %v", err)
 	}
-	_, err := f.svc.Start(context.Background(), alice, Selector{}, factsAct, StartOptions{})
+	_, err := f.svc.Start(context.Background(), alice, fleetSel, factsAct, StartOptions{})
 	if !errors.Is(err, ErrDraining) {
 		t.Fatalf("Start after Drain = %v, want ErrDraining", err)
 	}
@@ -426,13 +426,13 @@ func TestStart_RefusesOnceDraining(t *testing.T) {
 
 func TestStart_SameKeyReattachesAndDispatchesNothing(t *testing.T) {
 	f := newStartFx(t)
-	first, err := f.svc.Start(context.Background(), alice, Selector{}, factsAct, keyed("k-1"))
+	first, err := f.svc.Start(context.Background(), alice, fleetSel, factsAct, keyed("k-1"))
 	if err != nil {
 		t.Fatalf("first Start: %v", err)
 	}
 	waitClosed(t, first.Done, "first Done")
 
-	again, err := f.svc.Start(context.Background(), alice, Selector{}, factsAct, keyed("k-1"))
+	again, err := f.svc.Start(context.Background(), alice, fleetSel, factsAct, keyed("k-1"))
 	if err != nil {
 		t.Fatalf("re-issued Start: %v", err)
 	}
@@ -455,7 +455,7 @@ func TestStart_SameKeyReattachesAndDispatchesNothing(t *testing.T) {
 
 func TestStart_SameKeyDifferentArgumentsIsRefusedAndAudited(t *testing.T) {
 	f := newStartFx(t)
-	first, err := f.svc.Start(context.Background(), alice, Selector{}, factsAct, keyed("k-1"))
+	first, err := f.svc.Start(context.Background(), alice, fleetSel, factsAct, keyed("k-1"))
 	if err != nil {
 		t.Fatalf("first Start: %v", err)
 	}
@@ -463,7 +463,7 @@ func TestStart_SameKeyDifferentArgumentsIsRefusedAndAudited(t *testing.T) {
 
 	other := factsAct
 	other.TimeoutSeconds = 10
-	_, err = f.svc.Start(context.Background(), alice, Selector{}, other, keyed("k-1"))
+	_, err = f.svc.Start(context.Background(), alice, fleetSel, other, keyed("k-1"))
 	var conflict *IdempotencyConflictError
 	if !errors.As(err, &conflict) {
 		t.Fatalf("Start with changed arguments = %v, want *IdempotencyConflictError", err)
@@ -493,7 +493,7 @@ func TestStart_ConcurrentSameKeyDispatchesExactlyOneJob(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			sj, err := f.svc.Start(context.Background(), alice, Selector{}, factsAct, keyed("k-race"))
+			sj, err := f.svc.Start(context.Background(), alice, fleetSel, factsAct, keyed("k-race"))
 			results[i] = startResult{sj, err}
 		}()
 	}
@@ -580,7 +580,7 @@ func TestStart_ReissueWhileStuckPersistingIsPendingNeverNewKey(t *testing.T) {
 	a := f.startAsync(alice, factsAct, keyed("k-1"))
 	waitClosed(t, entered, "A inside RecordIntent")
 
-	_, err := f.svc.Start(context.Background(), alice, Selector{}, factsAct, keyed("k-1"))
+	_, err := f.svc.Start(context.Background(), alice, fleetSel, factsAct, keyed("k-1"))
 	var pending *IdempotencyPendingError
 	if !errors.As(err, &pending) {
 		t.Fatalf("re-issue while A is stuck = %v, want *IdempotencyPendingError", err)
@@ -604,7 +604,7 @@ func TestStart_ReissueWhileStuckPersistingIsPendingNeverNewKey(t *testing.T) {
 	if pending.JobID != ra.sj.JobID {
 		t.Errorf("pending named %s, want A's Job %s", pending.JobID, ra.sj.JobID)
 	}
-	third, err := f.svc.Start(context.Background(), alice, Selector{}, factsAct, keyed("k-1"))
+	third, err := f.svc.Start(context.Background(), alice, fleetSel, factsAct, keyed("k-1"))
 	if err != nil || !third.Reattached || third.JobID != ra.sj.JobID {
 		t.Fatalf("third re-issue = %+v, %v; want a re-attach to %s", third, err, ra.sj.JobID)
 	}
@@ -616,21 +616,21 @@ func TestStart_UnpersistedClaimIsPendingUntilTheAbandonBound(t *testing.T) {
 	f := newStartFx(t)
 	rec := jobs.IdempotencyRecord{
 		AccountID: alice.AccountID, Key: "k-ghost", JobID: "job-ghost", CreatedAt: startNow,
-		RequestDigest: jobs.RequestDigest(Selector{}.String(), factsAct),
+		RequestDigest: jobs.RequestDigest(fleetSel.String(), factsAct),
 	}
 	if _, won, err := f.st.IdempotencyKeys().Claim(context.Background(), rec, startNow.Add(-IdempotencyWindow)); err != nil || !won {
 		t.Fatalf("seed claim: won=%v err=%v", won, err)
 	}
 
 	f.setNow(startNow.Add(time.Minute))
-	_, err := f.svc.Start(context.Background(), alice, Selector{}, factsAct, keyed("k-ghost"))
+	_, err := f.svc.Start(context.Background(), alice, fleetSel, factsAct, keyed("k-ghost"))
 	var pending *IdempotencyPendingError
 	if !errors.As(err, &pending) || pending.JobID != "job-ghost" {
 		t.Fatalf("age 1m: err = %v, want Pending for job-ghost", err)
 	}
 
 	f.setNow(startNow.Add(11 * time.Minute))
-	_, err = f.svc.Start(context.Background(), alice, Selector{}, factsAct, keyed("k-ghost"))
+	_, err = f.svc.Start(context.Background(), alice, fleetSel, factsAct, keyed("k-ghost"))
 	var abandoned *IdempotencyAbandonedError
 	if !errors.As(err, &abandoned) {
 		t.Fatalf("age 11m: err = %v, want *IdempotencyAbandonedError", err)
@@ -683,7 +683,7 @@ func TestStart_ReissueAfterTheOriginalFailedIsToldToRetryTheSameKey(t *testing.T
 	}
 
 	f.intents.setFail(nil)
-	c, err := f.svc.Start(context.Background(), alice, Selector{}, factsAct, keyed("k-1"))
+	c, err := f.svc.Start(context.Background(), alice, fleetSel, factsAct, keyed("k-1"))
 	if err != nil || c.Reattached {
 		t.Fatalf("retry with the same key = %+v, %v; want a fresh dispatch", c, err)
 	}
@@ -697,7 +697,7 @@ func TestStart_KeyReleaseSurvivesCallerCancellation(t *testing.T) {
 	f.idem.afterClaim = cancel
 	f.intents.setFail(errors.New("store unavailable"))
 
-	if _, err := f.svc.Start(ctx, alice, Selector{}, factsAct, keyed("k-1")); err == nil {
+	if _, err := f.svc.Start(ctx, alice, fleetSel, factsAct, keyed("k-1")); err == nil {
 		t.Fatal("Start succeeded; the test needs the persist to fail")
 	}
 	f.idem.afterClaim = nil
@@ -706,7 +706,7 @@ func TestStart_KeyReleaseSurvivesCallerCancellation(t *testing.T) {
 	}
 
 	f.intents.setFail(nil)
-	sj, err := f.svc.Start(context.Background(), alice, Selector{}, factsAct, keyed("k-1"))
+	sj, err := f.svc.Start(context.Background(), alice, fleetSel, factsAct, keyed("k-1"))
 	if err != nil || sj.Reattached {
 		t.Fatalf("re-issue = %+v, %v; want a fresh dispatch", sj, err)
 	}
@@ -717,7 +717,7 @@ func TestStart_KeyReleaseSurvivesCallerCancellation(t *testing.T) {
 func TestStart_FrozenAndUnauthorizedRefuseBeforeAnyKeyValidationOrLookup(t *testing.T) {
 	f := newStartFx(t)
 	f.freeze.frozen = true
-	_, err := f.svc.Start(context.Background(), alice, Selector{}, factsAct, keyed("bad key"))
+	_, err := f.svc.Start(context.Background(), alice, fleetSel, factsAct, keyed("bad key"))
 	var frozen *FrozenError
 	if !errors.As(err, &frozen) {
 		t.Fatalf("frozen + invalid key = %v, want *FrozenError", err)
@@ -725,7 +725,7 @@ func TestStart_FrozenAndUnauthorizedRefuseBeforeAnyKeyValidationOrLookup(t *test
 
 	f.freeze.frozen = false
 	f.authz.err = errors.New("denied")
-	_, err = f.svc.Start(context.Background(), alice, Selector{}, factsAct, keyed("bad key"))
+	_, err = f.svc.Start(context.Background(), alice, fleetSel, factsAct, keyed("bad key"))
 	if err == nil || errors.As(err, new(*IdempotencyKeyError)) {
 		t.Fatalf("unauthorized + invalid key = %v, want the authorization refusal", err)
 	}
@@ -737,7 +737,7 @@ func TestStart_FrozenAndUnauthorizedRefuseBeforeAnyKeyValidationOrLookup(t *test
 func TestStart_InvalidKeyIsRefusedWithoutDispatching(t *testing.T) {
 	f := newStartFx(t)
 	for _, key := range []string{"has space", "tab\there", "ünï", strings.Repeat("k", MaxIdempotencyKeyBytes+1)} {
-		_, err := f.svc.Start(context.Background(), alice, Selector{}, factsAct, keyed(key))
+		_, err := f.svc.Start(context.Background(), alice, fleetSel, factsAct, keyed(key))
 		var ke *IdempotencyKeyError
 		if !errors.As(err, &ke) {
 			t.Errorf("key %q: err = %v, want *IdempotencyKeyError", key, err)
@@ -751,11 +751,11 @@ func TestStart_InvalidKeyIsRefusedWithoutDispatching(t *testing.T) {
 func TestStart_KeyIsScopedToTheAccount(t *testing.T) {
 	f := newStartFx(t)
 	bob := Principal{AccountID: "acct-2", Account: "bob"}
-	a, err := f.svc.Start(context.Background(), alice, Selector{}, factsAct, keyed("k-1"))
+	a, err := f.svc.Start(context.Background(), alice, fleetSel, factsAct, keyed("k-1"))
 	if err != nil {
 		t.Fatalf("alice: %v", err)
 	}
-	b, err := f.svc.Start(context.Background(), bob, Selector{}, factsAct, keyed("k-1"))
+	b, err := f.svc.Start(context.Background(), bob, fleetSel, factsAct, keyed("k-1"))
 	if err != nil {
 		t.Fatalf("bob: %v", err)
 	}
@@ -766,14 +766,14 @@ func TestStart_KeyIsScopedToTheAccount(t *testing.T) {
 
 func TestStart_KeyPastTheWindowDispatchesAfresh(t *testing.T) {
 	f := newStartFx(t)
-	a, err := f.svc.Start(context.Background(), alice, Selector{}, factsAct, keyed("k-1"))
+	a, err := f.svc.Start(context.Background(), alice, fleetSel, factsAct, keyed("k-1"))
 	if err != nil {
 		t.Fatalf("first: %v", err)
 	}
 	waitClosed(t, a.Done, "first Done")
 
 	f.setNow(startNow.Add(IdempotencyWindow + time.Hour))
-	b, err := f.svc.Start(context.Background(), alice, Selector{}, factsAct, keyed("k-1"))
+	b, err := f.svc.Start(context.Background(), alice, fleetSel, factsAct, keyed("k-1"))
 	if err != nil || b.Reattached || b.JobID == a.JobID {
 		t.Fatalf("after the window = %+v, %v; want a fresh Job", b, err)
 	}
@@ -782,7 +782,7 @@ func TestStart_KeyPastTheWindowDispatchesAfresh(t *testing.T) {
 func TestStart_KeyWithoutAnAccountStoreOrEngineIsRefused(t *testing.T) {
 	t.Run("no AccountID", func(t *testing.T) {
 		f := newStartFx(t)
-		_, err := f.svc.Start(context.Background(), Principal{Account: "alice"}, Selector{}, factsAct, keyed("k-1"))
+		_, err := f.svc.Start(context.Background(), Principal{Account: "alice"}, fleetSel, factsAct, keyed("k-1"))
 		if !errors.Is(err, ErrIdempotencyUnavailable) {
 			t.Fatalf("err = %v, want ErrIdempotencyUnavailable", err)
 		}
@@ -793,7 +793,7 @@ func TestStart_KeyWithoutAnAccountStoreOrEngineIsRefused(t *testing.T) {
 	t.Run("no key store", func(t *testing.T) {
 		f := newStartFx(t)
 		f.svc.idem = nil
-		_, err := f.svc.Start(context.Background(), alice, Selector{}, factsAct, keyed("k-1"))
+		_, err := f.svc.Start(context.Background(), alice, fleetSel, factsAct, keyed("k-1"))
 		if !errors.Is(err, ErrIdempotencyUnavailable) {
 			t.Fatalf("err = %v, want ErrIdempotencyUnavailable", err)
 		}
@@ -801,7 +801,7 @@ func TestStart_KeyWithoutAnAccountStoreOrEngineIsRefused(t *testing.T) {
 	t.Run("dispatcher cannot persist first", func(t *testing.T) {
 		f := newStartFx(t)
 		f.svc.disp = &spyDispatcher{jobID: "job-1"}
-		_, err := f.svc.Start(context.Background(), alice, Selector{}, factsAct, keyed("k-1"))
+		_, err := f.svc.Start(context.Background(), alice, fleetSel, factsAct, keyed("k-1"))
 		if !errors.Is(err, ErrIdempotencyUnavailable) {
 			t.Fatalf("err = %v, want ErrIdempotencyUnavailable", err)
 		}
@@ -812,7 +812,7 @@ func TestStart_WithoutAKeyBehavesLikeRunOnANonPersistingDispatcher(t *testing.T)
 	f := newStartFx(t)
 	disp := &spyDispatcher{jobID: "job-1"}
 	f.svc.disp = disp
-	sj, err := f.svc.Start(context.Background(), alice, Selector{}, factsAct, StartOptions{})
+	sj, err := f.svc.Start(context.Background(), alice, fleetSel, factsAct, StartOptions{})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -895,7 +895,7 @@ func TestStart_ParkClaimsNoKey(t *testing.T) {
 	f, store := approvalStartFx(t)
 	p := Principal{AccountID: "acct-g", Account: "gleipnir-prod"}
 
-	_, err := f.svc.Start(context.Background(), p, Selector{}, mutateAct(), keyed("k-1"))
+	_, err := f.svc.Start(context.Background(), p, fleetSel, mutateAct(), keyed("k-1"))
 	var parked *ParkedError
 	if !errors.As(err, &parked) {
 		t.Fatalf("Start = %v, want a park", err)
@@ -905,7 +905,7 @@ func TestStart_ParkClaimsNoKey(t *testing.T) {
 	}
 
 	store.approve(t, parked.RequestID, "acct-ana", "ana", apNow.Add(time.Minute))
-	sj, err := f.svc.Start(context.Background(), p, Selector{}, mutateAct(), keyed("k-1"))
+	sj, err := f.svc.Start(context.Background(), p, fleetSel, mutateAct(), keyed("k-1"))
 	if err != nil || sj.Reattached {
 		t.Fatalf("answered retry = %+v, %v; want a dispatch", sj, err)
 	}
@@ -947,7 +947,7 @@ func TestStart_ReleasedApprovalReattachesAndRebindsTheKey(t *testing.T) {
 	})
 	p := Principal{AccountID: "acct-g", Account: "gleipnir-prod"}
 
-	_, err := f.svc.Start(context.Background(), p, Selector{}, mutateAct(), keyed("k-1"))
+	_, err := f.svc.Start(context.Background(), p, fleetSel, mutateAct(), keyed("k-1"))
 	var parked *ParkedError
 	if !errors.As(err, &parked) {
 		t.Fatalf("Start = %v, want a park", err)
@@ -955,7 +955,7 @@ func TestStart_ReleasedApprovalReattachesAndRebindsTheKey(t *testing.T) {
 	mem.approve(t, parked.RequestID, "acct-ana", "ana", apNow.Add(time.Minute))
 	lb.winnerJob = "job-winner"
 
-	sj, err := f.svc.Start(context.Background(), p, Selector{}, mutateAct(), keyed("k-1"))
+	sj, err := f.svc.Start(context.Background(), p, fleetSel, mutateAct(), keyed("k-1"))
 	if err != nil {
 		t.Fatalf("Start that loses the release claim: %v", err)
 	}

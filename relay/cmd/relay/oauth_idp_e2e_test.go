@@ -127,7 +127,7 @@ func TestE2EOAuth_SessionResolvesToTheAccount(t *testing.T) {
 	token := idp.token(t, "hana")
 
 	session := relaytest.Connect(t, f.ControlBase, f.ClientFor(token))
-	res := relaytest.CallTool(t, session, "run_operation", map[string]any{"operation": "system.facts", "wait_seconds": 300})
+	res := relaytest.CallTool(t, session, "run_operation", map[string]any{"selector": e2eFleetSelector, "operation": "system.facts", "wait_seconds": 300})
 	if res.IsError {
 		t.Fatalf("run_operation over the OAuth session returned IsError=true: %+v", res.Content)
 	}

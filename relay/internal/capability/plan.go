@@ -19,6 +19,8 @@
 //     not learn per-Node deciding rules.
 //   - A Plan creates no Job, no Stage, no Task, no dedup entry, and is
 //     audited as a distinct AuditKindPlan (seams.go), never AuditKindDispatch.
+//   - An empty Selector is REFUSED (EmptySelectorError), exactly as Run
+//     refuses it: it is a request that cannot be asked, not a guardrail.
 //   - A Selector matching no Nodes is REPORTED (PlanResult.NoNodesMatched),
 //     never refused, while Run refuses the same condition as
 //     no_nodes_matched (ADR-0011).
@@ -160,6 +162,8 @@ func ruleReference(v jobs.Verdict) NodeVerdict {
 // dispatch would currently be refused (ADR-0011/0013).
 //
 // Order mirrors Run except for the Freeze/cap treatment:
+//  0. refuse an empty Selector — refused, not reported, exactly as Run
+//     refuses it.
 //  1. resolve the Selector — identical resolution to Run —
 //     and, for a Template Operation, its class and fan-out (ADR-0042),
 //     exactly as Run does.
@@ -182,6 +186,10 @@ func ruleReference(v jobs.Verdict) NodeVerdict {
 //  7. audit as AuditKindPlan — Principal/Selector/Action only, no
 //     JobID/Results (no Job/Task rows were ever created).
 func (s *Execution) Plan(ctx context.Context, p Principal, sel Selector, act jobs.Action) (PlanResult, error) {
+	if sel.Empty() {
+		return PlanResult{}, s.recordRefusal(ctx, p, sel, act, RefusalMalformed, &EmptySelectorError{})
+	}
+
 	matched := sel.Resolve(s.read.reg, s.read.stateEval())
 
 	// The same resolution Run makes, which fixes the class of every Action

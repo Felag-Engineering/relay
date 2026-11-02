@@ -277,13 +277,14 @@ not at a surface.
 | A `relay:`-namespace Selector narrows as expected; `state:` too | `TestSelectorNamespaceNarrows`, `TestSelectorNamespaceState` | approval |
 | Labels are independent across Nodes, and reads return copies | `TestLabels_AreIndependentOfOtherNodes`, `TestGetReturnsCopy` | registry |
 | `state:` derivation imports no database | `.golangci.yml` depguard rule `domain-no-sql` | lint |
+| An empty Selector is refused on dispatch and Policy preflight, and a blank listing filter lists every Node | `TestExecution_EmptySelectorIsRefusedBeforeAnythingResolves`, `TestPlan_EmptySelectorIsRefusedNotReported`, `TestMCP_EmptySelectorIsRefusedOnEveryExecutionTool`, `TestControlAPI_EmptySelectorIsRefusedOnDispatchAndPlan`, `TestListNodes_EmptyOrWhitespaceFilterListsEveryNode` | capability, MCP, Control API |
 
 Claims above with **no row**, and so nothing checking them:
 
 - **Everything decided on `2026-09-13` and `2026-10-23`** has no test yet: `relay:` labels
   written only by their defining action, declared versus default `node:` labels, bulk tagging audited as one action, initial tags from an
-  Enrollment Token, the per-Node limits, the new `state:` markers, the refusal of a negated
-  term, and the empty-Selector refusal on dispatch.
+  Enrollment Token, the per-Node limits, the new `state:` markers, and the refusal of a negated
+  term.
 - `tag:` writes by human `operator` Accounts on the Console and the Control API, their
   old-and-new audit and the 256-Node cap are tested in the capability layer, the Control API
   and the Console, but this spec is aspirational and records no proof rows for them.

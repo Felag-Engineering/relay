@@ -210,18 +210,19 @@ func (s *Execution) logger() *slog.Logger { return s.recorder().logger() }
 func (s *Execution) clock() time.Time { return s.approvals.clock() }
 
 // Run is the pipeline every surface must call to act on Nodes: check the
-// Freeze, resolve the Selector, resolve a Template Operation's class and
-// fan-out (ADR-0042, computing only), authorize the Principal, refuse a
-// Selector that matched no Nodes, refuse an unknown or malformed Template
-// call, check the blast-radius cap, consult the approval gate, dispatch, then
-// audit — in that order. The Freeze gate, authorize, the no-Nodes-matched
-// check, the Template refusal and the cap check each short-circuit the
-// remaining stages on error (no dispatch — nothing was executed), but each
-// refusal is itself audited (recordRefusal) — refusals are the most interesting
-// audit events. Once dispatch is attempted, the audit record is always written,
-// even if the dispatcher itself returns an error: a dispatcher may execute some
-// Nodes before failing on others, and a partially-executed dispatch must never
-// go unaudited. In that case Run returns the dispatch error (joined with any
+// Freeze, refuse an empty Selector, resolve the Selector, resolve a Template
+// Operation's class and fan-out (ADR-0042, computing only), authorize the
+// Principal, refuse a Selector that matched no Nodes, refuse an unknown or
+// malformed Template call, check the blast-radius cap, consult the approval
+// gate, dispatch, then audit — in that order. The Freeze gate, the
+// empty-Selector refusal, authorize, the no-Nodes-matched check, the Template
+// refusal and the cap check each short-circuit the remaining stages on error
+// (no dispatch — nothing was executed), but each refusal is itself audited
+// (recordRefusal) — refusals are the most interesting audit events. Once
+// dispatch is attempted, the audit record is always written, even if the
+// dispatcher itself returns an error: a dispatcher may execute some Nodes
+// before failing on others, and a partially-executed dispatch must never go
+// unaudited. In that case Run returns the dispatch error (joined with any
 // audit-write error via errors.Join) alongside the partial results. Principal
 // is threaded through to the AuditSink so every recorded entry attributes who
 // asked.
@@ -281,9 +282,10 @@ type reattachment struct {
 }
 
 // prepareDispatch is Run's pipeline up to, and not including, the dispatcher:
-// Freeze, Selector resolution, authorization, the no-Nodes-matched and Template
-// refusals, the blast cap, the approval gate and the Job-ID claims. key is an
-// idempotency key and is only ever non-empty from Start; "" is exactly Run.
+// Freeze, the empty-Selector refusal, Selector resolution, authorization, the
+// no-Nodes-matched and Template refusals, the blast cap, the approval gate and
+// the Job-ID claims. key is an idempotency key and is only ever non-empty from
+// Start; "" is exactly Run.
 func (s *Execution) prepareDispatch(ctx context.Context, p Principal, sel Selector, act jobs.Action, key string) (prep, error) {
 	reqAct := act
 	frozen, err := s.control.freeze.Frozen(ctx)
@@ -292,6 +294,14 @@ func (s *Execution) prepareDispatch(ctx context.Context, p Principal, sel Select
 	}
 	if frozen {
 		return prep{}, s.recordRefusal(ctx, p, sel, act, RefusalFrozen, &FrozenError{})
+	}
+
+	// After the Freeze, which is the outermost gate (ADR-0013), and before
+	// anything resolves, authorizes, claims an idempotency key, counts the cap
+	// or parks, so a refusal here leaves nothing behind and reveals nothing
+	// about the fleet.
+	if sel.Empty() {
+		return prep{}, s.recordRefusal(ctx, p, sel, act, RefusalMalformed, &EmptySelectorError{})
 	}
 
 	matched := sel.Resolve(s.read.reg, s.read.stateEval())

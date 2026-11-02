@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/Felag-Engineering/relay/relay/internal/audit"
+	"github.com/Felag-Engineering/relay/relay/internal/capability"
 	"github.com/Felag-Engineering/relay/relay/internal/controlplane/mcp"
 	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 )
@@ -32,7 +33,7 @@ func TestMCP_RunOperation_Plan_VerdictsNoExecution(t *testing.T) {
 	ts.conduit.verdicts[ts.nodeB] = jobs.Verdict{Allowed: false, DecidingRule: "deny-facts"}
 
 	session := ts.connect(t)
-	res := callTool(t, session, "run_operation", map[string]any{"operation": "system.facts", "plan": true})
+	res := callTool(t, session, "run_operation", map[string]any{"selector": capability.WholeFleetSelector, "operation": "system.facts", "plan": true})
 	var out mcp.RunOrPlanOutput
 	decodeResult(t, res, &out)
 
@@ -88,7 +89,7 @@ func TestMCP_RunOperation_Plan_OfflineIsUnknown(t *testing.T) {
 	// nodeB is deliberately left disconnected.
 
 	session := ts.connect(t)
-	res := callTool(t, session, "run_operation", map[string]any{"operation": "system.facts", "plan": true})
+	res := callTool(t, session, "run_operation", map[string]any{"selector": capability.WholeFleetSelector, "operation": "system.facts", "plan": true})
 	var out mcp.RunOrPlanOutput
 	decodeResult(t, res, &out)
 
@@ -120,7 +121,7 @@ func TestMCP_RunOperation_Plan_OutdatedAdvisory(t *testing.T) {
 	ts.conduit.verdicts[ts.nodeB] = jobs.Verdict{Allowed: true}
 
 	session := ts.connect(t)
-	res := callTool(t, session, "run_operation", map[string]any{"operation": "system.facts", "plan": true})
+	res := callTool(t, session, "run_operation", map[string]any{"selector": capability.WholeFleetSelector, "operation": "system.facts", "plan": true})
 	var out mcp.RunOrPlanOutput
 	decodeResult(t, res, &out)
 
@@ -164,7 +165,7 @@ func TestMCP_RunOperation_Plan_OverCap_ReportsNotErrors(t *testing.T) {
 	ts.conduit.connect(ts.nodeA, ts.nodeB)
 
 	session := ts.connect(t)
-	res := callTool(t, session, "raw_exec", map[string]any{"argv": []string{"/bin/true"}, "plan": true})
+	res := callTool(t, session, "raw_exec", map[string]any{"selector": capability.WholeFleetSelector, "argv": []string{"/bin/true"}, "plan": true})
 	if res.IsError {
 		t.Fatalf("raw_exec(plan=true) over the mutate-cap: IsError = true, want false (reported, not errored): content = %+v", res.Content)
 	}
@@ -305,8 +306,9 @@ func TestMCP_RawExec_Plan_ArgvVerbatimMutateClass(t *testing.T) {
 
 	session := ts.connect(t)
 	res := callTool(t, session, "raw_exec", map[string]any{
-		"argv": []string{"/usr/bin/systemctl", "restart", "nginx"},
-		"plan": true,
+		"selector": capability.WholeFleetSelector,
+		"argv":     []string{"/usr/bin/systemctl", "restart", "nginx"},
+		"plan":     true,
 	})
 	if res.IsError {
 		t.Fatalf("raw_exec(plan=true): IsError = true, content = %+v", res.Content)
@@ -332,11 +334,11 @@ func TestMCP_Plan_PlanVsRealRunParity(t *testing.T) {
 
 	session := ts.connect(t)
 
-	planRes := callTool(t, session, "run_operation", map[string]any{"operation": "system.facts", "plan": true})
+	planRes := callTool(t, session, "run_operation", map[string]any{"selector": capability.WholeFleetSelector, "operation": "system.facts", "plan": true})
 	var planOut mcp.RunOrPlanOutput
 	decodeResult(t, planRes, &planOut)
 
-	runRes := callTool(t, session, "run_operation", map[string]any{"operation": "system.facts", "wait_seconds": 300})
+	runRes := callTool(t, session, "run_operation", map[string]any{"selector": capability.WholeFleetSelector, "operation": "system.facts", "wait_seconds": 300})
 	var runOut mcp.RunOrPlanOutput
 	decodeResult(t, runRes, &runOut)
 

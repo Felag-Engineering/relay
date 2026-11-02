@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/Felag-Engineering/relay/relay/internal/controlplane/mcp"
-	"github.com/Felag-Engineering/relay/relay/internal/registry"
 	"github.com/Felag-Engineering/relay/relay/internal/relaytest"
 )
 
@@ -17,12 +16,12 @@ import (
 // one fails if the wiring is dropped.
 func TestMCPExecution_ReissuedCallWithTheSameKeyReturnsTheSameJob(t *testing.T) {
 	f := startRelay(t, WithControlPlane())
-	if _, err := f.Deps.registry.Upsert(registry.Report{NodeID: "node-e2e-1"}); err != nil {
+	if _, err := f.Deps.registry.Upsert(linuxNode("node-e2e-1")); err != nil {
 		t.Fatalf("seed registry: %v", err)
 	}
 	session := relaytest.Connect(t, f.ControlBase, f.Client())
 
-	args := map[string]any{"operation": "system.facts", "idempotency_key": "k-e2e-1", "wait_seconds": 60}
+	args := map[string]any{"selector": e2eFleetSelector, "operation": "system.facts", "idempotency_key": "k-e2e-1", "wait_seconds": 60}
 	run := func() mcp.RunOrPlanOutput {
 		t.Helper()
 		res := relaytest.CallTool(t, session, "run_operation", args)
@@ -48,6 +47,7 @@ func TestMCPExecution_ReissuedCallWithTheSameKeyReturnsTheSameJob(t *testing.T) 
 
 	// A key with different arguments is refused, not dispatched.
 	res := relaytest.CallTool(t, session, "run_operation", map[string]any{
+		"selector":  e2eFleetSelector,
 		"operation": "system.facts", "idempotency_key": "k-e2e-1", "timeout_seconds": 5,
 	})
 	if !res.IsError || !strings.Contains(relaytest.ToolErrorText(t, res), "different arguments") {

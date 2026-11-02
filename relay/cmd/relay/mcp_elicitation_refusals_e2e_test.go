@@ -32,7 +32,6 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/controlplane/mcp"
 	"github.com/Felag-Engineering/relay/relay/internal/controlplane/mcp/requeststate"
 	"github.com/Felag-Engineering/relay/relay/internal/jobs"
-	"github.com/Felag-Engineering/relay/relay/internal/registry"
 	"github.com/Felag-Engineering/relay/relay/internal/relaytest"
 )
 
@@ -445,7 +444,7 @@ func TestMCPElicitation_WrongCallStateIsRefused(t *testing.T) {
 		before := auditLen(t, f)
 		res := relaytest.CallToolWith(t, session, &sdkmcp.CallToolParams{
 			Name:           "raw_exec",
-			Arguments:      map[string]any{"argv": []string{"systemctl", "restart", "nginx"}},
+			Arguments:      map[string]any{"selector": e2eFleetSelector, "argv": []string{"systemctl", "restart", "nginx"}},
 			RequestState:   q.RequestState,
 			InputResponses: sdkmcp.InputResponseMap{qid: acceptResponse()},
 		})
@@ -937,7 +936,7 @@ func TestMCPElicitation_FleetChangedRetryReParks(t *testing.T) {
 		t.Fatalf("first question message = %q, want it to name 1 node", q1.InputRequests[qid1].(*sdkmcp.ElicitParams).Message)
 	}
 
-	if _, err := f.Deps.registry.Upsert(registry.Report{NodeID: "node-e2e-2"}); err != nil {
+	if _, err := f.Deps.registry.Upsert(linuxNode("node-e2e-2")); err != nil {
 		t.Fatalf("upsert second Node: %v", err)
 	}
 

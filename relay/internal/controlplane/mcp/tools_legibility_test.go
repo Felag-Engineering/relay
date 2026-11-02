@@ -187,7 +187,7 @@ func TestMCP_PolicyDenyNamesItsBoundary(t *testing.T) {
 	ts.conduit.results[ts.nodeB] = jobs.Result{Outcome: jobs.OutcomeDeniedByPolicy, ExitCode: -1, Stderr: []byte(daemonReason)}
 
 	session := ts.connect(t)
-	res := callTool(t, session, "run_operation", map[string]any{"operation": "system.facts", "wait_seconds": 300})
+	res := callTool(t, session, "run_operation", map[string]any{"selector": capability.WholeFleetSelector, "operation": "system.facts", "wait_seconds": 300})
 	var out mcp.ExecutionOutput
 	decodeResult(t, res, &out)
 
@@ -224,7 +224,7 @@ func TestMCP_PlanDenyNamesItsBoundary(t *testing.T) {
 	ts.conduit.verdicts[ts.nodeB] = jobs.Verdict{Allowed: false, DecidingRule: "deny-facts"}
 
 	session := ts.connect(t)
-	res := callTool(t, session, "run_operation", map[string]any{"operation": "system.facts", "plan": true})
+	res := callTool(t, session, "run_operation", map[string]any{"selector": capability.WholeFleetSelector, "operation": "system.facts", "plan": true})
 	var out mcp.RunOrPlanOutput
 	decodeResult(t, res, &out)
 
@@ -263,7 +263,7 @@ func TestMCP_VersionRefusedCarriesFullExplanation(t *testing.T) {
 	ts.conduit.results[ts.nodeB] = jobs.Result{Outcome: jobs.OutcomeSuccess}
 
 	session := ts.connect(t)
-	res := callTool(t, session, "run_operation", map[string]any{"operation": "system.facts", "wait_seconds": 300})
+	res := callTool(t, session, "run_operation", map[string]any{"selector": capability.WholeFleetSelector, "operation": "system.facts", "wait_seconds": 300})
 	var out mcp.ExecutionOutput
 	decodeResult(t, res, &out)
 
@@ -297,7 +297,7 @@ func TestMCP_ExplanationAbsentWhenNotRefused(t *testing.T) {
 	ts.conduit.results[ts.nodeB] = jobs.Result{Outcome: jobs.OutcomeFailure, Stderr: []byte("spawn systemctl: No such file or directory")}
 
 	session := ts.connect(t)
-	res := callTool(t, session, "run_operation", map[string]any{"operation": "system.facts", "wait_seconds": 300})
+	res := callTool(t, session, "run_operation", map[string]any{"selector": capability.WholeFleetSelector, "operation": "system.facts", "wait_seconds": 300})
 	var out mcp.ExecutionOutput
 	decodeResult(t, res, &out)
 

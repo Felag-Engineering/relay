@@ -231,7 +231,7 @@ func TestMCP_RunOperation_PerNodeResults(t *testing.T) {
 	ts.conduit.results[ts.nodeB] = jobs.Result{Outcome: jobs.OutcomeSuccess, ExitCode: 0, Stdout: []byte(`{"hostname":"db-1"}`)}
 
 	session := ts.connect(t)
-	res := callTool(t, session, "run_operation", map[string]any{"operation": "system.facts", "wait_seconds": 300})
+	res := callTool(t, session, "run_operation", map[string]any{"selector": capability.WholeFleetSelector, "operation": "system.facts", "wait_seconds": 300})
 	var out mcp.ExecutionOutput
 	decodeResult(t, res, &out)
 
@@ -267,7 +267,7 @@ func TestMCP_RunOperation_OutdatedNodeVersionRefused(t *testing.T) {
 	ts.conduit.results[ts.nodeB] = jobs.Result{Outcome: jobs.OutcomeSuccess}
 
 	session := ts.connect(t)
-	res := callTool(t, session, "run_operation", map[string]any{"operation": "system.facts", "wait_seconds": 300})
+	res := callTool(t, session, "run_operation", map[string]any{"selector": capability.WholeFleetSelector, "operation": "system.facts", "wait_seconds": 300})
 	var out mcp.ExecutionOutput
 	decodeResult(t, res, &out)
 
@@ -307,6 +307,7 @@ func TestMCP_RawExec_AllowedVsDenied_ThenStructuredSucceeds(t *testing.T) {
 
 	session := ts.connect(t)
 	res := callTool(t, session, "raw_exec", map[string]any{
+		"selector":     capability.WholeFleetSelector,
 		"argv":         []string{"/usr/bin/systemctl", "restart", "nginx"},
 		"wait_seconds": 300,
 	})
@@ -329,7 +330,7 @@ func TestMCP_RawExec_AllowedVsDenied_ThenStructuredSucceeds(t *testing.T) {
 	// success for both, proving run_operation dispatches through the same
 	// pipeline, not a separate one.
 	ts.conduit.results[ts.nodeB] = jobs.Result{Outcome: jobs.OutcomeSuccess}
-	res2 := callTool(t, session, "run_operation", map[string]any{"operation": "system.facts", "wait_seconds": 300})
+	res2 := callTool(t, session, "run_operation", map[string]any{"selector": capability.WholeFleetSelector, "operation": "system.facts", "wait_seconds": 300})
 	var out2 mcp.ExecutionOutput
 	decodeResult(t, res2, &out2)
 	for _, r := range out2.Results {
@@ -354,7 +355,7 @@ func TestMCP_ExitCode_OmittedWhenNoProcessRan(t *testing.T) {
 	ts.conduit.results[ts.nodeB] = jobs.Result{Outcome: jobs.OutcomeDeniedByPolicy, ExitCode: -1, Stderr: []byte("no allow rule matched")}
 
 	session := ts.connect(t)
-	res := callTool(t, session, "raw_exec", map[string]any{"argv": []string{"/usr/bin/systemctl", "restart", "nginx"}, "wait_seconds": 300})
+	res := callTool(t, session, "raw_exec", map[string]any{"selector": capability.WholeFleetSelector, "argv": []string{"/usr/bin/systemctl", "restart", "nginx"}, "wait_seconds": 300})
 
 	var out struct {
 		Results []map[string]json.RawMessage `json:"results"`
@@ -388,7 +389,7 @@ func TestMCP_RawExec_OverCap(t *testing.T) {
 	ts.conduit.connect(ts.nodeA, ts.nodeB)
 
 	session := ts.connect(t)
-	res := callTool(t, session, "raw_exec", map[string]any{"argv": []string{"/bin/true"}})
+	res := callTool(t, session, "raw_exec", map[string]any{"selector": capability.WholeFleetSelector, "argv": []string{"/bin/true"}})
 	if !res.IsError {
 		t.Fatal("raw_exec over the mutate-cap: IsError = false, want true")
 	}
@@ -411,7 +412,7 @@ func TestMCP_Frozen_RefusesBothExecutionTools(t *testing.T) {
 
 	session := ts.connect(t)
 
-	res := callTool(t, session, "run_operation", map[string]any{"operation": "system.facts"})
+	res := callTool(t, session, "run_operation", map[string]any{"selector": capability.WholeFleetSelector, "operation": "system.facts"})
 	if !res.IsError {
 		t.Fatal("run_operation while frozen: IsError = false, want true")
 	}
@@ -419,7 +420,7 @@ func TestMCP_Frozen_RefusesBothExecutionTools(t *testing.T) {
 		t.Errorf("run_operation while frozen error = %q, want it to contain %q", text, "the Relay is frozen")
 	}
 
-	res2 := callTool(t, session, "raw_exec", map[string]any{"argv": []string{"/bin/true"}})
+	res2 := callTool(t, session, "raw_exec", map[string]any{"selector": capability.WholeFleetSelector, "argv": []string{"/bin/true"}})
 	if !res2.IsError {
 		t.Fatal("raw_exec while frozen: IsError = false, want true")
 	}
@@ -526,7 +527,7 @@ func TestMCP_CancelJob_InFlightAndPendingSibling(t *testing.T) {
 
 	runDone := make(chan *sdkmcp.CallToolResult, 1)
 	go func() {
-		runDone <- callTool(t, runSession, "run_operation", map[string]any{"operation": "system.facts", "wait_seconds": 300})
+		runDone <- callTool(t, runSession, "run_operation", map[string]any{"selector": capability.WholeFleetSelector, "operation": "system.facts", "wait_seconds": 300})
 	}()
 
 	<-ts.conduit.ready // node A's Dispatch is now in-flight, blocked.
@@ -679,7 +680,7 @@ func TestMCP_HaltedMutateJob_ReportsTheHaltOnRunAndGetJob(t *testing.T) {
 	ts.conduit.results[ts.nodeB] = jobs.Result{Outcome: jobs.OutcomeFailure, ExitCode: 1}
 	session := ts.connect(t)
 
-	res := callTool(t, session, "raw_exec", map[string]any{"argv": []string{"/bin/true"}, "wait_seconds": 300})
+	res := callTool(t, session, "raw_exec", map[string]any{"selector": capability.WholeFleetSelector, "argv": []string{"/bin/true"}, "wait_seconds": 300})
 	var run mcp.RunOrPlanOutput
 	decodeResult(t, res, &run)
 
@@ -735,3 +736,72 @@ func TestMCP_HaltedMutateJob_ReportsTheHaltOnRunAndGetJob(t *testing.T) {
 		t.Errorf("job_halt audit records = %d, want 1", halts)
 	}
 }
+
+// TestMCP_EmptySelectorIsRefusedOnEveryExecutionTool proves the capability
+// layer's one refusal reaches both execution tools, with and without plan, for
+// an omitted, empty and whitespace-only Selector: a tool error naming how to
+// proceed, no Task sent or queried, and an audited refusal rather than a
+// dispatch or a park (#1274).
+func TestMCP_EmptySelectorIsRefusedOnEveryExecutionTool(t *testing.T) {
+	tools := map[string]map[string]any{
+		"run_operation": {"operation": "system.facts"},
+		"raw_exec":      {"argv": []string{"/bin/true"}},
+	}
+	selectors := map[string]*string{"omitted": nil, "empty": ptr(""), "whitespace": ptr("   ")}
+
+	for tool, base := range tools {
+		for selName, sel := range selectors {
+			for _, plan := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/%s/plan=%v", tool, selName, plan), func(t *testing.T) {
+					ts := newTestServer(t)
+					ts.conduit.connect(ts.nodeA, ts.nodeB)
+					session := ts.connect(t)
+
+					args := map[string]any{"plan": plan}
+					for k, v := range base {
+						args[k] = v
+					}
+					if sel != nil {
+						args["selector"] = *sel
+					}
+					res := callTool(t, session, tool, args)
+
+					if !res.IsError {
+						t.Fatal("IsError = false, want a tool error")
+					}
+					text := toolErrorText(t, res)
+					if !strings.Contains(text, "empty_selector") || !strings.Contains(text, capability.WholeFleetSelector) {
+						t.Errorf("error = %q, want it to carry empty_selector and name %s", text, capability.WholeFleetSelector)
+					}
+					for _, id := range []string{ts.nodeA, ts.nodeB} {
+						if n := ts.conduit.dispatchCount(id); n != 0 {
+							t.Errorf("%s was sent %d Tasks, want 0", id, n)
+						}
+					}
+					if q := ts.conduit.queriedNodes(); len(q) != 0 {
+						t.Errorf("Nodes queried = %v, want none", q)
+					}
+
+					records, err := ts.store.Audit().List(context.Background())
+					if err != nil {
+						t.Fatalf("Audit().List: %v", err)
+					}
+					refusals := 0
+					for _, rec := range records {
+						switch rec.Kind {
+						case audit.KindRefusal:
+							refusals++
+						case audit.KindDispatch, audit.KindDispatchIntent, audit.KindApprovalRequested:
+							t.Errorf("found a %s record for an empty Selector: %+v", rec.Kind, rec)
+						}
+					}
+					if refusals != 1 {
+						t.Errorf("refusal records = %d, want exactly 1 among %+v", refusals, records)
+					}
+				})
+			}
+		}
+	}
+}
+
+func ptr[T any](v T) *T { return &v }

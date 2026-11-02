@@ -311,9 +311,9 @@ type harnessResponse struct {
 	Connected bool `json:"connected,omitempty"`
 	// JobID/Results are run_job's success-path fields. Error, below, is
 	// INTENTIONALLY the refusal channel for run_job too (a CapExceededError,
-	// FrozenError or NoNodesMatchedError populates Error with Results left
-	// empty) — refusal-expecting callers must use the harness client's
-	// non-failing helper.
+	// FrozenError, EmptySelectorError or NoNodesMatchedError populates Error
+	// with Results left empty) — refusal-expecting callers must use the harness
+	// client's non-failing helper.
 	JobID   string              `json:"job_id,omitempty"`
 	Results []harnessNodeResult `json:"results,omitempty"`
 	// Verdicts is preflight_job's per-Node result.
@@ -505,10 +505,10 @@ func harnessGetNode(st *harnessState, req harnessRequest) harnessResponse {
 // dispatch -> audit, ADR-0009/0010): the single entry point every real
 // surface (MCP, Control API) must also use (invariant 10). A refusal
 // (CapExceededError from the blast-radius cap, FrozenError from the
-// Relay-wide Freeze, or NoNodesMatchedError from a Selector that resolved to
-// zero Nodes) is reported on the response's Error field, not a transport
-// error — callers that expect a refusal must use the harness client's
-// non-failing helper.
+// Relay-wide Freeze, EmptySelectorError from a Selector naming nothing, or
+// NoNodesMatchedError from a Selector that resolved to zero Nodes) is reported
+// on the response's Error field, not a transport error — callers that expect a
+// refusal must use the harness client's non-failing helper.
 func harnessRunJob(ctx context.Context, st *harnessState, req harnessRequest) harnessResponse {
 	sel, err := capability.ParseSelector(req.Selector)
 	if err != nil {
