@@ -209,9 +209,8 @@ func handleRevokeToken(d Deps) http.HandlerFunc {
 			return
 		}
 
-		id := r.PathValue("id")
-		if id == "" {
-			writeProblem(w, http.StatusBadRequest, "missing token id", "path parameter id must not be empty")
+		id, ok := requirePathValue(w, r, "id", "missing token id", "path parameter id must not be empty")
+		if !ok {
 			return
 		}
 
