@@ -1016,13 +1016,11 @@ func main() {
 	cfg := sc.Config
 	files, err := startup.Open(cfg.CADir, cfg.StorePath)
 	if err != nil {
-		slog.Error("start-time file check refused", "err", err)
-		os.Exit(1)
+		exitOnError("start-time file check refused", err)
 	}
 	srv, deps, err := newServer(cfg, files)
 	if err != nil {
-		slog.Error("build server failed", "err", err)
-		os.Exit(1)
+		exitOnError("build server failed", err)
 	}
 	defer deps.store.Close() //nolint:errcheck
 	// installDevHarness is a no-op in every build except `devharness`
@@ -1030,8 +1028,7 @@ func main() {
 	// before Serve so deps.tunnel.sink is set before any tunnel handler starts.
 	stop, err := installDevHarness(cfg, deps)
 	if err != nil {
-		slog.Error("install dev harness failed", "err", err)
-		os.Exit(1)
+		exitOnError("install dev harness failed", err)
 	}
 	defer stop()
 	// watchFreezeSignals is the local engage/release lever for the Relay-wide
@@ -1042,6 +1039,33 @@ func main() {
 	// SIGHUP reloads the configuration file (reload_signal.go).
 	go watchReload(context.Background(), hup, newReloader(path, sc, deps, logs, os.Stderr))
 	lis := mustListen(cfg.Addr, "listen failed")
+	logListening(cfg, path)
+
+	// The control-plane listener (MCP + /api/v1, ADR-0009/0010) is separate
+	// from the node-plane gRPC listener above: its own address, its own
+	// goroutine, its own lifecycle. deps.control is nil unless
+	// cfg.ControlEnabled, so this is a no-op on the default (disabled) path.
+	if deps.control != nil {
+		listenAndServeControl(deps.control, cfg.ControlAddr)
+	}
+	if deps.store != nil {
+		startHousekeeping(deps)
+	}
+
+	if err := srv.Serve(lis); err != nil {
+		exitOnError("serve failed", err)
+	}
+}
+
+// exitOnError logs msg with err and ends the process with status 1.
+func exitOnError(msg string, err error) {
+	slog.Error(msg, "err", err)
+	os.Exit(1)
+}
+
+// logListening records the build stamp and the effective startup settings once
+// the node-plane listener is bound.
+func logListening(cfg Config, path string) {
 	slog.Info("relay listening",
 		"version", version.Version,
 		"commit", version.Commit,
@@ -1063,22 +1087,6 @@ func main() {
 		"min_daemon_version", cfg.MinDaemonVersion,
 		"cert_expiring_fraction", cfg.CertExpiringFraction,
 	)
-
-	// The control-plane listener (MCP + /api/v1, ADR-0009/0010) is separate
-	// from the node-plane gRPC listener above: its own address, its own
-	// goroutine, its own lifecycle. deps.control is nil unless
-	// cfg.ControlEnabled, so this is a no-op on the default (disabled) path.
-	if deps.control != nil {
-		listenAndServeControl(deps.control, cfg.ControlAddr)
-	}
-	if deps.store != nil {
-		startHousekeeping(deps)
-	}
-
-	if err := srv.Serve(lis); err != nil {
-		slog.Error("serve failed", "err", err)
-		os.Exit(1)
-	}
 }
 
 // mustListen opens a process-lifetime TCP listener, logging failMsg and
