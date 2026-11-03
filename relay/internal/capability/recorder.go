@@ -45,6 +45,18 @@ func NewRecorder(audit AuditSink, metrics MetricsSink, log *slog.Logger) *Record
 	return &Recorder{audit: audit, metrics: metrics, log: log}
 }
 
+// FirstRefusal returns the first error of an errors.Join result, or err itself
+// when it is not one. The capability layer joins a refusal first and the error
+// from recording it after, so this is the refusal without the record failure.
+func FirstRefusal(err error) error {
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		if errs := joined.Unwrap(); len(errs) > 0 {
+			return errs[0]
+		}
+	}
+	return err
+}
+
 func (r *Recorder) logger() *slog.Logger { return logctx.Or(r.log) }
 
 // recordRefusal audits a Freeze-engaged, authz-deny, no-Nodes-matched, or

@@ -251,7 +251,7 @@ func mintEnrollmentFailed(d Deps, w http.ResponseWriter, r *http.Request, pg Pag
 	case errors.Is(err, authz.ErrUnauthorized), errors.Is(err, capability.ErrEnrollmentInitialTagsNeedHuman):
 		// The record error a refusal may be joined with is never shown.
 		renderWriteResult(w, pg, http.StatusForbidden,
-			addNodesRefusedByRelayPrefix+firstJoinedErr(err).Error()+"."+addNodesNothingMintedSuffix, "", "")
+			addNodesRefusedByRelayPrefix+capability.FirstRefusal(err).Error()+"."+addNodesNothingMintedSuffix, "", "")
 	case errors.Is(err, capability.ErrEnrollmentInitialTags):
 		refuse(w, pg, http.StatusBadRequest, initialTagsRefusalText(err), "", "")
 	case errors.Is(err, capability.ErrEnrollmentFormNodes):
