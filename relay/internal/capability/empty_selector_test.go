@@ -154,6 +154,8 @@ func TestExecution_EmptySelectorIsRefusedBeforeAnythingResolves(t *testing.T) {
 // TestPlan_EmptySelectorIsRefusedNotReported proves a Policy preflight refuses
 // an empty Selector as a dispatch does, rather than reporting no_nodes_matched
 // (#1274).
+//
+// Proves PF-24.
 func TestPlan_EmptySelectorIsRefusedNotReported(t *testing.T) {
 	acts := map[string]jobs.Action{"native read": readFacts(), "raw exec": mutateRawExec()}
 	for inputName, sel := range emptySelectorInputs(t) {
