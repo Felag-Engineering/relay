@@ -12,8 +12,10 @@ exercise. Its `SystemCallFilter`, `SystemCallArchitectures` and `MemoryDenyWrite
 directives, and the capability sets below, are a **static derivation** from daemon source and
 `systemd-analyze` (see
 [Syscall and capability surface](#syscall-and-capability-surface)),
-not a guess. They have **not** been verified live on a real systemd host under load; that
-manual step is tracked by **#246** (see [Live tracing procedure](#live-tracing-procedure-real-systemd-host)).
+not a guess, and they are verified live: on every push to `main`, CI runs the
+[live tracing procedure](#live-tracing-procedure-real-systemd-host) against the packaged unit on
+real systemd VMs (see [Live verification](#live-verification)). The `pkg-install.conf` drop-in
+is the one part not traced.
 
 ## Why the daemon is privileged
 
@@ -83,8 +85,8 @@ From `daemon/packaging/relay-daemon.service`:
   `MemoryDenyWriteExecute=yes`**: the derived allowlist from
   [Syscall and capability surface](#syscall-and-capability-surface).
   The `pkg-install.conf` drop-in ([Documented exceptions](#documented-exceptions)) overrides
-  `MemoryDenyWriteExecute` to `=no` for maintainer-script interpreters. Not yet validated
-  live against `pkg.install` and a Policy-permitted Raw Exec command (#246); see
+  `MemoryDenyWriteExecute` to `=no` for maintainer-script interpreters. The drop-in is not
+  traced live: CI traces the strict unit only; see
   [the residual risk](#what-the-derivation-did-and-did-not-cover-residual-risk).
 - **`TasksMax=4096`**: the fork-bomb backstop; see
   [Resource limits on spawned children](#resource-limits-on-spawned-children-v008-exec-audit).
@@ -113,7 +115,7 @@ CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_CHOWN CAP_DAC_OVERRIDE CAP_FOWNER 
 # Conservative default: the base's inherited MemoryDenyWriteExecute=yes could
 # silently break a maintainer-script interpreter that needs W^X memory on the
 # very Nodes that opt into running pkg.install. This is a documented choice
-# PENDING the live trace (#246), not a verified fact — the live trace can
+# PENDING a live trace of this drop-in, not a verified fact — that trace can
 # promote this back to inheriting the base's =yes if it proves safe.
 MemoryDenyWriteExecute=no
 ```
@@ -316,8 +318,9 @@ manager's own syscalls). It does **not** bound:
 
 A maintainer script or Raw Exec command that needs a syscall **outside** `@system-service`
 (e.g. `@mount`, `quotactl`, a `@privileged`-only call, `bpf`) is `SIGSYS`/`EPERM`'d: a **hard
-block**, unlike the `ProtectSystem` case. Only a live trace on a real systemd host (#246)
-closes this. If it shows a legitimate need, the fix is a targeted, trace-validated
+block**, unlike the `ProtectSystem` case. CI's live trace covers the strict unit and a
+permitted Raw Exec (`/usr/bin/true`), not this drop-in or an operator's own commands; only a
+live trace of the drop-in on a real systemd host closes this. If it shows a legitimate need, the fix is a targeted, trace-validated
 **additive** line (e.g. `SystemCallFilter=@mount`) in the `pkg-install.conf` drop-in, never a
 speculative widening of the base.
 
@@ -350,12 +353,26 @@ This confirms the directives are active: `NoNewPrivileges=`, `RestrictRealtime=`
 `AF_NETLINK`/`AF_UNIX`/`AF_INET`/`AF_INET6` families show as expected residual exposure; the
 tool cannot know they are load-bearing. `User=root` is always flagged.
 
-**Still pending (#246), and only a human on a real systemd host can do it:** run the daemon
-under `relay-daemon.service` with `policy.toml` in place and the Node enrolled with
-`relay-daemon join`, confirm it connects and executes `system.facts`, then run the tracing procedure below against
-`system.facts`, `file.read`, `service.restart`, `pkg.install` and a permitted Raw Exec. Confirm
-none break (especially `pkg.install` maintainer scripts and Raw Exec), confirm or revise the
-drop-in's `MemoryDenyWriteExecute=no`, and record the run here.
+### Live verification
+
+CI's install matrix runs the procedure below on every push to `main`, on real systemd VMs for
+`x86_64` and `aarch64` (`scripts/install-matrix-vm-trace.sh`). It installs the release's
+packages, enrolls the Node with `relay-daemon join`, attaches `strace` to the packaged unit,
+dispatches every read Operation, a gated `service.restart`, a gated Raw Exec (`/usr/bin/true`)
+and a gated `pkg.install`, which must fail under the strict unit. It then checks the union of
+traced syscalls against `@system-service`, the journal for `SIGSYS`, and the process's seccomp,
+no-new-privileges and capability state. A finding fails the job.
+
+**Signed off 2026-11-04** (the release gate `RELEASE_UNIT_SYSCALL_FILTER_SIGNED_OFF`) on CI run
+41460370524, commit `455ab7f`, Ubuntu 24.04 with systemd 255, both architectures. The installed
+unit is identical to the shipped one; seccomp is on, no-new-privileges is on, and the bounding
+set is `CAP_DAC_READ_SEARCH` alone. All thirteen Operations behave as expected, 87 (`x86_64`)
+and 80 (`aarch64`) distinct syscalls were traced with none outside `@system-service`, and the
+journal records no `SIGSYS`.
+
+**Still manual:** the `pkg-install.conf` drop-in is never shipped (DI-5), so no CI run traces
+it. Before relying on `pkg.install`, trace it on a real systemd host with the procedure below,
+and confirm or revise its `MemoryDenyWriteExecute=no`.
 
 ### Live tracing procedure (real systemd host)
 
