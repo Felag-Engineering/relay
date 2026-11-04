@@ -160,15 +160,16 @@ func requireAccountAdmin(w http.ResponseWriter, r *http.Request, d Deps) (capabi
 	return p, true
 }
 
-// requireAccountAdminAndID is requireAccountAdmin followed by pathID, the
-// prelude of every route that names one Account or API Token: the caller is
+// requireAccountAdminAndID is requireAccountAdmin followed by a required path
+// parameter, the prelude of every route that names one Account or API Token: the caller is
 // checked before the path is read.
 func requireAccountAdminAndID(w http.ResponseWriter, r *http.Request, d Deps, param, label string) (capability.Principal, string, bool) {
 	p, ok := requireAccountAdmin(w, r, d)
 	if !ok {
 		return capability.Principal{}, "", false
 	}
-	id, ok := pathID(w, r, param, label)
+	id, ok := requirePathValue(w, r, param, "missing "+label,
+		"path parameter "+param+" must not be empty")
 	if !ok {
 		return capability.Principal{}, "", false
 	}
@@ -518,15 +519,4 @@ func handleRevokeAPIToken(d Deps) http.HandlerFunc {
 
 		w.WriteHeader(http.StatusNoContent)
 	}
-}
-
-// pathID reads a required path parameter, rendering a 400 when it is empty.
-func pathID(w http.ResponseWriter, r *http.Request, param, label string) (string, bool) {
-	v := r.PathValue(param)
-	if v == "" {
-		writeProblem(w, http.StatusBadRequest, "missing "+label,
-			"path parameter "+param+" must not be empty")
-		return "", false
-	}
-	return v, true
 }
