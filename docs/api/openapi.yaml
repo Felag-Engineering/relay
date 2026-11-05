@@ -106,7 +106,9 @@ paths:
         verdicts instead (ADR-0011). A plan creates no Job, so its response
         carries no `job_id`. A Selector that matches no Nodes is refused with
         `422`; with `plan: true` it is reported instead as
-        `would_be_rejected.reason: no_nodes_matched`.
+        `would_be_rejected.reason: no_nodes_matched`. A dispatch, or a Policy
+        preflight (`plan: true`), with an empty Selector is refused with `400`
+        before anything resolves; name `node:os=linux` to reach the whole fleet.
 
         Argument NAMES are validated against the Operation's published
         constraints before dispatch, so a misspelled argument is a `400` rather
@@ -160,7 +162,9 @@ paths:
 
         A Selector that matches no Nodes is refused with `422`; with
         `plan: true` it is reported instead as
-        `would_be_rejected.reason: no_nodes_matched`.
+        `would_be_rejected.reason: no_nodes_matched`. A dispatch, or a Policy
+        preflight (`plan: true`), with an empty Selector is refused with `400`
+        before anything resolves; name `node:os=linux` to reach the whole fleet.
       requestBody:
         required: true
         content:
@@ -970,8 +974,8 @@ components:
     BadRequest:
       description: |
         Malformed request — a body not declared `Content-Type: application/json`,
-        bad JSON, an unknown field, an invalid Selector, or an invalid Operation
-        argument name.
+        bad JSON, an unknown field, an invalid Selector, an empty Selector on a
+        dispatch or Policy preflight, or an invalid Operation argument name.
       content:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }
@@ -1250,7 +1254,7 @@ components:
 
     RunOperationRequest:
       type: object
-      required: [operation]
+      required: [selector, operation]
       properties:
         selector:
           type: string
@@ -1261,8 +1265,13 @@ components:
             markers `state:offline`, `state:outdated`, `state:template-unloadable`,
             `state:cert-expiring`, and the facts `state:daemon-version=`,
             `state:policy-fingerprint=`, `state:template-fingerprint=` — any
-            other `state:` key is a parse error, not an empty match. Empty or
-            omitted matches every Node — subject to the blast cap.
+            other `state:` key is a parse error, not an empty match. Required. An
+            empty or whitespace-only Selector is refused with `400` (title
+            `invalid selector`), on a dispatch or a Policy preflight
+            (`plan: true`), and is never read as every Node. To reach the whole
+            fleet, name it deliberately: `node:os=linux`, the label every
+            relay-daemon declares by default; the blast cap and the approval
+            gate still apply.
           examples: ["node:role=web"]
         operation:
           type: string
@@ -1289,7 +1298,7 @@ components:
 
     RawExecRequest:
       type: object
-      required: [argv]
+      required: [selector, argv]
       properties:
         selector:
           type: string

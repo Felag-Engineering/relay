@@ -664,7 +664,8 @@ const (
 	// RefusalMalformed counts a dispatch refused for malformed input: a
 	// Template's argument names not matching its slots or its matched Nodes
 	// disagreeing about them (ADR-0042), or an invalid idempotency key, or
-	// a key reused with different arguments. Never a Policy verdict.
+	// a key reused with different arguments, or an empty Selector on a dispatch
+	// or preflight. Never a Policy verdict.
 	RefusalMalformed
 )
 

@@ -10,6 +10,7 @@ import (
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/Felag-Engineering/relay/relay/internal/audit"
+	"github.com/Felag-Engineering/relay/relay/internal/capability"
 	"github.com/Felag-Engineering/relay/relay/internal/controlplane/mcp"
 	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 )
@@ -91,7 +92,7 @@ func TestMCP_RunOperation_SilentNodeReturnsTheJobOncePersisted(t *testing.T) {
 	blockNodeUntilCleanup(t, ts, ts.nodeA)
 
 	session := ts.connect(t)
-	res := callTool(t, session, "run_operation", map[string]any{"operation": "system.facts"})
+	res := callTool(t, session, "run_operation", map[string]any{"selector": capability.WholeFleetSelector, "operation": "system.facts"})
 	// node-a is now mid-dispatch and nothing has released it: the call returned
 	// without waiting for the silent Node.
 	select {
@@ -154,7 +155,7 @@ func TestMCP_RunOperation_WaitSecondsReturnsFullResults(t *testing.T) {
 	ts.conduit.results[ts.nodeB] = jobs.Result{Outcome: jobs.OutcomeSuccess}
 
 	session := ts.connect(t)
-	res := callTool(t, session, "run_operation", map[string]any{"operation": "system.facts", "wait_seconds": 5})
+	res := callTool(t, session, "run_operation", map[string]any{"selector": capability.WholeFleetSelector, "operation": "system.facts", "wait_seconds": 5})
 	var out mcp.RunOrPlanOutput
 	decodeResult(t, res, &out)
 
@@ -213,7 +214,7 @@ func TestMCP_RunOperation_ReissueAfterDroppedResponseReturnsTheSameJob(t *testin
 	unblock := blockNodeUntilCleanup(t, ts, ts.nodeB)
 
 	args := func() map[string]any {
-		return map[string]any{"operation": "system.facts", "idempotency_key": "k-1", "wait_seconds": 300}
+		return map[string]any{"selector": capability.WholeFleetSelector, "operation": "system.facts", "idempotency_key": "k-1", "wait_seconds": 300}
 	}
 
 	session := ts.connect(t)
@@ -296,7 +297,7 @@ func TestMCP_RunOperation_IdempotencyKeyRefusals(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		res, err := session.CallTool(ctx, &sdkmcp.CallToolParams{Name: "run_operation", Arguments: map[string]any{
-			"operation": "system.facts", "idempotency_key": strings.Repeat("k", 129),
+			"selector": capability.WholeFleetSelector, "operation": "system.facts", "idempotency_key": strings.Repeat("k", 129),
 		}})
 		if err == nil && !res.IsError {
 			t.Fatal("a 129-byte key was accepted; the schema must refuse it")
@@ -310,7 +311,7 @@ func TestMCP_RunOperation_IdempotencyKeyRefusals(t *testing.T) {
 		ts := newTestServerWithAccount(t, "acct-test", 0, 0, "")
 		ts.conduit.connect(ts.nodeA)
 		session := ts.connect(t)
-		res := callTool(t, session, "run_operation", map[string]any{"operation": "system.facts", "idempotency_key": "has space"})
+		res := callTool(t, session, "run_operation", map[string]any{"selector": capability.WholeFleetSelector, "operation": "system.facts", "idempotency_key": "has space"})
 		if !res.IsError || !strings.Contains(toolErrorText(t, res), "invalid idempotency key") {
 			t.Fatalf("a key with a space: want the invalid-key tool error, got IsError=%v", res.IsError)
 		}
@@ -323,7 +324,7 @@ func TestMCP_RunOperation_IdempotencyKeyRefusals(t *testing.T) {
 		ts := newTestServer(t) // the default fixture's Account carries no ID
 		ts.conduit.connect(ts.nodeA)
 		session := ts.connect(t)
-		res := callTool(t, session, "run_operation", map[string]any{"operation": "system.facts", "idempotency_key": "k-x"})
+		res := callTool(t, session, "run_operation", map[string]any{"selector": capability.WholeFleetSelector, "operation": "system.facts", "idempotency_key": "k-x"})
 		if !res.IsError || !strings.Contains(toolErrorText(t, res), "cannot honour an idempotency key") {
 			t.Fatalf("a key with no AccountID: want the unavailable tool error, got IsError=%v", res.IsError)
 		}

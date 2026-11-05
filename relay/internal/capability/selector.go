@@ -74,9 +74,11 @@ type Selector struct {
 // without one, an empty fact value, or any key outside the closed vocabulary
 // (nodestate.KeyKind).
 //
-// An empty (or all-whitespace) string parses to an empty Selector, which
-// Resolve treats as matching every Node (see Resolve). A malformed term and an
-// unknown namespace prefix are errors rather than silently dropped terms.
+// An empty (or all-whitespace) string parses to an empty Selector. Resolve
+// matches every Node with it, which is what a read such as list_nodes wants;
+// Execution refuses it for a dispatch or a Policy preflight (EmptySelectorError).
+// A malformed term and an unknown namespace prefix are errors rather than
+// silently dropped terms.
 func ParseSelector(s string) (Selector, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
@@ -239,23 +241,15 @@ func (sel Selector) String() string {
 	return strings.Join(terms, ", ")
 }
 
-// Resolve returns every Node in reg that matches sel. A Selector with no
-// Predicates matches every Node (inventory semantics — ADR-0003's
-// list_nodes(selector?) is deliberately callable with no selector at all).
-// Resolve itself never bounds the number of Nodes returned; guarding
-// fan-out size against the blast-radius cap is the pipeline's job
-// (Execution.Run), not the resolver's.
 // NamespaceNames returns the distinct label namespaces this Selector targets,
 // as the lower-case names the approval-gate config uses ("node", "relay",
 // "tag", "state"). It is how a gate rule expresses "anything targeting the
 // security lane needs two people" (ADR-0027) without package approval knowing
 // about Predicate.
 //
-// An empty Selector targets no namespace and matches every Node, so it returns
-// nothing — a namespace-scoped rule must not fire on a match-everything
-// Selector merely because that Selector also happens to reach `relay:`-labelled
-// Nodes. Rules that should catch a match-everything dispatch are the fan-out
-// ones (MinFanOut), which is the honest axis for that case.
+// An empty Selector targets no namespace, so it returns nothing. Execution
+// refuses an empty Selector before the gate is consulted, so a gate rule never
+// sees one.
 func (sel Selector) NamespaceNames() []string {
 	var out []string
 	seen := make(map[Namespace]struct{}, len(sel.Predicates))
@@ -294,8 +288,9 @@ func (n Namespace) Name() string {
 // Resolve returns every Node in reg that matches sel, evaluated at ev. A
 // Selector with no Predicates matches every Node (inventory semantics —
 // ADR-0003's list_nodes(selector?) is deliberately callable with no selector
-// at all). Resolve itself never bounds the number of Nodes returned; guarding
-// fan-out size against the blast-radius cap is the pipeline's job
+// at all); Execution refuses such a Selector before dispatching or
+// preflighting. Resolve itself never bounds the number of Nodes returned;
+// guarding fan-out size against the blast-radius cap is the pipeline's job
 // (Execution.Run), not the resolver's.
 //
 // Every Node in one Resolve call is evaluated against the SAME ev — one
@@ -310,6 +305,31 @@ func (sel Selector) Resolve(reg registry.Repository, ev StateEval) []registry.No
 		}
 	}
 	return matched
+}
+
+// WholeFleetSelector is how a caller reaches every Node deliberately: the
+// default node:os label every relay-daemon declares (selectors-and-labels.md).
+// It is a Selector, not a keyword. A Node whose config overrides os falls
+// outside it, and it is routine targeting, never a security-lane target
+// (invariant 7).
+const WholeFleetSelector = "node:os=linux"
+
+// Empty reports whether sel names no Predicates. It is the one definition of an
+// empty Selector for dispatch and preflight: an omitted, empty and
+// whitespace-only selector string all parse to one.
+func (sel Selector) Empty() bool { return len(sel.Predicates) == 0 }
+
+// EmptySelectorError is returned by Execution.Run, Start and Plan when the
+// Selector has no Predicates: reaching every Node must be written deliberately,
+// never the result of leaving an argument out. It is exported and typed so a
+// surface recognises it via errors.As (mirrors FrozenError, seams.go).
+type EmptySelectorError struct{}
+
+func (*EmptySelectorError) Error() string {
+	return "capability: refused: empty_selector: a dispatch or Policy preflight must name a Selector; " +
+		"an empty Selector is never read as every Node, so nothing was dispatched and no Job was " +
+		"created. Name the Nodes to act on, for example node:role=web; to reach the whole fleet, " +
+		"name it deliberately: " + WholeFleetSelector + ", the label every relay-daemon declares by default"
 }
 
 // NoNodesMatchedError is returned by Execution.Run when the Selector resolves to
@@ -329,6 +349,7 @@ func (e *NoNodesMatchedError) Error() string {
 		return fmt.Sprintf("capability: dispatch refused: no_nodes_matched: the Selector %q matched no Nodes; "+
 			"nothing was dispatched and no Job was created. Check the Selector against the Nodes' labels", e.Selector)
 	}
+	// Unreachable from dispatch: Execution refuses an empty Selector before this point.
 	return "capability: dispatch refused: no_nodes_matched: the empty Selector matches every Node, and the " +
 		"registry has none; nothing was dispatched and no Job was created"
 }

@@ -157,7 +157,7 @@ func TestRun_ReservedDispatchIsAuditedWhenTheClientDropsMidDispatch(t *testing.T
 	approvalsRepo := st.Approvals()
 
 	reg := registry.NewInMemory()
-	if _, err := reg.Upsert(registry.Report{NodeID: "node-a"}); err != nil {
+	if _, err := reg.Upsert(linuxReport("node-a")); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
@@ -174,7 +174,7 @@ func TestRun_ReservedDispatchIsAuditedWhenTheClientDropsMidDispatch(t *testing.T
 	})
 	p := Principal{AccountID: "acct-g", Account: "gleipnir-prod"}
 
-	_, err = s.Run(ctx, p, Selector{}, mutateAct())
+	_, err = s.Run(ctx, p, fleetSel, mutateAct())
 	var parked *ParkedError
 	if !errors.As(err, &parked) {
 		t.Fatalf("first Run: err = %v, want a park", err)
@@ -184,7 +184,7 @@ func TestRun_ReservedDispatchIsAuditedWhenTheClientDropsMidDispatch(t *testing.T
 	// The second Run's ctx is the one cancelOnDispatchConduit cancels from
 	// inside the (already-detached) dispatch pipeline — mid-dispatch, exactly
 	// like a client timeout or a dropped connection.
-	res, err := s.Run(ctx, p, Selector{}, mutateAct())
+	res, err := s.Run(ctx, p, fleetSel, mutateAct())
 	if err != nil {
 		t.Fatalf("release Run: %v — a client drop mid-dispatch must not surface as an error once the Job and its accounting both completed", err)
 	}
@@ -249,7 +249,7 @@ func captureDefaultLog(t *testing.T) *bytes.Buffer {
 func TestRun_ReservedDispatchAuditWriteFailureIsLoggedForAnOperator(t *testing.T) {
 	store := newMemApprovals()
 	reg := registry.NewInMemory()
-	if _, err := reg.Upsert(registry.Report{NodeID: "node-a"}); err != nil {
+	if _, err := reg.Upsert(linuxReport("node-a")); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	disp := &spyDispatcher{jobID: "job-audit-fail"}
@@ -263,7 +263,7 @@ func TestRun_ReservedDispatchAuditWriteFailureIsLoggedForAnOperator(t *testing.T
 	s.disp = disp
 	p := Principal{AccountID: "acct-g", Account: "gleipnir-prod"}
 
-	_, err := s.Run(context.Background(), p, Selector{}, mutateAct())
+	_, err := s.Run(context.Background(), p, fleetSel, mutateAct())
 	var parked *ParkedError
 	if !errors.As(err, &parked) {
 		t.Fatalf("first Run: err = %v, want a park", err)
@@ -271,7 +271,7 @@ func TestRun_ReservedDispatchAuditWriteFailureIsLoggedForAnOperator(t *testing.T
 	store.approve(t, parked.RequestID, "acct-ana", "ana", apNow.Add(time.Minute))
 
 	buf := captureDefaultLog(t)
-	_, err = s.Run(context.Background(), p, Selector{}, mutateAct())
+	_, err = s.Run(context.Background(), p, fleetSel, mutateAct())
 	if err == nil {
 		t.Fatal("release Run with a failing audit sink: want an error")
 	}

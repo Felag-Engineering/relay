@@ -78,7 +78,7 @@ func rawToolCall(t *testing.T, f *relayFixture, credential string, capable bool,
 }
 
 func restartArgs() map[string]any {
-	return map[string]any{"operation": "service.restart", "args": map[string]string{"unit": "nginx"}}
+	return map[string]any{"selector": e2eFleetSelector, "operation": "service.restart", "args": map[string]string{"unit": "nginx"}}
 }
 
 // rawMethodCall POSTs one raw JSON-RPC request for method with params and

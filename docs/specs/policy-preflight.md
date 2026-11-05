@@ -46,8 +46,7 @@ one thing and apply another by reaching a different endpoint.
 
 - **PF-2** A preflight resolves the same Selector and runs the same Relay-side authorization and
   the same blast-cap arithmetic as a real dispatch, then sends each matched, connected daemon a
-  read-only `PolicyQuery` instead of a Task. (One divergence is open: an empty Selector is not
-  refused on this path today — see *Open questions*.)
+  read-only `PolicyQuery` instead of a Task.
 
 Seven differences from execution, each deliberate:
 
@@ -143,12 +142,16 @@ A preflight refuses in fewer cases than a dispatch, and the difference is the po
 | Requires approval | Parked | **Answered** — the gate is not consulted and not reported (PF-23) |
 | Unauthorized | Refused | Refused, audited, no verdicts (PF-18) |
 | Unknown argument name | Refused | Refused before any Node is queried (PF-13) |
+| Empty Selector | Refused | Refused before any Node is queried (PF-24) |
 | Node offline | Per-Node `unreachable` | Per-Node `unknown` (PF-6) |
 | Outdated daemon | Task refused before sending | **Answered** — a real verdict, outdated advisory (PF-14) |
 
 - **PF-13** A call naming an argument the Operation does not declare is refused on the Relay
   before any Node is queried. Argument *values* are validated by the daemon's engine, so an
   ill-formed value surfaces as that Node's verdict, not as a Relay refusal.
+- **PF-24** A preflight whose Selector is empty, whitespace-only or omitted is refused before any
+  Node is queried, as a real dispatch is: reaching every Node takes an explicit Selector, and the
+  refusal names one (`node:os=linux`).
 - **PF-18** A caller not authorized to dispatch is not authorized to preflight: the preflight is
   refused, audited as a refusal, and returns no verdicts — an unauthorized caller learns no
   per-Node deciding rule.
@@ -211,6 +214,7 @@ that lands PF-19 renames them.
 | PF-18 | `TestPlanAuthzDeniedRecordsRefusalNoVerdicts` | capability |
 | PF-22 | `TestVerdictZeroValueIsUnknownNeverAllow` (zero-value half), `TestPolicyVerdict_CannotExpressUnknown` (wire half: `PolicyVerdict`'s field set and a nested walk that skips enums, plus the exact value names of the two enums `PolicyVerdict` carries, which the walk does not reach) | capability, compile-time |
 | PF-23 | `TestPreflightNeverConsultsTheApprovalGate` (behavioural, with an armed control: the same call through a real run parks), `TestPreflightResultCarriesNoApprovalField` (response half, on the result's field sets, which now include the display-only pass and rule-reference fields on `NodeVerdict`; the surfaces rest on invariant 10) | capability |
+| PF-24 | `TestPlan_EmptySelectorIsRefusedNotReported` | capability |
 
 Claims with **no row**, and so nothing checking them:
 
@@ -268,11 +272,6 @@ sequential round trips as a dispatch — cheap enough that a caller should alway
 Future work is in the private roadmap: roadmap: relay/research/spec-future-work/policy-preflight.
 
 ## Open questions
-
-- **An empty Selector matches every Node on both paths and is refused by neither.**
-  `execution.md` and `selectors-and-labels.md` say dispatch refuses it; the code refuses it on
-  neither path. Settle in those two specs' migrations; this spec then follows whatever dispatch
-  does (PF-2).
 
 Who answers `unsupported` for a Node that does not report a Template is settled by ADR-0042
 (PF-11).

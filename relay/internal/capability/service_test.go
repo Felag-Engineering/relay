@@ -229,7 +229,7 @@ func seedOneNode(t *testing.T) registry.Repository {
 	reg := registry.NewInMemory()
 	if _, err := reg.Upsert(registry.Report{
 		NodeID: "node-1",
-	}.WithNodeLabels(map[string]string{"role": "web"})); err != nil {
+	}.WithNodeLabels(map[string]string{"role": "web", "os": "linux"})); err != nil {
 		t.Fatalf("Upsert(node-1): %v", err)
 	}
 	return reg
@@ -730,7 +730,7 @@ func TestNewApprovals_NilNotifierParksWithoutNotifying(t *testing.T) {
 	read := newReadLane(rec, seedOneNode(t), nil, nil, nil, nil, testSettings, nil)
 	svc := newExecution(ctl, read, appr, noopCapChecker{}, nil, noopDispatcher{}, nil)
 
-	_, err := svc.Run(context.Background(), machineRequester, Selector{}, mutateAct())
+	_, err := svc.Run(context.Background(), machineRequester, fleetSel, mutateAct())
 	var parked *ParkedError
 	if !errors.As(err, &parked) {
 		t.Fatalf("Run: err = %v, want a park", err)

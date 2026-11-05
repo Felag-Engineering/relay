@@ -134,6 +134,7 @@ func TestApprovalRelease_ReDriveOnAnySurfaceReAttaches(t *testing.T) {
 	//     named as realistic (#713 comment 2026-09-25).
 	session := relaytest.Connect(t, f.ControlBase, f.ClientFor(requester))
 	mcpRes := relaytest.CallTool(t, session, "run_operation", map[string]any{
+		"selector":  e2eFleetSelector,
 		"operation": "service.restart",
 		"args":      map[string]string{"unit": "nginx"},
 	})

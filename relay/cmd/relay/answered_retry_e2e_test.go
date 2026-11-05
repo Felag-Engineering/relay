@@ -21,7 +21,6 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/audit"
 	"github.com/Felag-Engineering/relay/relay/internal/controlplane/mcp"
 	"github.com/Felag-Engineering/relay/relay/internal/controlplane/mcp/requeststate"
-	"github.com/Felag-Engineering/relay/relay/internal/registry"
 	"github.com/Felag-Engineering/relay/relay/internal/relaytest"
 )
 
@@ -176,7 +175,7 @@ func TestAnsweredRetry_FleetChangedReParksAndAsksAfresh(t *testing.T) {
 	requestID, _ := q.Meta["relay/request_id"].(string)
 	planHash, _ := q.Meta["relay/plan_hash"].(string)
 
-	if _, err := f.Deps.registry.Upsert(registry.Report{NodeID: "node-e2e-2"}); err != nil {
+	if _, err := f.Deps.registry.Upsert(linuxNode("node-e2e-2")); err != nil {
 		t.Fatalf("upsert second Node: %v", err)
 	}
 

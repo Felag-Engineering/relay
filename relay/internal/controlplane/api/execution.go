@@ -455,6 +455,8 @@ func buildOperationAction(name string, args map[string]string, timeoutSeconds in
 //     authorized, refused on the resolved fan-out (zero Nodes) before any
 //     Job exists. Title "no nodes matched" is what distinguishes it from the
 //     cap's 422; detail carries no_nodes_matched and the canonical Selector.
+//   - Empty Selector  → 400 Bad Request: malformed input, the same class and
+//     title as an unparseable Selector; nothing resolved and no Job exists.
 //   - Unauthorized    → 403 Forbidden: the role ladder refused (authz.RoleGate)
 //     — an operator reaching for Raw Exec lands here.
 //   - anything else   → 500.
@@ -465,6 +467,11 @@ func writeExecError(w http.ResponseWriter, err error) {
 	var frozenErr *capability.FrozenError
 	if errors.As(err, &frozenErr) {
 		writeProblem(w, http.StatusConflict, "relay is frozen", err.Error())
+		return
+	}
+	var emptyErr *capability.EmptySelectorError
+	if errors.As(err, &emptyErr) {
+		writeProblem(w, http.StatusBadRequest, "invalid selector", err.Error())
 		return
 	}
 	var capErr *capability.CapExceededError

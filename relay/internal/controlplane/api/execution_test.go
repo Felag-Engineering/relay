@@ -408,6 +408,12 @@ func TestExecutionRefusals_RenderTruthfulStatuses(t *testing.T) {
 			want:    http.StatusUnprocessableEntity,
 			wantSub: "no_nodes_matched",
 		},
+		{
+			name:    "an empty Selector is malformed input, not a guardrail",
+			runErr:  &capability.EmptySelectorError{},
+			want:    http.StatusBadRequest,
+			wantSub: "empty_selector",
+		},
 	}
 
 	for _, tt := range tests {

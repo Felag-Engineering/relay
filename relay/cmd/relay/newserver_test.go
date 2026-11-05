@@ -387,3 +387,24 @@ func TestListeners_Independent(t *testing.T) {
 	}
 	conn.Close()
 }
+
+// e2eFleetSelector reaches every Node linuxNode seeds. A dispatch must name a
+// Selector, so a test that means its whole fleet names this one.
+const e2eFleetSelector = capability.WholeFleetSelector
+
+// linuxNode is a Node report carrying the default node:os=linux label, which
+// every relay-daemon declares and e2eFleetSelector matches.
+func linuxNode(id string) registry.Report {
+	return registry.Report{NodeID: id}.WithNodeLabels(map[string]string{"os": "linux"})
+}
+
+// fleetSelector is e2eFleetSelector parsed, for a test that drives the
+// capability layer directly rather than through a surface.
+func fleetSelector(t *testing.T) capability.Selector {
+	t.Helper()
+	sel, err := capability.ParseSelector(e2eFleetSelector)
+	if err != nil {
+		t.Fatalf("ParseSelector(%q): %v", e2eFleetSelector, err)
+	}
+	return sel
+}

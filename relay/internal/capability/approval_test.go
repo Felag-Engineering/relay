@@ -191,7 +191,7 @@ func approvalFixture(t *testing.T, nodes []string, gate ApprovalGate, store Appr
 	t.Helper()
 	reg := registry.NewInMemory()
 	for _, id := range nodes {
-		if _, err := reg.Upsert(registry.Report{NodeID: id}); err != nil {
+		if _, err := reg.Upsert(linuxReport(id)); err != nil {
 			t.Fatalf("seed registry: %v", err)
 		}
 	}
@@ -215,7 +215,7 @@ func approvalFixtureWithAudit(t *testing.T, nodes []string, gate ApprovalGate, s
 	t.Helper()
 	reg := registry.NewInMemory()
 	for _, id := range nodes {
-		if _, err := reg.Upsert(registry.Report{NodeID: id}); err != nil {
+		if _, err := reg.Upsert(linuxReport(id)); err != nil {
 			t.Fatalf("seed registry: %v", err)
 		}
 	}
@@ -252,7 +252,7 @@ func TestGatedDispatchParksAndSendsNothing(t *testing.T) {
 	store := newMemApprovals()
 	s, disp := approvalFixture(t, []string{"node-a", "node-b"}, gateEverything(t), store, func() time.Time { return apNow })
 
-	res, err := s.Run(context.Background(), Principal{AccountID: "acct-g", Account: "gleipnir-prod"}, Selector{}, mutateAct())
+	res, err := s.Run(context.Background(), Principal{AccountID: "acct-g", Account: "gleipnir-prod"}, fleetSel, mutateAct())
 
 	var parked *ParkedError
 	if !errors.As(err, &parked) {
@@ -294,7 +294,7 @@ func TestRun_GateIsConsultedAfterAuthorizationAndTheCap(t *testing.T) {
 		t.Helper()
 		reg := registry.NewInMemory()
 		for _, id := range []string{"node-a", "node-b"} {
-			if _, err := reg.Upsert(registry.Report{NodeID: id}); err != nil {
+			if _, err := reg.Upsert(linuxReport(id)); err != nil {
 				t.Fatalf("seed registry: %v", err)
 			}
 		}
@@ -311,7 +311,7 @@ func TestRun_GateIsConsultedAfterAuthorizationAndTheCap(t *testing.T) {
 		return r
 	}
 	run := func(r rig) error {
-		_, err := r.s.Run(context.Background(), machineRequester, Selector{}, mutateAct())
+		_, err := r.s.Run(context.Background(), machineRequester, fleetSel, mutateAct())
 		return err
 	}
 
@@ -399,7 +399,7 @@ func TestPark_SummaryShowsTheResolvedCountAndACappedSample(t *testing.T) {
 	store := newMemApprovals()
 	s, _ := approvalFixture(t, nodes, gateEverything(t), store, func() time.Time { return apNow })
 
-	_, err := s.Run(context.Background(), machineRequester, Selector{}, mutateAct())
+	_, err := s.Run(context.Background(), machineRequester, fleetSel, mutateAct())
 	var parked *ParkedError
 	if !errors.As(err, &parked) {
 		t.Fatalf("err = %v, want a park", err)
@@ -433,7 +433,7 @@ func TestUngatedDispatchIsUntouched(t *testing.T) {
 	store := newMemApprovals()
 	s, disp := approvalFixture(t, []string{"node-a"}, empty, store, func() time.Time { return apNow })
 
-	if _, err := s.Run(context.Background(), Principal{Account: "gleipnir-prod"}, Selector{}, mutateAct()); err != nil {
+	if _, err := s.Run(context.Background(), Principal{Account: "gleipnir-prod"}, fleetSel, mutateAct()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if !disp.called {
@@ -453,7 +453,7 @@ func TestApprovedPlanDispatchesAndBindsTheJob(t *testing.T) {
 	s, disp := approvalFixture(t, []string{"node-a", "node-b"}, gateEverything(t), store, func() time.Time { return apNow })
 	p := Principal{AccountID: "acct-g", Account: "gleipnir-prod"}
 
-	_, err := s.Run(context.Background(), p, Selector{}, mutateAct())
+	_, err := s.Run(context.Background(), p, fleetSel, mutateAct())
 	var parked *ParkedError
 	if !errors.As(err, &parked) {
 		t.Fatalf("first Run: err = %v, want a park", err)
@@ -461,7 +461,7 @@ func TestApprovedPlanDispatchesAndBindsTheJob(t *testing.T) {
 
 	store.approve(t, parked.RequestID, "acct-ana", "ana", apNow.Add(time.Minute))
 
-	if _, err := s.Run(context.Background(), p, Selector{}, mutateAct()); err != nil {
+	if _, err := s.Run(context.Background(), p, fleetSel, mutateAct()); err != nil {
 		t.Fatalf("second Run after approval: %v", err)
 	}
 	if !disp.called {
@@ -483,7 +483,7 @@ func TestApprovedPlanDispatchesAndBindsTheJob(t *testing.T) {
 func TestRegistryDriftReParksAnApprovedPlan(t *testing.T) {
 	reg := registry.NewInMemory()
 	for _, id := range []string{"node-a", "node-b"} {
-		if _, err := reg.Upsert(registry.Report{NodeID: id}); err != nil {
+		if _, err := reg.Upsert(linuxReport(id)); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
 	}
@@ -497,7 +497,7 @@ func TestRegistryDriftReParksAnApprovedPlan(t *testing.T) {
 	s.disp = disp
 	p := Principal{AccountID: "acct-g", Account: "gleipnir-prod"}
 
-	_, err := s.Run(context.Background(), p, Selector{}, mutateAct())
+	_, err := s.Run(context.Background(), p, fleetSel, mutateAct())
 	var first *ParkedError
 	if !errors.As(err, &first) {
 		t.Fatalf("first Run: err = %v, want a park", err)
@@ -505,11 +505,11 @@ func TestRegistryDriftReParksAnApprovedPlan(t *testing.T) {
 	store.approve(t, first.RequestID, "acct-ana", "ana", apNow.Add(time.Minute))
 
 	// A third Node joins the fleet between approval and dispatch.
-	if _, err := reg.Upsert(registry.Report{NodeID: "node-c"}); err != nil {
+	if _, err := reg.Upsert(linuxReport("node-c")); err != nil {
 		t.Fatalf("drift: %v", err)
 	}
 
-	_, err = s.Run(context.Background(), p, Selector{}, mutateAct())
+	_, err = s.Run(context.Background(), p, fleetSel, mutateAct())
 	var second *ParkedError
 	if !errors.As(err, &second) {
 		t.Fatalf("after drift: err = %v, want a fresh park — an approval for 2 Nodes must not release a dispatch to 3", err)
@@ -596,7 +596,7 @@ func TestRun_AnApprovalNeverWaivesAGuardrail(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			reg := registry.NewInMemory()
 			for _, id := range []string{"node-a", "node-b"} {
-				if _, err := reg.Upsert(registry.Report{NodeID: id}); err != nil {
+				if _, err := reg.Upsert(linuxReport(id)); err != nil {
 					t.Fatalf("seed registry: %v", err)
 				}
 			}
@@ -610,7 +610,7 @@ func TestRun_AnApprovalNeverWaivesAGuardrail(t *testing.T) {
 			disp := &spyDispatcher{jobID: "job-1"}
 			s.disp = disp
 
-			_, err := s.Run(context.Background(), machineRequester, Selector{}, mutateAct())
+			_, err := s.Run(context.Background(), machineRequester, fleetSel, mutateAct())
 			var parked *ParkedError
 			if !errors.As(err, &parked) {
 				t.Fatalf("first Run: err = %v, want a park", err)
@@ -619,7 +619,7 @@ func TestRun_AnApprovalNeverWaivesAGuardrail(t *testing.T) {
 			n := len(audit.entries)
 
 			tc.trip(authz, capc, freeze)
-			_, err = s.Run(context.Background(), machineRequester, Selector{}, mutateAct())
+			_, err = s.Run(context.Background(), machineRequester, fleetSel, mutateAct())
 			var reparked *ParkedError
 			if err == nil || errors.As(err, &reparked) {
 				t.Fatalf("re-drive: err = %v, want a refusal that is not a park", err)
@@ -653,7 +653,7 @@ func TestRepeatedRunReusesTheSamePark(t *testing.T) {
 
 	var ids []string
 	for i := 0; i < 3; i++ {
-		_, err := s.Run(context.Background(), p, Selector{}, mutateAct())
+		_, err := s.Run(context.Background(), p, fleetSel, mutateAct())
 		var parked *ParkedError
 		if !errors.As(err, &parked) {
 			t.Fatalf("run %d: err = %v, want a park", i, err)
@@ -677,7 +677,7 @@ func TestRepeatedRunReusesTheSamePark(t *testing.T) {
 func TestFrozenRelayNeverEvenParks(t *testing.T) {
 	store := newMemApprovals()
 	reg := registry.NewInMemory()
-	if _, err := reg.Upsert(registry.Report{NodeID: "node-a"}); err != nil {
+	if _, err := reg.Upsert(linuxReport("node-a")); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	s := build(t, seams{reg: reg,
@@ -686,7 +686,7 @@ func TestFrozenRelayNeverEvenParks(t *testing.T) {
 		gate: gateEverything(t), approvals: store, approvalAuthz: &spyApprovalAuthorizer{}, now: func() time.Time { return apNow },
 	})
 
-	_, err := s.Run(context.Background(), Principal{Account: "gleipnir-prod"}, Selector{}, mutateAct())
+	_, err := s.Run(context.Background(), Principal{Account: "gleipnir-prod"}, fleetSel, mutateAct())
 	var frozen *FrozenError
 	if !errors.As(err, &frozen) {
 		t.Fatalf("err = %v, want a FrozenError", err)
@@ -794,14 +794,14 @@ func TestRun_ReDriveOfAReleasedApprovalReAttachesAndDispatchesNothing(t *testing
 	s, disp, audit := approvalFixtureWithAudit(t, []string{"node-a", "node-b"}, gateEverything(t), store, func() time.Time { return apNow })
 	p := Principal{AccountID: "acct-g", Account: "gleipnir-prod"}
 
-	_, err := s.Run(context.Background(), p, Selector{}, mutateAct())
+	_, err := s.Run(context.Background(), p, fleetSel, mutateAct())
 	var parked *ParkedError
 	if !errors.As(err, &parked) {
 		t.Fatalf("first Run: err = %v, want a park", err)
 	}
 	store.approve(t, parked.RequestID, "acct-ana", "ana", apNow.Add(time.Minute))
 
-	if _, err := s.Run(context.Background(), p, Selector{}, mutateAct()); err != nil {
+	if _, err := s.Run(context.Background(), p, fleetSel, mutateAct()); err != nil {
 		t.Fatalf("release Run: %v", err)
 	}
 	if !disp.called {
@@ -813,7 +813,7 @@ func TestRun_ReDriveOfAReleasedApprovalReAttachesAndDispatchesNothing(t *testing
 	audit.entries = nil
 	audit.readCalls = nil
 
-	res, err := s.Run(context.Background(), p, Selector{}, mutateAct())
+	res, err := s.Run(context.Background(), p, fleetSel, mutateAct())
 	if err != nil {
 		t.Fatalf("re-drive Run: %v", err)
 	}
@@ -860,20 +860,20 @@ func TestRun_DifferentRequesterReAttachesToTheReleasedJob(t *testing.T) {
 	accountA := Principal{AccountID: "acct-a", Account: "alice"}
 	accountB := Principal{AccountID: "acct-b", Account: "bob"}
 
-	_, err := s.Run(context.Background(), accountA, Selector{}, mutateAct())
+	_, err := s.Run(context.Background(), accountA, fleetSel, mutateAct())
 	var parked *ParkedError
 	if !errors.As(err, &parked) {
 		t.Fatalf("first Run: err = %v, want a park", err)
 	}
 	store.approve(t, parked.RequestID, "acct-ana", "ana", apNow.Add(time.Minute))
 
-	if _, err := s.Run(context.Background(), accountA, Selector{}, mutateAct()); err != nil {
+	if _, err := s.Run(context.Background(), accountA, fleetSel, mutateAct()); err != nil {
 		t.Fatalf("release Run: %v", err)
 	}
 	disp.called = false
 	audit.readCalls = nil
 
-	res, err := s.Run(context.Background(), accountB, Selector{}, mutateAct())
+	res, err := s.Run(context.Background(), accountB, fleetSel, mutateAct())
 	if err != nil {
 		t.Fatalf("account B Run: %v", err)
 	}
@@ -919,7 +919,7 @@ func (f *failingReadAuditSink) RecordRead(ctx context.Context, p Principal, tool
 func TestRun_ReAttachThatCannotBeAuditedReturnsNothing(t *testing.T) {
 	store := newMemApprovals()
 	reg := registry.NewInMemory()
-	if _, err := reg.Upsert(registry.Report{NodeID: "node-a"}); err != nil {
+	if _, err := reg.Upsert(linuxReport("node-a")); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	disp := &spyDispatcher{jobID: "job-1"}
@@ -933,20 +933,20 @@ func TestRun_ReAttachThatCannotBeAuditedReturnsNothing(t *testing.T) {
 	s.disp = disp
 	p := Principal{AccountID: "acct-g", Account: "gleipnir-prod"}
 
-	_, err := s.Run(context.Background(), p, Selector{}, mutateAct())
+	_, err := s.Run(context.Background(), p, fleetSel, mutateAct())
 	var parked *ParkedError
 	if !errors.As(err, &parked) {
 		t.Fatalf("first Run: err = %v, want a park", err)
 	}
 	store.approve(t, parked.RequestID, "acct-ana", "ana", apNow.Add(time.Minute))
 
-	if _, err := s.Run(context.Background(), p, Selector{}, mutateAct()); err != nil {
+	if _, err := s.Run(context.Background(), p, fleetSel, mutateAct()); err != nil {
 		t.Fatalf("release Run: %v", err)
 	}
 	disp.called = false
 	audit.readErr = errors.New("audit store down")
 
-	res, err := s.Run(context.Background(), p, Selector{}, mutateAct())
+	res, err := s.Run(context.Background(), p, fleetSel, mutateAct())
 	if res != nil {
 		t.Errorf("results = %v, want nil on an unauditable re-attach", res)
 	}
@@ -968,14 +968,14 @@ func TestRun_ReleasedApprovalPastItsDeadlineParksAfresh(t *testing.T) {
 	s, disp := approvalFixture(t, []string{"node-a"}, gateEverything(t), store, func() time.Time { return clock })
 	p := Principal{AccountID: "acct-g", Account: "gleipnir-prod"}
 
-	_, err := s.Run(context.Background(), p, Selector{}, mutateAct())
+	_, err := s.Run(context.Background(), p, fleetSel, mutateAct())
 	var first *ParkedError
 	if !errors.As(err, &first) {
 		t.Fatalf("first Run: err = %v, want a park", err)
 	}
 	store.approve(t, first.RequestID, "acct-ana", "ana", clock.Add(time.Minute))
 
-	if _, err := s.Run(context.Background(), p, Selector{}, mutateAct()); err != nil {
+	if _, err := s.Run(context.Background(), p, fleetSel, mutateAct()); err != nil {
 		t.Fatalf("release Run: %v", err)
 	}
 	disp.called = false
@@ -983,7 +983,7 @@ func TestRun_ReleasedApprovalPastItsDeadlineParksAfresh(t *testing.T) {
 	// Past gateEverything's one-hour TTL.
 	clock = clock.Add(2 * time.Hour)
 
-	_, err = s.Run(context.Background(), p, Selector{}, mutateAct())
+	_, err = s.Run(context.Background(), p, fleetSel, mutateAct())
 	var second *ParkedError
 	if !errors.As(err, &second) {
 		t.Fatalf("err = %v, want a fresh park after the deadline", err)
@@ -1005,7 +1005,7 @@ func TestRun_ClaimedReleaseThatFailsToDispatchStaysSpent(t *testing.T) {
 	s, disp := approvalFixture(t, []string{"node-a"}, gateEverything(t), store, func() time.Time { return apNow })
 	p := Principal{AccountID: "acct-g", Account: "gleipnir-prod"}
 
-	_, err := s.Run(context.Background(), p, Selector{}, mutateAct())
+	_, err := s.Run(context.Background(), p, fleetSel, mutateAct())
 	var parked *ParkedError
 	if !errors.As(err, &parked) {
 		t.Fatalf("first Run: err = %v, want a park", err)
@@ -1015,7 +1015,7 @@ func TestRun_ClaimedReleaseThatFailsToDispatchStaysSpent(t *testing.T) {
 	disp.failWithNoJobID = true
 	disp.err = errors.New("dispatch exploded before CreateJob returned")
 
-	_, err = s.Run(context.Background(), p, Selector{}, mutateAct())
+	_, err = s.Run(context.Background(), p, fleetSel, mutateAct())
 	if err == nil {
 		t.Fatal("Run: want an error from the failing dispatcher")
 	}
@@ -1029,7 +1029,7 @@ func TestRun_ClaimedReleaseThatFailsToDispatchStaysSpent(t *testing.T) {
 	// was ever created for it.
 	disp.called = false
 	disp.err = nil
-	res, err := s.Run(context.Background(), p, Selector{}, mutateAct())
+	res, err := s.Run(context.Background(), p, fleetSel, mutateAct())
 	if err != nil {
 		t.Fatalf("second Run: %v", err)
 	}
@@ -1051,7 +1051,7 @@ func TestRun_ReserveJobIDFailureRefusesWithoutDispatching(t *testing.T) {
 	s, disp := approvalFixture(t, []string{"node-a"}, gateEverything(t), store, func() time.Time { return apNow })
 	p := Principal{AccountID: "acct-g", Account: "gleipnir-prod"}
 
-	_, err := s.Run(context.Background(), p, Selector{}, mutateAct())
+	_, err := s.Run(context.Background(), p, fleetSel, mutateAct())
 	var parked *ParkedError
 	if !errors.As(err, &parked) {
 		t.Fatalf("first Run: err = %v, want a park", err)
@@ -1059,7 +1059,7 @@ func TestRun_ReserveJobIDFailureRefusesWithoutDispatching(t *testing.T) {
 	store.approve(t, parked.RequestID, "acct-ana", "ana", apNow.Add(time.Minute))
 
 	disp.reserveErr = errors.New("dispatcher out of ids")
-	_, err = s.Run(context.Background(), p, Selector{}, mutateAct())
+	_, err = s.Run(context.Background(), p, fleetSel, mutateAct())
 	if err == nil {
 		t.Fatal("Run: want an error when reserveJobID fails")
 	}
@@ -1092,7 +1092,7 @@ func TestRun_StoreErrorReadingForAPlanIsRefused(t *testing.T) {
 	failing := errByPlanHashApprovalStore{ApprovalStore: newMemApprovals(), err: errors.New("approvals store unavailable")}
 	reg := registry.NewInMemory()
 	for _, id := range []string{"node-a", "node-b"} {
-		if _, err := reg.Upsert(registry.Report{NodeID: id}); err != nil {
+		if _, err := reg.Upsert(linuxReport(id)); err != nil {
 			t.Fatalf("seed registry: %v", err)
 		}
 	}
@@ -1106,7 +1106,7 @@ func TestRun_StoreErrorReadingForAPlanIsRefused(t *testing.T) {
 	})
 	s.disp = disp
 
-	_, err := s.Run(context.Background(), machineRequester, Selector{}, mutateAct())
+	_, err := s.Run(context.Background(), machineRequester, fleetSel, mutateAct())
 	if err == nil {
 		t.Fatal("Run: want a refusal when the plan-hash read fails")
 	}
@@ -1157,7 +1157,7 @@ func TestRun_ReleasedJobStaysBoundWhenTheCallIsCancelledMidDispatch(t *testing.T
 	repo := st.Approvals()
 
 	reg := registry.NewInMemory()
-	if _, err := reg.Upsert(registry.Report{NodeID: "node-a"}); err != nil {
+	if _, err := reg.Upsert(linuxReport("node-a")); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
@@ -1172,7 +1172,7 @@ func TestRun_ReleasedJobStaysBoundWhenTheCallIsCancelledMidDispatch(t *testing.T
 	s.disp = disp
 	p := Principal{AccountID: "acct-g", Account: "gleipnir-prod"}
 
-	_, err = s.Run(ctx, p, Selector{}, mutateAct())
+	_, err = s.Run(ctx, p, fleetSel, mutateAct())
 	var parked *ParkedError
 	if !errors.As(err, &parked) {
 		t.Fatalf("first Run: err = %v, want a park", err)
@@ -1180,7 +1180,7 @@ func TestRun_ReleasedJobStaysBoundWhenTheCallIsCancelledMidDispatch(t *testing.T
 	approveViaRecordDecision(t, repo, parked.RequestID, parked.PlanHash, apNow.Add(time.Minute))
 
 	// The second Run's context is the one the dispatcher cancels mid-dispatch.
-	_, err = s.Run(ctx, p, Selector{}, mutateAct())
+	_, err = s.Run(ctx, p, fleetSel, mutateAct())
 	if err == nil {
 		t.Fatal("Run with a mid-dispatch cancellation: want an error")
 	}
@@ -1201,7 +1201,7 @@ func TestRun_ReleasedJobStaysBoundWhenTheCallIsCancelledMidDispatch(t *testing.T
 
 	// A fresh, LIVE context re-drives and re-attaches rather than dispatching
 	// again.
-	res, err := s.Run(context.Background(), p, Selector{}, mutateAct())
+	res, err := s.Run(context.Background(), p, fleetSel, mutateAct())
 	if err != nil {
 		t.Fatalf("third Run (re-attach): %v", err)
 	}
@@ -1250,7 +1250,7 @@ func TestRun_CallCancelledBeforeTheClaimDispatchesNothingAndLeavesTheApprovalRel
 	repo := st.Approvals()
 
 	reg := registry.NewInMemory()
-	if _, err := reg.Upsert(registry.Report{NodeID: "node-a"}); err != nil {
+	if _, err := reg.Upsert(linuxReport("node-a")); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
@@ -1267,14 +1267,14 @@ func TestRun_CallCancelledBeforeTheClaimDispatchesNothingAndLeavesTheApprovalRel
 	s.disp = disp
 	p := Principal{AccountID: "acct-g", Account: "gleipnir-prod"}
 
-	_, err = s.Run(context.Background(), p, Selector{}, mutateAct())
+	_, err = s.Run(context.Background(), p, fleetSel, mutateAct())
 	var parked *ParkedError
 	if !errors.As(err, &parked) {
 		t.Fatalf("first Run: err = %v, want a park", err)
 	}
 	approveViaRecordDecision(t, repo, parked.RequestID, parked.PlanHash, apNow.Add(time.Minute))
 
-	_, err = s.Run(cancelCtx, p, Selector{}, mutateAct())
+	_, err = s.Run(cancelCtx, p, fleetSel, mutateAct())
 	if err == nil {
 		t.Fatal("Run whose ctx is cancelled inside the claim: want an error")
 	}
@@ -1293,7 +1293,7 @@ func TestRun_CallCancelledBeforeTheClaimDispatchesNothingAndLeavesTheApprovalRel
 		t.Fatalf("JobID = %q, want unbound — a cancelled claim must not spend the approval", got.JobID)
 	}
 
-	res, err := s.Run(context.Background(), p, Selector{}, mutateAct())
+	res, err := s.Run(context.Background(), p, fleetSel, mutateAct())
 	if err != nil {
 		t.Fatalf("live Run: %v", err)
 	}
@@ -1341,7 +1341,7 @@ func TestRun_ClaimThatFindsTheDeadlinePassedDispatchesNothing(t *testing.T) {
 	s, disp, audit := approvalFixtureWithAudit(t, []string{"node-a"}, gateEverything(t), store, func() time.Time { return apNow })
 	p := Principal{AccountID: "acct-g", Account: "gleipnir-prod"}
 
-	_, err := s.Run(context.Background(), p, Selector{}, mutateAct())
+	_, err := s.Run(context.Background(), p, fleetSel, mutateAct())
 	var parked *ParkedError
 	if !errors.As(err, &parked) {
 		t.Fatalf("first Run: err = %v, want a park", err)
@@ -1350,7 +1350,7 @@ func TestRun_ClaimThatFindsTheDeadlinePassedDispatchesNothing(t *testing.T) {
 
 	s.store = laterNowOnBindJobApprovalStore{ApprovalStore: store, now: apNow.Add(2 * time.Hour)}
 
-	_, err = s.Run(context.Background(), p, Selector{}, mutateAct())
+	_, err = s.Run(context.Background(), p, fleetSel, mutateAct())
 	if !errors.Is(err, approval.ErrNotReleasable) {
 		t.Fatalf("err = %v, want it to wrap ErrNotReleasable", err)
 	}
@@ -1372,7 +1372,7 @@ func TestRun_ClaimThatFindsTheDeadlinePassedDispatchesNothing(t *testing.T) {
 	// Restore the plain store — the deadline-overshoot was only ever the
 	// PREVIOUS Run's claim, not a lasting change to what "now" means.
 	s.store = store
-	res, err := s.Run(context.Background(), p, Selector{}, mutateAct())
+	res, err := s.Run(context.Background(), p, fleetSel, mutateAct())
 	if err != nil {
 		t.Fatalf("live Run: %v", err)
 	}
@@ -1410,7 +1410,7 @@ func TestRun_ClaimAlreadyReleasedWithNoJobIDIsRefusedRatherThanReattachingToNoth
 	s, disp, audit := approvalFixtureWithAudit(t, []string{"node-a"}, gateEverything(t), store, func() time.Time { return apNow })
 	p := Principal{AccountID: "acct-g", Account: "gleipnir-prod"}
 
-	_, err := s.Run(context.Background(), p, Selector{}, mutateAct())
+	_, err := s.Run(context.Background(), p, fleetSel, mutateAct())
 	var parked *ParkedError
 	if !errors.As(err, &parked) {
 		t.Fatalf("first Run: err = %v, want a park", err)
@@ -1419,7 +1419,7 @@ func TestRun_ClaimAlreadyReleasedWithNoJobIDIsRefusedRatherThanReattachingToNoth
 
 	s.store = alwaysAlreadyReleasedNoJobIDApprovalStore{ApprovalStore: store}
 
-	_, err = s.Run(context.Background(), p, Selector{}, mutateAct())
+	_, err = s.Run(context.Background(), p, fleetSel, mutateAct())
 	if err == nil {
 		t.Fatal("Run: want a refusal when the claim reports ErrAlreadyReleased with no JobID to reattach to")
 	}
@@ -1476,7 +1476,7 @@ func TestRun_ConcurrentReDrivesDispatchExactlyOneJob(t *testing.T) {
 	repo := st.Approvals()
 
 	reg := registry.NewInMemory()
-	if _, err := reg.Upsert(registry.Report{NodeID: "node-a"}); err != nil {
+	if _, err := reg.Upsert(linuxReport("node-a")); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
@@ -1490,7 +1490,7 @@ func TestRun_ConcurrentReDrivesDispatchExactlyOneJob(t *testing.T) {
 	s.disp = disp
 	p := Principal{AccountID: "acct-g", Account: "gleipnir-prod"}
 
-	_, err = s.Run(context.Background(), p, Selector{}, mutateAct())
+	_, err = s.Run(context.Background(), p, fleetSel, mutateAct())
 	var parked *ParkedError
 	if !errors.As(err, &parked) {
 		t.Fatalf("first Run: err = %v, want a park", err)
@@ -1507,7 +1507,7 @@ func TestRun_ConcurrentReDrivesDispatchExactlyOneJob(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			<-start
-			res, runErr := s.Run(context.Background(), p, Selector{}, mutateAct())
+			res, runErr := s.Run(context.Background(), p, fleetSel, mutateAct())
 			results[i] = res
 			errs[i] = runErr
 		}(i)
@@ -1578,12 +1578,12 @@ func TestRun_EveryGatedDispatchParksOnItsOwn(t *testing.T) {
 	p := Principal{AccountID: "acct-g", Account: "gleipnir-prod"}
 
 	var parkedA *ParkedError
-	if _, err := s.Run(context.Background(), p, Selector{}, mutateAct()); !errors.As(err, &parkedA) {
+	if _, err := s.Run(context.Background(), p, fleetSel, mutateAct()); !errors.As(err, &parkedA) {
 		t.Fatalf("plan A: err = %v, want a park", err)
 	}
 	store.approve(t, parkedA.RequestID, "acct-ana", "ana", apNow.Add(time.Minute))
 
-	if _, err := s.Run(context.Background(), p, Selector{}, mutateAct()); err != nil {
+	if _, err := s.Run(context.Background(), p, fleetSel, mutateAct()); err != nil {
 		t.Fatalf("approved plan A: %v", err)
 	}
 	if !disp.called {
@@ -1594,7 +1594,7 @@ func TestRun_EveryGatedDispatchParksOnItsOwn(t *testing.T) {
 	other := mutateAct()
 	other.OperationArgs = map[string]string{"service": "redis"}
 	var parkedB *ParkedError
-	if _, err := s.Run(context.Background(), p, Selector{}, other); !errors.As(err, &parkedB) {
+	if _, err := s.Run(context.Background(), p, fleetSel, other); !errors.As(err, &parkedB) {
 		t.Fatalf("plan B: err = %v, want its own park", err)
 	}
 	if parkedB.RequestID == parkedA.RequestID {

@@ -760,7 +760,7 @@ func TestResolveAction_MalformedHelloTemplateFingerprintNeverMatchesAnEmptySnaps
 		t.Fatalf("HelloReportFromProto = %q refused %v, want the fingerprint recorded as empty", rep.TemplateSetFingerprint, refused)
 	}
 	reg := registry.NewInMemory()
-	if _, err := reg.Upsert(registry.Report{NodeID: "n", TemplateSetFingerprint: rep.TemplateSetFingerprint}); err != nil {
+	if _, err := reg.Upsert(linuxReportWith(registry.Report{NodeID: "n", TemplateSetFingerprint: rep.TemplateSetFingerprint})); err != nil {
 		t.Fatalf("Upsert: %v", err)
 	}
 	n, ok := reg.Get("n")
@@ -852,7 +852,7 @@ func templateApprovalFixture(t *testing.T, nodes []string, vocab TemplateVocabul
 	t.Helper()
 	reg := registry.NewInMemory()
 	for _, id := range nodes {
-		if _, err := reg.Upsert(registry.Report{NodeID: id, TemplateSetFingerprint: reportedTemplateSet}); err != nil {
+		if _, err := reg.Upsert(linuxReportWith(registry.Report{NodeID: id, TemplateSetFingerprint: reportedTemplateSet})); err != nil {
 			t.Fatalf("seed registry: %v", err)
 		}
 	}
@@ -887,7 +887,7 @@ func TestRun_TemplateApprovalGateMatchesTheResolvedClass(t *testing.T) {
 		"node-b": reported(readTemplate("svc.thing")),
 	}
 	s, disp := templateApprovalFixture(t, []string{"node-a", "node-b"}, vocab, gate, newMemApprovals())
-	if _, err := s.Run(context.Background(), machineRequester, Selector{}, templateAction("svc.thing", nil)); err != nil {
+	if _, err := s.Run(context.Background(), machineRequester, fleetSel, templateAction("svc.thing", nil)); err != nil {
 		t.Fatalf("all-read Run: %v, want it to proceed ungated", err)
 	}
 	if !disp.called {
@@ -896,7 +896,7 @@ func TestRun_TemplateApprovalGateMatchesTheResolvedClass(t *testing.T) {
 
 	vocab["node-b"] = reported(mutateTemplate("svc.thing"))
 	disp.called = false
-	_, err = s.Run(context.Background(), machineRequester, Selector{}, templateAction("svc.thing", nil))
+	_, err = s.Run(context.Background(), machineRequester, fleetSel, templateAction("svc.thing", nil))
 	var parked *ParkedError
 	if !errors.As(err, &parked) {
 		t.Fatalf("mixed Run err = %v, want a park under the mutate rule", err)
@@ -918,7 +918,7 @@ func TestRun_TemplateApprovalReparksWhenTheReportingSetChanges(t *testing.T) {
 	}
 	s, disp := templateApprovalFixture(t, []string{"node-a", "node-b", "node-c"}, vocab, gateEverything(t), store)
 
-	_, err := s.Run(context.Background(), machineRequester, Selector{}, templateAction("svc.restart", nil))
+	_, err := s.Run(context.Background(), machineRequester, fleetSel, templateAction("svc.restart", nil))
 	var first *ParkedError
 	if !errors.As(err, &first) {
 		t.Fatalf("first Run err = %v, want a park", err)
@@ -927,7 +927,7 @@ func TestRun_TemplateApprovalReparksWhenTheReportingSetChanges(t *testing.T) {
 
 	// node-c starts reporting the Template: the remaining set changed.
 	vocab["node-c"] = reported(mutateTemplate("svc.restart"))
-	_, err = s.Run(context.Background(), machineRequester, Selector{}, templateAction("svc.restart", nil))
+	_, err = s.Run(context.Background(), machineRequester, fleetSel, templateAction("svc.restart", nil))
 	var second *ParkedError
 	if !errors.As(err, &second) || second.PlanHash == first.PlanHash {
 		t.Fatalf("Run after the reporting set grew: err = %v, want a fresh park with a different plan hash", err)
@@ -938,7 +938,7 @@ func TestRun_TemplateApprovalReparksWhenTheReportingSetChanges(t *testing.T) {
 
 	// Back to the approved set: it releases.
 	delete(vocab, "node-c")
-	if _, err := s.Run(context.Background(), machineRequester, Selector{}, templateAction("svc.restart", nil)); err != nil {
+	if _, err := s.Run(context.Background(), machineRequester, fleetSel, templateAction("svc.restart", nil)); err != nil {
 		t.Fatalf("re-drive of the approved plan: %v", err)
 	}
 	if !disp.called {
@@ -958,7 +958,7 @@ func TestRun_TemplateApprovalReparksWhenAReportedClassChanges(t *testing.T) {
 	}
 	s, disp := templateApprovalFixture(t, []string{"node-a", "node-b"}, vocab, gateEverything(t), store)
 
-	_, err := s.Run(context.Background(), machineRequester, Selector{}, templateAction("svc.thing", nil))
+	_, err := s.Run(context.Background(), machineRequester, fleetSel, templateAction("svc.thing", nil))
 	var first *ParkedError
 	if !errors.As(err, &first) {
 		t.Fatalf("first Run err = %v, want a park", err)
@@ -966,7 +966,7 @@ func TestRun_TemplateApprovalReparksWhenAReportedClassChanges(t *testing.T) {
 	store.approve(t, first.RequestID, "acct-ana", "ana", apNow)
 
 	vocab["node-b"] = reported(mutateTemplate("svc.thing"))
-	_, err = s.Run(context.Background(), machineRequester, Selector{}, templateAction("svc.thing", nil))
+	_, err = s.Run(context.Background(), machineRequester, fleetSel, templateAction("svc.thing", nil))
 	var second *ParkedError
 	if !errors.As(err, &second) || second.PlanHash == first.PlanHash {
 		t.Fatalf("Run after node-b flipped to mutate: err = %v, want a fresh park with a different plan hash", err)

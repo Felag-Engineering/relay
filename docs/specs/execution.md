@@ -393,6 +393,7 @@ also need `make test-integration`; changes to the daemon-facing contract need th
 | Policy preflight and apply agree on an unchanged fleet | `TestMCP_Plan_PlanVsRealRunParity` | MCP |
 | A fan-out returns one result per Node | `TestMCP_RunOperation_PerNodeResults` | MCP |
 | A park is a result, not an error | `TestDispatch_ParkIsAResultNotAnError` | MCP |
+| An empty Selector is refused for dispatch, before anything resolves, on every surface | `TestExecution_EmptySelectorIsRefusedBeforeAnythingResolves`, `TestMCP_EmptySelectorIsRefusedOnEveryExecutionTool`, `TestControlAPI_EmptySelectorIsRefusedOnDispatchAndPlan` | capability, MCP, Control API |
 
 Claims above with **no row**, and so nothing checking them:
 
@@ -401,7 +402,6 @@ Claims above with **no row**, and so nothing checking them:
 - Caller-asserted attribution is stripped before the authorization decision. Nothing references
   `withoutAssertions` from a test, and this one guards an authorization input.
 - A zero-match dispatch is refused as `no_nodes_matched` with no Job.
-- An empty Selector is refused for dispatch.
 - Nodes not reporting a Template are excluded before the cap and reported `unsupported`.
 - A dispatch hands back its Job before finishing.
 - A repeated idempotency key returns the existing Job; the same key with different arguments is

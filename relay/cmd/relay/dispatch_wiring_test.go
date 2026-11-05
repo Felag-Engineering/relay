@@ -315,7 +315,7 @@ func TestDispatchWiring_ACancelDuringFanOutWithholdsUnsentTasksThroughTheRealRou
 	requested := map[string]string{} // task ID -> node ID, TaskRequests that reached a Tunnel
 	cancelRequested := map[string]bool{}
 	for _, id := range []string{"node-1", "node-2", "node-3"} {
-		if _, err := st.Registry().Upsert(registry.Report{NodeID: id}); err != nil {
+		if _, err := st.Registry().Upsert(linuxNode(id)); err != nil {
 			t.Fatalf("Upsert(%s): %v", id, err)
 		}
 		router.Register(id, func(msg *relayv1.RelayMessage) error {
@@ -362,7 +362,7 @@ func TestDispatchWiring_ACancelDuringFanOutWithholdsUnsentTasksThroughTheRealRou
 	}
 	done := make(chan runOut, 1)
 	go func() {
-		res, err := capSvc.Run(context.Background(), capability.Principal{Account: "devharness"}, capability.Selector{},
+		res, err := capSvc.Run(context.Background(), capability.Principal{Account: "devharness"}, fleetSelector(t),
 			jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"})
 		done <- runOut{res, err}
 	}()
@@ -821,7 +821,7 @@ func TestDispatchWiring_AHaltedJobsUnsentTasksAreNeverSentAfterARestart(t *testi
 	var mu sync.Mutex
 	var requested []string // node IDs whose TaskRequest reached a Tunnel
 	for _, id := range nodes {
-		if _, err := st.Registry().Upsert(registry.Report{NodeID: id}); err != nil {
+		if _, err := st.Registry().Upsert(linuxNode(id)); err != nil {
 			t.Fatalf("Upsert(%s): %v", id, err)
 		}
 		router.Register(id, func(msg *relayv1.RelayMessage) error {
@@ -851,7 +851,7 @@ func TestDispatchWiring_AHaltedJobsUnsentTasksAreNeverSentAfterARestart(t *testi
 		conduit:     router,
 		concurrency: 1,
 	})
-	results, err := capSvc.Run(context.Background(), capability.Principal{Account: "devharness"}, capability.Selector{},
+	results, err := capSvc.Run(context.Background(), capability.Principal{Account: "devharness"}, fleetSelector(t),
 		jobs.Action{Kind: jobs.ActionRawExec, RawExecArgv: []string{"/bin/true"}})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -938,7 +938,7 @@ func TestDispatchWiring_AHaltClosingAfterASiblingPassedAdmitWithholdsItsSend(t *
 	var mu sync.Mutex
 	requested := map[string]string{} // task ID -> node ID, TaskRequests that reached a Tunnel
 	for _, id := range nodes {
-		if _, err := st.Registry().Upsert(registry.Report{NodeID: id}); err != nil {
+		if _, err := st.Registry().Upsert(linuxNode(id)); err != nil {
 			t.Fatalf("Upsert(%s): %v", id, err)
 		}
 		router.Register(id, func(msg *relayv1.RelayMessage) error {
@@ -978,7 +978,7 @@ func TestDispatchWiring_AHaltClosingAfterASiblingPassedAdmitWithholdsItsSend(t *
 	}
 	done := make(chan runOut, 1)
 	go func() {
-		res, err := capSvc.Run(context.Background(), capability.Principal{Account: "devharness"}, capability.Selector{},
+		res, err := capSvc.Run(context.Background(), capability.Principal{Account: "devharness"}, fleetSelector(t),
 			jobs.Action{Kind: jobs.ActionRawExec, RawExecArgv: []string{"/bin/true"}})
 		done <- runOut{res, err}
 	}()

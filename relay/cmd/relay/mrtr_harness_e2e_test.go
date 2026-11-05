@@ -6,6 +6,7 @@ package main
 // park — identical between them, so the parks are directly comparable.
 func restartNginxArgs() map[string]any {
 	return map[string]any{
+		"selector":     e2eFleetSelector,
 		"operation":    "service.restart",
 		"args":         map[string]string{"unit": "nginx"},
 		"wait_seconds": 300,

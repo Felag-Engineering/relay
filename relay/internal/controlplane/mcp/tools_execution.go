@@ -188,8 +188,9 @@ func haltOutput(h *controlplane.RenderedHalt) *HaltOutput {
 // verbatim too (NoNodesMatchedError.Error() already carries the token and
 // the canonical Selector) — err itself, not just the unwrapped
 // NoNodesMatchedError, so a joined audit-write failure stays visible to the
-// caller (errors.As still finds the type on the joined err); anything else
-// is wrapped generically.
+// caller (errors.As still finds the type on the joined err); an empty-Selector
+// refusal is returned verbatim too, since it already names how to proceed;
+// anything else is wrapped generically.
 func renderRunError(err error) error {
 	var frozenErr *capability.FrozenError
 	if errors.As(err, &frozenErr) {
@@ -201,6 +202,10 @@ func renderRunError(err error) error {
 	}
 	var nnmErr *capability.NoNodesMatchedError
 	if errors.As(err, &nnmErr) {
+		return err
+	}
+	var emptyErr *capability.EmptySelectorError
+	if errors.As(err, &emptyErr) {
 		return err
 	}
 	// Template refusals (ADR-0042) already say what to do next.
@@ -285,7 +290,7 @@ func buildOperationAction(ops OperationLister, name string, args map[string]stri
 // omitted or false is a real dispatch; plan=true resolves/authorizes/checks exactly as a real run would but
 // executes nothing, returning per-Node Policy verdicts instead.
 type runOperationInput struct {
-	Selector  string            `json:"selector,omitempty" jsonschema:"Selector filter, e.g. 'node:role=web, relay:quarantine=on, tag:team=payments, state:offline'. Every term must carry a node:, relay:, tag: or state: prefix. state: is a closed, Relay-derived vocabulary (ADR-0034): the boolean markers state:offline, state:outdated, state:template-unloadable, state:cert-expiring, and the facts state:daemon-version=, state:policy-fingerprint=, state:template-fingerprint=. Empty or omitted matches every Node."`
+	Selector  string            `json:"selector,omitempty" jsonschema:"Selector filter, e.g. 'node:role=web, relay:quarantine=on, tag:team=payments, state:offline'. Every term must carry a node:, relay:, tag: or state: prefix. state: is a closed, Relay-derived vocabulary (ADR-0034): the boolean markers state:offline, state:outdated, state:template-unloadable, state:cert-expiring, and the facts state:daemon-version=, state:policy-fingerprint=, state:template-fingerprint=. Required: an empty, whitespace-only or omitted Selector is refused, with or without plan, and is never read as every Node. To reach the whole fleet, name it deliberately: node:os=linux, the label every relay-daemon declares by default."`
 	Operation string            `json:"operation" jsonschema:"Operation name, e.g. 'system.facts' (see list_operations for the full vocabulary and each Operation's risk class)."`
 	Args      map[string]string `json:"args,omitempty" jsonschema:"Operation arguments, validated against the Operation's own constraints (never a shell) — see list_operations for each Operation's argument names, types, and constraints."`
 	// TimeoutSeconds omitted or 0 keeps today's default (the daemon/engine
@@ -302,7 +307,7 @@ type runOperationInput struct {
 // rawExecInput is raw_exec's argument: argv only — no shell, no
 // client-side splitting, no string-command field (ADR-0001, invariant 1).
 type rawExecInput struct {
-	Selector string   `json:"selector,omitempty" jsonschema:"Selector filter, e.g. 'node:role=web, relay:quarantine=on, tag:team=payments, state:offline'. Every term must carry a node:, relay:, tag: or state: prefix. state: is a closed, Relay-derived vocabulary (ADR-0034): the boolean markers state:offline, state:outdated, state:template-unloadable, state:cert-expiring, and the facts state:daemon-version=, state:policy-fingerprint=, state:template-fingerprint=. Empty or omitted matches every Node."`
+	Selector string   `json:"selector,omitempty" jsonschema:"Selector filter, e.g. 'node:role=web, relay:quarantine=on, tag:team=payments, state:offline'. Every term must carry a node:, relay:, tag: or state: prefix. state: is a closed, Relay-derived vocabulary (ADR-0034): the boolean markers state:offline, state:outdated, state:template-unloadable, state:cert-expiring, and the facts state:daemon-version=, state:policy-fingerprint=, state:template-fingerprint=. Required: an empty, whitespace-only or omitted Selector is refused, with or without plan, and is never read as every Node. To reach the whole fleet, name it deliberately: node:os=linux, the label every relay-daemon declares by default."`
 	Argv     []string `json:"argv" jsonschema:"Argv to execute verbatim on each matched Node — no shell, no client-side splitting (ADR-0001). The daemon's Policy regex decides per Node whether it is allowed."`
 	// TimeoutSeconds: see runOperationInput's field doc.
 	TimeoutSeconds int32 `json:"timeout_seconds,omitempty" jsonschema:"Optional per-Task timeout in seconds. 0 or omitted uses the daemon/engine default; max 86400 (24h)."`

@@ -276,3 +276,46 @@ func TestMCP_SelectorSchemaNamesEveryNamespace(t *testing.T) {
 		}
 	}
 }
+
+// TestMCP_DispatchSelectorSchemaRequiresANonEmptySelector keeps the advertised
+// text honest after an empty Selector became a refusal for a dispatch: the two
+// execution tools say it is required and name the whole-fleet Selector, while
+// list_nodes, a read, still says an empty one matches every Node (#1274).
+func TestMCP_DispatchSelectorSchemaRequiresANonEmptySelector(t *testing.T) {
+	ts := newTestServer(t)
+	session := ts.connect(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	res, err := session.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+
+	seen := map[string]bool{}
+	for _, tool := range res.Tools {
+		prop := toolSchema(t, tool.Name, tool.InputSchema).Properties["selector"]
+		if prop == nil {
+			continue
+		}
+		seen[tool.Name] = true
+		desc := prop.Description
+		switch tool.Name {
+		case "run_operation", "raw_exec":
+			if !strings.Contains(desc, "refused") || !strings.Contains(desc, capability.WholeFleetSelector) {
+				t.Errorf("%s selector description must say an empty Selector is refused and name %s: %q", tool.Name, capability.WholeFleetSelector, desc)
+			}
+			if strings.Contains(desc, "matches every Node") {
+				t.Errorf("%s selector description still says an empty Selector matches every Node: %q", tool.Name, desc)
+			}
+		case "list_nodes":
+			if !strings.Contains(desc, "matches every Node") {
+				t.Errorf("list_nodes selector description must still say an empty filter matches every Node: %q", desc)
+			}
+		}
+	}
+	for _, name := range []string{"list_nodes", "run_operation", "raw_exec"} {
+		if !seen[name] {
+			t.Errorf("tool %s has no selector input to check", name)
+		}
+	}
+}

@@ -33,7 +33,7 @@ func ruleGate(t *testing.T, rules ...approval.Rule) ApprovalGate {
 func askableFixture(t *testing.T, gate ApprovalGate) (*testSvc, *memApprovals, *spyDispatcher) {
 	t.Helper()
 	reg := registry.NewInMemory()
-	if _, err := reg.Upsert(registry.Report{NodeID: "node-a"}); err != nil {
+	if _, err := reg.Upsert(linuxReport("node-a")); err != nil {
 		t.Fatalf("seed registry: %v", err)
 	}
 	store := newMemApprovals()
@@ -108,7 +108,7 @@ func TestRedriveOfAPendingRequestIsNotAskable(t *testing.T) {
 // rendered as a question a surface could ask about.
 func TestParkWithAFailingAuditIsNotAskable(t *testing.T) {
 	reg := registry.NewInMemory()
-	if _, err := reg.Upsert(registry.Report{NodeID: "node-a"}); err != nil {
+	if _, err := reg.Upsert(linuxReport("node-a")); err != nil {
 		t.Fatalf("seed registry: %v", err)
 	}
 	audit := &spyAuditSink{err: errors.New("audit store is down")}
@@ -122,7 +122,7 @@ func TestParkWithAFailingAuditIsNotAskable(t *testing.T) {
 	})
 	s.disp = &spyDispatcher{jobID: "job-1"}
 
-	_, err := s.Run(context.Background(), askCaller, Selector{}, mutateAct())
+	_, err := s.Run(context.Background(), askCaller, fleetSel, mutateAct())
 	var parked *ParkedError
 	if !errors.As(err, &parked) {
 		t.Fatalf("Run: err = %v, want a *ParkedError joined with the audit-write failure", err)
