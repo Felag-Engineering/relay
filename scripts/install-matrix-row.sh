@@ -402,7 +402,7 @@ phase_install() {
     bash -c '[ -d "$1" ] && [ -z "$(ls -A "$1")" ] && [ "$(stat -c %a "$1")" = 755 ]' _ "$POLICY_DIR"
   check DI-27 "the env file is root:root 0600 and equals the shipped example" \
     bash -c 'cmp -s "$1" "$2" && [ "$(stat -c "%U:%G %a" "$1")" = "root:root 600" ]' _ "$ENV_FILE" /usr/share/relay-daemon/relay-daemon.env.example
-  check DI-31 "the state directory is a 0700 directory" \
+  check DI-50 "the state directory is a 0700 directory" \
     bash -c '[ -d "$1" ] && [ "$(stat -c %a "$1")" = 700 ]' _ "$DAEMON_STATE"
 
   check DI-29 "the catalog is installed and owned by relay-daemon" owned_by relay-daemon "$CATALOG"
@@ -672,12 +672,14 @@ phase_remove() {
 
   precondition "remove the packages" pm_remove relay-daemon relay
 
-  check DI-31 "remove takes the binary, unit, Templates, enablement link and process" remove_took_the_payload
-  check DI-31 "remove keeps the Policy, the Policy directory, the env file and the state" remove_keeps_state
+  check DI-50 "remove takes the binary, unit, Templates, enablement link and process" remove_took_the_payload
+  check DI-50 "remove keeps the Policy, the Policy directory, the env file and the state" remove_keeps_state
   check DI-26 "the edited Policy survives remove" [ "$(sha "$POLICY")" = "$(cat "$STATE/policy-after-install")" ]
   if ! is_deb; then
-    check DI-31 "the remove output names the paths to delete by hand" \
+    check DI-50 "the remove output names the paths to delete by hand" \
       bash -c 'grep -q "$1" "$3" && grep -q "$2" "$3"' _ "$DAEMON_STATE" "$POLICY" "$STATE/remove.log"
+    check DI-50 "the remove output warns to delete the Policy file only with the Policy directory" \
+      grep_log "only together with" remove
   fi
 
   check RC-26 "remove keeps relay.toml, the CA and the store" \
@@ -702,7 +704,7 @@ purged_state_is_aside() {
 
 purge_took_what_it_created() {
   local rc=0 p
-  for p in "$POLICY" "$ENV_FILE" "$DAEMON_STATE" /var/lib/relay-daemon-package; do
+  for p in "$ENV_FILE" "$DAEMON_STATE" /var/lib/relay-daemon-package; do
     if exists_path "$p"; then echo "$p remains"; rc=1; fi
   done
   [ -d "$POLICY_DIR" ] && [ -f "$POLICY_DIR/50-operator.toml" ] || { echo "the operator's fragment is gone"; rc=1; }
@@ -712,15 +714,19 @@ purge_took_what_it_created() {
 phase_purge() {
   if is_deb; then
     precondition "purge the packages" pm_purge relay-daemon relay
-    check DI-31 "purge removes the Policy, env file, state and marker the package created" purge_took_what_it_created
-    check DI-31 "purge names the Policy directory it left in place" grep_log 'policy.d' purge
+    check DI-50 "purge removes the env file, state and marker the package created" purge_took_what_it_created
+    check DI-50 "purge keeps the edited Policy file beside the operator's fragment" \
+      [ "$(sha "$POLICY")" = "$(cat "$STATE/policy-after-install")" ]
+    check DI-50 "purge says it kept the Policy file" grep_log "$POLICY kept" purge
+    check DI-50 "purge names the Policy directory it left in place" \
+      grep_log "$POLICY_DIR holds files the package did not create" purge
     check RC-26 "purge moves the CA and the store aside together, root 0700, keeping the relay account" purged_state_is_aside
     check RC-26 "purge removes relay.toml and /etc/relay, which the package created" \
       bash -c '[ ! -e "$1" ] && [ ! -e /etc/relay ]' _ "$RELAY_TOML"
     check RC-26 "purge keeps the relay account" getent passwd relay
     check RC-26 "purge names where the state was moved" grep_log 'relay.purged-' purge
   else
-    check DI-31 "remove deleted nothing the operator deletes by hand" remove_keeps_state
+    check DI-50 "remove deleted nothing the operator deletes by hand" remove_keeps_state
     check RC-26 "remove deleted nothing: relay.toml and the state remain" \
       bash -c '[ -f "$1" ] && [ -d /var/lib/relay/ca ]' _ "$RELAY_TOML"
   fi
@@ -763,10 +769,36 @@ phase_cycles() {
   check DI-26 "cycle (b): the existing fragment is byte-unchanged" [ "$(sha "$POLICY_DIR/50-existing.toml")" = "$frag_sha" ]
   cycle_cleanup
   if is_deb; then
-    check DI-31 "cycle (b): purge keeps the fragment and directory the package did not create" \
+    check DI-50 "cycle (b): purge keeps the fragment and directory the package did not create" \
       bash -c '[ -f "$1/50-existing.toml" ]' _ "$POLICY_DIR"
   fi
   reset_state
+
+  # (c) Purge with an empty Policy directory removes the Policy file; purge beside a fragment
+  # keeps it, and the reinstall leaves the Node with the shipped default. Deb only: .rpm has no
+  # purge, and its remove deletes nothing.
+  if is_deb; then
+    local default_sha
+    pristine daemon
+    daemon_set new
+    precondition "install the new daemon set" pm_install "${SET[@]}"
+    default_sha=$(sha /usr/share/relay-daemon/policy.default.toml)
+    precondition "purge with an empty Policy directory" pm_purge relay-daemon
+    check DI-50 "cycle (c): purge with an empty Policy directory removes the Policy and the directory" \
+      bash -c '[ ! -e "$1" ] && [ ! -e "$2" ]' _ "$POLICY" "$POLICY_DIR"
+    precondition "reinstall the new daemon set" pm_install "${SET[@]}"
+    check DI-26 "cycle (c): the install after the purge, a first install, places the shipped default" [ "$(sha "$POLICY")" = "$default_sha" ]
+    printf '[[deny]]\nname = "file.read"\nargs = [["/etc/hostname"]]\n' >"$POLICY_DIR/50-operator.toml"
+    chmod 0644 "$POLICY_DIR/50-operator.toml"
+    frag_sha=$(sha "$POLICY_DIR/50-operator.toml")
+    precondition "purge beside a fragment" pm_purge relay-daemon
+    check DI-50 "cycle (c): purge beside a fragment keeps the Policy file, unchanged" [ "$(sha "$POLICY")" = "$default_sha" ]
+    precondition "reinstall after the purge" pm_install "${SET[@]}"
+    check DI-50 "cycle (c): after the reinstall the Policy is still the shipped default" [ "$(sha "$POLICY")" = "$default_sha" ]
+    check DI-50 "cycle (c): the fragment is byte-unchanged" [ "$(sha "$POLICY_DIR/50-operator.toml")" = "$frag_sha" ]
+    cycle_cleanup
+    reset_state
+  fi
 }
 
 phase_fips() {

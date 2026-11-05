@@ -319,5 +319,6 @@ decision targets. Example: `RUST_LOG=info,relay_ops::raw_exec=debug`.
 - **Decommissioning:** revoke the Node on the Relay (`POST /api/v1/nodes/{node_id}/revoke`,
   with a required JSON body `{"reason": "..."}`), then remove the package. Removing keeps the
   Policy, `policy.d`, the env file and the state directory. `apt purge` deletes the ones the
-  package created, the Node's identity included (DI-31), and leaves any that existed before the
-  package was first installed. `.rpm` removal prints the paths to delete by hand.
+  package created, the Node's identity included (DI-50), except `policy.toml` while `policy.d`
+  holds a fragment, and leaves any that existed before the package was first installed. `.rpm`
+  removal prints the paths to delete by hand.

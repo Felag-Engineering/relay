@@ -457,7 +457,7 @@ fn the_daemon_package_replaces_and_conflicts_with_the_retired_catalog_package() 
 /// each behind its `created` test. `.rpm` removal prints the paths to delete by hand and
 /// deletes no state. A structural check, because the executable counterparts are shell
 /// tests that the spec-proof scan does not see.
-// Proves DI-31.
+// Proves DI-50.
 #[test]
 fn removing_the_daemon_package_takes_its_payload_and_keeps_configuration_and_state() {
     let packaging = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("packaging");
@@ -525,19 +525,23 @@ fn removing_the_daemon_package_takes_its_payload_and_keeps_configuration_and_sta
         [
             "rm -f \"$MARKER\"",
             "rmdir \"$MARKER_DIR\" 2>/dev/null || true",
-            "if created policy; then rm -f \"$ETC/policy.toml\"; fi",
-            "if created env; then rm -f \"$ETC/relay-daemon.env\"; fi",
             "rmdir \"$ETC/policy.d\" 2>/dev/null \\",
+            "rm -f \"$ETC/policy.toml\"",
+            "if created env; then rm -f \"$ETC/relay-daemon.env\"; fi",
             "rmdir \"$ETC\" 2>/dev/null \\",
             "rm -rf \"$STATE\"",
         ],
         "postrm.sh deletes something this test does not pin"
     );
-    // The three multi-line deletions each sit directly behind the marker's say-so.
+    // Each of these deletions sits directly behind the marker's say-so.
     for (deletion, guard) in [
         (
             "rmdir \"$ETC/policy.d\" 2>/dev/null \\",
             "if created policy-dir && plain_dir \"$ETC/policy.d\"; then",
+        ),
+        (
+            "rm -f \"$ETC/policy.toml\"",
+            "if created policy && ! exists \"$ETC/policy.d\"; then",
         ),
         ("rmdir \"$ETC\" 2>/dev/null \\", "if created etc; then"),
         (
@@ -567,6 +571,76 @@ fn removing_the_daemon_package_takes_its_payload_and_keeps_configuration_and_sta
     assert!(
         arm.iter().any(|l| l.trim() == "leftovers"),
         "the .rpm removal arm must print the paths left to delete by hand"
+    );
+}
+
+/// Purge keeps the Policy file the package placed while the Policy directory survives, which it
+/// does only while it holds an entry. `postrm.sh` tries to remove the directory first, deletes
+/// the Policy file only if the directory is gone, and says what it kept. A later install places
+/// no default beside an existing Policy directory, so deleting the file would leave the
+/// fragments without the shipped denies. The directory is removed only when the package created
+/// it, so one the package did not create is never removed and its Policy file is kept. `.rpm`
+/// removal deletes no configuration and warns against deleting the file alone. A structural
+/// check: it cannot show that the directory is present when the gate runs. The executable
+/// counterpart is the install matrix's purge cycle, which the spec-proof scan does not see.
+// Proves DI-50.
+#[test]
+fn purge_keeps_the_policy_file_while_the_policy_directory_holds_a_fragment() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("packaging/scripts/postrm.sh");
+    let postrm =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let lines: Vec<&str> = postrm
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .collect();
+
+    let delete_file = lines
+        .iter()
+        .position(|l| *l == "rm -f \"$ETC/policy.toml\"")
+        .expect("postrm.sh must delete the Policy file somewhere");
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|l| **l == "rm -f \"$ETC/policy.toml\"")
+            .count(),
+        1,
+        "the Policy file is deleted in exactly one place"
+    );
+    assert_eq!(
+        lines[delete_file - 1],
+        "if created policy && ! exists \"$ETC/policy.d\"; then",
+        "the Policy file is deleted only behind the marker and only once the directory is gone"
+    );
+    assert_eq!(
+        lines[delete_file + 1],
+        "elif created policy && exists \"$ETC/policy.toml\"; then",
+        "a Policy file kept beside a surviving directory must be a distinct branch"
+    );
+    assert!(
+        lines[delete_file + 2].starts_with("echo ")
+            && lines[delete_file + 2].contains("$ETC/policy.toml kept"),
+        "purge must say it kept the Policy file"
+    );
+
+    let try_directory = lines
+        .iter()
+        .position(|l| *l == "rmdir \"$ETC/policy.d\" 2>/dev/null \\")
+        .expect("postrm.sh must try to remove the Policy directory");
+    assert!(
+        try_directory < delete_file,
+        "the directory's emptiness must be decided before the Policy file is touched"
+    );
+
+    let arm: Vec<&str> = postrm
+        .lines()
+        .skip_while(|l| *l != "  0)")
+        .take_while(|l| !l.contains(";;"))
+        .collect();
+    assert!(
+        arm.iter()
+            .any(|l| l.contains("$ETC/policy.toml") && l.contains("$ETC/policy.d")),
+        ".rpm removal must warn to delete the Policy file only together with the Policy directory"
     );
 }
 

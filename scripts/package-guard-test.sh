@@ -9,7 +9,7 @@
 # or catalog, an extra relationship and an added trigger or scriptlet; the build refuses a
 # missing SOURCE_DATE_EPOCH, a malformed version and an unknown architecture; and the daemon's
 # maintainer scripts, run under a fake root, write nothing through a directory any account but
-# root can write.
+# root can write, and purge keeps the Policy file beside a Policy fragment.
 #
 # Builds the pinned nfpm with `go tool` and packages a stand-in binary; touches nothing in this
 # working tree. The Relay's maintainer scripts are proved separately, by
@@ -373,6 +373,43 @@ if purge_fixture "$pt"; then
     test ! -e "$pt/etc/relay-daemon" -a ! -e "$pt/var/lib/relay-daemon" -a ! -e "$pt/var/lib/relay-daemon-package"
 else bad "postrm relocates for the test"; fi
 
+# DI-50: purge removes the Policy file while the Policy directory is empty, and keeps it, with
+# the fragment, while the directory holds one; a reinstall after that keeps the shipped denies.
+kept_with_fragment() { cmp -s "$1" "$2" && [ "$(cat "$3")" = frag ]; }
+if purge_fixture "$pt"; then
+  mkdir -p "$pt/etc/relay-daemon/policy.d"
+  echo p > "$pt/etc/relay-daemon/policy.toml"
+  in_fake_root sh "$pt/postrm.sh" purge >/dev/null 2>&1
+  check "purge with an empty policy.d removes the Policy file" \
+    test ! -e "$pt/etc/relay-daemon/policy.toml" -a ! -e "$pt/etc/relay-daemon/policy.d"
+else bad "postrm relocates for the test"; fi
+if purge_fixture "$pt"; then
+  mkdir -p "$pt/etc/relay-daemon/policy.d"
+  echo p > "$pt/etc/relay-daemon/policy.toml"; echo e > "$pt/etc/relay-daemon/relay-daemon.env"
+  echo frag > "$pt/etc/relay-daemon/policy.d/10-play.toml"
+  cp "$pt/etc/relay-daemon/policy.toml" "$pt/policy.before"
+  out="$(in_fake_root sh "$pt/postrm.sh" purge 2>&1)"
+  check "purge beside a fragment keeps the Policy file unchanged and the fragment" \
+    kept_with_fragment "$pt/policy.before" "$pt/etc/relay-daemon/policy.toml" \
+      "$pt/etc/relay-daemon/policy.d/10-play.toml"
+  check "purge beside a fragment names the Policy file it kept" \
+    lists "$pt/etc/relay-daemon/policy.toml kept" "$out"
+  check "purge beside a fragment still deletes the env file, state and marker" \
+    test ! -e "$pt/etc/relay-daemon/relay-daemon.env" -a ! -e "$pt/var/lib/relay-daemon" \
+      -a ! -e "$pt/var/lib/relay-daemon-package"
+else bad "postrm relocates for the test"; fi
+# DI-50: .rpm removal deletes no configuration and warns that the Policy file goes only with
+# its directory.
+if purge_fixture "$pt"; then
+  mkdir -p "$pt/etc/relay-daemon/policy.d"
+  echo p > "$pt/etc/relay-daemon/policy.toml"
+  out="$(in_fake_root sh "$pt/postrm.sh" 0 2>&1)"
+  check "rpm removal with policy.d present warns and deletes no configuration" \
+    lists "only together with" "$out"
+  check "rpm removal keeps the Policy file and directory" \
+    test -f "$pt/etc/relay-daemon/policy.toml" -a -d "$pt/etc/relay-daemon/policy.d"
+else bad "postrm relocates for the test"; fi
+
 # A symlinked /etc/relay-daemon: purge deletes nothing through it, and names it.
 if purge_fixture "$pt"; then
   echo p > "$pt/operator/policy.toml"; echo e > "$pt/operator/relay-daemon.env"
@@ -546,6 +583,28 @@ if relocated_preinst "$it"; then
     test "$rc" -eq 0 -a "$(mode_of "$it/var/lib/relay-daemon-package")" = 700 \
       -a "$(mode_of "$it/var/lib/relay-daemon-package/marker")" = 600
 else bad "preinst relocates for the test"; fi
+
+# DI-50: a reinstall after a purge beside a fragment leaves the shipped Policy file and the
+# fragment, because the install places no default beside an existing Policy directory.
+if purge_fixture "$pt"; then
+  e="$pt/etc/relay-daemon"
+  mkdir -p "$e/policy.d" "$pt/usr/share/relay-daemon"
+  cp "$root/daemon/policy.default.toml" "$e/policy.toml"
+  cp "$root/daemon/policy.default.toml" "$root/daemon/packaging/relay-daemon.env.example" \
+    "$pt/usr/share/relay-daemon/"
+  echo frag > "$e/policy.d/10-play.toml"
+  in_fake_root sh "$pt/postrm.sh" purge >/dev/null 2>&1
+  : > "$owners"; : > "$chowns"; : > "$systemctls"
+  if relocated_preinst "$pt" && relocated_postinst "$pt"; then
+    rc=0
+    in_fake_root dash "$pt/preinst.sh" install >/dev/null 2>&1 || rc=$?
+    run_postinst "$pt" >/dev/null 2>&1 || rc=$?
+    check "a reinstall after a purge beside a fragment keeps the shipped Policy and the fragment" \
+      test "$rc" -eq 0
+    check "the reinstalled Policy file is still the shipped default beside the fragment" \
+      kept_with_fragment "$root/daemon/policy.default.toml" "$e/policy.toml" "$e/policy.d/10-play.toml"
+  else bad "preinst and postinst relocate for the test"; fi
+else bad "postrm relocates for the test"; fi
 
 # The build refuses what it cannot make reproducible or does not recognise.
 expect_refused "no SOURCE_DATE_EPOCH is refused" 2 env -u SOURCE_DATE_EPOCH bash "$build" "$version" x86_64 "$work/one/relay-daemon" "$work/x"

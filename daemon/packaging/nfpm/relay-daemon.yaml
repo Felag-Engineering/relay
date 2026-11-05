@@ -1,4 +1,4 @@
-# nfpm manifest for the relay-daemon .deb and .rpm (DI-24, DI-25, DI-26, DI-27, DI-29, DI-31).
+# nfpm manifest for the relay-daemon .deb and .rpm (DI-24, DI-25, DI-26, DI-27, DI-29, DI-50).
 #
 # A template, rendered by scripts/build-packages.sh: the @NAME@ placeholders are substituted
 # before nfpm reads it, and nothing else is. The package wraps the release's guarded binary

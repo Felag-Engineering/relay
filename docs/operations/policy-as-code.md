@@ -100,6 +100,11 @@ fingerprints, exactly as a Node without one.
   in `policy.d` must not lose it: keep load-bearing denies in a fragment too (for example
   `policy.d/00-deny.toml`). A mistyped `RELAY_POLICY_PATH` filename has the same effect. To
   lock a Node down to deny-all, remove or empty its fragments as well as the Policy file.
+- **`apt purge` keeps `policy.toml` while `policy.d` holds a fragment.** Purge deletes the Policy
+  file the package placed only when the Policy directory is empty, because a reinstall places no
+  default Policy beside an existing `policy.d` and would otherwise leave the fragments without
+  the shipped denies. From then on the kept file is yours, and a later purge leaves it. `.rpm`
+  removal deletes no configuration: delete `policy.toml` by hand only together with `policy.d`.
 - **A bad fragment stops the daemon; an unreadable one makes the Policy deny-all.** A fragment
   that is a symlink, is not a regular file, or is group/world-writable or owned by neither
   root nor the daemon's user, and a `policy.d` that is insecure the same way, **refuse
