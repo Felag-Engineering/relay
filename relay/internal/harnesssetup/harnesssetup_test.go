@@ -50,13 +50,39 @@ func TestNewTarget_URLIsTheAdvertisedHostOnTheControlPort(t *testing.T) {
 		{"dns name", "relay.example:7654", "0.0.0.0:9443", "https://relay.example:9443/mcp"},
 		{"ipv4", "192.0.2.7:7654", "0.0.0.0:9443", "https://192.0.2.7:9443/mcp"},
 		{"ipv6", "[2001:db8::1]:7654", "[::]:9443", "https://[2001:db8::1]:9443/mcp"},
-		{"port zero", "relay.example:7654", "127.0.0.1:0", "https://relay.example:0/mcp"},
+		{"port zero", "relay.example:7654", "0.0.0.0:0", "https://relay.example:0/mcp"},
+		{"all interfaces, empty host", "relay.example:7654", ":9443", "https://relay.example:9443/mcp"},
+		{"specific non-loopback address", "relay.example:7654", "192.0.2.9:9443", "https://relay.example:9443/mcp"},
+		{"localhost by name", "relay.example:7654", "localhost:9443", "https://relay.example:9443/mcp"},
+		{"another 127/8 address", "relay.example:7654", "127.0.0.2:9443", "https://relay.example:9443/mcp"},
+		{"zoned loopback", "relay.example:7654", "[::1%lo]:9443", "https://relay.example:9443/mcp"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			got := mustRender(t, mustTarget(t, tc.advertised, tc.listen), accounts.KindHuman).MCPURL()
 			if got != tc.want {
 				t.Errorf("MCPURL() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestNewTarget_ALoopbackBoundControlPlaneRendersLoopback(t *testing.T) {
+	tests := []struct {
+		name, listen, want string
+	}{
+		{"ipv4 loopback", "127.0.0.1:9443", "https://127.0.0.1:9443/mcp"},
+		{"ipv6 loopback", "[::1]:9443", "https://[::1]:9443/mcp"},
+		{"ipv4-mapped loopback", "[::ffff:127.0.0.1]:9443", "https://127.0.0.1:9443/mcp"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r := mustRender(t, mustTarget(t, "relay.example:7654", tc.listen), accounts.KindHuman)
+			if got := r.MCPURL(); got != tc.want {
+				t.Errorf("MCPURL() = %q, want %q", got, tc.want)
+			}
+			if check := r.Check(); !strings.HasSuffix(check, " '"+tc.want+"'") {
+				t.Errorf("Check() = %q, want it to end with the URL %q", check, tc.want)
 			}
 		})
 	}
@@ -119,8 +145,8 @@ func TestRender_ClaudeCodeCarriesTheHeaderAndTheTrustLine(t *testing.T) {
 	r := mustRender(t, mustTarget(t, "relay.example:7654", "0.0.0.0:9443"), accounts.KindHuman)
 	want := `claude mcp add --transport http relay 'https://relay.example:9443/mcp' --header "Authorization: Bearer ` + testToken + `"` + "\n" +
 		"# Claude Code has no CA setting: NODE_EXTRA_CA_CERTS makes this one process trust the Relay CA.\n" +
-		"# Run it from the directory that holds relay-ca.pem.\n" +
-		`NODE_EXTRA_CA_CERTS="$PWD/relay-ca.pem" claude` + "\n"
+		"# Run it from the directory that holds relay-ca-cert.pem.\n" +
+		`NODE_EXTRA_CA_CERTS="$PWD/relay-ca-cert.pem" claude` + "\n"
 	if got := r.ClaudeCode(); got != want {
 		t.Errorf("ClaudeCode() =\n%s\nwant\n%s", got, want)
 	}
@@ -151,7 +177,7 @@ func TestRender_JSONBlocksParseAndCarryTheBearerHeader(t *testing.T) {
 
 func TestRender_CheckIsTheCurlOverCheckBody(t *testing.T) {
 	r := mustRender(t, mustTarget(t, "relay.example:7654", "0.0.0.0:9443"), accounts.KindHuman)
-	want := `curl -sS --cacert relay-ca.pem -H "Authorization: Bearer ` + testToken + `"` +
+	want := `curl -sS --cacert relay-ca-cert.pem -H "Authorization: Bearer ` + testToken + `"` +
 		` -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream"` +
 		` --data '` + harnesssetup.CheckBody + `' 'https://relay.example:9443/mcp'`
 	if got := r.Check(); got != want {

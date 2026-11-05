@@ -75,7 +75,14 @@ func newIdentityFixtureWith(t *testing.T, wrap func(capability.AccountStore) cap
 // wired, so a mint renders its harness_setup.
 func newIdentityFixtureWithHarness(t *testing.T) *identityFixture {
 	t.Helper()
-	target, err := harnesssetup.NewTarget("relay.example:7654", "0.0.0.0:9443",
+	return newIdentityFixtureWithHarnessOn(t, "0.0.0.0:9443")
+}
+
+// newIdentityFixtureWithHarnessOn is newIdentityFixtureWithHarness with the
+// control plane bound to controlListen.
+func newIdentityFixtureWithHarnessOn(t *testing.T, controlListen string) *identityFixture {
+	t.Helper()
+	target, err := harnesssetup.NewTarget("relay.example:7654", controlListen,
 		[]byte("-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"))
 	if err != nil {
 		t.Fatalf("harnesssetup.NewTarget: %v", err)
@@ -366,6 +373,35 @@ func (f *identityFixture) mintHarness(t *testing.T, name string, kind accounts.K
 	var minted mintAPITokenResponse
 	decodeInto(t, rec, &minted)
 	return minted
+}
+
+func TestIdentityAPI_MintRendersTheMCPURLForTheControlPlaneBind(t *testing.T) {
+	tests := []struct {
+		name, listen, want string
+	}{
+		{"loopback-bound", "127.0.0.1:9443", "https://127.0.0.1:9443/mcp"},
+		{"ipv6 loopback-bound", "[::1]:9443", "https://[::1]:9443/mcp"},
+		{"widened to all ipv4", "0.0.0.0:9443", "https://relay.example:9443/mcp"},
+		{"widened to all ipv6", "[::]:9443", "https://relay.example:9443/mcp"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newIdentityFixtureWithHarnessOn(t, tc.listen)
+			h := f.mintHarness(t, "alice", accounts.KindHuman).HarnessSetup
+			if h == nil {
+				t.Fatal("the mint response carries no harness_setup")
+			}
+			if h.MCPURL != tc.want {
+				t.Errorf("mcp_url = %q, want %q", h.MCPURL, tc.want)
+			}
+			if !strings.Contains(h.Check, tc.want) {
+				t.Errorf("check does not carry %q: %s", tc.want, h.Check)
+			}
+			if !strings.Contains(h.ClaudeCode, tc.want) {
+				t.Errorf("claude_code does not carry %q: %s", tc.want, h.ClaudeCode)
+			}
+		})
+	}
 }
 
 func TestIdentityAPI_MintRendersTheHarnessSetupForAHumanAccount(t *testing.T) {

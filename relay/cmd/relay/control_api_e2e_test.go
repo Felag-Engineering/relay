@@ -1062,12 +1062,13 @@ func TestMintEnrollmentToken_JoinStringUsesAdvertisedAddress(t *testing.T) {
 	}
 }
 
-// A mint's Harness setup is built from the join string's host, the CA this Relay
-// issued from, and the control-plane port, and a Target nobody wired renders
-// nothing without failing the mint. This is the wiring guard for that silence,
-// and it replays the rendered check against the running Relay, which proves the
-// rendered path is the mounted /mcp and that the minted token works.
-func TestMintAPIToken_HarnessSetupUsesTheJoinStringHostAndTheRelayCA(t *testing.T) {
+// A mint's Harness setup on a loopback-bound control plane names loopback and
+// the configured control-plane port, with the CA this Relay issued from, and a
+// Target nobody wired renders nothing without failing the mint. This is the
+// wiring guard for that silence, and it replays the rendered check against the
+// running Relay, which proves the rendered path is the mounted /mcp and that the
+// minted token works.
+func TestMintAPIToken_HarnessSetupUsesTheLoopbackBindAndTheRelayCA(t *testing.T) {
 	body := "[node_plane]\nlisten_address = \"127.0.0.1:7654\"\n" +
 		"\n[control_plane]\nenabled = true\n\n[ca]\ndir = " + fmt.Sprintf("%q", t.TempDir()) +
 		"\n\n[store]\npath = " + fmt.Sprintf("%q", filepath.Join(t.TempDir(), "relay.db")) +
@@ -1118,8 +1119,8 @@ func TestMintAPIToken_HarnessSetupUsesTheJoinStringHostAndTheRelayCA(t *testing.
 	if err != nil {
 		t.Fatalf("mcp_url %q does not parse: %v", minted.HarnessSetup.MCPURL, err)
 	}
-	if parsed.Hostname() != "localhost" || parsed.Path != "/mcp" {
-		t.Errorf("mcp_url = %q, want the join string's host (localhost) and /mcp", minted.HarnessSetup.MCPURL)
+	if parsed.Hostname() != "127.0.0.1" || parsed.Path != "/mcp" {
+		t.Errorf("mcp_url = %q, want the loopback control-plane bind (127.0.0.1) and /mcp", minted.HarnessSetup.MCPURL)
 	}
 	// The CONFIGURED control-plane port renders, not the bound one: the fixture
 	// configures :0 and binds an ephemeral port, so "0" here proves the value

@@ -24,7 +24,7 @@ const (
 	MCPPath = "/mcp"
 	// CAFileName is the file name every rendered block expects the CA certificate
 	// to be saved under.
-	CAFileName = "relay-ca.pem"
+	CAFileName = "relay-ca-cert.pem"
 	// CheckBody is the MCP initialize request the rendered check sends. It holds
 	// no single quote, so it sits safely inside single quotes in a shell line.
 	CheckBody = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"relay-check","version":"1"}}}`
@@ -57,26 +57,51 @@ type Target struct {
 	caPEM  string
 }
 
-// NewTarget builds the Target from the node-plane advertised address (whose host
-// is a SAN of the server certificate), the control-plane listen address (whose
-// port serves /mcp) and the CA certificate PEM. A host or port outside the DNS
-// and IP alphabet is refused, which is what keeps the rendered URL safe inside
-// single quotes. So is a PEM holding anything but CERTIFICATE blocks, which
-// keeps key material out of what every minter is shown.
+// NewTarget builds the Target from the node-plane advertised address, the
+// control-plane listen address (whose port serves /mcp) and the CA certificate
+// PEM. The URL's host is the advertised host, a SAN of the server certificate,
+// except when the control plane is bound to 127.0.0.1 or ::1. That listener is
+// reachable only on the Relay's host or through a tunnel, so the URL names
+// loopback: 127.0.0.1, or ::1 for an IPv6 bind. The server certificate always
+// names loopback, and the MCP handler's DNS-rebinding check accepts loopback as
+// a Host header. A host or port outside the DNS and IP alphabet is refused,
+// which is what keeps the rendered URL safe inside single quotes. So is a PEM
+// holding anything but CERTIFICATE blocks, which keeps key material out of what
+// every minter is shown.
 func NewTarget(advertisedAddress, controlListenAddress string, caPEM []byte) (Target, error) {
 	host, _, err := net.SplitHostPort(advertisedAddress)
 	if err != nil || !validHost(host) {
 		return Target{}, ErrTarget
 	}
-	_, port, err := net.SplitHostPort(controlListenAddress)
+	listenHost, port, err := net.SplitHostPort(controlListenAddress)
 	if err != nil || !allDigits(port) {
 		return Target{}, ErrTarget
 	}
 	if !onlyCertificates(caPEM) {
 		return Target{}, ErrTarget
 	}
+	if loopback, ok := loopbackHost(listenHost); ok {
+		host = loopback
+	}
 	u := url.URL{Scheme: "https", Host: net.JoinHostPort(host, port), Path: MCPPath}
 	return Target{mcpURL: u.String(), caPEM: string(caPEM)}, nil
+}
+
+// loopbackHost returns the address to render for a control plane bound to
+// listenHost, and false unless listenHost is exactly 127.0.0.1 (or its
+// IPv4-mapped form) or ::1. The rendered address must be one the listener is
+// bound to and the server certificate names, and the certificate names only
+// those two; any other loopback address, such as 127.0.0.2, keeps the
+// advertised host.
+func loopbackHost(listenHost string) (string, bool) {
+	ip := net.ParseIP(listenHost)
+	switch {
+	case ip.Equal(net.IPv4(127, 0, 0, 1)):
+		return "127.0.0.1", true
+	case ip.Equal(net.IPv6loopback):
+		return "::1", true
+	}
+	return "", false
 }
 
 // onlyCertificates reports whether data is one or more PEM CERTIFICATE blocks
@@ -230,7 +255,7 @@ func deref(s *string) string {
 // MCPURL is the Relay's MCP endpoint.
 func (r Rendering) MCPURL() string { return r.mcpURL }
 
-// CACertificate is the PEM a client saves as relay-ca.pem. It is public.
+// CACertificate is the PEM a client saves under CAFileName. It is public.
 func (r Rendering) CACertificate() string { return r.caPEM }
 
 // ClaudeCode is the `claude mcp add` line and the line that trusts the CA. It
