@@ -18,6 +18,9 @@
 //!
 //! It also pins the shipped unit's binary path (DI-40).
 //!
+//! It also reads the daemon package's maintainer scripts, manifest and baselines, and pins what
+//! the install does and never does with the unit, the Policy and the environment file.
+//!
 //! Its counterpart on the Relay side is
 //! `relay/cmd/relay/packaging_drift_test.go`. Two toolchains, two files, one
 //! rule.
@@ -645,8 +648,8 @@ fn purge_keeps_the_policy_file_while_the_policy_directory_holds_a_fragment() {
 }
 
 /// The shipped unit keeps `/etc`, and so the Policy directory in it, read-only
-/// (the unit's sandbox claim covers the rest): exactly one `ProtectSystem=strict`, and no directive
-/// that re-opens a path in or above `/etc/relay-daemon` for writing.
+/// (the unit's sandbox claim covers the rest): exactly one `ProtectSystem=strict`, and no
+/// directive that re-opens a path in or above `/etc/relay-daemon` for writing.
 #[test]
 fn unit_keeps_the_policy_directory_read_only() {
     let unit_path =
@@ -686,5 +689,632 @@ fn unit_keeps_the_policy_directory_read_only() {
                 "{line:?} re-opens {path} for writing, which puts the Policy directory in reach"
             );
         }
+    }
+}
+
+// ---- structural readers for maintainer scripts, manifests and baselines ----
+
+fn re(pattern: &str) -> regex::Regex {
+    regex::Regex::new(pattern).unwrap_or_else(|e| panic!("regex {pattern}: {e}"))
+}
+
+fn read_text(path: &Path) -> String {
+    std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
+}
+
+/// The trimmed, non-empty lines that are not full-line comments.
+fn commands(text: &str) -> Vec<String> {
+    text.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .map(String::from)
+        .collect()
+}
+
+/// The command lines of the four maintainer scripts under `dir`, by script name.
+fn script_commands(dir: &Path) -> Vec<(&'static str, Vec<String>)> {
+    ["preinst", "postinst", "prerm", "postrm"]
+        .into_iter()
+        .map(|name| (name, commands(&read_text(&dir.join(format!("{name}.sh"))))))
+        .collect()
+}
+
+/// Whether `line` starts or restarts a unit, by systemctl, `service`, or the Debian helpers.
+fn starts_a_unit(line: &str) -> bool {
+    re(r"\bsystemctl\b(?:\s+-{1,2}[A-Za-z-]+(?:=\S+)?)*\s+(?:start|restart|try-restart|reload-or-restart|try-reload-or-restart|isolate)\b")
+        .is_match(line)
+        || (re(r"\bsystemctl\b").is_match(line)
+            && re(r"\benable\b").is_match(line)
+            && line.contains("--now"))
+        || re(r"\bservice\s+\S+\s+(?:start|restart|try-restart|force-reload)\b").is_match(line)
+        || re(r"\b(?:invoke-rc\.d|deb-systemd-invoke)\b").is_match(line)
+}
+
+/// Whether `line` changes whether a unit is enabled, by any route that reaches the same state.
+fn enables_a_unit(line: &str) -> bool {
+    re(r"\bsystemctl\b.*\b(?:enable|reenable|preset|preset-all|link|add-wants)\b").is_match(line)
+        || re(r"\b(?:deb-systemd-helper|update-rc\.d|chkconfig)\b").is_match(line)
+        || re(r"\bln\b[^|;&]*\.wants/").is_match(line)
+}
+
+/// Whether `line` writes to a path `target` names: a redirect into it on any line, or one of
+/// the writing commands naming it on a line that is not an echo or printf.
+fn writes_to(line: &str, target: &regex::Regex) -> bool {
+    let t = target.as_str();
+    if re(&format!(r#">>?\s*"?[^\s;|&]*?(?:{t})"#)).is_match(line) {
+        return true;
+    }
+    if matches!(line.split_whitespace().next(), Some("echo" | "printf")) {
+        return false;
+    }
+    re(&format!(
+        r"(?:\b(?:cp|mv|install|tee|ln|place|touch|dd|rsync|truncate)\b|\bsed\s+-i\b)[^|;&]*(?:{t})"
+    ))
+    .is_match(line)
+}
+
+/// The index of the one line equal to `exact`.
+fn at(lines: &[String], exact: &str) -> usize {
+    let hits: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| l.as_str() == exact)
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(
+        hits.len(),
+        1,
+        "expected exactly one line `{exact}`: {lines:#?}"
+    );
+    hits[0]
+}
+
+/// The command lines of the shell function whose header line is `header`, up to its closing
+/// brace, a line that is exactly `}`.
+fn body(text: &str, header: &str) -> Vec<String> {
+    let lines = commands(text);
+    let start = at(&lines, header);
+    let mut out = Vec::new();
+    for line in &lines[start + 1..] {
+        if line == "}" {
+            return out;
+        }
+        out.push(line.clone());
+    }
+    panic!("`{header}` has no closing brace");
+}
+
+const FIRST_INSTALL_GATE: [&str; 6] = [
+    "if [ \"$first_install\" != yes ]; then",
+    "if systemd_running; then",
+    "systemctl daemon-reload || true",
+    "fi",
+    "exit 0",
+    "fi",
+];
+
+/// The index of the gate's closing `fi`: past it, a postinst runs on a first install only.
+fn first_install_gate_end(lines: &[String]) -> usize {
+    let start = at(lines, FIRST_INSTALL_GATE[0]);
+    let block: Vec<&str> = lines[start..start + FIRST_INSTALL_GATE.len()]
+        .iter()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        block, FIRST_INSTALL_GATE,
+        "an upgrade or reinstall runs daemon-reload and nothing else"
+    );
+    start + FIRST_INSTALL_GATE.len() - 1
+}
+
+/// The `case "${1:-}" in` arms that follow it, up to `esac`.
+fn case_arms(lines: &[String]) -> Vec<String> {
+    let start = at(lines, "case \"${1:-}\" in");
+    let end = lines[start..]
+        .iter()
+        .position(|l| l == "esac")
+        .expect("the case statement ends");
+    lines[start + 1..start + end].to_vec()
+}
+
+/// The paths of a baseline's regular files, for the `dpkg-deb` and `rpm` listing formats.
+fn regular_entries(baseline: &str) -> Vec<String> {
+    baseline
+        .lines()
+        .filter(|l| l.starts_with('-'))
+        .filter_map(|l| l.split_whitespace().last())
+        .map(|p| p.trim_start_matches('.').to_string())
+        .collect()
+}
+
+fn files_under(dir: &Path, out: &mut Vec<PathBuf>) {
+    for entry in std::fs::read_dir(dir)
+        .unwrap_or_else(|e| panic!("read {}: {e}", dir.display()))
+        .flatten()
+    {
+        let path = entry.path();
+        if path.is_dir() {
+            files_under(&path, out);
+        } else {
+            out.push(path);
+        }
+    }
+}
+
+/// A prerm that stops and disables the unit on removal and does nothing on any other call.
+fn assert_prerm_stops_and_disables_on_removal_only(prerm: &[String]) {
+    let systemctl: Vec<&str> = prerm
+        .iter()
+        .filter(|l| l.starts_with("systemctl"))
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        systemctl,
+        [
+            "systemctl stop \"$UNIT\" || true",
+            "systemctl --no-reload disable \"$UNIT\" || true"
+        ],
+        "prerm stops and disables the unit and does nothing else with it"
+    );
+    assert_eq!(
+        case_arms(prerm),
+        ["remove | 0) ;;", "*) exit 0 ;;"],
+        "prerm acts on removal only; an upgrade changes nothing"
+    );
+}
+
+/// Lookalike lines the two unit matchers must tell apart.
+fn assert_unit_matchers_tell_the_verbs_apart() {
+    for line in [
+        "systemctl start \"$UNIT\"",
+        "systemctl --no-block restart relay-daemon.service",
+        "systemctl try-reload-or-restart relay.service",
+        "systemctl enable --now \"$UNIT\"",
+        "service relay-daemon start",
+        "service relay restart || true",
+        "invoke-rc.d relay-daemon start",
+        "deb-systemd-invoke start relay.service",
+    ] {
+        assert!(starts_a_unit(line), "starts_a_unit must match: {line}");
+    }
+    for line in [
+        "systemctl daemon-reload || true",
+        "systemctl preset \"$UNIT\" || true",
+        "systemctl stop \"$UNIT\" || true",
+        "systemctl --no-reload disable \"$UNIT\" || true",
+        "systemctl enable \"$UNIT\"",
+        "systemd_running() { [ -d /run/systemd/system ]; }",
+    ] {
+        assert!(!starts_a_unit(line), "starts_a_unit must not match: {line}");
+    }
+    for line in [
+        "systemctl enable \"$UNIT\"",
+        "systemctl reenable relay.service",
+        "systemctl preset-all",
+        "systemctl link /opt/relay.service",
+        "systemctl --now enable relay.service",
+        "deb-systemd-helper enable relay.service",
+        "chkconfig relay on",
+        "update-rc.d relay defaults",
+        "ln -s /usr/lib/systemd/system/relay.service /etc/systemd/system/multi-user.target.wants/relay.service",
+    ] {
+        assert!(enables_a_unit(line), "enables_a_unit must match: {line}");
+    }
+    for line in [
+        "systemctl --no-reload disable \"$UNIT\" || true",
+        "systemctl daemon-reload || true",
+        "systemctl stop \"$UNIT\" || true",
+        "if ln \"$tmp\" \"$dst\" 2>/dev/null; then",
+        "echo \"enable the unit by hand\" >&2",
+    ] {
+        assert!(
+            !enables_a_unit(line),
+            "enables_a_unit must not match: {line}"
+        );
+    }
+}
+
+// ---- the daemon package's install behaviour: unit, Policy, environment file ----
+
+/// The daemon package installs the binary and the hardened unit, and no maintainer script
+/// starts the unit. The one enabling act is `systemctl preset`, run by `postinst` on a first
+/// install only, behind the systemd-running and root-only-directory checks; an upgrade runs
+/// `daemon-reload` and nothing else, and `prerm` acts on removal only. The unit restarts only
+/// on failure and no `.path` or `.timer` unit watches for an identity, so an enabled unit with
+/// no identity is the daemon's clean exit, which `exit_rule.rs` proves. A structural check:
+/// the executable counterparts are the install matrix and the shell package tests, which the
+/// spec-proof scan does not see.
+// Proves DI-25.
+#[test]
+fn the_daemon_package_installs_its_unit_never_starts_it_and_enables_it_only_on_a_first_install() {
+    let packaging = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("packaging");
+
+    // (a) The binary and the unit are regular files of both packages; nothing watches.
+    for baseline in ["relay-daemon.deb.files", "relay-daemon.rpm.files"] {
+        let entries = regular_entries(&read_text(&packaging.join("expected").join(baseline)));
+        for want in [
+            "/usr/bin/relay-daemon",
+            "/usr/lib/systemd/system/relay-daemon.service",
+        ] {
+            assert!(
+                entries.iter().any(|e| e == want),
+                "{baseline} lists {want} as a regular file: {entries:?}"
+            );
+        }
+        assert!(
+            entries
+                .iter()
+                .all(|e| !e.ends_with(".path") && !e.ends_with(".timer")),
+            "{baseline} lists a .path or .timer unit, which would start the daemon: {entries:?}"
+        );
+    }
+    assert_eq!(
+        regular_entries(
+            "-rwxr-xr-x root/root ./usr/bin/x\ndrwxr-xr-x root/root ./usr/\n\
+             -rw-r--r-- root:root caps=(none) /etc/y\ndrwxr-xr-x root:root caps=(none) /etc/z"
+        ),
+        ["/usr/bin/x", "/etc/y"],
+        "the baseline reader keeps regular files of both listing formats and nothing else"
+    );
+    let mut shipped = Vec::new();
+    files_under(&packaging, &mut shipped);
+    assert!(shipped.len() > 10, "the packaging tree was not read");
+    assert!(
+        shipped
+            .iter()
+            .all(|p| { !p.extension().is_some_and(|e| e == "path" || e == "timer") }),
+        "packaging ships a .path or .timer unit"
+    );
+    let manifest: Vec<String> = commands(&read_text(&packaging.join("nfpm/relay-daemon.yaml")))
+        .iter()
+        .map(|l| l.trim_start_matches("- ").to_string())
+        .collect();
+    for (src, dst) in [
+        ("src: \"@DAEMON_BIN@\"", "dst: /usr/bin/relay-daemon"),
+        (
+            "src: \"@SRC@/daemon/packaging/relay-daemon.service\"",
+            "dst: /usr/lib/systemd/system/relay-daemon.service",
+        ),
+    ] {
+        assert_eq!(
+            manifest[at(&manifest, src) + 1],
+            dst,
+            "the manifest installs {src} at {dst}"
+        );
+    }
+
+    // (b) No script starts a unit, and the one enabling line is postinst's preset.
+    let scripts = script_commands(&packaging.join("scripts"));
+    let mut enabling = Vec::new();
+    for (name, lines) in &scripts {
+        for line in lines {
+            assert!(
+                !starts_a_unit(line),
+                "{name}.sh starts the daemon, which the package never does: {line}"
+            );
+            if enables_a_unit(line) {
+                enabling.push((*name, line.as_str()));
+            }
+        }
+    }
+    assert_eq!(
+        enabling,
+        [("postinst", "systemctl preset \"$UNIT\" || true")],
+        "the distribution's presets are the only thing that enables the unit"
+    );
+
+    // (c) postinst: the preset is past the first-install gate, inside both checks.
+    let postinst = &scripts.iter().find(|(n, _)| *n == "postinst").unwrap().1;
+    for pinned in [
+        "UNIT=relay-daemon.service",
+        "systemd_running() { [ -d /run/systemd/system ]; }",
+    ] {
+        at(postinst, pinned);
+    }
+    assert_eq!(
+        case_arms(postinst),
+        [
+            "configure) [ -z \"${2:-}\" ] && first_install=yes ;;",
+            "1) first_install=yes ;;",
+            "[0-9]*) ;;",
+            "*) exit 0 ;;"
+        ],
+        "only a .deb configure with no old version and an .rpm $1 of 1 is a first install"
+    );
+    let case_at = at(postinst, "case \"${1:-}\" in");
+    assert!(
+        case_at > 0 && postinst[case_at - 1] == "first_install=no",
+        "first_install starts as no, on the line before the case"
+    );
+    assert_eq!(
+        postinst
+            .iter()
+            .filter(|l| l.contains("first_install=yes"))
+            .count(),
+        2,
+        "first_install=yes is set in the two pinned arms and nowhere else"
+    );
+    let gate_end = first_install_gate_end(postinst);
+    let preset = at(postinst, "systemctl preset \"$UNIT\" || true");
+    assert!(
+        preset > gate_end,
+        "the preset runs past the first-install gate"
+    );
+    assert_eq!(
+        postinst[preset - 3..preset],
+        [
+            "if systemd_running; then",
+            "systemctl daemon-reload || true",
+            "if [ \"$etc_ok\" = yes ]; then"
+        ],
+        "the preset runs only where systemd runs and /etc/relay-daemon is root-only"
+    );
+
+    // (d) prerm acts on removal only.
+    assert_prerm_stops_and_disables_on_removal_only(
+        &scripts.iter().find(|(n, _)| *n == "prerm").unwrap().1,
+    );
+
+    // (e) The unit restarts only on failure and installs into multi-user.target.
+    let unit = read_text(&packaging.join("relay-daemon.service"));
+    let unit_lines = commands(&unit);
+    let restarts: Vec<&str> = unit_lines
+        .iter()
+        .filter(|l| l.starts_with("Restart="))
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        restarts,
+        ["Restart=on-failure"],
+        "the unit restarts on failure only"
+    );
+    assert!(
+        !unit_lines
+            .iter()
+            .any(|l| l.starts_with("RestartForceExitStatus=")),
+        "no RestartForceExitStatus revives a clean exit"
+    );
+    let install = unit_lines
+        .iter()
+        .skip_while(|l| *l != "[Install]")
+        .skip(1)
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    assert_eq!(install, ["WantedBy=multi-user.target"]);
+
+    // (f) The matchers tell the verbs apart.
+    assert_unit_matchers_tell_the_verbs_apart();
+}
+
+const POLICY_TARGET: &str = r"\$\{?POLICY\b\}?|policy\.toml\b";
+const ENV_TARGET: &str = r#"\$\{?ENV_FILE\b\}?|relay-daemon\.env(?:["'\s;)]|$)"#;
+const DST_TARGET: &str = r"\$\{?dst\b\}?";
+
+/// The lines of `scripts` that write to `target`, as `(script, line)`.
+fn writers<'a>(
+    scripts: &'a [(&'static str, Vec<String>)],
+    target: &str,
+) -> Vec<(&'static str, &'a str)> {
+    let target = re(target);
+    scripts
+        .iter()
+        .flat_map(|(name, lines)| {
+            lines
+                .iter()
+                .filter(|l| writes_to(l, &target))
+                .map(|l| (*name, l.as_str()))
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+/// `place` links a fully written temporary file into place with a plain `ln`, which fails where
+/// the destination exists, so no placement rewrites a file; and the file is owned by root and
+/// given its mode before it is linked.
+fn assert_place_never_overwrites_and_owns_before_linking(place: &[String]) {
+    let ln = at(place, "if ln \"$tmp\" \"$dst\" 2>/dev/null; then");
+    let own = at(
+        place,
+        "if ! { chown -h root:root \"$tmp\" && chmod \"$mode\" \"$tmp\"; }; then",
+    );
+    assert!(
+        own < ln,
+        "the file is chowned and chmodded before it is linked"
+    );
+    let links: Vec<&String> = place.iter().filter(|l| re(r"\bln\b").is_match(l)).collect();
+    assert_eq!(links.len(), 1, "place links exactly once: {place:?}");
+    assert!(
+        !re(r"\bln\s+(?:-\S*f|--force)").is_match(&place[ln]),
+        "a forced link would replace an existing file"
+    );
+    let dst = re(DST_TARGET);
+    let to_dst: Vec<&String> = place.iter().filter(|l| writes_to(l, &dst)).collect();
+    assert_eq!(
+        to_dst,
+        [&place[ln]],
+        "nothing but the link writes the destination: no mv, cp or redirect"
+    );
+}
+
+/// The default Policy is placed once, by the one `place` line in `postinst`, only when preinst
+/// saw neither a Policy directory nor a Policy file, and `place` never replaces a file. No
+/// script writes the Policy path anywhere else, and no package file list owns it.
+// Proves DI-26.
+#[test]
+fn the_default_policy_is_placed_only_where_no_policy_file_or_directory_existed() {
+    let packaging = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("packaging");
+    let scripts = script_commands(&packaging.join("scripts"));
+    let lines_of = |name: &str| &scripts.iter().find(|(n, _)| *n == name).unwrap().1;
+
+    // (a) preinst records what existed, on a first install only.
+    let preinst = lines_of("preinst");
+    assert_eq!(
+        case_arms(preinst),
+        [
+            "install) [ -z \"${2:-}\" ] && first_install=yes ;;",
+            "1) first_install=yes ;;"
+        ]
+    );
+    let gate = at(preinst, "[ \"$first_install\" = yes ] || exit 0");
+    for marker in [
+        "exists /etc/relay-daemon/policy.d && echo \"existed policy-dir\"",
+        "exists /etc/relay-daemon/policy.toml && echo \"existed policy\"",
+    ] {
+        assert!(
+            at(preinst, marker) > gate,
+            "preinst records `{marker}` only after the first-install gate"
+        );
+    }
+
+    // (b) postinst places it in one line, after the gate, behind both absence checks.
+    let postinst = lines_of("postinst");
+    let places: Vec<usize> = postinst
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| l.contains("place \"$POLICY\""))
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(places.len(), 1, "the Policy is placed in exactly one line");
+    let place_at = places[0];
+    assert_eq!(
+        postinst[place_at],
+        "if place \"$POLICY\" 0644 \"$SHARE/policy.default.toml\"; then"
+    );
+    assert_eq!(
+        postinst[place_at - 1],
+        "if [ \"$have_marker\" = yes ] && ! marked \"existed policy-dir\" && ! exists \"$POLICY\"; then",
+        "placed only if no Policy directory existed before the install and no Policy file exists"
+    );
+    assert!(place_at > first_install_gate_end(postinst));
+
+    // (c) place links and never replaces.
+    let place_fn = body(
+        &read_text(&packaging.join("scripts/postinst.sh")),
+        "place() {",
+    );
+    assert_place_never_overwrites_and_owns_before_linking(&place_fn);
+
+    // (d) Across every script, only that line writes the Policy path.
+    assert_eq!(
+        writers(&scripts, POLICY_TARGET),
+        [("postinst", postinst[place_at].as_str())],
+        "nothing else installs, upgrades or removes by writing the live Policy"
+    );
+
+    // (e) The package owns no live Policy.
+    for baseline in ["relay-daemon.deb.files", "relay-daemon.rpm.files"] {
+        let text = read_text(&packaging.join("expected").join(baseline));
+        assert!(
+            !text.contains("/etc/relay-daemon/policy.toml"),
+            "{baseline} lists the live Policy"
+        );
+    }
+    assert!(
+        !read_text(&packaging.join("nfpm/relay-daemon.yaml"))
+            .contains("dst: /etc/relay-daemon/policy.toml"),
+        "the manifest installs the live Policy"
+    );
+
+    // (f) The matcher tells a write from a mention.
+    let policy = re(POLICY_TARGET);
+    for line in [
+        "cp \"$SHARE/policy.default.toml\" \"$POLICY\"",
+        "cat x > \"$ETC/policy.toml\"",
+        "echo y >> \"${POLICY}\"",
+        "install -m 0644 a /etc/relay-daemon/policy.toml",
+        "if place \"$POLICY\" 0644 \"$SHARE/policy.default.toml\"; then",
+    ] {
+        assert!(writes_to(line, &policy), "must match: {line}");
+    }
+    for line in [
+        "mkdir -m 0755 \"$POLICY_DIR\"",
+        "rm -f \"$ETC/policy.toml\"",
+        "echo \"relay-daemon: $ETC/policy.toml kept: a later install places no default Policy\"",
+        "POLICY=\"$ETC/policy.toml\"",
+        "exists /etc/relay-daemon/policy.toml && echo \"existed policy\"",
+    ] {
+        assert!(!writes_to(line, &policy), "must not match: {line}");
+    }
+}
+
+/// The environment file is placed once, in one `place` line after the first-install gate and
+/// only if none exists, as a root-owned 0600 copy of the shipped example, and no script and no
+/// package file list writes it again.
+// Proves DI-27.
+#[test]
+fn the_environment_file_is_placed_once_root_0600_and_never_rewritten() {
+    let packaging = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("packaging");
+    let scripts = script_commands(&packaging.join("scripts"));
+    let postinst = &scripts.iter().find(|(n, _)| *n == "postinst").unwrap().1;
+
+    // (a) One placement, guarded by absence, after the gate, with the mode and umask set.
+    let places: Vec<usize> = postinst
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| l.contains("place \"$ENV_FILE\""))
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(
+        places.len(),
+        1,
+        "the environment file is placed in one line"
+    );
+    let place_at = places[0];
+    assert_eq!(
+        postinst[place_at],
+        "if place \"$ENV_FILE\" 0600 \"$SHARE/relay-daemon.env.example\"; then"
+    );
+    assert_eq!(
+        postinst[place_at - 1],
+        "if ! exists \"$ENV_FILE\"; then",
+        "placed only if none exists"
+    );
+    assert!(place_at > first_install_gate_end(postinst));
+    at(postinst, "ENV_FILE=\"$ETC/relay-daemon.env\"");
+    at(postinst, "umask 077");
+
+    // (b) place owns the file as root with its mode before it links, and never replaces.
+    let place_fn = body(
+        &read_text(&packaging.join("scripts/postinst.sh")),
+        "place() {",
+    );
+    assert_place_never_overwrites_and_owns_before_linking(&place_fn);
+
+    // (c) Across every script, only that line writes the file.
+    assert_eq!(
+        writers(&scripts, ENV_TARGET),
+        [("postinst", postinst[place_at].as_str())],
+        "nothing else writes the environment file"
+    );
+
+    // (d) The package owns no environment file.
+    for baseline in ["relay-daemon.deb.files", "relay-daemon.rpm.files"] {
+        let entries = regular_entries(&read_text(&packaging.join("expected").join(baseline)));
+        assert!(
+            !entries
+                .iter()
+                .any(|e| e == "/etc/relay-daemon/relay-daemon.env"),
+            "{baseline} lists the live environment file"
+        );
+    }
+
+    // (e) The matcher tells a write from the shipped example's name.
+    let env = re(ENV_TARGET);
+    for line in [
+        "cp a \"$ETC/relay-daemon.env\"",
+        "echo X=1 >> \"$ENV_FILE\"",
+        "cat x > /etc/relay-daemon/relay-daemon.env",
+        "if place \"$ENV_FILE\" 0600 \"$SHARE/relay-daemon.env.example\"; then",
+    ] {
+        assert!(writes_to(line, &env), "must match: {line}");
+    }
+    for line in [
+        "echo x > \"$ETC/relay-daemon.env.example\"",
+        "cp a \"$SHARE/relay-daemon.env.example\" /tmp/x",
+        "if created env; then rm -f \"$ETC/relay-daemon.env\"; fi",
+        "ENV_FILE=\"$ETC/relay-daemon.env\"",
+        "exists /etc/relay-daemon/relay-daemon.env && echo \"existed env\"",
+    ] {
+        assert!(!writes_to(line, &env), "must not match: {line}");
     }
 }

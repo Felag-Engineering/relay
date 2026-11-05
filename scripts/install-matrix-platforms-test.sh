@@ -78,6 +78,8 @@ expect_pass "1: the real spec, workflow and Dockerfiles"
 cat >"$WORKDIR/spec-promoted.md" <<'EOF'
 # Fixture
 
+## Behaviour
+
 - **DI-33** A platform is supported only where CI installs the package, upgrades it over the
   operator's edited configuration and finds the edit intact, and removes
   it: Ubuntu 24.04 LTS and 26.04 LTS; Debian 13; RHEL-compatible 10, tested on Rocky
@@ -88,6 +90,55 @@ cat >"$WORKDIR/spec-promoted.md" <<'EOF'
 EOF
 run "$WORKDIR/spec-promoted.md" "$REAL_WORKFLOW" "$REAL_DOCKERFILES"
 expect_pass "2: DI-33 as a promoted bullet, wrapped inside an anchor and a platform name"
+
+# 2b. the promoted bullet beside a Proof-table row for DI-33, which names a test and is not read
+cat >"$WORKDIR/spec-proof-row.md" <<'EOF'
+# Fixture
+
+## Behaviour
+
+- **DI-33** A platform is supported only where CI installs the package, upgrades it over the
+  operator's edited configuration and finds the edit intact, and removes
+  it: Ubuntu 24.04 LTS and 26.04 LTS; Debian 13; RHEL-compatible 10, tested on Rocky
+  Linux 10; Amazon Linux 2023. Each is supported on `x86_64` and `aarch64`.
+
+## Proof
+
+| DI-33 | `a_test_name` | daemon |
+EOF
+run "$WORKDIR/spec-proof-row.md" "$REAL_WORKFLOW" "$REAL_DOCKERFILES"
+expect_pass "2b: the promoted bullet beside a Proof-table row"
+
+# 2e. a decoy full-list bullet in a section before Behaviour, and a real Behaviour bullet that
+# disagrees with the matrix: the real one is read, so the run fails
+cat >"$WORKDIR/spec-decoy.md" <<'EOF'
+# Fixture
+
+## Purpose
+
+- **DI-33** A platform is supported only where CI installs the package, upgrades it over the
+  operator's edited configuration and finds the edit intact, and removes
+  it: Ubuntu 24.04 LTS and 26.04 LTS; Debian 13; RHEL-compatible 10, tested on Rocky
+  Linux 10; Amazon Linux 2023. Each is supported on `x86_64` and `aarch64`.
+
+## Behaviour
+
+- **DI-33** A platform is supported only where CI installs the package, upgrades it over the
+  operator's edited configuration and finds the edit intact, and removes
+  it: Debian 13. Each is supported on `x86_64` and `aarch64`.
+EOF
+run "$WORKDIR/spec-decoy.md" "$REAL_WORKFLOW" "$REAL_DOCKERFILES"
+expect_fail "2e: a decoy bullet outside Behaviour is not read" "platform lists differ"
+
+# 2c. only a Proof-table row: it is not DI-33's text
+printf '# Fixture\n\n## Proof\n\n| DI-33 | `a_test_name` | daemon |\n' >"$WORKDIR/spec-proof-only.md"
+run "$WORKDIR/spec-proof-only.md" "$REAL_WORKFLOW" "$REAL_DOCKERFILES"
+expect_fail "2c: a Proof-table row alone" "DI-33 not found"
+
+# 2d. the Designed table row
+printf '# Fixture\n\n## Designed, not built\n\n| DI-33 | removes it: Debian 13. Each is supported on `x86_64`. | v1 |\n' >"$WORKDIR/spec-designed.md"
+run "$WORKDIR/spec-designed.md" "$REAL_WORKFLOW" "$REAL_DOCKERFILES"
+expect_fail "2d: the Designed table row is read" "platform lists differ"
 
 # --- workflow fixtures --------------------------------------------------------------------------
 # 3. a workflow missing one platform

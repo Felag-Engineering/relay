@@ -105,6 +105,10 @@ a reload or restart. The Relay installs from an OS package or as a container ima
 - **RC-16** Each file the check covers is opened without following a symlink, checked on that descriptor and read from it, so nothing can change between the check and the read; a path that is a symlink is refused.
 - **RC-18** No secret value, inline or in a file, and no approval webhook URL, appears on any surface, in any log or audit record, or in any refusal message. A parse or validation error names the key and the line, never the value; a reload's audit record names a changed secret setting, never its value.
 - **RC-45** The quickstart installs the Relay from its OS package. The container image with its deployment stack (RC-7, RC-27) stays a supported install, as built.
+- **RC-23** The release publishes the Relay as `.deb` and `.rpm` packages for each architecture, on the platforms and under the platform list and CI rule `daemon-installation.md` sets for its own packages. The edited configuration an upgrade must preserve is the configuration file. A package wraps the release's guarded binary byte for byte, is reproducible, built twice and compared, is listed in the release `SHA256SUMS`, and carries no signature of its own before v1.0.0.
+- **RC-24** The Relay package installs the Relay's Unix account, the binary, the hardened unit, the configuration file and the state directory, and prints a configuration guide that carries no secret and names `relay init` (RC-28), also installed as documentation. It enables the Relay on a first install only, only where systemd is running, honouring the distribution's presets, and an upgrade never changes enablement. It never starts the Relay and never runs the first-boot command. The guide says never to capture an image of the host after the Relay has first started, since the CA private key would travel with it.
+- **RC-25** The Relay package writes the configuration file once, at first install, only if none exists, and never again: the host's fully qualified name as the certificate hostname, the CA directory and store path inside the state directory, the control plane and Admin Console enabled, and the control-plane listener bound to loopback. The file is generated, not package-owned configuration, so no upgrade rewrites it.
+- **RC-26** Removing the Relay package keeps configuration and state. `apt purge` removes configuration and moves the CA and the store aside together, re-owned by root and readable by nobody else, and prints where; it never deletes them, never splits them, and never deletes the Relay's Unix account. Purge deletes only paths the package itself created. Where the state directory is a mount point, purge re-owns it in place instead of moving it; where it is a symbolic link, purge moves and re-owns nothing. `.rpm` removal never deletes state and prints the paths to delete by hand.
 
 ## Refusals
 
@@ -136,10 +140,6 @@ a reload or restart. The Relay installs from an OS package or as a container ima
 
 | Claim | Statement | Milestone |
 |---|---|---|
-| RC-23 | The release publishes the Relay as `.deb` and `.rpm` packages for each architecture, on the platforms and under the platform list and CI rule `daemon-installation.md` sets for its own packages. The edited configuration an upgrade must preserve is the configuration file. A package wraps the release's guarded binary byte for byte, is reproducible, built twice and compared, is listed in the release `SHA256SUMS`, and carries no signature of its own before v1.0.0. | MVP |
-| RC-24 | The Relay package installs the Relay's Unix account, the binary, the hardened unit, the configuration file and the state directory, and prints a configuration guide that carries no secret and names `relay init` (RC-28), also installed as documentation. It enables the Relay on a first install only, only where systemd is running, honouring the distribution's presets, and an upgrade never changes enablement. It never starts the Relay and never runs the first-boot command. The guide says never to capture an image of the host after the Relay has first started, since the CA private key would travel with it. | MVP |
-| RC-25 | The Relay package writes the configuration file once, at first install, only if none exists, and never again: the host's fully qualified name as the certificate hostname, the CA directory and store path inside the state directory, the control plane and Admin Console enabled, and the control-plane listener bound to loopback. The file is generated, not package-owned configuration, so no upgrade rewrites it. | MVP |
-| RC-26 | Removing the Relay package keeps configuration and state. `apt purge` removes configuration and moves the CA and the store aside together, re-owned by root and readable by nobody else, and prints where; it never deletes them, never splits them, and never deletes the Relay's Unix account. Purge deletes only paths the package itself created. Where the state directory is a mount point, purge re-owns it in place instead of moving it; where it is a symbolic link, purge moves and re-owns nothing. `.rpm` removal never deletes state and prints the paths to delete by hand. | MVP |
 | RC-34 | Per-Account Console preferences are stored per Account, not fleet-wide. | After MVP |
 
 ## Out of scope
@@ -170,6 +170,7 @@ Generated by `make spec-proof` from the tests that name the claim they prove.
 |---|---|---|
 | RC-4 | `TestNewServer_MinimalConfigIsGRPCOnly` | Relay |
 | RC-6 | `TestRelayUnit_UnprivilegedNoCapsReadOnly` | Relay |
+| RC-7 | `release_publishes_the_relay_image_by_digest_signed_keylessly`, `the_deployment_stack_pins_the_published_image_by_digest_read_only_with_no_capabilities`, `the_relay_image_carries_no_configuration_and_runs_unprivileged` | daemon |
 | RC-9 | `TestSecretFilePermissionsAreEnforced` | approvalnotify |
 | RC-10 | `TestValidate_OAuthIssuerNeedsAudienceAndPublicURL` | relayconfig |
 | RC-11 | `TestDeps_HasNoConfigField`, `TestMuxRegistrationsAreTheKnownSites`, `TestNoRouteWritesConfiguration`, `TestNoToolWritesConfiguration` | API, MCP, Relay |
@@ -184,6 +185,11 @@ Generated by `make spec-proof` from the tests that name the claim they prove.
 | RC-20 | `TestMain_CoherentButSuspectConfigStartsWithWarning`, `TestValidate_ConsoleWithoutControlPlaneRefused`, `TestValidate_MutateCapAboveReadCapWarns`, `TestValidate_OAuthWithoutIssuerRefused` | Relay, relayconfig |
 | RC-21 | `TestCapability_ReadsReachSettingsPerRequest`, `TestReload_BindTimeChangeRefusedRestartRequired`, `TestReload_FailedReloadProcessSurvives`, `TestReload_InvalidValueRefusedConfigIntact`, `TestReload_RechecksFileFirst`, `TestReload_ValidChangeAppliedAndAudited` | Relay, capability |
 | RC-22 | `TestDefaults_EachReachValueWhenAbsent`, `TestEveryKeyReachesConfig`, `TestFromFile_CarriesEverySetting`, `TestNewLogHandler_JSONAtConfiguredLevel`, `TestValidate_InvalidValueRefusedNamingSetting` | Relay, relayconfig |
+| RC-23 | `release_attaches_every_package_and_its_sbom_under_sha256sums`, `release_packages_are_built_twice_compared_wrap_the_binary_and_carry_no_signature`, `release_publishes_nothing_unless_the_install_matrix_passes_on_its_packages`, `release_signs_and_tests_only_the_sha256sums_the_comparing_job_wrote` | daemon |
+| RC-24 | `the_relay_package_installs_its_account_unit_and_guide_and_only_enables_it` | daemon |
+| RC-25 | `TestPackagedRelayTOML_FirstInstallSettings`, `TestPackagedRelayTOML_WithoutFQDNRefusesNamingTLSHostname`, `the_relay_package_writes_its_configuration_once_and_never_owns_it` | daemon, relayconfig |
+| RC-26 | `purge_moves_the_ca_and_store_aside_together_and_deletes_only_what_the_package_created` | daemon |
+| RC-27 | `the_deployment_stack_is_not_called_production_before_its_hardening_review`, `the_deployment_stack_pins_the_published_image_by_digest_read_only_with_no_capabilities`, `the_relay_image_carries_no_configuration_and_runs_unprivileged` | daemon |
 | RC-28 | `TestInit_CreatesNamedAdminAndMintsOnce`, `TestInit_NoReservedName`, `TestInit_RecoverReMintsAndAudits`, `TestInit_RecoverRefusesDisabledOrNonAdmin`, `TestInit_RefusesAbsentStore`, `TestInit_RefusesRoot`, `TestInit_RefusesWhenAHumanAccountExists`, `TestInit_RerunEmitsNothing`, `TestInit_TTLAppliesToTheFirstAndTheRecoveredToken`, `TestNewServer_ControlEnabled_SeedsNoAccount`, `TestOpenExisting_LoadsTheCAOpenCreated`, `TestOpenExisting_RefusesAnAbsentCAAndCreatesNothing`, `TestReadNoEcho_ThePasswordIsNotEchoedAndEchoIsRestored` | Relay, ca |
 | RC-36 | `TestMintEnrollmentToken_JoinStringUsesAdvertisedAddress` | Relay |
 | RC-37 | `TestLoad_GateRulesOnlyAsArrayTables`, `TestLoad_GateRulesPathRefusedNamingKey`, `TestReloader_GateRulesPathRefusedNamingKey`, `TestStart_RefusesGateRulesPath`, `TestValidate_GateRuleValuesRefusedNamingField` | Relay, relayconfig |
@@ -201,8 +207,7 @@ Generated by `make spec-proof` from the tests that name the claim they prove.
 | RC-53 | `TestLoad_GateRulesOnlyAsArrayTables`, `TestLoad_VariantSpellingOfRulesKeysRefused` | relayconfig |
 | RC-54 | `TestLoad_CaseVariantKeyRefusedInEverySection`, `TestLoad_KeySpelledTwoWaysRefused`, `TestReloader_CaseVariantKeyRefusedNamingKey`, `TestStart_RefusesCaseVariantKey` | Relay, relayconfig |
 
-Unproven: RC-7, RC-27.
-Designed claims a test already cites: RC-23 (`release_attaches_every_package_and_its_sbom_under_sha256sums`, `release_packages_are_built_twice_compared_wrap_the_binary_and_carry_no_signature`, `release_publishes_nothing_unless_the_install_matrix_passes_on_its_packages`, `release_signs_and_tests_only_the_sha256sums_the_comparing_job_wrote`); RC-25 (`TestPackagedRelayTOML_FirstInstallSettings`, `TestPackagedRelayTOML_WithoutFQDNRefusesNamingTLSHostname`).
+Unproven: none.
 <!-- proof:end -->
 
 ## Retired
