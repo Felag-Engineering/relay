@@ -22,8 +22,9 @@ reference.
   prompt works and so does passwordless `sudo`: on the Relay's VM you work inside an
   interactive `ssh <relay-vm>` session, and on a Node you run one `ssh -t <node> "..."`.
 - Network: the Nodes reach the Relay's VM on TCP 7654, the Node plane. Open it in any firewall
-  or cloud security group. Nothing needs to reach 9443: the control plane stays on the Relay
-  VM's loopback and you reach it through an SSH tunnel, once, in step 5, before connecting Claude Code.
+  or cloud security group (step 2 gives the firewalld command). Nothing needs to reach 9443: the
+  control plane stays on the Relay VM's loopback and you reach it through an SSH tunnel, once, in
+  step 5, before connecting Claude Code.
 
 Why the Nodes are VMs: the Relay runs unprivileged, as its own `relay` account with no
 capabilities. The relay-daemon runs as root, because administering the server it runs on is
@@ -74,7 +75,7 @@ In that session:
 ```console
 $ sudo apt-get install -y ./relay_*_amd64.deb   # or: sudo dnf install -y ./relay-*.x86_64.rpm
 $ relay --version
-$ sudo grep -n hostname /etc/relay/relay.toml
+$ sudo grep -nE '^(# )?hostname = ' /etc/relay/relay.toml
 ```
 
 That last check otherwise fails only later, on the Nodes. `tls.hostname` must be a name every
@@ -82,7 +83,31 @@ Node resolves to this VM. The package sets it from the VM's fully qualified name
 found, the line is commented out and the Relay refuses to start, naming `tls.hostname`. With no
 DNS in your lab, set it to the VM's IP address, which a relay-daemon may dial
 ([relay-install.md §2](operations/relay-install.md#2-configuration-surface)). Edit with
-`sudoedit /etc/relay/relay.toml`, which keeps owner and mode. Then start it:
+`sudoedit /etc/relay/relay.toml`, which keeps owner and mode.
+
+If `tls.hostname` is a DNS name, check from the workstation, in another terminal, that a Node
+resolves it:
+
+```console
+$ ssh node-1 getent hosts <tls.hostname>
+```
+
+A pass prints an address the Node can reach this VM on. No output means the Node cannot resolve
+the name. Debian and Ubuntu map a host's own name to `127.0.1.1` in `/etc/hosts`, so the name the
+package found can resolve on the Relay's VM and nowhere else; use the IP address then. If
+`tls.hostname` is already an IP address, skip this check.
+
+Back in the Relay VM's session, open TCP 7654, the Node plane. Where firewalld runs (Rocky
+Linux 10; `sudo firewall-cmd --state` says `running`):
+
+```console
+$ sudo firewall-cmd --permanent --add-port=7654/tcp
+$ sudo firewall-cmd --reload
+```
+
+In a cloud, also allow inbound TCP 7654 from the Nodes in the Relay VM's security group.
+
+Then start it:
 
 ```console
 $ sudo systemctl enable --now relay
@@ -100,7 +125,8 @@ lists all of it.
 $ sudo -u relay relay init --admin <your-name>
 ```
 
-It prompts twice for a Console password (not echoed) and creates the admin. It then asks
+It prompts twice for a Console password of at least 12 characters (not echoed) and creates the
+admin. It then asks
 `How many Nodes is it for?`: answer `3`, or however many you will join (1 to 256), and press
 Enter at the expiry for two hours. It prints the API Token once, then the command
 `sudo relay-daemon join` and, apart from it, the join string. `relay init` refuses root, hence
@@ -110,11 +136,13 @@ replaced with `sudo -u relay relay init --recover <your-name>`.
 
 - The join string is a secret, shown once, and nothing shows it again. It carries the Relay's
   address, its CA fingerprint and the Enrollment Token, and it can only enroll a Node, never
-  run anything. It stays on this terminal's screen for step 4: do not save it to a file.
+  run anything. Do not save it to a file.
 - `relay init` mints only on a terminal. Without one, it mints nothing and says how to mint
   later.
 
-Then leave the session:
+Step 4 pastes the join string once per Node, so keep it in view: leave this session open and
+run step 4 in a second terminal, or scroll back to the string for each paste. When every Node
+has joined, leave the session:
 
 ```console
 $ exit
@@ -140,8 +168,8 @@ loads Policy only at start: writing it first means no restart. `systemd-journald
 supported platform and keeps its log streams across a restart; swap in any unit you can safely
 restart.
 
-Then, in the step 1 shell and directory (re-state `VERSION` and `PKGVERSION` first if you
-opened a fresh one), one `ssh -t` per Node:
+Then, in the step 1 directory (in a second terminal, re-state `VERSION` and `PKGVERSION`
+first), one `ssh -t` per Node:
 
 ```bash
 # .rpm form: scp relay-daemon-${PKGVERSION}-1.x86_64.rpm in place of the .deb, and
@@ -155,11 +183,13 @@ done
 ```
 
 On each Node `sudo` may ask for your password, then `join` asks
-`Paste the join string (input is hidden):`. Paste the string `relay init` showed in step 3. `ssh -t` gives `join`
-a terminal, so the prompt does not echo; the string is never in a command line, a file or an
-environment variable. Success prints
-`enrolled as "<node-id>"; relay-daemon.service is enabled and started`. Running it again on an
-enrolled Node changes nothing (`this Node already holds an identity in …; nothing was changed`).
+`Paste the join string (input is hidden):`. Paste the string `relay init` showed in step 3 (from
+the Relay session's terminal, or scrolled back). `ssh -t` gives `join` a terminal, so the prompt
+does not echo; the string is never in a command line, a file or an environment variable. Success
+prints
+`enrolled as "<node-id>"; relay-daemon.service is enabled and started (journalctl -u relay-daemon)`.
+Running it again on an enrolled Node changes nothing
+(`this Node already holds an identity in …; nothing was changed`).
 For many Nodes, see [enrollment.md §3](operations/enrollment.md#3-bulk-enrollment-via-config-management):
 the release's Ansible role (ADR-0048), and an SSH loop that needs passwordless `sudo`.
 
@@ -221,8 +251,8 @@ because a human Account's token answers a gate as that person's decision (AP-87)
 machine Account's answer is machine self-confirmation and would not stand as your approval in
 step 8. The Account needs no Console password to hold a token.
 
-In a fresh shell, run the `read -rsp` from step 5 again first, so `RELAY_TOKEN` (the admin's) is
-set. These are the first two calls of
+If you opened a fresh shell, run the `read -rsp` from step 5 again first, so `RELAY_TOKEN` (the
+admin's) is set. These are the first two calls of
 [the intended flow](operations/control-plane-credential.md#the-intended-flow):
 
 ```console
@@ -244,6 +274,7 @@ $ curl --cacert relay-ca-cert.pem -H "Authorization: Bearer $RELAY_TOKEN" \
 {
   "api_token": { … },
   "token": "glp_….…",
+  "harness_setup": { … },
   …
 }
 ```
@@ -254,15 +285,22 @@ alone:
 
 ```console
 $ read -rsp 'Claude Code API Token: ' CLAUDE_TOKEN; echo
-$ claude mcp add --transport http relay https://127.0.0.1:9443/mcp \
+$ claude mcp add --scope user --transport http relay 'https://127.0.0.1:9443/mcp' \
     --header "Authorization: Bearer $CLAUDE_TOKEN"
-$ NODE_EXTRA_CA_CERTS=$PWD/relay-ca-cert.pem claude
+$ NODE_EXTRA_CA_CERTS="$PWD/relay-ca-cert.pem" claude
 ```
 
 An http transport is dialled by the `claude` process itself, so that process must trust the CA;
 `claude mcp add -e` would not help, and `NODE_EXTRA_CA_CERTS` does. `--header` stores the token
 in Claude Code's own configuration, which is why it holds this Account's token and never the
-admin's `RELAY_TOKEN`.
+admin's `RELAY_TOKEN`. `--scope user` registers Relay for every directory, but
+`$PWD/relay-ca-cert.pem` needs `claude` started in the directory that holds the CA file.
+
+The second response's `harness_setup.claude_code` carries these same lines, plus two comment
+lines, with the token written in. It can be pasted as is, but that puts the token in your shell
+history and registers Relay for the current directory only (it passes no `--scope`); the lines
+above avoid both and read the token from `$CLAUDE_TOKEN`. To paste it, copy its value out of the
+JSON, turning `\n` into newlines and `\"` into quotes.
 
 Gleipnir or any other MCP client needs the same three things: the URL, the CA certificate and
 its own API Token, with a machine Account for one that runs unattended.
@@ -296,9 +334,10 @@ call is
   of the request, the request ID and the plan hash, and Claude Code puts that question to you.
 - Accept, and the client retries: the Job runs, each Node reports `success` (the model passes
   `wait_seconds` or polls `get_job` to see it), and the Decision is recorded as yours, a
-  token-session answer. Decline, and nothing runs. If no question appears, the request stays
-  pending; [approval-gates.md](operations/approval-gates.md#how-an-ai-agent-waits-two-envelopes-one-decision)
-  says where a person decides.
+  token-session answer. Decline, and nothing runs. If Claude Code doesn't ask you, a person
+  decides the request, never Claude: run the commands in
+  [approval-gates.md](operations/approval-gates.md#the-decision-endpoint) with the admin's
+  `RELAY_TOKEN` in your own terminal, then ask Claude to re-send the same call.
 - A mutate on any other unit is refused by each Node (`denied_by_policy`) even after you
   approve: approval never widens Policy.
 

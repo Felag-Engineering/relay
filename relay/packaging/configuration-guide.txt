@@ -18,8 +18,10 @@ The Relay is installed and has not been started.
 
        sudo -u relay relay init --admin <name>
 
-   It prompts for the admin's Console password and prints the first API Token once. The
-   package never runs it.
+   It prompts twice for the admin's Console password, at least 12 characters, then asks
+   how many Nodes the first join string is for and when it expires. It prints the first API
+   Token once, then `sudo relay-daemon join` and, apart from it, the first join string,
+   once. The package never runs it.
 
 4. The control plane and the Admin Console listen on 127.0.0.1:9443 only. Widen
    control_plane.listen_address only after `relay init` has run, then restart the Relay.

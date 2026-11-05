@@ -52,7 +52,9 @@ What the package did on a first install:
 - Generated `/etc/relay/relay.toml` (`root:relay`, `0640`), only because none existed: the
   control plane enabled on `127.0.0.1:9443`, the Console enabled, `ca.dir` at
   `/var/lib/relay/ca`, `store.path` at `/var/lib/relay/relay.db`, and `tls.hostname` set to this
-  host's fully qualified name.
+  host's fully qualified name; and two gate rules, `mutate-needs-a-human` and
+  `raw-exec-needs-a-human`, so every mutate and every Raw Exec waits up to an hour for a person's
+  answer ([approval-gates.md](approval-gates.md#what-a-fresh-install-gates)).
 - Ran `systemctl preset` where systemd runs.
 
 It did not start the Relay and did not run `relay init`. If the host has no fully qualified
@@ -131,7 +133,8 @@ Subcommands, checked before the configuration is read:
 - `relay --version` / `-version` / `-V`: print the build stamp and exit.
 - `relay init [--config <path>] [--ttl <duration>] --admin <name>`: once the Relay has started
   and created its store, create the first admin: a human `admin` Account with that name, its
-  Console password (prompted for, not echoed) and its first API Token, printed to stdout once.
+  Console password (at least 12 characters, prompted for, not echoed) and its first API Token,
+  printed to stdout once.
   This is the only way to obtain the first control-plane credential; there is none in Relay
   configuration ([control-plane-credential.md](control-plane-credential.md), ADR-0023,
   ADR-0030). Run it as the Relay's own account (`sudo -u relay relay init …`): it reads the
