@@ -130,7 +130,7 @@ func TestAnswerElicited_MachineTokenSessionIsMachineSelfConfirmation(t *testing.
 // off a human's OAuth session, an answer with no responder is a machine
 // self-decision, and nothing is stored or audited.
 //
-// Proves AP-87.
+// Proves AP-87, AP-96.
 func TestAnswerElicited_OtherSessionNeedsAResponder(t *testing.T) {
 	cases := []struct {
 		name string
