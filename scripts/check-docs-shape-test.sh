@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Proves the two-layer checks in scripts/check-docs.sh (ADR-0046, checks 4 and 5) and the
-# generator they lean on, scripts/spec-proof.sh: a spec in the two-layer shape passes with a
-# fresh Proof block and fails with a stale one or a retired section; an ADR fails on a missing
-# Decision, an over-budget length or a second amendment unless the ratchet waives it; a
-# proposal fails on a bad status, a missing section or an accepted status with no Outcome; a
-# claim or a source comment that cites a proposal fails; and the generator attributes a test to
-# the claim named in the comment directly above it, by seam, listing unproven and
-# Designed-but-cited claims.
+# generator they lean on, scripts/spec-proof.sh, and check 6, RC-45's install paths: a spec in
+# the two-layer shape passes with a fresh Proof block and fails with a stale one or a retired
+# section; an ADR fails on a missing Decision, an over-budget length or a second amendment
+# unless the ratchet waives it; a proposal fails on a bad status, a missing section or an
+# accepted status with no Outcome; a claim or a source comment that cites a proposal fails; and
+# the generator attributes a test to the claim named in the comment directly above it, by seam,
+# listing unproven and Designed-but-cited claims.
 #
 # Runs the REAL scripts inside a throwaway fixture repo. Hermetic: bash, grep, awk, find, diff;
 # no toolchain, no network, no writes outside its own `mktemp -d`. NOT `set -e`: every case must
@@ -23,7 +23,7 @@ esac
 FIX="$WORKDIR/repo"
 fail=0
 
-mkdir -p "$FIX/scripts" "$FIX/docs/adr" "$FIX/docs/specs" "$FIX/docs/proposals" "$FIX/docs/agents" \
+mkdir -p "$FIX/scripts" "$FIX/docs/adr" "$FIX/docs/specs" "$FIX/docs/proposals" "$FIX/docs/agents" "$FIX/docs/operations" \
          "$FIX/relay/internal/controlplane/mcp" "$FIX/relay/internal/capability" "$FIX/daemon/src"
 cp "$REPO_ROOT/scripts/check-docs.sh" "$REPO_ROOT/scripts/spec-proof.sh" "$FIX/scripts/"
 chmod +x "$FIX/scripts/"*.sh
@@ -142,6 +142,8 @@ reset_fixture() {
   echo "# ADR-0001: fixture" > "$FIX/docs/adr/0001-fixture.md"
   printf '**Status:** Accepted\n\n## Decision\n\nShort.\n' >> "$FIX/docs/adr/0001-fixture.md"
   : > "$FIX/docs/agents/docs-ratchet.txt"
+  printf '$ sudo apt-get install -y ./relay_1.0.0_amd64.deb\n' > "$FIX/docs/quickstart.md"
+  printf 'Docker Compose is a supported deployment beside the package.\n' > "$FIX/docs/operations/relay-install.md"
   write_spec "$(fresh_block)"
 }
 
@@ -222,6 +224,52 @@ assert_rc "proposal-accepted-with-outcome" 0
 
 write_proposal "$FIX/docs/proposals/p.md" '**Status:** accepted (`2026-10-22`).' "" "Decided."; run_check
 assert_rc "proposal-accepted-names-nothing" 1; assert_contains "proposal-accepted-names-nothing" "names neither an ADR nor a claim"
+
+# ---- install paths (check 6, RC-45) --------------------------------------------------------------
+QS="$FIX/docs/quickstart.md"
+RI="$FIX/docs/operations/relay-install.md"
+
+reset_fixture; run_check
+assert_rc "install-apt-passes" 0
+
+reset_fixture; printf '$ sudo dnf install -y ./relay-1.0.0-1.x86_64.rpm\n' > "$QS"; run_check
+assert_rc "install-dnf-passes" 0
+
+reset_fixture; printf '$ sudo apt-get install -y \\\n    ./relay_1.0.0_amd64.deb\n' > "$QS"; run_check
+assert_rc "install-continuation-passes" 0
+
+reset_fixture; printf '$ sudo apt-get install -y ./relay-daemon_1.0.0-1_amd64.deb\n' > "$QS"; run_check
+assert_rc "install-daemon-only-fails" 1; assert_contains "install-daemon-only-fails" "installs the Relay from no OS package"
+
+reset_fixture; printf 'Do not run apt-get install ./relay_1.0.0_amd64.deb.\n' > "$QS"; run_check
+assert_rc "install-prose-fails" 1; assert_contains "install-prose-fails" "installs the Relay from no OS package"
+
+reset_fixture; printf '# sudo apt-get install -y ./relay_1.0.0_amd64.deb\n' > "$QS"; run_check
+assert_rc "install-commented-out-fails" 1; assert_contains "install-commented-out-fails" "installs the Relay from no OS package"
+
+reset_fixture; printf '$ sudo apt-get install -y curl   # relay prerequisite\n' > "$QS"; run_check
+assert_rc "install-trailing-comment-fails" 1; assert_contains "install-trailing-comment-fails" "installs the Relay from no OS package"
+
+reset_fixture; printf 'Install the package.\n' > "$QS"; run_check
+assert_rc "install-none-fails" 1
+
+reset_fixture; rm -f "$QS"; run_check
+assert_rc "install-quickstart-missing-fails" 1; assert_contains "install-quickstart-missing-fails" "does not exist"
+
+reset_fixture; printf 'Docker Compose is a\nsupported deployment.\n' > "$RI"; run_check
+assert_rc "container-wrapped-passes" 0
+
+reset_fixture; printf 'Docker Compose is not supported.\n' > "$RI"; run_check
+assert_rc "container-not-supported-fails" 1; assert_contains "container-not-supported-fails" "documents the container install"
+
+reset_fixture; printf 'Docker Compose is not currently supported.\n' > "$RI"; run_check
+assert_rc "container-not-currently-supported-fails" 1; assert_contains "container-not-currently-supported-fails" "documents the container install"
+
+reset_fixture; printf 'The container image is unsupported.\n' > "$RI"; run_check
+assert_rc "container-unsupported-fails" 1
+
+reset_fixture; printf 'Docker Compose is no longer supported.\n' > "$RI"; run_check
+assert_rc "container-no-longer-supported-fails" 1
 
 # ---- source comments ------------------------------------------------------------------------------
 reset_fixture

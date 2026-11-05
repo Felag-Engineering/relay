@@ -160,6 +160,7 @@ max_nodes = 26
 	}
 }
 
+// Proves RC-19.
 func TestLoadConfig_MissingFileRefusedNamingPath(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "absent.toml")
 	_, err := loadConfig(path)
@@ -176,6 +177,7 @@ func TestLoadConfig_DirectoryRefused(t *testing.T) {
 	}
 }
 
+// Proves RC-19.
 func TestLoadConfig_UnreadableFileRefused(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root reads a mode-0000 file")

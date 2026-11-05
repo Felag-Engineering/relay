@@ -24,6 +24,10 @@
 #      describes: a Status of accepted or rejected on line 3 (undecided ideas are private, in
 #      the roadmap repository; ADR-0046 amended 2026-10-22), the five sections, at most 120
 #      lines. No spec claim and no Go or Rust comment cites a proposal.
+#   6. RC-45's install paths: docs/quickstart.md installs the Relay from its OS package (apt-get,
+#      apt or dnf installing the relay package, not only relay-daemon), and a paragraph of
+#      docs/quickstart.md or docs/operations/relay-install.md documents the container install
+#      (Docker Compose or the container image) as supported.
 #
 # Legacy specs (Status aspirational/stub) get checks 1 and 2 only — they are unmigrated intent,
 # see "The establishing phase" in docs/specs/README.md. SPEC_DIR, ADR_DIR, PROPOSAL_DIR and
@@ -276,5 +280,37 @@ for d in relay daemon; do
   done < <(grep -rnIE 'docs/proposals' "$d" --include='*.go' --include='*.rs' --exclude='*.pb.go' --exclude-dir=target 2>/dev/null)
 done
 
-[ "$fail" -eq 0 ] && echo "check-docs: ADR numbers unique; every cited test exists; migrated specs, ADRs and proposals are well-formed."
+# 6. RC-45; loose on wording, so only the two facts are held: the quickstart installs the Relay
+# from its OS package, and the container install is still documented as supported.
+quickstart=docs/quickstart.md
+if [ ! -f "$quickstart" ]; then
+  err "$quickstart does not exist; RC-45 names the quickstart as the OS-package install"
+else
+  # Join backslash continuations so a package on the next line reads as one command.
+  installs=$(awk '
+    /\\[[:space:]]*$/ { sub(/\\[[:space:]]*$/, ""); buf = buf $0 " "; next }
+    { print buf $0; buf = "" }
+    END { if (buf != "") print buf }' "$quickstart" \
+    | grep -vE '^[[:space:]]*#' | sed -E 's/[[:space:]]+#.*$//' \
+    | grep -E '^[[:space:]]*(\$ )?(sudo )?(apt-get|apt|dnf)[[:space:]]+install\b' \
+    | sed -E 's/relay-daemon[^[:space:]]*//g')
+  grep -qE '(^|[[:space:]/])relay([_-]|[[:space:]]|$)' <<<"$installs" \
+    || err "$quickstart: installs the Relay from no OS package (apt-get or dnf on the relay package); RC-45"
+fi
+container_paragraphs=$( { cat "$quickstart" 2>/dev/null; echo; echo; cat docs/operations/relay-install.md 2>/dev/null; } \
+  | awk 'BEGIN { RS = "" }
+    { p = tolower($0); gsub(/[[:space:]]+/, " ", p)
+      m = split(p, sent, /\.[[:space:]]+/)
+      for (i = 1; i <= m; i++) {
+        t = sent[i]
+        if (t !~ /(docker compose|docker-compose|container image|compose stack)/ || t !~ /supported/) continue
+        if (t ~ /(^|[^a-z])(not|no|never|unsupported|deprecated)([^a-z]|$)/ || t ~ /n[^a-z ]{1,3}t([^a-z]|$)/) continue
+        n++
+      }
+    }
+    END { print n + 0 }')
+[ "$container_paragraphs" -gt 0 ] \
+  || err "no paragraph of docs/quickstart.md or docs/operations/relay-install.md documents the container install (Docker Compose) as supported; RC-45"
+
+[ "$fail" -eq 0 ] && echo "check-docs: ADR numbers unique; every cited test exists; migrated specs, ADRs and proposals are well-formed; the quickstart's install paths hold."
 exit "$fail"

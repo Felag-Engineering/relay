@@ -9,7 +9,7 @@ import (
 // rules key or of a rule field would replace, empty or narrow the operator's
 // rules unseen. Each is refused naming the schema key, in fixed text.
 //
-// Proves AP-8, AP-89.
+// Proves AP-8, AP-89, RC-53.
 func TestLoad_VariantSpellingOfRulesKeysRefused(t *testing.T) {
 	cases := []struct {
 		name, src, want string

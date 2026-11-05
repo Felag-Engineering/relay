@@ -173,7 +173,7 @@ func wantNoSecret(t *testing.T, out string) {
 	}
 }
 
-// Proves RC-14.
+// Proves RC-14, RC-18.
 func TestStartupLog_CarriesNoWebhookURLOrSecret(t *testing.T) {
 	run := func(t *testing.T, approval func(layout *relaytest.RelayLayout) string) string {
 		t.Helper()
@@ -277,6 +277,18 @@ func TestStart_RefusesSymlinkedConfig(t *testing.T) {
 		real := layout.WriteConfig(t, layoutTOML(layout, freeAddr(t), ""))
 		link := layout.Symlink(t, real, "relay-link.toml")
 		wantInOutput(t, refusedStart(t, layout, bin, link), "a symbolic link is on the path")
+	})
+
+	t.Run("a file the configuration names", func(t *testing.T) {
+		bin, layout := shippableLayout(t)
+		urlFile := layout.WriteFile(t, "webhook-url", webhookURLValue+"\n", "root", relaytest.TestUser, "0640")
+		secret := layout.WriteFile(t, "webhook-secret", webhookSecretValue+"\n", "root", relaytest.TestUser, "0640")
+		link := layout.Symlink(t, secret, "webhook-secret-link")
+		cfg := layout.WriteConfig(t, layoutTOML(layout, freeAddr(t),
+			"\n[approval]\nwebhook_url_file = \""+urlFile+"\"\nwebhook_secret_file = \""+link+"\"\n"))
+		out := refusedStart(t, layout, bin, cfg)
+		wantInOutput(t, out, "a symbolic link is on the path")
+		wantNoSecret(t, out)
 	})
 }
 

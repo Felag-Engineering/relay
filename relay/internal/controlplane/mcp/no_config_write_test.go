@@ -14,6 +14,8 @@ import (
 	"testing"
 
 	"github.com/Felag-Engineering/relay/relay/internal/approval"
+	"github.com/Felag-Engineering/relay/relay/internal/capability"
+	"github.com/Felag-Engineering/relay/relay/internal/revocation"
 )
 
 // no_config_write_test.go is RC-11's MCP half: no tool writes Relay
@@ -74,6 +76,81 @@ func TestMCP_NoToolWritesATag(t *testing.T) {
 			t.Errorf("toolWrites files %q under %q; no MCP tool writes a tag (ADR-0050)", name, writes)
 		}
 	}
+}
+
+// TestMCP_RegistersNoEnrollmentTool: MCP registers no enrollment tool, neither mint nor
+// revoke. No live tool is named for one, none is filed as writing an Enrollment Token, and
+// no type reachable from the constructor's seams carries the enrollment capability.
+//
+// Proves EN-22.
+func TestMCP_RegistersNoEnrollmentTool(t *testing.T) {
+	isEnrollmentName := func(name string) bool {
+		n := strings.ToLower(name)
+		return strings.Contains(n, "enroll") || strings.Contains(n, "mint") ||
+			(strings.Contains(n, "revoke") && strings.Contains(n, "token"))
+	}
+
+	t.Run("no live tool is an enrollment tool", func(t *testing.T) {
+		live := liveRegisteredToolNames(t)
+		if len(live) == 0 {
+			t.Fatal("liveRegisteredToolNames reported no tools; the check proved nothing")
+		}
+		for name := range live {
+			if isEnrollmentName(name) {
+				t.Errorf("a live tool is named %q; no MCP tool mints or revokes an Enrollment Token (EN-22)", name)
+			}
+		}
+	})
+
+	t.Run("no tool is filed as writing an Enrollment Token", func(t *testing.T) {
+		for name, writes := range toolWrites {
+			if writes == "Enrollment Token" || isEnrollmentName(name) {
+				t.Errorf("toolWrites files %q under %q; no MCP tool writes an Enrollment Token (EN-22)", name, writes)
+			}
+		}
+	})
+
+	t.Run("no seam reaches the enrollment capability", func(t *testing.T) {
+		for _, root := range []reflect.Type{reflect.TypeOf(New), reflect.TypeOf(serverOptions{})} {
+			hits, named := findTypesMatching(root, isEnrollmentType)
+			for _, hit := range hits {
+				t.Errorf("%s reaches an enrollment type: %s (EN-22)", root, hit)
+			}
+			if named < 2 {
+				t.Errorf("the walk visited %d Relay types from %s; it is not seeing the seams", named, root)
+			}
+		}
+	})
+
+	t.Run("the type walk finds the enrollment capability", func(t *testing.T) {
+		hits, _ := findTypesMatching(reflect.TypeOf(struct {
+			F func() *capability.EnrollmentTokens
+		}{}), isEnrollmentType)
+		if len(hits) < 1 {
+			t.Fatalf("walk of a type returning *capability.EnrollmentTokens found no hit")
+		}
+		for _, hit := range hits {
+			if strings.Contains(hit, "EnrollmentTokens") {
+				return
+			}
+		}
+		t.Errorf("no hit names EnrollmentTokens: %v", hits)
+	})
+
+	t.Run("the type walk finds the revocation capability", func(t *testing.T) {
+		hits, _ := findTypesMatching(reflect.TypeOf(struct {
+			F func() *revocation.Service
+		}{}), isEnrollmentType)
+		if len(hits) < 1 {
+			t.Fatalf("walk of a type returning *revocation.Service found no hit")
+		}
+		for _, hit := range hits {
+			if strings.Contains(hit, "Service") {
+				return
+			}
+		}
+		t.Errorf("no hit names Service: %v", hits)
+	})
 }
 
 // Proves AP-84.
@@ -268,13 +345,37 @@ func isConfigType(t reflect.Type) bool {
 	return false
 }
 
-// findConfigTypes walks the type graph reachable from root: elements, map keys
+// findConfigTypes is findTypesMatching with isConfigType.
+func findConfigTypes(root reflect.Type) (hits []string, named int) {
+	return findTypesMatching(root, isConfigType)
+}
+
+// isEnrollmentType reports whether t carries the enrollment capability: anything in the
+// enroll package or the revocation package, or the capability types that mint or list an
+// Enrollment Token. Tokens are minted through capability.EnrollmentTokens and revoked
+// through internal/revocation (revocation.Service.RevokeToken). It matches on package path
+// and name strings.
+func isEnrollmentType(t reflect.Type) bool {
+	pkg, name := t.PkgPath(), t.Name()
+	switch pkg {
+	case relayModule + "internal/enroll", relayModule + "internal/revocation":
+		return true
+	case relayModule + "internal/capability":
+		switch name {
+		case "EnrollmentTokens", "EnrollmentMint", "EnrollmentMintForm", "MintedEnrollmentToken":
+			return true
+		}
+	}
+	return false
+}
+
+// findTypesMatching walks the type graph reachable from root: elements, map keys
 // and values, function parameters and results, struct fields (exported or
 // not), interface methods, and the exported method set of every named type. It
 // descends only into types of the Relay module, because the standard library
 // and third-party types cannot refer to Relay packages. It returns the path to
-// each configuration type found and the number of Relay named types visited.
-func findConfigTypes(root reflect.Type) (hits []string, named int) {
+// each type for which match is true and the number of Relay named types visited.
+func findTypesMatching(root reflect.Type, match func(reflect.Type) bool) (hits []string, named int) {
 	seen := map[reflect.Type]bool{}
 	var walk func(t reflect.Type, path string)
 	walk = func(t reflect.Type, path string) {
@@ -287,7 +388,7 @@ func findConfigTypes(root reflect.Type) (hits []string, named int) {
 				return
 			}
 			named++
-			if isConfigType(t) {
+			if match(t) {
 				hits = append(hits, path+" is "+t.PkgPath()+"."+t.Name())
 			}
 		}

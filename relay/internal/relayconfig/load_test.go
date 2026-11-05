@@ -91,6 +91,9 @@ func TestLoad_DuplicateKeyNamesFullKeyAndSaysSetTwice(t *testing.T) {
 	}
 }
 
+// A parse or validation error names the key and the line, never the value or its source line.
+//
+// Proves RC-18.
 func TestLoad_ErrorNamesKeyAndLineNotValue(t *testing.T) {
 	const sentinel = "hunter2-SENTINEL"
 	cases := []struct {

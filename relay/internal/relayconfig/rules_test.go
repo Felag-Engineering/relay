@@ -72,7 +72,7 @@ func TestLoad_RuleFieldNamingADecisionTermRefusedNamingField(t *testing.T) {
 // a value written at the key, a dotted field outside a rule section and the
 // single-bracket table are each refused before decoding, in fixed text.
 //
-// Proves AP-89, RC-37.
+// Proves AP-89, RC-37, RC-53.
 func TestLoad_GateRulesOnlyAsArrayTables(t *testing.T) {
 	const want = "approval.rules (line %d): must be written as [[approval.rules]] sections"
 	cases := []struct {

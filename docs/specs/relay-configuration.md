@@ -1,6 +1,6 @@
 # Relay configuration
 
-**Status:** designed, not built, as of `2026-10-30`.
+**Status:** designed, not built, as of `2026-11-05`.
 **Claim prefix:** `RC`
 **Governed by:** ADR-0043, ADR-0010, ADR-0033, ADR-0030, ADR-0047, ADR-0052, ADR-0027, ADR-0024,
 ADR-0023, ADR-0014, ADR-0004, ADR-0012, ADR-0009, ADR-0021; invariants 5, 10, 11, 14.
@@ -102,6 +102,8 @@ a reload or restart. The Relay installs from an OS package or as a container ima
 - **RC-47** `[tls] extra_names` is a bind-time list of at most 32 DNS names and IP addresses. An
   entry that is malformed or a wildcard refuses start, naming the entry, and a reload that
   changes the list is refused as RC-21 says.
+- **RC-16** Each file the check covers is opened without following a symlink, checked on that descriptor and read from it, so nothing can change between the check and the read; a path that is a symlink is refused.
+- **RC-18** No secret value, inline or in a file, and no approval webhook URL, appears on any surface, in any log or audit record, or in any refusal message. A parse or validation error names the key and the line, never the value; a reload's audit record names a changed secret setting, never its value.
 
 ## Refusals
 
@@ -125,16 +127,14 @@ a reload or restart. The Relay installs from an OS package or as a container ima
 - **RC-54** A key that differs from a key the Relay accepts only in letter case (`TLS.hostname`
   for `tls.hostname`) is refused at start and on reload, and so is a file that spells one key two
   such ways. The refusal names the key as written and never its value (RC-18). Extends RC-53.
+- **RC-15** At start and on every reload the Relay refuses to run if it could write its configuration file or any file the configuration names, or if any account but it and root could read the configuration file or any file holding a secret. It could write a file when it owns the file on a filesystem mounted writable, when a mode bit or access-control list grants it or one of its groups write, when any directory on the file's resolved path is owned by or writable by it, or when it runs as root or holds any capability (ADR-0043).
+- **RC-17** Everything the Relay generates, its CA private key and its store, is owned by the Relay's uid, and the Relay refuses to start if the directory holding either, or the key, is readable by any other account. The packaged configuration places both in the state directory, the one place the unit's sandbox lets the Relay write.
+- **RC-19** The CA directory, store path and certificate hostname have no defaults: unset is a refusal naming the setting. Every value is validated at start and at reload, and an invalid one is a refusal naming the setting, never a warning and a fallback to a default. A missing or unreadable configuration file is a refusal.
 
 ## Designed, not built
 
 | Claim | Statement | Milestone |
 |---|---|---|
-| RC-15 | At start and on every reload the Relay refuses to run if it could write its configuration file or any file the configuration names, or if any account but it and root could read the configuration file or any file holding a secret. It could write a file when it owns the file on a filesystem mounted writable, when a mode bit or access-control list grants it or one of its groups write, when any directory on the file's resolved path is owned by or writable by it, or when it runs as root or holds any capability (ADR-0043). | MVP |
-| RC-16 | Each file the check covers is opened without following a symlink, checked on that descriptor and read from it, so nothing can change between the check and the read; a path that is a symlink is refused. | MVP |
-| RC-17 | Everything the Relay generates, its CA private key and its store, is owned by the Relay's uid, and the Relay refuses to start if the directory holding either, or the key, is readable by any other account. The packaged configuration places both in the state directory, the one place the unit's sandbox lets the Relay write. | MVP |
-| RC-18 | No secret value, inline or in a file, and no approval webhook URL, appears on any surface, in any log or audit record, or in any refusal message. A parse or validation error names the key and the line, never the value; a reload's audit record names a changed secret setting, never its value. | MVP |
-| RC-19 | The CA directory, store path and certificate hostname have no defaults: unset is a refusal naming the setting. Every value is validated at start and at reload, and an invalid one is a refusal naming the setting, never a warning and a fallback to a default. A missing or unreadable configuration file is a refusal. | MVP |
 | RC-23 | The release publishes the Relay as `.deb` and `.rpm` packages for each architecture, on the platforms and under the platform list and CI rule `daemon-installation.md` sets for its own packages. The edited configuration an upgrade must preserve is the configuration file. A package wraps the release's guarded binary byte for byte, is reproducible, built twice and compared, is listed in the release `SHA256SUMS`, and carries no signature of its own before v1.0.0. | MVP |
 | RC-24 | The Relay package installs the Relay's Unix account, the binary, the hardened unit, the configuration file and the state directory, and prints a configuration guide that carries no secret and names `relay init` (RC-28), also installed as documentation. It enables the Relay on a first install only, only where systemd is running, honouring the distribution's presets, and an upgrade never changes enablement. It never starts the Relay and never runs the first-boot command. The guide says never to capture an image of the host after the Relay has first started, since the CA private key would travel with it. | MVP |
 | RC-25 | The Relay package writes the configuration file once, at first install, only if none exists, and never again: the host's fully qualified name as the certificate hostname, the CA directory and store path inside the state directory, the control plane and Admin Console enabled, and the control-plane listener bound to loopback. The file is generated, not package-owned configuration, so no upgrade rewrites it. | MVP |
@@ -176,6 +176,11 @@ Generated by `make spec-proof` from the tests that name the claim they prove.
 | RC-12 | `TestMain_ConfigFlagHonoured`, `TestMain_OtherFlagsRefused`, `TestParseArgs` | Relay |
 | RC-13 | `TestFreezeReleaseReason_IsTheOnlyEnvironmentRead`, `TestMain_OtherFlagsRefused`, `TestMain_RetiredEnvNameRefusesNamingKey`, `TestRefuseRetiredEnv_NamesKeyNotValue`, `TestRetiredEnvMap_CoversEveryRetiredName` | Relay, relayconfig |
 | RC-14 | `TestLoadConfig_FileSecretsResolved`, `TestMain_OtherFlagsRefused`, `TestMain_RetiredEnvNameRefusesNamingKey`, `TestSecret_FileLoad`, `TestStartupLog_CarriesNoWebhookURLOrSecret` | Relay, relayconfig |
+| RC-15 | `TestDecide_Table`, `TestInit_RefusesRoot`, `TestReload_RechecksFileFirst`, `TestStart_RefusesConfigWritableByRelay`, `TestStart_RefusesSecretReadableByOthers` | Relay, hostfile |
+| RC-16 | `TestGather_DecisionAndReadShareDescriptor`, `TestGather_SymlinkedAncestorRefused`, `TestStart_RefusesSymlinkedConfig` | Relay, hostfile |
+| RC-17 | `TestCA_RefusesGroupReadableKeyOrDirectory`, `TestDecide_GeneratedMaterialRule`, `TestPackagedRelayTOML_FirstInstallSettings`, `TestRelayUnit_UnprivilegedNoCapsReadOnly`, `TestStart_RefusesGroupReadableStateOrKey` | Relay, ca, hostfile, relayconfig |
+| RC-18 | `TestDeliveryLogsCarryNoURL`, `TestDiff_SecretChangeNamedNeverValued`, `TestLoad_ErrorNamesKeyAndLineNotValue`, `TestNewGate_RefusalNamesNoRuleNameOrValue`, `TestNewRefusalsCarryNoURL`, `TestRefusals_CarryNoSecretOrWebhookURL`, `TestReload_AuditNamesSecretKeyNotValue`, `TestSecret_NeverPrints`, `TestStartupLog_CarriesNoWebhookURLOrSecret`, `TestValidate_GateRuleValuesRefusedNamingField` | Relay, approval, approvalnotify, relayconfig |
+| RC-19 | `TestLoadConfig_MissingFileRefusedNamingPath`, `TestLoadConfig_UnreadableFileRefused`, `TestPackagedRelayTOML_WithoutFQDNRefusesNamingTLSHostname`, `TestReload_InvalidValueRefusedConfigIntact`, `TestValidate_EachRequiredSettingNamed`, `TestValidate_InvalidValueRefusedNamingSetting` | Relay, relayconfig |
 | RC-20 | `TestMain_CoherentButSuspectConfigStartsWithWarning`, `TestValidate_ConsoleWithoutControlPlaneRefused`, `TestValidate_MutateCapAboveReadCapWarns`, `TestValidate_OAuthWithoutIssuerRefused` | Relay, relayconfig |
 | RC-21 | `TestCapability_ReadsReachSettingsPerRequest`, `TestReload_BindTimeChangeRefusedRestartRequired`, `TestReload_FailedReloadProcessSurvives`, `TestReload_InvalidValueRefusedConfigIntact`, `TestReload_RechecksFileFirst`, `TestReload_ValidChangeAppliedAndAudited` | Relay, capability |
 | RC-22 | `TestDefaults_EachReachValueWhenAbsent`, `TestEveryKeyReachesConfig`, `TestFromFile_CarriesEverySetting`, `TestNewLogHandler_JSONAtConfiguredLevel`, `TestValidate_InvalidValueRefusedNamingSetting` | Relay, relayconfig |
@@ -192,10 +197,11 @@ Generated by `make spec-proof` from the tests that name the claim they prove.
 | RC-46 | `TestServerCertificateNames`, `TestServerCertificate_NamesEveryHostAJoinStringCarries` | Relay |
 | RC-47 | `TestDiff_ExtraNamesChangeIsRestartRequired`, `TestReloader_ExtraNamesChangeRefusedRestartRequired`, `TestValidate_ExtraNamesCappedAt32`, `TestValidate_ExtraNamesEachEntryChecked` | Relay, relayconfig |
 | RC-48 | `TestGather_DecisionAndReadShareDescriptor`, `TestSecretFilePermissionsAreEnforced`, `TestSecretRule_RefusesADirectory` | approvalnotify, hostfile |
+| RC-53 | `TestLoad_GateRulesOnlyAsArrayTables`, `TestLoad_VariantSpellingOfRulesKeysRefused` | relayconfig |
 | RC-54 | `TestLoad_CaseVariantKeyRefusedInEverySection`, `TestLoad_KeySpelledTwoWaysRefused`, `TestReloader_CaseVariantKeyRefusedNamingKey`, `TestStart_RefusesCaseVariantKey` | Relay, relayconfig |
 
-Unproven: RC-7, RC-27, RC-53.
-Designed claims a test already cites: RC-15 (`TestDecide_Table`, `TestInit_RefusesRoot`, `TestStart_RefusesConfigWritableByRelay`, `TestStart_RefusesSecretReadableByOthers`); RC-16 (`TestStart_RefusesSymlinkedConfig`); RC-17 (`TestCA_RefusesGroupReadableKeyOrDirectory`, `TestStart_RefusesGroupReadableStateOrKey`); RC-18 (`TestNewGate_RefusalNamesNoRuleNameOrValue`, `TestRefusals_CarryNoSecretOrWebhookURL`, `TestReload_AuditNamesSecretKeyNotValue`, `TestValidate_GateRuleValuesRefusedNamingField`); RC-19 (`TestPackagedRelayTOML_WithoutFQDNRefusesNamingTLSHostname`); RC-23 (`release_attaches_every_package_and_its_sbom_under_sha256sums`, `release_packages_are_built_twice_compared_wrap_the_binary_and_carry_no_signature`, `release_publishes_nothing_unless_the_install_matrix_passes_on_its_packages`, `release_signs_and_tests_only_the_sha256sums_the_comparing_job_wrote`); RC-25 (`TestPackagedRelayTOML_FirstInstallSettings`, `TestPackagedRelayTOML_WithoutFQDNRefusesNamingTLSHostname`).
+Unproven: RC-7, RC-27.
+Designed claims a test already cites: RC-23 (`release_attaches_every_package_and_its_sbom_under_sha256sums`, `release_packages_are_built_twice_compared_wrap_the_binary_and_carry_no_signature`, `release_publishes_nothing_unless_the_install_matrix_passes_on_its_packages`, `release_signs_and_tests_only_the_sha256sums_the_comparing_job_wrote`); RC-25 (`TestPackagedRelayTOML_FirstInstallSettings`, `TestPackagedRelayTOML_WithoutFQDNRefusesNamingTLSHostname`).
 <!-- proof:end -->
 
 ## Retired
