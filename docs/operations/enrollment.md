@@ -22,9 +22,10 @@ TTL, `max_uses`, and instant revocation bound the risk of reuse.
 
 ## 1. Mint a token
 
-The first join string comes from `relay init` ([relay-install.md](relay-install.md) §2), on a
-terminal, through the same mint form as the Console's: at most 256 Nodes, two hours by default.
-Every later token is minted here, through the Control API, or on the Console's Add Nodes form.
+The first join string comes from `relay init`
+([relay-install.md](relay-install.md#4-the-packaged-systemd-unit) §4), on a terminal, through
+the same mint form as the Console's: at most 256 Nodes, two hours by default. Every later token
+is minted here, through the Control API, or on the Console's Add Nodes form.
 
 `POST /api/v1/enrollment-tokens` on the Relay's control plane (`$RELAY_TOKEN` is an API
 Token; [control-plane-credential.md](control-plane-credential.md)). Run this on the Relay host

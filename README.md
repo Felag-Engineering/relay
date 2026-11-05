@@ -218,11 +218,11 @@ credentials, because the architecture never asks who is asking.
 
 ## Status
 
-Alpha: 0.1.0 is the first release. Relay is source-available under the
-[Business Source License 1.1](LICENSE): free for personal, non-commercial use by individuals;
-use by or for an organization needs a commercial license. Each version converts to Apache-2.0
-three years after its release (its Change Date). Issues are welcome; code contributions from
-outside Felag Engineering are not accepted (see [CONTRIBUTING.md](CONTRIBUTING.md)).
+Alpha. Relay is source-available under the [Business Source License 1.1](LICENSE):
+free for personal, non-commercial use by individuals; use by or for an organization needs a
+commercial license. Each version converts to Apache-2.0 three years after its release (its
+Change Date). Issues are welcome; code contributions from outside Felag Engineering are not
+accepted (see [CONTRIBUTING.md](CONTRIBUTING.md)).
 
 **GitHub milestones are the authority on what is in progress**, and GitHub releases on what has
 shipped. [docs/STATUS.md](docs/STATUS.md) says what `main` does today, capability by

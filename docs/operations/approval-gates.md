@@ -164,16 +164,32 @@ Console has no approval surface; this endpoint is the out-of-band path.
 | `GET /api/v1/approvals/{id}` | any authenticated Account |
 | `POST /api/v1/approvals/{id}/decision` | see the floor below |
 
-```bash
-# What is waiting?
-curl -s -H "Authorization: Bearer $RELAY_TOKEN" https://relay:9443/api/v1/approvals
+On the packaged setup the control plane listens on the Relay VM's loopback. Open the SSH tunnel
+from [the quickstart](../quickstart.md#5-reach-the-control-plane-from-your-workstation)
+(`ssh -N -L 9443:127.0.0.1:9443 <relay-vm>`), work in the directory holding
+`relay-ca-cert.pem`, and set `RELAY_TOKEN` to an API Token whose Account clears the floor below
+(the quickstart's admin token does). A person runs these commands, never the AI-agent that made
+the request. With a widened control plane, use its address in place of `127.0.0.1`.
 
-# Answer one. plan_hash is required.
-curl -s -X POST -H "Authorization: Bearer $RELAY_TOKEN" \
-  -H 'Content-Type: application/json' \
-  -d '{"approve":true,"plan_hash":"<from the request>","reason":"change ticket OPS-91"}' \
-  https://relay:9443/api/v1/approvals/<request-id>/decision
+```console
+$ curl -sS --cacert relay-ca-cert.pem -H "Authorization: Bearer $RELAY_TOKEN" \
+    https://127.0.0.1:9443/api/v1/approvals
+{"approvals":[{"request_id":"…","state":"pending","plan_hash":"…","summary":"…",…}]}
+$ read -rp 'request_id: ' REQUEST_ID
+$ read -rp 'plan_hash: ' PLAN_HASH
+$ curl -sS --cacert relay-ca-cert.pem -H "Authorization: Bearer $RELAY_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"approve\": true, \"plan_hash\": \"$PLAN_HASH\", \"reason\": \"checked the summary\"}" \
+    "https://127.0.0.1:9443/api/v1/approvals/$REQUEST_ID/decision"
 ```
+
+The list is one compact line of JSON. Copy `request_id` and `plan_hash` from the entry whose
+`summary` you mean to answer; with `python3`, pipe the list through `python3 -m json.tool` to
+read it. The queue lists only requests still pending, oldest deadline first; read the
+Relay-authored `summary` before you answer. `plan_hash` is required and must be the one the
+queue showed. `"approve": false` denies. The response is the request in its new state. Nothing
+runs yet: the caller re-sends the same call (see
+[Deciding does not dispatch](#deciding-does-not-dispatch)).
 
 Every authenticated Account can read the queue, `viewer` included. The role floor restricts who
 may **decide**, not who may see that a decision is owed: every entry is a Relay-authored summary
