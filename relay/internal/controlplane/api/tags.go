@@ -62,7 +62,8 @@ func handleWriteNodeTag(d Deps) http.HandlerFunc {
 			writeProblem(w, http.StatusInternalServerError, "tag writes are not wired", "")
 			return
 		}
-		nodeID, ok := pathID(w, r, "node_id", "node id")
+		nodeID, ok := requirePathValue(w, r, "node_id", "missing node id",
+			"path parameter node_id must not be empty")
 		if !ok {
 			return
 		}
