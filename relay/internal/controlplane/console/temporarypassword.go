@@ -98,7 +98,7 @@ func renderTemporaryPassword(w http.ResponseWriter, pg Page, heading, accountNam
 func createHuman(d Deps, w http.ResponseWriter, r *http.Request, pg Page, caller capability.Principal, form accountCreateForm, a accounts.Account) {
 	w.Header().Set("Cache-Control", "no-store")
 	if d.TemporaryPasswords == nil {
-		unavailable(w, "Account administration")
+		unavailable(w, accountAdminName)
 		return
 	}
 	created, tp, err := d.TemporaryPasswords.CreateHumanAccount(r.Context(), caller, a)
@@ -126,7 +126,7 @@ func handleIssueTemporaryPassword(d Deps) http.HandlerFunc {
 			return
 		}
 		if d.TemporaryPasswords == nil {
-			unavailable(w, "Account administration")
+			unavailable(w, accountAdminName)
 			return
 		}
 

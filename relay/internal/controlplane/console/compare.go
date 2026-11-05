@@ -395,7 +395,7 @@ func handleCompare(d Deps) http.HandlerFunc {
 		p.Banner = banner(d, r)
 
 		if d.Queries == nil {
-			unavailable(w, "the audited read lane")
+			unavailable(w, auditedReadLaneName)
 			return
 		}
 		d, lane := latched(d)

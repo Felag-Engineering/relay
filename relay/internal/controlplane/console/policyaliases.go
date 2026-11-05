@@ -193,7 +193,7 @@ func handleWritePolicyAlias(d Deps) http.HandlerFunc {
 			return
 		}
 		if d.AliasWriter == nil {
-			unavailable(w, "Policy alias writes")
+			unavailable(w, policyAliasWritesName)
 			return
 		}
 		pg, ok := page(d, w, r, policyAliasTitle)
@@ -289,7 +289,7 @@ func policyAliasWriteFailed(w http.ResponseWriter, pg Page, err error, back, bac
 		refuse(http.StatusConflict)
 	case errors.Is(err, capability.ErrPolicyAliasesUnavailable):
 		w.Header().Set("Cache-Control", "no-store")
-		unavailable(w, "Policy alias writes")
+		unavailable(w, policyAliasWritesName)
 	default:
 		pg.logger().Error("console policy alias write returned an error", "error", err)
 		policyAliasRefusal(w, pg, http.StatusInternalServerError, policyAliasUnconfirmedHeading, back, backLabel)

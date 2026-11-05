@@ -104,7 +104,7 @@ func accountsReadFailed(w http.ResponseWriter, p Page, err error) {
 			Heading: "The Relay refused this read: " + err.Error() + ".",
 		})
 	case errors.Is(err, capability.ErrAccountsUnavailable):
-		unavailable(w, "Account administration")
+		unavailable(w, accountAdminName)
 	default:
 		unreadable(w, "the Account registry")
 	}
@@ -188,7 +188,7 @@ func handleAccount(d Deps) http.HandlerFunc {
 			return
 		}
 		if d.Accounts == nil {
-			unavailable(w, "Account administration")
+			unavailable(w, accountAdminName)
 			return
 		}
 
@@ -359,7 +359,7 @@ func handleNewAccount(d Deps) http.HandlerFunc {
 		}
 		p.Banner = banner(d, r)
 		if !accountsOffered(d) {
-			unavailable(w, "Account administration")
+			unavailable(w, accountAdminName)
 			return
 		}
 		renderScreen(w, p, newAccountTmpl, newAccountForm(p.CSRFToken, stepUpFresh(d, r)))

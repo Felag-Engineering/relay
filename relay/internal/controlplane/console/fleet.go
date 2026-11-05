@@ -540,7 +540,7 @@ func handleFleet(d Deps) http.HandlerFunc {
 		p.Banner = banner(d, r)
 
 		if d.Queries == nil {
-			unavailable(w, "the audited read lane")
+			unavailable(w, auditedReadLaneName)
 			return
 		}
 		// Every read this page makes goes through the latch, so the "a page

@@ -208,7 +208,7 @@ func handleNode(d Deps) http.HandlerFunc {
 			return
 		}
 		if d.Queries == nil {
-			unavailable(w, "the audited read lane")
+			unavailable(w, auditedReadLaneName)
 			return
 		}
 		d, lane := latched(d)
