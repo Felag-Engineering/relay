@@ -7,14 +7,20 @@
 //! the matrix's hash-locked ansible-core and release-mode role (DI-45), and that the role
 //! installs only its own release's package (DI-45), reading
 //! `install-matrix.yml` as well, and the role's restart handler with the matrix's fragment run
-//! (DI-47), reading the role, its test fixture and the matrix script.
+//! (DI-47), reading the role, its test fixture and the matrix script. It also proves the
+//! standalone unit and example attachments (DI-32), the install matrix's platform list
+//! against the specification's (DI-33), and the Relay image's digest-pinned, keyless
+//! publication (RC-7).
 //!
 //! A workflow cannot run in a test, so the files are read as text and the assertions are on
 //! properties of the job graph, never on exact lines: a reworded step stays green, a removed
-//! guard does not. Spec-proof harvests only Rust and Go tests, which is why this is a test
-//! over the file and not a script. Full-line `#` comments are dropped before any assertion,
-//! so prose that names a property never satisfies it. Hermetic: no network, no Docker, and
-//! nothing is spawned.
+//! guard does not. The exception is deliberate: the attached-unit comparison, the
+//! install-matrix reader and the image signature steps each pin specific lines, with
+//! whitespace-tolerant regexes, because what they prove is those exact arguments (which file
+//! is compared with which, which digest is signed). Spec-proof harvests only Rust and Go
+//! tests, which is why this is a test over the file and not a script. Full-line `#` comments
+//! are dropped before any assertion, so prose that names a property never satisfies it.
+//! Hermetic: no network, no Docker, and nothing is spawned.
 //!
 //! The refusal is a property of the graph, sound because GitHub skips a job when a job it
 //! needs failed: the comparing job gates every privileged job, and no job on those chains
@@ -953,7 +959,7 @@ fn release_publishes_nothing_unless_the_install_matrix_passes_on_its_packages() 
     }
 }
 
-// Proves DI-24, RC-23.
+// Proves DI-24, RC-23, DI-32.
 #[test]
 fn release_attaches_every_package_and_its_sbom_under_sha256sums() {
     let all = release();
@@ -1288,7 +1294,7 @@ fn release_signing_waits_on_the_owner_recording_every_decision() {
     }
 }
 
-// Proves DI-24, RC-23.
+// Proves DI-24, RC-23, DI-32.
 #[test]
 fn release_packages_are_built_twice_compared_wrap_the_binary_and_carry_no_signature() {
     let all = release();
@@ -1365,6 +1371,133 @@ fn release_packages_are_built_twice_compared_wrap_the_binary_and_carry_no_signat
             gl.iter().any(|l| re(pattern).is_match(l)),
             "the guard checks {what}: {gl:?}"
         );
+    }
+
+    // The standalone unit and example environment file are the daemon packages' own copies.
+    let unit_same = re(
+        r#"\bsame\s+"\$\{f\}"\s+/usr/lib/systemd/system/relay-daemon\.service\s+dist/relay-daemon\.service\s*$"#,
+    );
+    let env_same = re(
+        r#"\bsame\s+"\$\{f\}"\s+/usr/share/relay-daemon/relay-daemon\.env\.example\s+dist/relay-daemon\.env\.example\s*$"#,
+    );
+    for (line, matches) in [
+        (
+            r#"bash "${guard}" same "${f}" /usr/lib/systemd/system/relay-daemon.service dist/relay-daemon.service"#,
+            (true, false),
+        ),
+        (
+            r#"bash "${guard}" same "${f}" /usr/share/relay-daemon/relay-daemon.env.example dist/relay-daemon.env.example"#,
+            (false, true),
+        ),
+        (
+            r#"bash "${guard}" same "${f}" /usr/lib/systemd/system/relay.service dist/relay.service"#,
+            (false, false),
+        ),
+        (
+            r#"bash "${guard}" same "${f}" /usr/share/relay/relay.toml.example dist/relay.toml.example"#,
+            (false, false),
+        ),
+        (
+            r#"bash "${guard}" same "${f}" /usr/lib/systemd/system/relay-daemon.service dist/relay.service"#,
+            (false, false),
+        ),
+    ] {
+        assert_eq!(
+            (unit_same.is_match(line), env_same.is_match(line)),
+            matches,
+            "the same-copy matchers read {line}"
+        );
+    }
+    let arm = line_index(
+        &gl,
+        "opening the daemon package's arm",
+        &re(r"^\s*relay-daemon\[_-\]\*\)\s*$"),
+    );
+    let arm_end = gl[arm..]
+        .iter()
+        .position(|l| l.trim() == ";;")
+        .map(|n| arm + n)
+        .expect("the daemon package's arm ends");
+    for (what, matcher) in [("unit", &unit_same), ("environment example", &env_same)] {
+        let found: Vec<usize> = gl
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| matcher.is_match(l))
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(
+            found.len(),
+            1,
+            "the guard compares the attached {what} with the daemon package's copy once: {gl:?}"
+        );
+        assert!(
+            arm < found[0] && found[0] < arm_end,
+            "the {what} comparison sits in the daemon package's arm, not the Relay's"
+        );
+    }
+    let for_p = line_index(
+        &gl,
+        "looping over both architectures",
+        &re(r"^\s*for p in x86_64:linux-amd64 aarch64:linux-arm64; do\s*$"),
+    );
+    let for_f = line_index(
+        &gl,
+        "looping over every package of the architecture",
+        &re(r#"^\s*for f in bins/bin-"\$\{arch\}"-primary/packages/\*; do\s*$"#),
+    );
+    assert!(
+        for_p < for_f && for_f < arm,
+        "every package of both architectures reaches the daemon arm: {gl:?}"
+    );
+    // The attached copies are staged from the repository's own files, before the guard runs.
+    let stage_unit =
+        re(r"^\s*cp daemon/packaging/relay-daemon\.service dist/relay-daemon\.service\s*$");
+    let stage_env = re(
+        r"^\s*cp daemon/packaging/relay-daemon\.env\.example dist/relay-daemon\.env\.example\s*$",
+    );
+    assert!(
+        stage_unit.is_match("cp daemon/packaging/relay-daemon.service dist/relay-daemon.service")
+    );
+    assert!(!stage_unit.is_match("cp daemon/packaging/relay.service dist/relay.service"));
+    assert!(!stage_env.is_match("cp relay/packaging/relay.toml.example dist/relay.toml.example"));
+    let stage = step_index(
+        c,
+        "staging the standalone unit and environment example",
+        |s| {
+            let lines = logical(s);
+            lines.iter().any(|l| stage_unit.is_match(l))
+                && lines.iter().any(|l| stage_env.is_match(l))
+        },
+    );
+    assert!(
+        stage
+            < step_index(c, "guarding the packages", |s| {
+                s.contains("package-guard.sh") && s.contains("no-config")
+            }),
+        "the attached unit and example are staged before the guard compares them"
+    );
+    // ... and the manifest installs the same repository files at the compared paths.
+    let manifest: Vec<String> = code(&read(
+        &repo().join("daemon/packaging/nfpm/relay-daemon.yaml"),
+    ))
+    .lines()
+    .map(|l| l.trim().trim_start_matches("- ").to_string())
+    .collect();
+    for (src, dst) in [
+        (
+            r#"src: "@SRC@/daemon/packaging/relay-daemon.service""#,
+            "dst: /usr/lib/systemd/system/relay-daemon.service",
+        ),
+        (
+            r#"src: "@SRC@/daemon/packaging/relay-daemon.env.example""#,
+            "dst: /usr/share/relay-daemon/relay-daemon.env.example",
+        ),
+    ] {
+        let at = manifest
+            .iter()
+            .position(|l| l == src)
+            .unwrap_or_else(|| panic!("the manifest has {src}"));
+        assert_eq!(manifest[at + 1], dst, "the manifest installs {src}");
     }
 
     // No package is signed on its own: SHA256SUMS is the one thing signed.
@@ -1939,4 +2072,635 @@ fn the_ansible_role_restarts_the_daemon_when_a_fragment_changes_and_the_matrix_p
             .any(|s| s.contains("install-matrix-ansible-role.sh")),
         "the install matrix runs the role script"
     );
+}
+
+// ---- the install matrix's platform list: the release half of the supported platforms ----
+
+fn collapse(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// DI-33's text, whitespace collapsed, in either shape the specification may hold it in: its
+/// bullet inside `## Behaviour` and its indented continuation lines once it is promoted, else
+/// the second cell of its table row inside `## Designed, not built`. The Proof table's `| DI-33 |` row names a
+/// test and is never read.
+fn di33_text(spec: &str) -> String {
+    let mut out = String::new();
+    let mut found = false;
+    let mut behaviour = false;
+    for line in spec.lines() {
+        if found && (line.starts_with("- **") || line.trim().is_empty() || line.starts_with('#')) {
+            break;
+        }
+        if line.starts_with("## ") {
+            behaviour = line.trim() == "## Behaviour";
+        }
+        found = found || (behaviour && line.starts_with("- **DI-33**"));
+        if found {
+            out.push_str(line);
+            out.push(' ');
+        }
+    }
+    if found {
+        return collapse(&out);
+    }
+    let mut designed = false;
+    for line in spec.lines() {
+        if line.starts_with("## ") {
+            designed = line.trim() == "## Designed, not built";
+        }
+        let cells: Vec<&str> = line.split('|').collect();
+        if designed && cells.len() > 2 && cells[1].trim() == "DI-33" {
+            return collapse(cells[2]);
+        }
+    }
+    panic!("DI-33 is neither a bullet nor a row of the Designed, not built section");
+}
+
+/// The platforms (`<distribution> <release>`) and architectures a DI-33 text names, or `None`
+/// where its wording is not the one this reader anchors on.
+fn supported(claim: &str) -> Option<(BTreeSet<String>, BTreeSet<String>)> {
+    let (_, after) = claim.split_once("removes it:")?;
+    let (platform_text, _) = after.split_once(". Each is supported on")?;
+    let (_, arch_text) = claim.split_once("Each is supported on")?;
+    let arch_text = arch_text.split('.').next()?;
+    let two = re(r"^(.+) ([0-9.]+)( LTS)? and ([0-9.]+)( LTS)?$");
+    let one = re(r"^(.+) ([0-9.]+)( LTS)?$");
+    let mut platforms = BTreeSet::new();
+    for item in platform_text.split(';') {
+        let item = item.trim();
+        if item.is_empty() {
+            continue;
+        }
+        let item = item.split_once("tested on ").map_or(item, |(_, rest)| rest);
+        if let Some(c) = two.captures(item) {
+            platforms.insert(format!("{} {}", &c[1], &c[2]));
+            platforms.insert(format!("{} {}", &c[1], &c[4]));
+        } else {
+            let c = one.captures(item)?;
+            platforms.insert(format!("{} {}", &c[1], &c[2]));
+        }
+    }
+    let arches: BTreeSet<String> = re(r"`([^`]+)`")
+        .captures_iter(arch_text)
+        .map(|c| c[1].to_string())
+        .collect();
+    if platforms.is_empty() || arches.is_empty() {
+        return None;
+    }
+    Some((platforms, arches))
+}
+
+/// The `(id, distribution, release)` of each platform line of the matrix's marked block.
+fn block_platforms(block: &str) -> Vec<(String, String, String)> {
+    let line_re = re(r"^\s*-\s*\{.*[\s,{]id:");
+    let id = re(r"(?:^|[\s,{])id: *([A-Za-z0-9.-]+)");
+    let distribution = re(r#"distribution: *"([^"]+)""#);
+    let release = re(r#"release: *"([^"]+)""#);
+    block
+        .lines()
+        .filter(|l| line_re.is_match(l))
+        .map(|l| {
+            let get = |r: &Regex, what: &str| {
+                r.captures(l)
+                    .unwrap_or_else(|| panic!("no {what} in the platform line `{l}`"))[1]
+                    .to_string()
+            };
+            (
+                get(&id, "id"),
+                get(&distribution, "distribution"),
+                get(&release, "release"),
+            )
+        })
+        .collect()
+}
+
+/// A runner that fits its architecture: an `arm` runner for `aarch64`, any other for `x86_64`.
+fn runner_fits_arch(arch: &str, runner: &str) -> bool {
+    (arch == "aarch64") == runner.contains("arm")
+}
+
+fn bypasses_signature_checks(line: &str) -> bool {
+    re(r"--nogpgcheck|--no-gpgcheck|--allow-unauthenticated|--no-gpg-checks|--nosignature|--nodigest|--force-bad-verify|--force-yes|gpgcheck\s*=\s*(?:0|False|no)\b|AllowUnauthenticated|trusted=yes")
+        .is_match(line)
+}
+
+/// The lines of the shell function whose header is `header`, up to its closing brace at the
+/// start of a line, backslash continuations joined.
+fn shell_function(script: &str, header: &str) -> Vec<String> {
+    let lines: Vec<&str> = script.lines().collect();
+    let start = lines
+        .iter()
+        .position(|l| *l == header)
+        .unwrap_or_else(|| panic!("no `{header}`"));
+    let end = lines[start..]
+        .iter()
+        .position(|l| *l == "}")
+        .map(|n| start + n)
+        .unwrap_or_else(|| panic!("`{header}` has no closing brace"));
+    logical(&lines[start + 1..end].join("\n"))
+        .into_iter()
+        .map(|l| l.trim().to_string())
+        .collect()
+}
+
+/// The install matrix runs exactly the platforms and architectures DI-33 names, each through
+/// install, upgrade over edited configuration, and remove, on a runner of its architecture,
+/// with nothing excluded, nothing allowed to fail, and no flag that skips a signature check.
+/// `scripts/install-matrix-platforms.sh` is the shell counterpart, which the spec-proof scan
+/// does not see.
+// Proves DI-33.
+#[test]
+fn the_install_matrix_runs_exactly_the_supported_platforms_and_architectures() {
+    // The reader of DI-33's wording, on synthetic text.
+    let anchored = "A platform is supported only where CI installs the package and removes it: \
+        Ubuntu 24.04 LTS and 26.04 LTS; Debian 13; RHEL-compatible 10, tested on Rocky Linux 10. \
+        Each is supported on `x86_64` and `aarch64`. A platform whose package manager refuses.";
+    let (platforms, arches) = supported(anchored).expect("the anchored wording parses");
+    assert_eq!(
+        platforms,
+        BTreeSet::from(
+            [
+                "Ubuntu 24.04",
+                "Ubuntu 26.04",
+                "Debian 13",
+                "Rocky Linux 10"
+            ]
+            .map(String::from)
+        )
+    );
+    assert_eq!(
+        arches,
+        BTreeSet::from(["x86_64", "aarch64"].map(String::from))
+    );
+    assert!(
+        supported(&anchored.replace("removes it:", "removes it;")).is_none(),
+        "`removes it;` is not the anchor `removes it:`"
+    );
+    assert!(supported("removes it: Ubuntu 24.04. Each is supported on x86_64.").is_none());
+    assert!(supported("removes it: Plan9. Each is supported on `x86_64`.").is_none());
+    assert!(supported("removes it: Debian 13. The arches are `x86_64`.").is_none());
+    let table = "## Designed, not built\n| DI-32 | other |\n| DI-33 | removes it: Debian 13. Each is supported on `x86_64`. | v1 |\n";
+    assert_eq!(
+        di33_text(table),
+        "removes it: Debian 13. Each is supported on `x86_64`."
+    );
+    let bullet = "## Behaviour\n- **DI-33** removes it:\n  Debian 13. Each is\n  supported on `x86_64`.\n- **DI-34** next\n";
+    assert_eq!(
+        di33_text(bullet),
+        "- **DI-33** removes it: Debian 13. Each is supported on `x86_64`."
+    );
+
+    let both = "## Behaviour\n- **DI-33** removes it: Debian 13. Each is supported on `x86_64`.\n\n## Proof\n| DI-33 | `a_test_name` | daemon |\n";
+    assert_eq!(
+        di33_text(both),
+        "- **DI-33** removes it: Debian 13. Each is supported on `x86_64`."
+    );
+    let decoy = "## Purpose\n- **DI-33** removes it: Ubuntu 24.04 LTS. Each is supported on `x86_64`.\n\n## Behaviour\n- **DI-33** removes it: Debian 13. Each is supported on `x86_64`.\n";
+    assert_eq!(
+        di33_text(decoy),
+        "- **DI-33** removes it: Debian 13. Each is supported on `x86_64`.",
+        "a bullet outside Behaviour is a decoy; the Behaviour bullet is the one read"
+    );
+    let outside_only =
+        "## Purpose\n- **DI-33** removes it: Debian 13. Each is supported on `x86_64`.\n";
+    assert!(
+        std::panic::catch_unwind(|| di33_text(outside_only)).is_err(),
+        "a bullet outside Behaviour alone is not DI-33's text"
+    );
+    let proof_only = "## Proof\n| DI-33 | `a_test_name` | daemon |\n";
+    assert!(
+        std::panic::catch_unwind(|| di33_text(proof_only)).is_err(),
+        "a Proof row is not DI-33's text"
+    );
+
+    // DI-33's text, read from the specification.
+    let spec = read(&repo().join("docs/specs/daemon-installation.md"));
+    let (spec_platforms, spec_arches) = supported(&di33_text(&spec))
+        .expect("DI-33 keeps the wording this test and the platform script anchor on");
+
+    // The matrix's marked block, read as raw text: the markers are comments.
+    let raw = read(&repo().join(".github/workflows/install-matrix.yml"));
+    let begin = raw
+        .lines()
+        .position(|l| l.contains("# BEGIN DI-33 platforms"))
+        .expect("the platform block begins");
+    let end = raw
+        .lines()
+        .position(|l| l.contains("# END DI-33 platforms"))
+        .expect("the platform block ends");
+    assert_eq!(raw.matches("# BEGIN DI-33 platforms").count(), 1);
+    assert_eq!(raw.matches("# END DI-33 platforms").count(), 1);
+    assert!(begin < end, "the block's markers are in order");
+    assert!(
+        !raw.contains("exclude:"),
+        "an exclude: drops a row the list names, wherever it is written"
+    );
+    let block = raw
+        .lines()
+        .skip(begin + 1)
+        .take(end - begin - 1)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_eq!(
+        block_platforms(
+            "  # - { id: no, distribution: \"No\", release: \"0\" }\n  - { arch: x86_64, runner: r }\n  \
+             - { id: debian-13, distribution: \"Debian\", release: \"13\", family: deb }\n"
+        ),
+        [("debian-13".to_string(), "Debian".to_string(), "13".to_string())],
+        "a commented line and a line with no id are not platforms"
+    );
+    let rows = block_platforms(&block);
+    let ids: BTreeSet<&String> = rows.iter().map(|(i, _, _)| i).collect();
+    let pairs: BTreeSet<String> = rows.iter().map(|(_, d, r)| format!("{d} {r}")).collect();
+    assert_eq!(ids.len(), rows.len(), "platform ids are unique");
+    assert_eq!(pairs.len(), rows.len(), "platforms are unique");
+    for id in &ids {
+        assert!(
+            repo()
+                .join(format!("docker/install-matrix/{id}.Dockerfile"))
+                .is_file(),
+            "platform {id} has its Dockerfile"
+        );
+    }
+    let arch_lines: Vec<&str> = block
+        .lines()
+        .filter(|l| re(r"^\s*arch: *\[").is_match(l))
+        .collect();
+    assert_eq!(arch_lines.len(), 1, "one arch: [...] line: {arch_lines:?}");
+    let arch_list = re(r"\[(.*)\]").captures(arch_lines[0]).expect("a list")[1].to_string();
+    let wf_arches: BTreeSet<String> = arch_list
+        .split(',')
+        .map(|a| a.trim().to_string())
+        .filter(|a| !a.is_empty())
+        .collect();
+    assert_eq!(pairs, spec_platforms, "the matrix runs DI-33's platforms");
+    assert_eq!(
+        wf_arches, spec_arches,
+        "the matrix runs DI-33's architectures"
+    );
+
+    // The install job runs the row on every platform and architecture, on a fitting runner,
+    // and nothing lets it fail or skip.
+    let all = jobs(&raw);
+    let install = &all["install"];
+    assert!(install.contains("# BEGIN DI-33 platforms"));
+    assert!(
+        re(r"(?m)^ {4}runs-on:\s*\$\{\{\s*matrix\.runner\s*\}\}\s*$").is_match(install),
+        "the install job runs on the runner its arch pairs with"
+    );
+    let pair_re = re(r"-\s*\{\s*arch:\s*(\S+?),\s*runner:\s*(\S+?)\s*\}");
+    let pairs: Vec<(String, String)> = pair_re
+        .captures_iter(install)
+        .map(|c| (c[1].to_string(), c[2].to_string()))
+        .collect();
+    assert_eq!(pairs.len(), 2, "one runner per architecture: {pairs:?}");
+    for (arch, runner) in &pairs {
+        assert!(runner_fits_arch(arch, runner), "{arch} runs on {runner}");
+    }
+    assert_eq!(
+        pairs
+            .iter()
+            .map(|(a, _)| a.clone())
+            .collect::<BTreeSet<_>>(),
+        spec_arches,
+        "a runner for each architecture DI-33 names"
+    );
+    for (arch, runner, fits) in [
+        ("aarch64", "ubuntu-24.04-arm", true),
+        ("x86_64", "ubuntu-24.04", true),
+        ("aarch64", "ubuntu-24.04", false),
+        ("x86_64", "ubuntu-24.04-arm", false),
+    ] {
+        assert_eq!(runner_fits_arch(arch, runner), fits, "{arch} on {runner}");
+    }
+    assert_eq!(
+        job_if(install),
+        None,
+        "the install job has no job-level condition"
+    );
+    let install_code = code(install);
+    assert!(
+        !re(r"(?m)^\s*continue-on-error:").is_match(&install_code),
+        "no row may fail without failing the matrix"
+    );
+    assert!(
+        steps(install).iter().any(|s| {
+            re(r"(?m)^\s+ID:\s*\$\{\{\s*matrix\.platform\.id\s*\}\}\s*$").is_match(s)
+                && s.contains("bash scripts/install-matrix-host.sh \"$ID\"")
+        }),
+        "a step runs the row for each platform id"
+    );
+
+    // The host runs the three phases DI-33 names, in order; the row's phases do the work.
+    let host = commands_of(&read(&repo().join("scripts/install-matrix-host.sh")));
+    let phase = |name: &str| {
+        let hits: Vec<usize> = host
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| l.as_str() == name)
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(hits.len(), 1, "`{name}` runs once: {host:?}");
+        hits[0]
+    };
+    assert!(
+        phase("phase install") < phase("phase upgrade")
+            && phase("phase upgrade") < phase("phase remove"),
+        "install, then upgrade, then remove"
+    );
+    let row_text = read(&repo().join("scripts/install-matrix-row.sh"));
+    let install_phase = shell_function(&row_text, "phase_install() {");
+    let edit = install_phase
+        .iter()
+        .position(|l| l == "for f in \"$POLICY\" \"$ENV_FILE\" \"$RELAY_TOML\"; do")
+        .expect("the install phase edits the Policy, the environment file and relay.toml");
+    assert_eq!(
+        install_phase[edit + 1],
+        "echo '# install-matrix edit' >>\"$f\"",
+        "each of them gets an operator's edit"
+    );
+    let upgrade_phase = shell_function(&row_text, "phase_upgrade() {");
+    assert!(
+        upgrade_phase
+            .iter()
+            .any(|l| l.starts_with("precondition \"upgrade to the new package set\" pm_upgrade ")),
+        "the upgrade phase upgrades the packages"
+    );
+    let survives: Vec<&String> = upgrade_phase
+        .iter()
+        .filter(|l| l.contains("survives the upgrade"))
+        .collect();
+    assert_eq!(
+        survives.len(),
+        3,
+        "an edit survives check each: {survives:?}"
+    );
+    for stem in [
+        "policy-after-install",
+        "env-after-install",
+        "relay-toml-after-install",
+    ] {
+        assert_eq!(
+            survives.iter().filter(|l| l.contains(stem)).count(),
+            1,
+            "the upgrade finds the edited file behind `{stem}` intact"
+        );
+    }
+    assert!(
+        shell_function(&row_text, "phase_remove() {")
+            .iter()
+            .any(|l| l == "precondition \"remove the packages\" pm_remove relay-daemon relay"),
+        "the remove phase removes both packages"
+    );
+
+    // No platform may skip a signature check to install: nothing in the row, the host or a
+    // platform's Dockerfile carries such a flag.
+    for line in [
+        "dnf install -y --nogpgcheck x.rpm",
+        "apt-get install -y --allow-unauthenticated ./x.deb",
+        "rpm -i --nosignature x.rpm",
+        "echo gpgcheck=0 >> /etc/yum.conf",
+        "dnf install -y --setopt=gpgcheck=False x.rpm",
+    ] {
+        assert!(bypasses_signature_checks(line), "must match: {line}");
+    }
+    for line in [
+        "dnf install -y \"$@\"",
+        "apt-get install -y \"$@\"",
+        "rpm -V \"$(rpm -qf \"$CATALOG\")\"",
+        "rpm -K x.rpm",
+    ] {
+        assert!(!bypasses_signature_checks(line), "must not match: {line}");
+    }
+    let mut scanned = vec![
+        ("install-matrix-row.sh".to_string(), commands_of(&row_text)),
+        ("install-matrix-host.sh".to_string(), host),
+    ];
+    for entry in std::fs::read_dir(repo().join("docker/install-matrix")).expect("read dir") {
+        let path = entry.expect("entry").path();
+        scanned.push((path.display().to_string(), commands_of(&read(&path))));
+    }
+    assert!(
+        scanned.len() >= 7,
+        "the row, the host and every Dockerfile were read"
+    );
+    for (file, lines) in &scanned {
+        for line in lines {
+            assert!(
+                !bypasses_signature_checks(line),
+                "{file} installs without a signature check: {line}"
+            );
+        }
+    }
+}
+
+fn commands_of(text: &str) -> Vec<String> {
+    logical(text)
+        .into_iter()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .collect()
+}
+
+// ---- the Relay image: published by digest, signed keylessly ----
+
+/// Whether `line` signs a container image: `cosign sign`, not `cosign sign-blob`.
+fn signs_image(line: &str) -> bool {
+    re(r"\bcosign\s+sign\s").is_match(line)
+}
+
+/// Whether `line` is a `cosign sign` with no key, naming the image by digest as its last word.
+fn keyless_at_digest(line: &str) -> bool {
+    signs_image(line)
+        && !re(r"\s--key(?:=|\s|$)").is_match(line)
+        && line.split_whitespace().last() == Some("\"${IMAGE}@${DIGEST}\"")
+}
+
+/// Whether `line` copies something to a tag of the Relay image, not to a digest.
+fn copies_to_a_tag(line: &str) -> bool {
+    re(r#"\bskopeo\s+copy\b.*"docker://\$\{IMAGE\}:"#).is_match(line)
+}
+
+/// Whether `line` carries `flag` as whole words.
+fn has_flag(line: &str, flag: &str) -> bool {
+    re(&format!(r"(?:^|\s){}(?:\s|$)", regex::escape(flag))).is_match(line)
+}
+
+/// The release builds the Relay image from the guarded binary and guards the archive for both
+/// architectures; the signing job pushes that archive by digest, signs the digest keylessly,
+/// verifies the signature against the workflow's identity, and only then tags it; no other job
+/// writes a tag before the signer has run.
+// Proves RC-7.
+#[test]
+fn release_publishes_the_relay_image_by_digest_signed_keylessly() {
+    // The matchers, on lookalikes.
+    let shipped = "cosign sign --yes --recursive \"${IMAGE}@${DIGEST}\"";
+    assert!(signs_image(shipped) && keyless_at_digest(shipped));
+    assert!(!signs_image(
+        "cosign sign-blob --yes --bundle b dist/SHA256SUMS"
+    ));
+    for line in [
+        "cosign sign --key cosign.key \"${IMAGE}@${DIGEST}\"",
+        "cosign sign --yes --key=cosign.key \"${IMAGE}@${DIGEST}\"",
+        "cosign sign --yes \"${IMAGE}:${version}\"",
+    ] {
+        assert!(!keyless_at_digest(line), "must refuse: {line}");
+    }
+    assert!(copies_to_a_tag(
+        "skopeo copy --all --preserve-digests \"docker://${IMAGE}@${digest}\" \"docker://${IMAGE}:latest\""
+    ));
+    assert!(!copies_to_a_tag(
+        "skopeo copy --all oci-archive:image/relay-image.oci.tar \"docker://${IMAGE}@${DIGEST}\""
+    ));
+    assert!(!copies_to_a_tag(
+        "skopeo inspect --raw \"docker://${IMAGE}:${version}\""
+    ));
+    assert!(has_flag(
+        "docker buildx build --target release --x",
+        "--target release"
+    ));
+    assert!(!has_flag(
+        "docker buildx build --target release-binary",
+        "--target release"
+    ));
+    assert!(!has_flag(
+        "docker buildx build --target runtime",
+        "--target release"
+    ));
+    assert!(!has_flag(
+        "--file docker/relay.Dockerfile.dev",
+        "--file docker/relay.Dockerfile"
+    ));
+    let key_env = re(r"\bCOSIGN_(?:KEY|PRIVATE_KEY|PASSWORD)\b");
+    for line in [
+        "COSIGN_KEY: ${{ secrets.K }}",
+        "COSIGN_PRIVATE_KEY=x",
+        "COSIGN_PASSWORD: x",
+    ] {
+        assert!(key_env.is_match(line), "must match: {line}");
+    }
+    assert!(!key_env.is_match("cosign-release: v3.1.3"));
+
+    let all = release();
+
+    // The image job: no privilege, the release target from the guarded binary, an OCI archive
+    // the guard reads for both architectures before the digest is written and uploaded.
+    let (image_name, image) = only(&all, "the job that builds the image", |_, j| {
+        j.contains("docker buildx build")
+    });
+    assert!(
+        !grants_privilege(image),
+        "the image job holds no write grant"
+    );
+    let build_step = step_index(image, "building the image", |s| {
+        s.contains("docker buildx build")
+    });
+    let build = logical(&steps(image)[build_step])
+        .into_iter()
+        .find(|l| l.trim_start().starts_with("docker buildx build"))
+        .expect("a buildx line");
+    for flag in [
+        "--file docker/relay.Dockerfile",
+        "--target release",
+        "--build-context \"release-binary=${PWD}/dist/image\"",
+        "--output type=oci,dest=relay-image.oci.tar",
+    ] {
+        assert!(
+            has_flag(&build, flag),
+            "the build carries `{flag}`: {build}"
+        );
+    }
+    let guard_step = step_index(image, "guarding the archive", |s| {
+        logical(s).iter().any(|l| {
+            l.trim() == "for p in amd64:x86_64 arm64:aarch64; do"
+        }) && logical(s).iter().any(|l| {
+            re(r#"\bbash scripts/release-image-guard\.sh relay-image\.oci\.tar "linux/\$\{goarch\}""#)
+                .is_match(l)
+        })
+    });
+    let digest_step = step_index(image, "writing the digest", |s| {
+        s.contains("> relay-image.digest")
+    });
+    let upload_step = step_index(image, "uploading the image", |s| {
+        s.contains("uses: actions/upload-artifact") && s.contains("name: release-image")
+    });
+    assert!(
+        build_step < guard_step && guard_step < digest_step && digest_step < upload_step,
+        "build, guard both architectures, write the digest, upload"
+    );
+
+    // The signing job.
+    let (signer_name, signer) = only(&all, "the job that signs the image", |_, j| {
+        logical(j).iter().any(|l| signs_image(l))
+    });
+    assert!(
+        needs(signer).contains(image_name),
+        "the signer needs the job that guarded the archive"
+    );
+    let grants = perms(signer);
+    assert_eq!(grants.get("id-token").map(String::as_str), Some("write"));
+    assert_eq!(grants.get("packages").map(String::as_str), Some("write"));
+    assert!(
+        re(r"(?m)^ {6}IMAGE:\s*ghcr\.io/felag-engineering/relay\s*$").is_match(signer),
+        "the signer names the published repository"
+    );
+    assert!(
+        !key_env.is_match(signer),
+        "a signing key in the job or a step would make the signature not keyless"
+    );
+    let signing_lines: Vec<String> = logical(signer)
+        .into_iter()
+        .filter(|l| signs_image(l))
+        .collect();
+    assert_eq!(
+        signing_lines.len(),
+        1,
+        "one image signature: {signing_lines:?}"
+    );
+    assert!(
+        keyless_at_digest(signing_lines[0].trim()),
+        "the signature is keyless and at the digest: {signing_lines:?}"
+    );
+    let digest_check = step_index(signer, "validating the digest", |s| {
+        s.contains("^sha256:[0-9a-f]{64}$") && s.contains("id: digest")
+    });
+    let push = step_index(signer, "pushing by digest", |s| {
+        logical(s).iter().any(|l| {
+            re(r#"\bskopeo\s+copy\b.*oci-archive:image/relay-image\.oci\.tar\s+"docker://\$\{IMAGE\}@\$\{DIGEST\}"\s*$"#).is_match(l)
+        })
+    });
+    let sign = step_index(signer, "signing the image", |s| {
+        logical(s).iter().any(|l| signs_image(l))
+            && re(r"(?m)^\s+DIGEST:\s*\$\{\{\s*steps\.digest\.outputs\.digest\s*\}\}\s*$")
+                .is_match(s)
+    });
+    let verify = step_index(signer, "verifying the signature", |s| {
+        logical(s).iter().any(|l| {
+            re(r#"\bcosign\s+verify\s+"\$\{IMAGE\}@\$\{DIGEST\}"\s+--certificate-identity\s+"https://github\.com/\$\{GITHUB_REPOSITORY\}/\.github/workflows/release\.yml@\$\{GITHUB_REF\}"\s+--certificate-oidc-issuer\s+https://token\.actions\.githubusercontent\.com\s*$"#).is_match(l)
+        })
+    });
+    let tag = step_index(signer, "tagging the verified digest", |s| {
+        logical(s).iter().any(|l| {
+            re(r#"\bskopeo\s+copy\b.*"docker://\$\{IMAGE\}@\$\{DIGEST\}"\s+"docker://\$\{IMAGE\}:\$\{version\}"\s*$"#).is_match(l)
+        })
+    });
+    assert!(
+        digest_check < push && push < sign && sign < verify && verify < tag,
+        "validate the digest, push by digest, sign, verify, then tag"
+    );
+
+    // No other job writes a tag unless the signer ran before it.
+    let tagging: Vec<&String> = all
+        .iter()
+        .filter(|(n, j)| *n != signer_name && logical(j).iter().any(|l| copies_to_a_tag(l)))
+        .map(|(n, _)| n)
+        .collect();
+    assert!(!tagging.is_empty(), "the :latest move is a tagging job");
+    for name in tagging {
+        assert!(
+            ancestors(&all, name).contains(signer_name),
+            "job {name} writes a tag without the signer among its ancestors"
+        );
+    }
 }

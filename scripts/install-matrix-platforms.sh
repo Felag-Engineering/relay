@@ -10,8 +10,9 @@
 # unless the two sets are equal, platform for platform and architecture for architecture.
 #
 # It anchors on DI-33's wording and fails closed: any rewording sends its author here rather
-# than passing vacuously. It reads DI-33 in either shape the spec may hold it in (the Designed
-# table row, or the promoted bullet with indented continuation lines), at any line wrap.
+# than passing vacuously. It reads DI-33 in either shape the spec may hold it in (the promoted
+# bullet with indented continuation lines, read only inside `## Behaviour`, or the table row,
+# read only inside `## Designed, not built`), at any line wrap.
 #
 # Defaults: docs/specs/daemon-installation.md, .github/workflows/install-matrix.yml and
 # docker/install-matrix, resolved from the repository root. Needs bash, awk, sed, grep and
@@ -32,15 +33,21 @@ die() { echo "install-matrix-platforms: $*" >&2; exit 1; }
 
 # --- DI-33's text -------------------------------------------------------------------------
 
-# The Designed shape: the second cell of the `| DI-33 |` table row.
-claim="$(awk -F'|' '$2 ~ /^[[:space:]]*DI-33[[:space:]]*$/ { print $3; exit }' "$SPEC")"
+# The promoted shape: the `- **DI-33**` bullet inside `## Behaviour` and its indented
+# continuation lines, up to the next bullet, a blank line or a heading. A copy of the bullet in
+# any other section is never read.
+claim="$(awk '
+  found && ($0 ~ /^- \*\*/ || $0 ~ /^[[:space:]]*$/ || $0 ~ /^#/) { exit }
+  /^## / { behaviour = ($0 ~ /^## Behaviour[[:space:]]*$/) }
+  behaviour && $0 ~ /^- \*\*DI-33\*\*/ { found = 1 }
+  found { print }
+' "$SPEC")"
 if [ -z "$claim" ]; then
-  # The promoted shape: the `- **DI-33**` bullet and its indented continuation lines, up to
-  # the next bullet, a blank line or a heading.
-  claim="$(awk '
-    found && ($0 ~ /^- \*\*/ || $0 ~ /^[[:space:]]*$/ || $0 ~ /^#/) { exit }
-    $0 ~ /^- \*\*DI-33\*\*/ { found = 1 }
-    found { print }
+  # The Designed shape: the second cell of the `| DI-33 |` row inside `## Designed, not built`.
+  # The Proof table's row names a test and is never read.
+  claim="$(awk -F'|' '
+    /^## / { designed = ($0 ~ /^## Designed, not built[[:space:]]*$/) }
+    designed && $2 ~ /^[[:space:]]*DI-33[[:space:]]*$/ { print $3; exit }
   ' "$SPEC")"
 fi
 [ -n "$claim" ] || die "DI-33 not found in $SPEC"

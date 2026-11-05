@@ -73,7 +73,7 @@ fn seed_identity(dir: &Path, only: Option<&[&str]>) {
     }
 }
 
-// Proves EN-33.
+// Proves EN-33, DI-25.
 #[test]
 fn unconfigured_node_exits_zero() {
     let state = TempDir::new("exit-unconfigured");
