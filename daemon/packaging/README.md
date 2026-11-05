@@ -37,12 +37,14 @@ environment example are release attachments too; to install by hand, see below.
   and removes it on upgrade (Replaces and Conflicts on .deb; Obsoletes and Conflicts on
   .rpm).
 
-Removing `relay-daemon` stops and disables the unit and removes the binary, the unit and the shipped catalog. It
-keeps the Policy, the Policy directory, the environment file and the state directory (the
-Node's identity). `apt purge` then deletes those the package created, using a marker under
-`/var/lib/relay-daemon-package/` that records what existed before the first install; a
-directory holding anything the package did not put there is left and named. `.rpm` has no
-purge: removal prints the paths to delete by hand.
+Removing `relay-daemon` stops and disables the unit and removes the binary, the unit and the
+shipped catalog. It keeps the Policy, the Policy directory, the environment file and the
+state directory (the Node's identity). `apt purge` then deletes those the package created,
+using a marker under `/var/lib/relay-daemon-package/` that records what existed before the
+first install; a directory holding anything the package did not put there is left and named.
+The Policy file stays while the Policy directory does, because a later install places no
+default Policy beside an existing Policy directory. `.rpm` has no purge: removal prints the
+paths to delete by hand.
 
 ## Ansible role
 

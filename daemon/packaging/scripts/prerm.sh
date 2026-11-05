@@ -2,7 +2,7 @@
 # relay-daemon prerm (.deb) and %preun (.rpm).
 #
 # On removal only (`.deb` prerm `remove`; `.rpm` $1 == 0), stops and disables the unit while
-# the binary is still in place (DI-25, DI-31). An upgrade changes nothing here: the package
+# the binary is still in place (DI-25, DI-50). An upgrade changes nothing here: the package
 # never restarts the daemon, and config management restarts it onto the new binary.
 set -eu
 

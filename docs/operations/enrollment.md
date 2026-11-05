@@ -295,7 +295,10 @@ The env file comes first because the package places its own only when none exist
 reads the labels from this file at enrollment. Because `/etc/relay-daemon` and the env file
 exist before the package's first install, the package treats them as yours: it never replaces
 the env file, and `apt purge` leaves both. The package still places its default `policy.toml`,
-since `policy.d` did not exist.
+since `policy.d` did not exist. Once your play places a fragment in `policy.d`, `apt purge`
+also keeps that `policy.toml` as it is, edits included, so reinstalling the package leaves
+the Node with that file and its denies beside the fragments. Purge still deletes the Node's
+identity and state directory.
 
 ```jinja
 {# templates/relay-daemon.env.j2, beside your playbook #}

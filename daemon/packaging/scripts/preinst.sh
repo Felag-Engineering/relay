@@ -3,7 +3,7 @@
 #
 # On a first install only, records which of the package's fixed paths already exist, so that
 # postinst places nothing over an operator's files (DI-26, DI-27) and purge deletes only what
-# the package itself created (DI-31). A first install is `.deb` preinst `install` with no old
+# the package itself created (DI-50). A first install is `.deb` preinst `install` with no old
 # version, or `.rpm` with $1 == 1. Every other invocation changes nothing.
 #
 # The marker holds fixed tokens only, and purge maps each token to a literal path: no path is

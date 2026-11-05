@@ -5,7 +5,7 @@
 # CI installs the package, upgrades it over the operator's edited configuration and finds the
 # edit intact, and removes it. Each row below does exactly that, in a systemd-as-PID-1
 # container, on x86_64 and aarch64 runners, and scripts/install-matrix-row.sh labels every
-# assertion with the spec claim it is evidence for (DI-25, DI-26, DI-27, DI-29, DI-31, DI-42,
+# assertion with the spec claim it is evidence for (DI-25, DI-26, DI-27, DI-29, DI-42, DI-50,
 # RC-15, RC-24, RC-25, RC-26). One row installs where systemd is not running. The vm-trace
 # jobs run the enroll, connect, execute syscall trace against the packaged unit on the runner
 # VM (DI-3's check of the packaged unit); a human signs off its first green report. The

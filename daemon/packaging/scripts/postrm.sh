@@ -2,11 +2,12 @@
 # relay-daemon postrm (.deb) and %postun (.rpm).
 #
 # Remove keeps the Policy, the Policy directory, the environment file and the state directory
-# (DI-31). `.deb` purge deletes what the package created and nothing else: it reads only the
+# (DI-50). `.deb` purge deletes what the package created and nothing else: it reads only the
 # marker preinst and postinst wrote, acts only on the literal paths its fixed tokens name, and
 # never reads a path from any file an operator edits, nor a marker in a directory another
 # account could write. A directory that holds anything the package did not put there (a Policy
-# fragment, an operator's Template) is left, and named.
+# fragment, an operator's Template) is left, and named. While the Policy directory survives, so
+# does the Policy file the package placed, because a later install places no default beside it.
 # `.rpm` has no purge: removal deletes no state and prints the paths to delete by hand.
 set -eu
 
@@ -72,12 +73,18 @@ purge() {
   # Nothing under $ETC is touched unless it is a real directory: through a symlink, a path the
   # package created would resolve to somewhere it did not create.
   if plain_dir "$ETC"; then
-    if created policy; then rm -f "$ETC/policy.toml"; fi
-    if created env; then rm -f "$ETC/relay-daemon.env"; fi
     if created policy-dir && plain_dir "$ETC/policy.d"; then
       rmdir "$ETC/policy.d" 2>/dev/null \
         || echo "relay-daemon: $ETC/policy.d holds files the package did not create; left in place"
     fi
+    # The Policy directory survives only while it holds an entry, and a later install places no
+    # default Policy beside an existing one, so the Policy file stays with it (DI-50).
+    if created policy && ! exists "$ETC/policy.d"; then
+      rm -f "$ETC/policy.toml"
+    elif created policy && exists "$ETC/policy.toml"; then
+      echo "relay-daemon: $ETC/policy.toml kept: a later install places no default Policy beside $ETC/policy.d, so its fragments would run without the shipped denies"
+    fi
+    if created env; then rm -f "$ETC/relay-daemon.env"; fi
     if created etc; then
       rmdir "$ETC" 2>/dev/null \
         || echo "relay-daemon: $ETC holds files the package did not create; left in place"
@@ -106,6 +113,11 @@ case "${1:-}" in
     echo "relay-daemon: removed. Configuration and state were kept; delete by hand when this"
     echo "Node leaves for good (the state directory holds the Node's identity):"
     leftovers
+    if plain_dir "$ETC" && exists "$ETC/policy.d" && exists "$ETC/policy.toml"; then
+      echo "Delete $ETC/policy.toml only together with $ETC/policy.d: a later install places no"
+      echo "default Policy beside an existing Policy directory, so its fragments would run"
+      echo "without the shipped denies."
+    fi
     ;;
   [0-9]*) reload ;;
 esac
