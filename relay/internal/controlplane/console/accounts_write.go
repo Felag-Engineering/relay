@@ -1195,7 +1195,7 @@ var accountsMintedTmpl = newScreen("accounts-minted", `
   <p class="note">Shown once.</p>
   <p class="note">Token id <code>{{.TokenID}}</code>{{if .Expires.IsZero}}, which does not expire{{else}}, expiring {{stamp .Expires}}{{end}}.</p>
   {{with .Harness}}
-  <h4>relay-ca.pem</h4>
+  <h4>relay-ca-cert.pem</h4>
   <pre><code>{{.CACertificate}}</code></pre>
   <h4>Claude Code</h4>
   <pre><code>{{.ClaudeCode}}</code></pre>

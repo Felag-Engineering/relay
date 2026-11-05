@@ -1735,7 +1735,7 @@ func TestAccountsWrite_TheMintResponseRendersTheHarnessSetupOnlyThere(t *testing
 				t.Fatalf("status = %d, want 200; body %s", rec.Code, contentOf(rec.Body.String()))
 			}
 			body := rec.Body.String()
-			for _, label := range []string{"relay-ca.pem", "Claude Code", ".mcp.json", "Check"} {
+			for _, label := range []string{harnesssetup.CAFileName, "Claude Code", ".mcp.json", "Check"} {
 				if !strings.Contains(body, "<h4>"+label+"</h4>") {
 					t.Errorf("the mint response has no %q block", label)
 				}
@@ -1779,7 +1779,7 @@ func TestAccountsWrite_AFailedMintRendersNoHarnessSetup(t *testing.T) {
 	if strings.Contains(body, sweepMintedPlaintext) {
 		t.Error("a failed mint rendered the plaintext")
 	}
-	for _, label := range []string{"relay-ca.pem", "Claude Code", ".mcp.json", "Gleipnir", "Check"} {
+	for _, label := range []string{harnesssetup.CAFileName, "Claude Code", ".mcp.json", "Gleipnir", "Check"} {
 		if strings.Contains(body, "<h4>"+label+"</h4>") {
 			t.Errorf("a failed mint rendered the %q harness block", label)
 		}

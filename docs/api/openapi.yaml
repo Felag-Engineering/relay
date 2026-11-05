@@ -1800,10 +1800,10 @@ components:
       properties:
         mcp_url:
           type: string
-          description: The Relay's MCP endpoint; its host is a name on the server certificate.
+          description: "The Relay's MCP endpoint. Its host is a name on the server certificate: loopback (127.0.0.1, or [::1] for an IPv6 bind) when the control plane listens on 127.0.0.1 or [::1], otherwise the node plane's advertised host."
         ca_certificate:
           type: string
-          description: The Relay CA certificate (PEM). Public; save it as `relay-ca.pem`.
+          description: The Relay CA certificate (PEM). Public; save it as `relay-ca-cert.pem`.
         claude_code:
           type: string
           description: The `claude mcp add` line and the line that trusts the CA for one `claude` process (with a comment saying why). Embeds the plaintext credential.
