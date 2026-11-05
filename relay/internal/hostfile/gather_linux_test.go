@@ -40,6 +40,9 @@ func wantRefusal(t *testing.T, err error, c Clause, component string) {
 	}
 }
 
+// A symbolic link anywhere on the path, leaf or ancestor, is refused and no file is returned.
+//
+// Proves RC-16.
 func TestGather_SymlinkedAncestorRefused(t *testing.T) {
 	b := base(t)
 	if err := os.Mkdir(filepath.Join(b, "real"), 0o755); err != nil {
@@ -133,7 +136,7 @@ func TestGather_FIFOLeafDoesNotBlock(t *testing.T) {
 // took from one descriptor and returns that same descriptor for the read. A file
 // swapped in after gather is never what is read.
 //
-// Proves RC-48.
+// Proves RC-16, RC-48.
 func TestGather_DecisionAndReadShareDescriptor(t *testing.T) {
 	b := base(t)
 	path := filepath.Join(b, "f")

@@ -7,6 +7,9 @@ import (
 	"testing"
 )
 
+// ca.dir, store.path and tls.hostname have no default: absent or empty is a refusal naming the setting.
+//
+// Proves RC-19.
 func TestValidate_EachRequiredSettingNamed(t *testing.T) {
 	required := []struct{ key, section, name string }{
 		{"ca.dir", "ca", "dir"},
@@ -57,7 +60,7 @@ func TestValidate_EachRequiredSettingNamed(t *testing.T) {
 	})
 }
 
-// Proves RC-22.
+// Proves RC-19, RC-22.
 func TestValidate_InvalidValueRefusedNamingSetting(t *testing.T) {
 	cases := []struct{ section, key, value string }{
 		{"node_plane", "listen_address", `":0"`},

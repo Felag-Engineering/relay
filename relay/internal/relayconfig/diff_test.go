@@ -137,6 +137,9 @@ func TestDiff_ExtraNamesChangeIsRestartRequired(t *testing.T) {
 	}
 }
 
+// A changed secret is named by its _file key and flagged Secret.
+//
+// Proves RC-18.
 func TestDiff_SecretChangeNamedNeverValued(t *testing.T) {
 	const urlA, urlB = "http://127.0.0.1:1/hook-token-A", "http://127.0.0.1:1/hook-token-B"
 	load := func(body string, url, secret string) Config {

@@ -165,6 +165,9 @@ func TestValidate_WebhookURLAndSecretOnlyFromFiles(t *testing.T) {
 	}
 }
 
+// No fmt verb, slog handler or JSON encoding of a Secret, or of a Config holding one, prints the value.
+//
+// Proves RC-18.
 func TestSecret_NeverPrints(t *testing.T) {
 	cfg := resolvedFileSecret(t, secretValueText)
 	s := cfg.Approval.WebhookSecret

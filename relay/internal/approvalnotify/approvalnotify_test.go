@@ -395,6 +395,8 @@ func TestSecretFileMustExistAndBeNonEmpty(t *testing.T) {
 }
 
 // TestNewRefusalsCarryNoURL: the URL may carry a token, and a refusal is logged.
+//
+// Proves RC-18.
 func TestNewRefusalsCarryNoURL(t *testing.T) {
 	for _, raw := range []string{
 		"http://hooks.example.test/T0K3N",
@@ -453,6 +455,8 @@ func hostPort(t *testing.T, raw string) string {
 
 // TestDeliveryLogsCarryNoURL: no delivery outcome puts the URL, or any part of
 // it, in the log. The production client runs, so its redirect policy is under test.
+//
+// Proves RC-18.
 func TestDeliveryLogsCarryNoURL(t *testing.T) {
 	run := func(t *testing.T, target string, wantMsg string, extraBanned ...string) string {
 		t.Helper()

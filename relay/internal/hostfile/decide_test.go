@@ -280,6 +280,10 @@ func tableKind(t *testing.T) {
 	})
 }
 
+// Generated material is the Relay's own: a root-owned key, or any access another account
+// is granted, refuses.
+//
+// Proves RC-17.
 func TestDecide_GeneratedMaterialRule(t *testing.T) {
 	root := func(f *Facts) { f.leaf().UID = 0 }
 	runCases(t, []decideCase{

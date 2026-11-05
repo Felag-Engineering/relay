@@ -63,6 +63,8 @@ func relayUnitPath(t *testing.T) string {
 // check is on the directive's presence and shape, so a later assignment that
 // would add privilege back (a second CapabilityBoundingSet, a "+" Exec prefix,
 // a ReadWritePaths) fails rather than being modelled.
+//
+// Proves RC-17.
 func TestRelayUnit_UnprivilegedNoCapsReadOnly(t *testing.T) {
 	unit := relayUnitPath(t)
 	svc := unitDirectives(t, unit)["Service"]

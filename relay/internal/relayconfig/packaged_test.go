@@ -41,6 +41,8 @@ func renderPackaged(t *testing.T, fqdn string) string {
 // the settings the package promises: the CA and the store inside the state directory, the
 // control plane and the Admin Console on, the control-plane listener on loopback, and the
 // host's name as the certificate hostname (RC-25).
+//
+// Proves RC-17.
 func TestPackagedRelayTOML_FirstInstallSettings(t *testing.T) {
 	cfg, warns, err := Load([]byte(renderPackaged(t, "relay.example.com")))
 	if err != nil {

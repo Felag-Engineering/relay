@@ -73,7 +73,7 @@ func decideFixtureWithRequirement(t *testing.T, req approval.Requirement, store 
 
 // failingApprovals wraps *memApprovals but fails RecordDecision with a
 // non-domain error, standing in for a genuine store outage — as opposed to a
-// domain refusal — on the "store failure" row of
+// domain refusal — on the "store write failure" row of
 // TestDecideApproval_OtherRefusalsAreUnchanged.
 type failingApprovals struct {
 	*memApprovals
@@ -82,6 +82,21 @@ type failingApprovals struct {
 
 func (f *failingApprovals) RecordDecision(context.Context, string, approval.Decision, time.Time) (approval.Request, error) {
 	return approval.Request{}, f.err
+}
+
+// failingReadApprovals wraps *memApprovals and, once armed, fails Get with a
+// non-domain error: a store whose read of the request fails (AP-95).
+type failingReadApprovals struct {
+	*memApprovals
+	err   error
+	armed bool
+}
+
+func (f *failingReadApprovals) Get(ctx context.Context, id string) (approval.Request, error) {
+	if f.armed {
+		return approval.Request{}, f.err
+	}
+	return f.memApprovals.Get(ctx, id)
 }
 
 // countApprovalDecided counts the AuditKindApprovalDecided entries audit has
@@ -1055,10 +1070,14 @@ func TestApprovalAudit_ParksAndDecisionsKeepTheTwoLanesApart(t *testing.T) {
 	}
 }
 
-// TestDecideApproval_OtherRefusalsAreUnchanged is the issue's third
-// acceptance criterion: every refusal besides ErrNotPending returns exactly
-// what it always has — the zero value —
-// and records or audits nothing new.
+// TestDecideApproval_OtherRefusalsAreUnchanged: every refusal besides ErrNotPending
+// returns the zero Request and records or audits nothing.
+//
+// Rows: role floor (AP-49), machine self-decision (AP-48), plan hash (AP-46),
+// approvals not wired (AP-94), request missing (AP-93), not found (AP-42),
+// store write and read failure (AP-95).
+//
+// Proves AP-93, AP-94, AP-95.
 func TestDecideApproval_OtherRefusalsAreUnchanged(t *testing.T) {
 	errRoleFloorDenied := errors.New("authz: unauthorized")
 	errStoreFailure := errors.New("disk on fire")
@@ -1117,7 +1136,7 @@ func TestDecideApproval_OtherRefusalsAreUnchanged(t *testing.T) {
 			},
 		},
 		{
-			name:    "unavailable",
+			name:    "approvals not wired",
 			wantErr: ErrApprovalUnavailable,
 			build: func(t *testing.T) (*testSvc, Principal, ApprovalDecision, *spyAuditSink, func(t *testing.T)) {
 				reg := registry.NewInMemory()
@@ -1135,7 +1154,7 @@ func TestDecideApproval_OtherRefusalsAreUnchanged(t *testing.T) {
 			},
 		},
 		{
-			name:       "missing ID",
+			name:       "request missing",
 			wantErrSub: "request id is required",
 			build: func(t *testing.T) (*testSvc, Principal, ApprovalDecision, *spyAuditSink, func(t *testing.T)) {
 				s, _, audit := decideFixture(t, &spyApprovalAuthorizer{})
@@ -1155,7 +1174,7 @@ func TestDecideApproval_OtherRefusalsAreUnchanged(t *testing.T) {
 			},
 		},
 		{
-			name:    "store failure",
+			name:    "store write failure",
 			wantErr: errStoreFailure,
 			build: func(t *testing.T) (*testSvc, Principal, ApprovalDecision, *spyAuditSink, func(t *testing.T)) {
 				inner := newMemApprovals()
@@ -1163,6 +1182,25 @@ func TestDecideApproval_OtherRefusalsAreUnchanged(t *testing.T) {
 				req := approval.Requirement{TTL: time.Hour}
 				s, audit := decideFixtureWithRequirement(t, req, failing, &spyApprovalAuthorizer{}, func() time.Time { return apNow })
 				parked := park(t, s, machineRequester)
+				return s, humanApprover("acct-ana", "ana"), ApprovalDecision{
+						RequestID: parked.RequestID, PlanHash: parked.PlanHash, Approve: true, Channel: approval.ChannelOutOfBand,
+					}, audit, func(t *testing.T) {
+						if got := inner.byID[parked.RequestID]; len(got.Decisions) != 0 || got.State != approval.StatePending {
+							t.Errorf("stored record changed: %+v", got)
+						}
+					}
+			},
+		},
+		{
+			name:    "store read failure",
+			wantErr: errStoreFailure,
+			build: func(t *testing.T) (*testSvc, Principal, ApprovalDecision, *spyAuditSink, func(t *testing.T)) {
+				inner := newMemApprovals()
+				failing := &failingReadApprovals{memApprovals: inner, err: errStoreFailure}
+				req := approval.Requirement{TTL: time.Hour}
+				s, audit := decideFixtureWithRequirement(t, req, failing, &spyApprovalAuthorizer{}, func() time.Time { return apNow })
+				parked := park(t, s, machineRequester)
+				failing.armed = true
 				return s, humanApprover("acct-ana", "ana"), ApprovalDecision{
 						RequestID: parked.RequestID, PlanHash: parked.PlanHash, Approve: true, Channel: approval.ChannelOutOfBand,
 					}, audit, func(t *testing.T) {

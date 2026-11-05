@@ -10,7 +10,8 @@
 # daemon/ trees, so it proves the shipped script against sources whose contents it controls.
 # Hermetic: bash, grep, awk, find; no Go, no Rust, no network, no writes outside its own
 # `mktemp -d`. The fixture spec is legacy (Status aspirational), which check 2 covers like every
-# other spec and the migrated-shape checks (3a-3h) skip, so no other check can fire here.
+# other spec and the migrated-shape checks (3a-3h) skip, so no other check can fire here
+# (check 6 passes on the fixture's quickstart and install runbook).
 #
 # NOT `set -e`: every case must run and be reported, not stop at the first failure
 # (security-surface-test.sh:13).
@@ -30,11 +31,14 @@ FIX="$WORKDIR/repo"
 fail=0
 
 # --- Fixture repo: the real script, and sources whose test names the cases control.
-mkdir -p "$FIX/scripts" "$FIX/docs/adr" "$FIX/docs/specs" "$FIX/relay/internal/thing" \
+mkdir -p "$FIX/scripts" "$FIX/docs/adr" "$FIX/docs/specs" "$FIX/docs/operations" "$FIX/relay/internal/thing" \
          "$FIX/daemon/src" "$FIX/daemon/tests" "$FIX/daemon/fuzz" "$FIX/daemon/target/debug/build"
 cp "$REPO_ROOT/scripts/check-docs.sh" "$FIX/scripts/check-docs.sh"
 chmod +x "$FIX/scripts/check-docs.sh"
 printf '# ADR-0001: fixture\n\n**Status:** Accepted\n\n## Decision\n\nShort.\n' > "$FIX/docs/adr/0001-fixture.md"
+# The install-path check (6, RC-45) reads these two; with them present it passes.
+printf '$ sudo apt-get install -y ./relay_X_amd64.deb\n' > "$FIX/docs/quickstart.md"
+printf 'Docker Compose is a supported deployment beside the package.\n' > "$FIX/docs/operations/relay-install.md"
 
 cat > "$FIX/relay/internal/thing/thing_test.go" <<'GO'
 package thing

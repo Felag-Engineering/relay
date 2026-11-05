@@ -230,7 +230,7 @@ func TestReload_ValidChangeAppliedAndAudited(t *testing.T) {
 	}
 }
 
-// Proves RC-21.
+// Proves RC-19, RC-21.
 func TestReload_InvalidValueRefusedConfigIntact(t *testing.T) {
 	r := startReloadable(t, "[reach]\nmutate_blast_cap = 5\n\n[log]\nlevel = \"info\"\n")
 
@@ -344,7 +344,7 @@ func TestReload_FailedReloadProcessSurvives(t *testing.T) {
 	r.requireAlive()
 }
 
-// Proves RC-21.
+// Proves RC-15, RC-21.
 func TestReload_RechecksFileFirst(t *testing.T) {
 	r := startReloadable(t, "")
 	bad := r.body(reloadBody{sections: malformedGateRule + "\n[reach]\nmutate_blast_cap = 0\n"})
