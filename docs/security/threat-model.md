@@ -331,14 +331,15 @@ decision** (this milestone is human-led).
    `SystemCallArchitectures=native`, `MemoryDenyWriteExecute=yes`, `CapabilityBoundingSet=CAP_DAC_READ_SEARCH`,
    and `TasksMax=4096` (`daemon/packaging/relay-daemon.service`); the posture is documented in
    `docs/operations/daemon-privilege-posture.md` (offline `systemd-analyze` exposure 3.7→2.1).
-   The profile has **not been exercised on a live systemd host** (the dev fleet is Docker);
-   verifying all five Operations plus a permitted Raw Exec under the filter **requires a human
-   on real hardware** and is the one outstanding acceptance task. #224 applied the profile
-   (PR #241) and closed; the live run is tracked by #246.
+   The profile is exercised live on real systemd hosts by CI on every push to `main`: every
+   read Operation, a gated `service.restart`, a gated Raw Exec and a gated `pkg.install` under
+   the packaged unit, with no syscall outside the filter and no `SIGSYS`
+   (`daemon-privilege-posture.md`, *Live verification*). #224 applied the profile (PR #241).
 
-**Sign-off status: pending human decision.** The disposition of #227 and #236 is discharged
-(both fixed before shipping binaries). The live least-privilege verification (#246) remains
-outstanding; every other criterion is met.
+**Sign-off status: signed off 2026-11-04 (owner decision).** The disposition of #227 and #236 is
+discharged (both fixed before shipping binaries), and the live least-privilege verification ran
+on CI. Every criterion is met; the never-shipped `pkg-install.conf` drop-in stays a manual trace
+(`daemon-privilege-posture.md`).
 
 ## Scope
 
@@ -349,8 +350,7 @@ The Ansible-MCP foil demo (#140) is a positioning exercise, not part of the thre
 ## Kept current
 
 This is a living document: update it alongside the system, not after. When a register entry is
-resolved, or the live least-privilege verification (#246) is run, update the entry and the
-Acceptance status rather than letting the doc drift.
+resolved, update the entry and the Acceptance status rather than letting the doc drift.
 
 **R11 and R15 are the anticipatory entries.** Each records a consequence class a decision
 introduced, not one in shipped code — the Console execution composer, and store-backed reach

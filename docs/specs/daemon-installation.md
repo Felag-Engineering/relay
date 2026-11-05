@@ -45,8 +45,9 @@ from artifacts they can verify before running them.
   so even a compromised daemon cannot rewrite its own Policy or Templates, install packages, or
   write outside its state directory.
 
-The unit's syscall filter is still checked by hand on a real systemd host. No package carrying the
-unit ships until that check is done.
+The unit's syscall filter is traced live on real systemd hosts by CI on every push to `main`, and
+was signed off for release on 2026-11-04 (`docs/operations/daemon-privilege-posture.md`, *Live
+verification*).
 
 - **DI-5** Relaxing that sandbox is a drop-in the operator places, documented and never shipped,
   so a Node that may install packages or write elsewhere is one whose operator chose it, visibly,
