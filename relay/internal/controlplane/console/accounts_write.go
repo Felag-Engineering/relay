@@ -586,7 +586,7 @@ func writeFailedWith(w http.ResponseWriter, pg Page, err error, route, ident, un
 			Heading: "A machine Account never holds a password. " + undone,
 		}
 	case errors.Is(err, capability.ErrAccountsUnavailable), errors.Is(err, capability.ErrTemporaryPasswordsUnavailable):
-		unavailable(w, "Account administration")
+		unavailable(w, accountAdminName)
 		return
 	default:
 		// "Did not happen" would be a claim this branch cannot back:
@@ -625,7 +625,7 @@ func writePrelude(d Deps, w http.ResponseWriter, r *http.Request, title string) 
 		return capability.Principal{}, Page{}, false
 	}
 	if !accountsOffered(d) {
-		unavailable(w, "Account administration")
+		unavailable(w, accountAdminName)
 		return capability.Principal{}, Page{}, false
 	}
 	if err := r.ParseForm(); err != nil {

@@ -191,7 +191,7 @@ func handleWriteNodeTag(d Deps) http.HandlerFunc {
 			return
 		}
 		if d.Tags == nil {
-			unavailable(w, "Tag writes")
+			unavailable(w, tagWritesName)
 			return
 		}
 		pg, ok := page(d, w, r, tagWriteTitle)
@@ -234,11 +234,11 @@ func handleConfirmTags(d Deps) http.HandlerFunc {
 			return
 		}
 		if !tagsOffered(d, accounts.Role(caller.Role), bulkTagsPattern) {
-			unavailable(w, "Tag writes")
+			unavailable(w, tagWritesName)
 			return
 		}
 		if d.Queries == nil {
-			unavailable(w, "the audited read lane")
+			unavailable(w, auditedReadLaneName)
 			return
 		}
 		pg, ok := page(d, w, r, tagWriteTitle)
@@ -325,7 +325,7 @@ func handleWriteTags(d Deps) http.HandlerFunc {
 			return
 		}
 		if d.Tags == nil {
-			unavailable(w, "Tag writes")
+			unavailable(w, tagWritesName)
 			return
 		}
 		pg, ok := page(d, w, r, tagWriteTitle)
@@ -397,7 +397,7 @@ func tagWriteFailed(w http.ResponseWriter, pg Page, err error, route, back, back
 	case isTagBadRequest(err):
 		tagRefusal(w, pg, http.StatusBadRequest, tagRefusalText(err)+" "+tagNotChanged, back, backLabel)
 	case errors.Is(err, capability.ErrTagsUnavailable):
-		unavailable(w, "Tag writes")
+		unavailable(w, tagWritesName)
 	default:
 		pg.logger().Error("console tag write returned an error", "route", route, "error", err)
 		tagRefusal(w, pg, http.StatusInternalServerError, tagUnconfirmedHeading, back, backLabel)

@@ -277,7 +277,7 @@ func handleAccounts(d Deps) http.HandlerFunc {
 			return
 		}
 		if d.Accounts == nil {
-			unavailable(w, "Account administration")
+			unavailable(w, accountAdminName)
 			return
 		}
 		d, lane := latched(d)

@@ -216,6 +216,15 @@ func notFoundHandler(d Deps) http.HandlerFunc {
 	}
 }
 
+// The unavailable page names the unwired dependency. These are the names more
+// than one handler passes, so the same dependency reads the same everywhere.
+const (
+	accountAdminName      = "Account administration"
+	tagWritesName         = "Tag writes"
+	policyAliasWritesName = "Policy alias writes"
+	auditedReadLaneName   = "the audited read lane"
+)
+
 // unavailable renders a screen whose backing seam the composition root did not
 // wire.
 //

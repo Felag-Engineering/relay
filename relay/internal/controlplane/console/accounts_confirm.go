@@ -103,7 +103,7 @@ func confirmPrelude(d Deps, w http.ResponseWriter, r *http.Request) (capability.
 		return capability.Principal{}, Page{}, false
 	}
 	if !accountsOffered(d) {
-		unavailable(w, "Account administration")
+		unavailable(w, accountAdminName)
 		return capability.Principal{}, Page{}, false
 	}
 	pg, ok := page(d, w, r, "Accounts")
@@ -138,7 +138,7 @@ func confirmReadFailed(w http.ResponseWriter, pg Page, err error, ident, what st
 			"No API Token of this Account matches the request. Nothing was changed.",
 			accountBack("", true))
 	case errors.Is(err, capability.ErrAccountsUnavailable):
-		unavailable(w, "Account administration")
+		unavailable(w, accountAdminName)
 	default:
 		unreadable(w, what)
 	}
