@@ -264,7 +264,7 @@ func policyAliasRefusal(w http.ResponseWriter, pg Page, status int, heading, hre
 // sentence-cased: they name the rule and never echo what the caller typed.
 func policyAliasWriteFailed(w http.ResponseWriter, pg Page, err error, back, backLabel string) {
 	refuse := func(status int) {
-		reason := strings.TrimPrefix(firstJoinedErr(err).Error(), "capability: ")
+		reason := strings.TrimPrefix(capability.FirstRefusal(err).Error(), "capability: ")
 		heading := sentenceCase(reason)
 		if !strings.HasSuffix(heading, ".") {
 			heading += "."
@@ -276,7 +276,7 @@ func policyAliasWriteFailed(w http.ResponseWriter, pg Page, err error, back, bac
 		// The capability layer decided this. A refusal reaches here joined with
 		// the error from recording it, so only the first is shown: a failed
 		// refusal-audit must not put store detail on the page.
-		heading := "The Relay refused this alias change: " + firstJoinedErr(err).Error() + ". " + policyAliasNotChanged
+		heading := "The Relay refused this alias change: " + capability.FirstRefusal(err).Error() + ". " + policyAliasNotChanged
 		policyAliasRefusal(w, pg, http.StatusForbidden, heading, back, backLabel)
 	case errors.Is(err, capability.ErrPolicyFingerprintMalformed),
 		errors.Is(err, capability.ErrPolicyAliasEmpty),

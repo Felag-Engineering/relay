@@ -144,7 +144,7 @@ func writeTagError(w http.ResponseWriter, err error) {
 	var missing *capability.TagNodesNotFoundError
 	switch {
 	case errors.Is(err, authz.ErrUnauthorized):
-		writeProblem(w, http.StatusForbidden, "forbidden", firstJoined(err).Error())
+		writeProblem(w, http.StatusForbidden, "forbidden", capability.FirstRefusal(err).Error())
 	case errors.As(err, &missing):
 		detail := "no Node was changed"
 		if len(missing.NodeIDs) > 0 {
@@ -164,16 +164,4 @@ func writeTagError(w http.ResponseWriter, err error) {
 		}
 		writeProblem(w, http.StatusInternalServerError, "tag write failed", "")
 	}
-}
-
-// firstJoined returns the first error of an errors.Join result, or err itself
-// when it is not one. The capability layer joins a refusal first, so this is
-// the refusal without the error from recording it.
-func firstJoined(err error) error {
-	if joined, ok := err.(interface{ Unwrap() []error }); ok {
-		if errs := joined.Unwrap(); len(errs) > 0 {
-			return errs[0]
-		}
-	}
-	return err
 }

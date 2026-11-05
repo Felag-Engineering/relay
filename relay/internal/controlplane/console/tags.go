@@ -383,7 +383,7 @@ func tagWriteFailed(w http.ResponseWriter, pg Page, err error, route, back, back
 		// error is shown: a failed refusal-audit must not put store detail on
 		// the page.
 		tagRefusal(w, pg, http.StatusForbidden,
-			"The Relay refused this tag change: "+firstJoinedErr(err).Error()+". "+tagNotChanged, back, backLabel)
+			"The Relay refused this tag change: "+capability.FirstRefusal(err).Error()+". "+tagNotChanged, back, backLabel)
 	case errors.As(err, &missing):
 		heading := tagNodeGoneHeading
 		if len(missing.NodeIDs) > 0 {
@@ -454,18 +454,6 @@ func tagRefusalText(err error) string {
 		return "A Node carries at most " + strconv.Itoa(registry.MaxTagsPerNode) + " tags."
 	}
 	return sentenceCase(strings.TrimPrefix(err.Error(), "capability: "))
-}
-
-// firstJoinedErr returns the first error of an errors.Join result, or err
-// itself when it is not one. The capability layer joins a refusal first, so this
-// is the refusal without the error from recording it.
-func firstJoinedErr(err error) error {
-	if joined, ok := err.(interface{ Unwrap() []error }); ok {
-		if errs := joined.Unwrap(); len(errs) > 0 {
-			return errs[0]
-		}
-	}
-	return err
 }
 
 // tagNode is one listed Node on the confirmation page. It has the fields the

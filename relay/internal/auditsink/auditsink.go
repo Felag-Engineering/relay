@@ -479,7 +479,7 @@ func (s *Sink) RecordHaltedSettlement(ctx context.Context, task jobs.Task, res j
 		Kind:          audit.KindDispatch,
 		JobID:         task.JobID,
 		NodeID:        task.NodeID,
-		ActionKind:    actionKindString(task.Action.Kind),
+		ActionKind:    approval.ActionKindName(task.Action.Kind),
 		OperationName: task.Action.OperationName,
 		Outcome:       res.Outcome,
 		Reason:        "settled_after_restart=halted_job task_id=" + task.ID,
@@ -686,23 +686,10 @@ func (s *Sink) baseRecord(p capability.Principal, a capability.Assertions, sel c
 		Principal:     p.Attribution(),
 		Attribution:   attribution(p, a),
 		Selector:      sel.String(),
-		ActionKind:    actionKindString(act.Kind),
+		ActionKind:    approval.ActionKindName(act.Kind),
 		OperationName: act.OperationName,
 		Args:          act.OperationArgs,
 		RawExecArgv:   act.RawExecArgv,
-	}
-}
-
-// actionKindString renders a jobs.ActionKind as the string audit.Record
-// stores, mirroring internal/store's tasks.go action_kind mapping.
-func actionKindString(k jobs.ActionKind) string {
-	switch k {
-	case jobs.ActionOperation:
-		return "operation"
-	case jobs.ActionRawExec:
-		return "raw_exec"
-	default:
-		return "unspecified"
 	}
 }
 
@@ -756,7 +743,7 @@ func (s *Sink) logDecision(kind string, e capability.AuditEntry, matched int, co
 		"kind", kind,
 		"principal", e.Principal.Attribution(),
 		"selector", e.Selector.String(),
-		"action_kind", actionKindString(e.Action.Kind),
+		"action_kind", approval.ActionKindName(e.Action.Kind),
 	}
 	if e.Action.Kind == jobs.ActionOperation {
 		attrs = append(attrs, "operation", e.Action.OperationName)
