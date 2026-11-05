@@ -92,7 +92,8 @@ the conformant form (ADR-0029).
 
 **What a decision does**
 
-- **AP-26** A decision is refused for any cause under *Refusals*, and for no other.
+- **AP-26** The capability layer refuses a decision for any cause under *Refusals*, and for no
+  other. A surface may also refuse input it cannot parse before the decision reaches it.
 - **AP-82** A request is ended by its first Decision that no refusal stops: an approving Decision releases it, and a denying one ends it.
 - **AP-27** A denial is terminal, and audited as fully as a release.
 - **AP-11** A machine Account cannot decide its own request on the Control API; only an
