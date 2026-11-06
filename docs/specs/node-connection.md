@@ -37,8 +37,7 @@ targets.
   the Relay presents its server certificate and the daemon its client certificate, and each
   verifies the other.
 - **NC-3** A Node's identity is the Node ID in its verified client certificate, never a value
-  the daemon sends. A `Hello` naming a different Node ID proceeds under the certificate's Node
-  ID; the named ID is logged and ignored.
+  the daemon sends.
 - **NC-4** On every connect the daemon verifies the Relay's server certificate against the CA it
   pinned at enrollment, and trusts no system or public roots.
 - **NC-5** The daemon reads its identity from its state directory at each connect, so a renewed
@@ -142,6 +141,7 @@ Stream replacement is not a refusal: the older stream ends because a newer one e
 | NC-35 | Between two connects of the same Node, a change in the client certificate fingerprint writes one audit record with the before and after fingerprints. The record blocks nothing. | v0.2.1 |
 | NC-36 | The Relay counts stream replacements per Node and writes at most one audit record per Node per 10 minutes, carrying the number of replacements since the previous record, so a single replacement is recorded and a flapping pair writes a bounded number of records (R54). | v0.2.1 |
 | NC-37 | The Relay measures each heartbeat's timestamp against its own clock and records the difference on the Node's registry record as its clock skew: a Relay-measured value, kept apart from the self-reported Facts. Clock skew never blocks a connection or a dispatch. | v0.2.1 |
+| NC-38 | `Hello` carries no Node ID: its field is deprecated in `/proto`, the daemon never sets it and the Relay never reads it. | v0.2.1 |
 
 ## Out of scope
 
