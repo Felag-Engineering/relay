@@ -139,9 +139,10 @@ Stream replacement is not a refusal: the older stream ends because a newer one e
 | NC-33 | Between two connects of the same Node, a change in the reported Policy fingerprint or in whether Raw Exec is enabled writes one audit record with the before and after values. A Node's first connect writes none, and the record blocks nothing. | v0.2.1 |
 | NC-34 | Between two connects of the same Node, a change in the reported daemon version writes one audit record with the before and after versions, marked as a downgrade when the new version is lower. The record blocks nothing. | v0.2.1 |
 | NC-35 | Between two connects of the same Node, a change in the client certificate fingerprint writes one audit record with the before and after fingerprints. The record blocks nothing. | v0.2.1 |
-| NC-36 | The Relay counts stream replacements per Node and writes at most one audit record per Node per 10 minutes, carrying the number of replacements since the previous record, so a single replacement is recorded and a flapping pair writes a bounded number of records (R54). | v0.2.1 |
+| NC-36 | The Relay counts stream replacements per Node and, while it runs, writes at most one audit record per Node per 10 minutes, carrying the number of replacements since the previous record, so a single replacement is recorded and a flapping pair writes a bounded number of records (R54). | v0.2.1 |
 | NC-37 | The Relay measures each heartbeat's timestamp against its own clock and records the difference on the Node's registry record as its clock skew: a Relay-measured value, kept apart from the self-reported Facts. Clock skew never blocks a connection or a dispatch. | v0.2.1 |
 | NC-38 | `Hello` carries no Node ID: its field is deprecated in `/proto`, the daemon never sets it and the Relay never reads it. | v0.2.1 |
+| NC-39 | The change records of NC-33, NC-34 and NC-35 are limited per Node and per kind: while the Relay runs, at most one record per 10 minutes, carrying the number of changes since the previous record of that kind, so a single change is recorded at once and a Node that keeps changing its report, or two parties sharing one certificate, write a bounded number of records (R51, R54). | v0.2.1 |
 
 ## Out of scope
 
