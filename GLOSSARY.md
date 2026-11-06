@@ -375,11 +375,11 @@ narrows: execution needs a Grant and Policy, and Policy has the last word. See *
 _Avoid_: policy (reserved for the Node-side document), permission, ACL, rule
 
 **Account**:
-A named identity, human or machine, with a role, to which every credential binds; the unit of
-Relay-side authorization and audit attribution (ADR-0010). Roles ladder: `viewer` reads, `operator` also
-runs structured Operations, `admin` also uses Raw Exec and administers the control plane. Relay seeds no
-Account and reserves no name; the **founding admin** is the first human `admin`, named at `relay init`
-(ADR-0030). An Account is a durable identity; a token is a revocable credential for one.
+A named identity, human or machine, with a role, to which every credential binds; the unit of Relay-side
+authorization and audit attribution (ADR-0010). Roles ladder: **`viewer`** may read but dispatch nothing,
+**`operator`** may additionally run structured Operations, **`admin`** may additionally use Raw Exec and
+administer the control plane. Relay seeds no Account and reserves no name; the **founding admin** is the
+first human `admin`, named at `relay init` (ADR-0030). A token is a revocable credential for an Account.
 _Avoid_: user, principal, service account (say "machine Account")
 
 **API Token**:
