@@ -487,38 +487,49 @@ func (m *Metrics) appendGauges(buf []byte) []byte {
 	}
 
 	if m.src.Nodes != nil {
-		total, revoked, err := m.src.Nodes()
-		if err != nil {
-			slog.Debug("metrics: read node counts failed", "err", err)
-		} else {
+		counts := func() (nodeCounts, error) {
+			total, revoked, err := m.src.Nodes()
+			return nodeCounts{total, revoked}, err
+		}
+		if n, ok := sampled("node counts", counts); ok {
 			buf = appendGauge(buf, "relay_nodes_enrolled",
-				"Total Nodes ever enrolled (including revoked).", int64(total))
+				"Total Nodes ever enrolled (including revoked).", int64(n.total))
 			buf = appendGauge(buf, "relay_nodes_revoked",
-				"Nodes currently revoked.", int64(revoked))
+				"Nodes currently revoked.", int64(n.revoked))
 		}
 	}
 
 	if m.src.Frozen != nil {
-		frozen, err := m.src.Frozen()
-		if err != nil {
-			slog.Debug("metrics: read freeze state failed", "err", err)
-		} else {
+		if frozen, ok := sampled("freeze state", m.src.Frozen); ok {
 			buf = appendGauge(buf, "relay_freeze_engaged",
 				"Whether the Relay-wide Freeze (ADR-0013) is currently engaged (1) or not (0).", boolToInt64(frozen))
 		}
 	}
 
 	if m.src.ApprovalsWaiting != nil {
-		waiting, err := m.src.ApprovalsWaiting()
-		if err != nil {
-			slog.Debug("metrics: read approvals waiting failed", "err", err)
-		} else {
+		if waiting, ok := sampled("approvals waiting", m.src.ApprovalsWaiting); ok {
 			buf = appendGauge(buf, "relay_approvals_waiting",
 				"Approval Requests waiting for an answer: pending and not past their deadline.", int64(waiting))
 		}
 	}
 
 	return m.appendCertificateRemaining(buf)
+}
+
+// nodeCounts is the Nodes sampler's pair of results as one value, so it can go
+// through sampled.
+type nodeCounts struct{ total, revoked int }
+
+// sampled reads one gauge source. A source that fails is logged at debug and
+// reported as !ok, so its gauge line is omitted rather than rendered with a
+// value the Relay could not read; what names the gauge in the log line.
+func sampled[T any](what string, read func() (T, error)) (T, bool) {
+	v, err := read()
+	if err != nil {
+		slog.Debug("metrics: read "+what+" failed", "err", err)
+		return v, false
+	}
+	return v, true
 }
 
 // appendCertificateRemaining renders relay_certificate_remaining_seconds,
@@ -540,39 +551,27 @@ func (m *Metrics) appendCertificateRemaining(buf []byte) []byte {
 	if len(samples) == 0 {
 		return buf
 	}
-	buf = appendFamilyHeader(buf, "relay_certificate_remaining_seconds",
-		"Seconds until a certificate the Relay holds expires, by certificate; negative once expired.", "gauge")
-	for _, s := range samples {
-		buf = fmt.Appendf(buf, "relay_certificate_remaining_seconds{certificate=%q} %d\n", s.label, s.value)
-	}
-	return buf
+	return appendLabelledFamily(buf, "relay_certificate_remaining_seconds",
+		"Seconds until a certificate the Relay holds expires, by certificate; negative once expired.",
+		"gauge", "certificate", samples)
 }
 
 func appendDispatches(buf []byte, dispatches *[nOutcomes]atomic.Int64) []byte {
-	samples := make([]labelledValue, 0, len(outcomeOrder))
-	for _, o := range outcomeOrder {
-		samples = append(samples, labelledValue{jobs.OutcomeName(o), dispatches[int(o)].Load()})
-	}
 	return appendLabelledCounter(buf, "relay_dispatches_total",
-		"Total Task dispatch outcomes, by outcome.", "outcome", samples)
+		"Total Task dispatch outcomes, by outcome.", "outcome",
+		loadSamples(outcomeOrder, dispatches[:], jobs.OutcomeName))
 }
 
 func appendRefusals(buf []byte, refusals *[nRefusalKinds]atomic.Int64) []byte {
-	samples := make([]labelledValue, 0, len(refusalOrder))
-	for _, k := range refusalOrder {
-		samples = append(samples, labelledValue{refusalLabel(k), refusals[int(k)].Load()})
-	}
 	return appendLabelledCounter(buf, "relay_refusals_total",
-		"Total dispatch refusals before any Task was sent, by reason.", "reason", samples)
+		"Total dispatch refusals before any Task was sent, by reason.", "reason",
+		loadSamples(refusalOrder, refusals[:], refusalLabel))
 }
 
 func appendCertRotations(buf []byte, rotations *[nServerCertListeners]atomic.Int64) []byte {
-	samples := make([]labelledValue, 0, len(listenerOrder))
-	for _, l := range listenerOrder {
-		samples = append(samples, labelledValue{listenerLabel(l), rotations[int(l)].Load()})
-	}
 	return appendLabelledCounter(buf, "relay_server_cert_rotations_total",
-		"Total in-process re-issuances of the Relay's own TLS server certificate, by listener.", "listener", samples)
+		"Total in-process re-issuances of the Relay's own TLS server certificate, by listener.", "listener",
+		loadSamples(listenerOrder, rotations[:], listenerLabel))
 }
 
 // appendAuthFailures renders relay_auth_failures_total: every pair that can be
@@ -599,12 +598,9 @@ func (m *Metrics) appendAuthFailures(buf []byte) []byte {
 }
 
 func appendProtocolViolations(buf []byte, violations *[nViolationRules]atomic.Int64) []byte {
-	samples := make([]labelledValue, 0, len(violationSlotOrder))
-	for _, slot := range violationSlotOrder {
-		samples = append(samples, labelledValue{violationSlotLabel(slot), violations[slot].Load()})
-	}
 	return appendLabelledCounter(buf, "relay_protocol_violations_total",
-		"Total relay-daemon reports refused at the wire boundary as protocol violations, by rule.", "rule", samples)
+		"Total relay-daemon reports refused at the wire boundary as protocol violations, by rule.", "rule",
+		loadSamples(violationSlotOrder, violations[:], violationSlotLabel))
 }
 
 // appendLabelsDeclined renders relay_labels_declined_total, one series per
@@ -668,11 +664,25 @@ type labelledValue struct {
 	value int64
 }
 
-// appendLabelledCounter appends a counter family with one label: the header,
-// then one sample per entry in samples, in order. Label values go through %q,
-// the escaping every labelled series here uses.
+// loadSamples reads one counter per key in order, labelled by label(key). A
+// key indexes counts directly, so every key in order must be in range.
+func loadSamples[K ~int](order []K, counts []atomic.Int64, label func(K) string) []labelledValue {
+	samples := make([]labelledValue, 0, len(order))
+	for _, k := range order {
+		samples = append(samples, labelledValue{label(k), counts[int(k)].Load()})
+	}
+	return samples
+}
+
 func appendLabelledCounter(buf []byte, name, help, label string, samples []labelledValue) []byte {
-	buf = appendFamilyHeader(buf, name, help, "counter")
+	return appendLabelledFamily(buf, name, help, "counter", label, samples)
+}
+
+// appendLabelledFamily appends a family with one label: the header, then one
+// sample per entry in samples, in order. Label values go through %q, the
+// escaping every labelled series here uses.
+func appendLabelledFamily(buf []byte, name, help, typ, label string, samples []labelledValue) []byte {
+	buf = appendFamilyHeader(buf, name, help, typ)
 	for _, s := range samples {
 		buf = fmt.Appendf(buf, "%s{%s=%q} %d\n", name, label, s.label, s.value)
 	}
