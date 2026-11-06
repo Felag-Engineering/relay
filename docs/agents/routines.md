@@ -225,6 +225,11 @@ skipped. The tools that are not Go-built (`shellcheck`, `zizmor`, `cargo-deny`) 
 
 Network access: **Trusted** is sufficient. It covers crates.io, the Go module proxy, and GitHub.
 
+**Schedulers don't source `~/.profile`,** so `cargo`, `go` and `buf` may be missing from a
+routine's `PATH`. The Makefile prepends the usual toolchain directories, but `buf` is usually
+absent, which silently drops two proto gates from `make verify`. Install it with
+`make proto-tools`, or report the skip.
+
 ## The kill switch
 
 Label an open issue that a maintainer authored **`loop:halt`**, ideally one pinned, dedicated

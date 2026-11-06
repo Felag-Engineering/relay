@@ -49,6 +49,41 @@ Two entries skip the top of the chain:
   bound claim untrue — stops the loop, labels the issue `loop:needs-human`, and re-enters at
   `/spec-author`. The loop never resolves it in either direction.
 
+## How to work here
+
+1. **Read before writing.** `GLOSSARY.md`, the capability specification for what you touch,
+   then the ADRs governing it. `docs/agents/domain.md` carries the consumer rules; the
+   invariants in `AGENTS.md` are the index into `docs/adr/`.
+2. **Shape before you spec.** Resolve ambiguity by interrogation, not guessing, and stress-test
+   the idea against the codebase and the ADRs first.
+3. **Spec, design, decompose, implement**, in the order of the chain above. A capability
+   specification is durable, maintained as the capability evolves. An implementation
+   specification is a GitHub issue and is disposable: it dies with its PR. Specs and issues name
+   modules and contracts, never file paths or code snippets. Bugs never get specs: diagnose and
+   fix; if the spec described the broken behaviour as correct, that is an escalation.
+4. **Work the current milestone.** GitHub milestones are the authority on what is in flight:
+   read them with `gh`. A milestone's acceptance criteria live on its issues; durable behaviour
+   lives in the capability specification, never in a planning document. Issues decompose a
+   milestone and never redefine one. Do not pull a
+   future milestone forward, and do not self-assign one gated on something an agent cannot
+   supply.
+5. **Contract-first.** Wire or Operation changes start in `/proto`, then regenerate, then
+   implement both sides.
+6. **Verify before you open a PR.** `make verify` is the gate (`CONTRIBUTING.md`). A skipped
+   gate is not a passed gate: say so in the PR body.
+7. **Write an ADR** when a decision is hard to reverse, surprising without context, *and* the
+   result of a real trade-off: all three. It opens with a `## Decision` of at most 120 words,
+   then *Why*, *What changes* and *Alternatives*, at most 150 lines, and links the proposal
+   that holds the argument (ADR-0046). It is amended at most once; the next change rewrites it.
+   **Promote before the issue closes:** behaviour now true → the spec; a decision → an ADR; the
+   reasoning behind it → the decided proposal in `docs/proposals/`; language → `GLOSSARY.md`; a
+   change to what must always be true → an invariant, which is a conversation with a human.
+   Work agreed in principle but not decided is a proposal in the private roadmap
+   (`roadmap: relay/<slug>`) or an issue labelled `idea`; an open question is an issue labelled
+   `decision`.
+8. **Update `GLOSSARY.md`** in the same change whenever the domain language shifts.
+9. **Security posture** is the rule in `AGENTS.md`, *How to work here*.
+
 ## Claims and claim IDs
 
 A spec is a set of **claims**: single statements a test can be pointed at. Each carries a

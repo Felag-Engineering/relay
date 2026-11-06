@@ -3,7 +3,7 @@
 **Status:** breakdown from the design conversation of 2026-08-18, which settled eleven decisions
 across ADR-0030 to ADR-0033 (all accepted). Most items have shipped; each says where it stands.
 The GitHub milestone **v0.6.5 — Install Path: relay init, join string, packages** is the
-authority on what is in flight (AGENTS.md, "Work the current milestone"), and its
+authority on what is in flight (`docs/agents/workflow.md`, *How to work here*, step 4), and its
 [design plan](plans/v0.6.5-install-path-relay-init-join-string-packages.md) is the step list.
 
 **Joining changed since (ADR-0048, ADR-0050).** A person runs `sudo relay-daemon join` and pastes

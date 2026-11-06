@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Proves the two-layer checks in scripts/check-docs.sh (ADR-0046, checks 4 and 5) and the
+# Proves the two-layer checks in scripts/check-docs.sh (ADR-0046, checks 4, 5 and 7) and the
 # generator they lean on, scripts/spec-proof.sh, and check 6, RC-45's install paths: a spec in
 # the two-layer shape passes with a fresh Proof block and fails with a stale one or a retired
 # section; an ADR fails on a missing Decision, an over-budget length or a second amendment
@@ -276,6 +276,47 @@ reset_fixture
 printf '// see docs/proposals/p.md\nfn x() {}\n' > "$FIX/daemon/src/cites.rs"; run_check
 assert_rc "source-cites-proposal" 1; assert_contains "source-cites-proposal" "cites docs/proposals/"
 rm -f "$FIX/daemon/src/cites.rs"
+
+# ---- reference documents (check 7) ----------------------------------------------------------------
+TM="$FIX/docs/security/threat-model.md"
+mkdir -p "$FIX/docs/security"
+row() { printf '| **R%s** | %s | b | Accepted | c | d |\n' "$1" "$2"; }
+
+reset_fixture; seq 1 261 | sed 's/^/line /' > "$FIX/AGENTS.md"; run_check
+assert_rc "agents-over-budget-fails" 1; assert_contains "agents-over-budget-fails" "at most 260"
+reset_fixture; printf 'AGENTS.md budget\n' > "$FIX/docs/agents/docs-ratchet.txt"; run_check
+assert_rc "agents-over-budget-waived" 0
+seq 1 10 | sed 's/^/line /' > "$FIX/AGENTS.md"
+
+reset_fixture; row 1 "$(printf 'x%.0s' $(seq 1 900))" > "$TM"; run_check
+assert_rc "register-row-over-budget-fails" 1; assert_contains "register-row-over-budget-fails" "register row R1"
+reset_fixture; row 1 "short risk" > "$TM"; run_check
+assert_rc "register-row-in-budget-passes" 0
+reset_fixture; row 1 "a risk, formerly worse" > "$TM"; run_check
+assert_rc "register-row-history-fails" 1; assert_contains "register-row-history-fails" "says when or how"
+reset_fixture; row 1 "tracked by #1234" > "$TM"; run_check
+assert_rc "register-row-issue-passes" 0
+rm -f "$TM"
+
+reset_fixture; printf '**Term**:\none\ntwo\nthree\nfour\nfive\nsix\n_Avoid_: x\n' > "$FIX/GLOSSARY.md"; run_check
+assert_rc "glossary-long-definition-fails" 1; assert_contains "glossary-long-definition-fails" "6-line definition"
+reset_fixture; printf '**Term**:\nA thing, amended 2026-01-02.\n_Avoid_: x\n' > "$FIX/GLOSSARY.md"; run_check
+assert_rc "glossary-history-fails" 1
+reset_fixture; printf '**Term**:\nA thing (#1234).\n_Avoid_: x\n' > "$FIX/GLOSSARY.md"; run_check
+assert_rc "glossary-issue-fails" 1; assert_contains "glossary-issue-fails" "cites an issue number"
+reset_fixture; printf '**Term**:\nA thing; never say "previously".\n_Avoid_: formerly (#12345)\n' > "$FIX/GLOSSARY.md"; run_check
+assert_rc "glossary-quoted-and-avoid-lines-pass" 0
+reset_fixture; printf '**Term**:\nA thing, formerly another.\n' > "$FIX/GLOSSARY.md"
+printf 'GLOSSARY.md history\n' > "$FIX/docs/agents/docs-ratchet.txt"; run_check
+assert_rc "glossary-history-waived" 0
+rm -f "$FIX/GLOSSARY.md"
+
+reset_fixture; sed -i 's/^- \*\*TH-1\*\* The tool refuses an empty selector\./& (#1234)/' "$FIX/docs/specs/thing.md"; run_check
+assert_rc "spec-claim-issue-fails" 1; assert_contains "spec-claim-issue-fails" "thing.md"
+sed -i 's/ (#1234)$//' "$FIX/docs/specs/thing.md"
+reset_fixture; sed -i 's/^Everything else\.$/Everything else (#1234)./' "$FIX/docs/specs/thing.md"; run_check
+assert_rc "spec-out-of-scope-issue-passes" 0
+sed -i 's/^Everything else (#1234)\.$/Everything else./' "$FIX/docs/specs/thing.md"
 
 if [ "$fail" -eq 0 ]; then echo "check-docs-shape-test: all cases pass"; else echo "check-docs-shape-test: $fail failure(s)" >&2; fi
 exit "$fail"

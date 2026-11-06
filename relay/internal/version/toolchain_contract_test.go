@@ -17,7 +17,7 @@ import (
 // and finds out through whatever changed between the two — issue #572 is the
 // worked example, where net/http's ServeMux started answering 301 where the
 // suite expects 307. The Makefile exports GOTOOLCHAIN for every `make` target,
-// but the bare `cd relay && go build ./... && go test ./...` loop AGENTS.md
+// but the bare `cd relay && go build ./... && go test ./...` loop CONTRIBUTING.md
 // documents never goes through make and cannot be reached that way. This test
 // is what covers it: it turns a mystery failure somewhere in the suite into
 // one line naming the cause.

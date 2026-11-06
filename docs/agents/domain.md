@@ -46,4 +46,4 @@ For everything outside that surface, normal engineering judgement applies.
 
 ## Writing an ADR
 
-When to write one, and the style to match: `AGENTS.md`, *How to work here*, step 7.
+When to write one, and the style to match: `docs/agents/workflow.md`, *How to work here*, step 7.
