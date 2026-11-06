@@ -41,8 +41,8 @@ to query, author or alter Policy over the wire; a live hypothetical is `policy-p
   one, the single-Node read; fleet enumeration, the Policy view and vocabulary discovery are MCP
   and Console only.
 - **QRY-4** `describe_node` and the Control API Node read identify exactly one Node. A
-  disconnected Node stays readable from its last registry record; `connected` is the live
-  Tunnel state and is never inferred from `last_seen`.
+  disconnected Node stays readable from its last registry record; `connected` is the
+  connection state as `node-connection.md` defines it, never inferred from `last_seen`.
 - **QRY-5** The capability read lane's Node detail, as rendered by the Console, reports how many
   registry Nodes share the Node's non-empty Policy fingerprint and template-set fingerprint.
   These counts are observation for rollout and drift visibility, never evidence of Policy

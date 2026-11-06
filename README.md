@@ -245,4 +245,4 @@ in a public issue: [SECURITY.md](SECURITY.md) has the channel and the supported 
 - **[docs/specs/](docs/specs/)**: capability specifications, saying what each capability does today across MCP, the Control API, and the Admin Console.
 - **[docs/adr/](docs/adr/)**: why the architecture is the way it is.
 - **[GLOSSARY.md](GLOSSARY.md)**: the ubiquitous language. Every term here is canonical.
-- **[AGENTS.md](AGENTS.md)**: how to work in this repo, the [repository layout](AGENTS.md#repository-layout), and the fourteen architecture invariants that constrain every change.
+- **[AGENTS.md](AGENTS.md)**: how to work in this repo and the fourteen architecture invariants that constrain every change; [CONTRIBUTING.md](CONTRIBUTING.md) has the repository layout.

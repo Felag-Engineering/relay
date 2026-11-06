@@ -28,6 +28,10 @@
 #      apt or dnf installing the relay package, not only relay-daemon), and a paragraph of
 #      docs/quickstart.md or docs/operations/relay-install.md documents the container install
 #      (Docker Compose or the container image) as supported.
+#   7. Reference documents (ADR-0046): AGENTS.md at most 260 lines, a threat-model register
+#      row at most 900 characters, a glossary definition at most 5 lines, and no history (dates
+#      of change, "formerly", "previously", issue numbers outside pointers to open work) in
+#      AGENTS.md, the glossary, the register or a migrated spec.
 #
 # Legacy specs (Status aspirational/stub) get checks 1 and 2 only — they are unmigrated intent,
 # see "The establishing phase" in docs/specs/README.md. SPEC_DIR, ADR_DIR, PROPOSAL_DIR and
@@ -312,5 +316,63 @@ container_paragraphs=$( { cat "$quickstart" 2>/dev/null; echo; echo; cat docs/op
 [ "$container_paragraphs" -gt 0 ] \
   || err "no paragraph of docs/quickstart.md or docs/operations/relay-install.md documents the container install (Docker Compose) as supported; RC-45"
 
-[ "$fail" -eq 0 ] && echo "check-docs: ADR numbers unique; every cited test exists; migrated specs, ADRs and proposals are well-formed; the quickstart's install paths hold."
+# 7. Reference documents (ADR-0046 amendment of 2026-11-05): AGENTS.md at most 260 lines, a
+# threat-model register row at most 900 characters, a glossary definition at most 5 lines, and
+# no history in a reference body. Text in double quotes or backticks is a quotation, not a claim,
+# and is skipped. Each rule is waived per file by `budget` or `history` in the ratchet.
+AGENTS=${AGENTS:-AGENTS.md}
+GLOSSARY=${GLOSSARY:-GLOSSARY.md}
+THREAT_MODEL=${THREAT_MODEL:-docs/security/threat-model.md}
+history_re='[Aa]mended (on )?20[0-9]{2}-|\b[Ff]ormerly\b|\b[Pp]reviously\b'
+unquote() { sed -E 's/"[^"]*"//g; s/`[^`]*`//g'; }
+if [ -f "$AGENTS" ]; then
+  n=$(wc -l < "$AGENTS")
+  [ "$n" -le 260 ] || exempt "$AGENTS" budget || err "$AGENTS: $n lines; it holds what every session needs, at most 260 (ADR-0046)"
+fi
+if [ -f "$THREAT_MODEL" ]; then
+  while IFS=$'\t' read -r ln id len; do
+    exempt "$THREAT_MODEL" budget || err "$THREAT_MODEL:$ln: register row $id is $len characters; a row is at most 900 (ADR-0046)"
+  done < <(awk '/^\| \*\*R[0-9]+\*\* \|/ { if (length($0) > 900) { match($0, /R[0-9]+/); print NR "\t" substr($0, RSTART, RLENGTH) "\t" length($0) } }' "$THREAT_MODEL")
+fi
+if [ -f "$GLOSSARY" ]; then
+  while IFS=$'\t' read -r ln term lines; do
+    exempt "$GLOSSARY" budget || err "$GLOSSARY:$ln: $term has a $lines-line definition; a definition is at most 5 (ADR-0046)"
+  done < <(awk '
+    /^\*\*[^*]+\*\*:/ { if (t != "" && c > 5) print s "\t" t "\t" c; t = $0; s = NR; c = 0; sub(/:.*/, "", t); next }
+    t != "" && (/^_Avoid_/ || /^#/ || /^$/) { if (c > 5) print s "\t" t "\t" c; t = ""; next }
+    t != "" { c++ }
+    END { if (t != "" && c > 5) print s "\t" t "\t" c }' "$GLOSSARY")
+fi
+# History: AGENTS.md outside its tables, GLOSSARY.md, the register rows, and every migrated spec
+# outside Out of scope, Proof and Retired. Issue numbers are history except where a document
+# points at open work, so they are refused in AGENTS.md prose, the glossary and spec claims.
+history_hits() {
+  case "$1" in
+    "$AGENTS") awk '!/^\|/ { print NR ":" $0 }' "$1" ;;
+    "$GLOSSARY") awk '!/^_Avoid_/ { print NR ":" $0 }' "$1" ;;
+    "$THREAT_MODEL") awk '/^\| \*\*R[0-9]+\*\* \|/ { print NR ":" $0 }' "$1" ;;
+    *) awk '/^## (Out of scope|Proof|Retired)/ { skip = 1; next } /^## / { skip = 0 } !skip { print NR ":" $0 }' "$1" ;;
+  esac
+}
+history_files=("$AGENTS" "$GLOSSARY" "$THREAT_MODEL")
+for spec in "$SPEC_DIR"/*.md; do
+  case "$spec" in */README.md|*/TEMPLATE.md) continue;; esac
+  grep -qE '^\*\*Status:\*\* (current|designed)' "$spec" && history_files+=("$spec")
+done
+for f in "${history_files[@]}"; do
+  [ -f "$f" ] || continue
+  exempt "$f" history && continue
+  issue_re='#[0-9]{3,5}\b'
+  [ "$f" = "$THREAT_MODEL" ] && issue_re='$^'
+  while IFS=: read -r ln text; do
+    q=$(unquote <<<"$text")
+    if grep -qE "$history_re" <<<"$q"; then
+      err "$f:$ln: says when or how the text changed; a reference body says what is true (ADR-0046)"
+    elif grep -qE "$issue_re" <<<"$q"; then
+      err "$f:$ln: cites an issue number; cite the ADR, the claim or the invariant (ADR-0046)"
+    fi
+  done < <(history_hits "$f")
+done
+
+[ "$fail" -eq 0 ] && echo "check-docs: ADR numbers unique; every cited test exists; migrated specs, ADRs and proposals are well-formed; reference documents are within budget; the quickstart's install paths hold."
 exit "$fail"

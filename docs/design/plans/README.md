@@ -10,7 +10,7 @@ order.** `/design` writes one; a human merges it; `/decompose` reads it into iss
 - **Milestone-scoped.** One plan per milestone, named `<milestone-slug>.md`. It opens with the
   milestone and is **deleted by the PR that closes the milestone.** A plan that outlives its
   milestone is a second, staler statement of what the spec already says.
-- **Disposable by design.** `AGENTS.md` forbids file paths and code snippets in specs and
+- **Disposable by design.** `docs/agents/workflow.md` (*How to work here*, step 3) forbids file paths and code snippets in specs and
   tickets because they go stale within a sprint. A plan is *allowed* them for exactly that
   sprint, which is why it must not survive it. Anything in a plan that outlives the milestone —
   a behaviour, a decision, a term — is promoted to the spec, an ADR or `GLOSSARY.md` before

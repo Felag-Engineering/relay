@@ -240,10 +240,10 @@ lint-guard-escapes:
 proto:
 	bin=$$($(call tool_bin,buf)) && cd proto && "$$bin" generate
 
-# Compatibility alias, kept only because AGENTS.md (Toolchains, Proto codegen and
-# Schedulers) still tells agents to run `make proto-tools`. It installs nothing; it
+# Compatibility alias, kept only because CONTRIBUTING.md (Build and verify) still tells
+# contributors to run `make proto-tools`. It installs nothing; it
 # pre-builds the pinned buf and generators into the Go build cache, which every proto
-# target also does on first use. Delete it once a human has updated AGENTS.md (#891,
+# target also does on first use. Delete it once CONTRIBUTING.md stops naming it (#891,
 # Escalations).
 proto-tools:
 	@$(call tool_bin,buf) >/dev/null && cd relay && go tool -n protoc-gen-go >/dev/null && go tool -n protoc-gen-go-grpc >/dev/null

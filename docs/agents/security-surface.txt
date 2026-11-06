@@ -13,6 +13,9 @@ docs/adr/**
 AGENTS.md
 CLAUDE.md
 GLOSSARY.md
+CONTRIBUTING.md
+docs/agents/workflow.md
+docs/agents/routines.md
 docs/agents/security-surface.txt
 docs/security/**
 

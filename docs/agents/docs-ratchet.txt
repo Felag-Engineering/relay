@@ -6,6 +6,7 @@
 #   amendments  an ADR with more than one `## Amendment`
 #   shape       a migrated spec still in the earlier template (hand-kept proof table, the
 #               Seams, Future work, Open questions and residual-risk sections)
+#   history     a reference body that says when its text changed (ADR-0046, 2026-11-05)
 #
 # A line is removed by the PR that touches its file: that PR brings the document into shape,
 # the rule the invariant gap table in AGENTS.md already uses. A listed path that no longer
@@ -48,5 +49,5 @@ docs/adr/0041-gleipnir-rooted-identity-grants-and-a-verified-approver.md decisio
 docs/adr/0042-template-dispatch-resolves-its-risk-class-over-the-reporting-nodes.md budget decision
 docs/adr/0043-one-relay-configuration-file.md decision
 docs/adr/0045-console-passwords-temporary-at-creation-and-self-service-change.md budget decision
-docs/specs/policy-preflight.md shape
-docs/specs/query.md shape
+docs/specs/policy-preflight.md shape history
+docs/specs/query.md shape history

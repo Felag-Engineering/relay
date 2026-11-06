@@ -37,8 +37,8 @@ to prevent.
 
 ## Stage 2 — Promote what outlives the plan
 
-Read `docs/design/plans/<slug>.md` one last time against `AGENTS.md` "Promote before the issue
-closes": a decision that meets the ADR test, a term the glossary lacks, a behaviour the spec
+Read `docs/design/plans/<slug>.md` one last time against "Promote before the issue closes" (`docs/agents/workflow.md`,
+*How to work here*, step 7): a decision that meets the ADR test, a term the glossary lacks, a behaviour the spec
 does not state. List each with where it should go. The human decides; anything they want kept
 is drafted in `/spec-author`, not here.
 
