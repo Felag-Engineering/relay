@@ -65,13 +65,14 @@ alone, it says so.
   included, otherwise.
 - **EN-8** The daemon persists the Relay address and the CA bundle with its identity. Every
   later start uses the persisted address, or a Relay address set in its environment, which
-  overrides the persisted one on every start (ADR-0031), and checks the pinned CA; the join
-  string is not needed again (`node-connection.md`).
+  overrides the persisted one on every start (ADR-0031); the join string is not needed again.
+  How each later connect verifies the Relay is `node-connection.md`.
 
 ### First enrollment and identity
 
-- **EN-9** `Enroll` is the sole certless Node-plane RPC. It uses server-authenticated TLS;
-  every other Node-plane RPC requires the Node's client certificate.
+- **EN-9** `Enroll` is the sole certless Node-plane RPC. It uses server-authenticated TLS,
+  and the daemon authenticates the Relay by the pin (EN-7). The mutual TLS every other
+  Node-plane call requires is `node-connection.md`'s.
 - **EN-10** The Relay applies per-source and global enrollment rate limits before token
   validation or CSR signing, so a throttled request cannot reveal whether a token is real.
 - **EN-11** The Relay rejects an empty token or an empty CSR. It rejects the whole request if a

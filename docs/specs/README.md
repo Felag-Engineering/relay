@@ -181,7 +181,7 @@ Rows marked *stub* exist so the capability is named.
 | `accounts-and-access.md` | Accounts, roles, Grants, API tokens, OAuth sessions, attribution |
 | `policy.md` | The daemon's Policy itself: the local file, deny-by-default and deny-beats-allow, argument-level and canonical matching, the shipped default read Policy |
 | `operations-and-templates.md` | The Operation vocabulary and its golden schema, risk classes, the frozen Native set, the local Template catalog |
-| `node-connection.md` | The mTLS session, `Hello`, reconnect and dedup, liveness in the registry, the minimum-version gate |
+| `node-connection.md` | The mTLS session, `Hello` and the self-report, what connected means, one current stream, reconnecting |
 | `relay-configuration.md` | The security floor and the operator settings, secrets as file paths, `relay init`, Relay packaging |
 | `daemon-installation.md` | Installing and configuring the relay-daemon on a Node through the customer's config management |
 | `observability.md` | What an operator can see of Relay's own health: metrics, logs, and what they must never contain |
