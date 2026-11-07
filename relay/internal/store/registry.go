@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -170,7 +171,7 @@ func (r *sqliteRegistry) Upsert(rep registry.Report) (registry.Node, error) {
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE nodes SET cert_fingerprint = ?, hostname = ?, os = ?, kernel = ?, arch = ?,
 				ip_addresses = ?, policy_fingerprint = ?, daemon_version = ?,
-				template_set_fingerprint = ?, last_seen = ?
+				template_set_fingerprint = ?, last_seen = ?, reported_raw_exec = NULL
 			WHERE node_id = ?`,
 			rep.CertFingerprint, rep.Facts.Hostname, rep.Facts.OS, rep.Facts.Kernel, rep.Facts.Arch,
 			ipJSON, rep.PolicyFingerprint, rep.DaemonVersion, rep.TemplateSetFingerprint,
@@ -181,7 +182,9 @@ func (r *sqliteRegistry) Upsert(rep registry.Report) (registry.Node, error) {
 		// enrolling_token_id and revoked_at are never touched here — provenance
 		// and revocation state are Relay-set/first-write-wins, exactly as
 		// registry.InMemory.Upsert preserves them on the update path. Nor is
-		// tag_labels: no Upsert statement names it.
+		// tag_labels: no Upsert statement names it, nor first_connected_at or
+		// the clock_skew columns. reported_raw_exec is reset: each connect
+		// replaces the self-report.
 		if err := replaceLabels(ctx, tx, nsNode.table(), rep.NodeID, rep.NodeLabels()); err != nil {
 			return registry.Node{}, err
 		}
@@ -201,14 +204,52 @@ func (r *sqliteRegistry) Upsert(rep registry.Report) (registry.Node, error) {
 	return r.withOutdated(n), nil
 }
 
-// UpdateLastSeen records the most recent contact time for nodeID. Returns
-// registry.ErrNotFound if the Node is not in the registry.
-func (r *sqliteRegistry) UpdateLastSeen(nodeID string, at time.Time) error {
+// RecordHeartbeat records a heartbeat for nodeID: last_seen and the clock skew
+// in one statement. The skew columns are NULL unless the reading is measured
+// and at is non-zero. Returns registry.ErrNotFound if the Node is not in the
+// registry.
+func (r *sqliteRegistry) RecordHeartbeat(nodeID string, at time.Time, skew registry.ClockSkewReading) error {
 	ctx := context.Background()
-	res, err := r.db.ExecContext(ctx, `UPDATE nodes SET last_seen = ? WHERE node_id = ?`,
+	var skewMs, skewAt any
+	if d, measured := skew.Value(); measured && !at.IsZero() {
+		skewMs = d.Milliseconds()
+		skewAt = formatTime(roundTripTime(at))
+	}
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE nodes SET last_seen = ?, clock_skew_ms = ?, clock_skew_measured_at = ?
+		 WHERE node_id = ?`,
+		formatTime(roundTripTime(at)), skewMs, skewAt, nodeID)
+	if err != nil {
+		return fmt.Errorf("record heartbeat: %w", err)
+	}
+	return rowsAffectedOr(res, registry.ErrNotFound, "rows affected")
+}
+
+// MarkConnected sets first_connected_at only when NULL, the enrolled_at
+// precedent in RecordEnrollment: the once-only rule lives in the SQL.
+func (r *sqliteRegistry) MarkConnected(nodeID string, at time.Time) error {
+	ctx := context.Background()
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE nodes SET first_connected_at = COALESCE(first_connected_at, ?)
+		 WHERE node_id = ?`,
 		formatTime(roundTripTime(at)), nodeID)
 	if err != nil {
-		return fmt.Errorf("update last_seen: %w", err)
+		return fmt.Errorf("mark connected: %w", err)
+	}
+	return rowsAffectedOr(res, registry.ErrNotFound, "rows affected")
+}
+
+// RecordPolicySnapshot stores the Raw Exec state a Node reported: 1 enabled,
+// 0 disabled. Returns registry.ErrNotFound if the Node is not in the registry.
+func (r *sqliteRegistry) RecordPolicySnapshot(nodeID string, rawExecEnabled bool) error {
+	ctx := context.Background()
+	v := 0
+	if rawExecEnabled {
+		v = 1
+	}
+	res, err := r.db.ExecContext(ctx, `UPDATE nodes SET reported_raw_exec = ? WHERE node_id = ?`, v, nodeID)
+	if err != nil {
+		return fmt.Errorf("record policy snapshot: %w", err)
 	}
 	return rowsAffectedOr(res, registry.ErrNotFound, "rows affected")
 }
@@ -568,17 +609,21 @@ func getNode(ctx context.Context, q queryer, nodeID string, declined *[nLabelNam
 		revokedAt                                       sql.NullString
 		certNotAfter, enrolledAt, lastRenewedAt         sql.NullString
 		renewalCount                                    int
+		reportedRawExec, clockSkewMs                    sql.NullInt64
+		firstConnectedAt, clockSkewMeasuredAt           sql.NullString
 	)
 	err := q.QueryRowContext(ctx, `
 		SELECT cert_fingerprint, hostname, os, kernel, arch, ip_addresses,
 			enrolling_token_id, policy_fingerprint, daemon_version,
 			template_set_fingerprint, last_seen, revoked_at,
-			cert_not_after, enrolled_at, renewal_count, last_renewed_at
+			cert_not_after, enrolled_at, renewal_count, last_renewed_at,
+			reported_raw_exec, first_connected_at, clock_skew_ms, clock_skew_measured_at
 		FROM nodes WHERE node_id = ?`, nodeID,
 	).Scan(&certFingerprint, &hostname, &osName, &kernel, &arch, &ipAddresses,
 		&enrollingTokenID, &policyFingerprint, &daemonVersion, &templateSetFingerprint,
 		&lastSeen, &revokedAt,
-		&certNotAfter, &enrolledAt, &renewalCount, &lastRenewedAt)
+		&certNotAfter, &enrolledAt, &renewalCount, &lastRenewedAt,
+		&reportedRawExec, &firstConnectedAt, &clockSkewMs, &clockSkewMeasuredAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return registry.Node{}, false, nil
 	}
@@ -630,6 +675,15 @@ func getNode(ctx context.Context, q queryer, nodeID string, declined *[nLabelNam
 	if err != nil {
 		return registry.Node{}, false, fmt.Errorf("parse last_renewed_at for node %q: %w", nodeID, err)
 	}
+	firstConnectedAtTime, err := parseTime(firstConnectedAt)
+	if err != nil {
+		return registry.Node{}, false, fmt.Errorf("parse first_connected_at for node %q: %w", nodeID, err)
+	}
+	clockSkewMeasuredAtTime, err := parseTime(clockSkewMeasuredAt)
+	if err != nil {
+		return registry.Node{}, false, fmt.Errorf("parse clock_skew_measured_at for node %q: %w", nodeID, err)
+	}
+	clockSkew, clockSkewAt := skewFromColumns(clockSkewMs, clockSkewMeasuredAtTime)
 
 	// A self-reported field stored before its ingress bound existed is
 	// declined here, on every read, exactly as a stored Label is: omitted,
@@ -660,6 +714,10 @@ func getNode(ctx context.Context, q queryer, nodeID string, declined *[nLabelNam
 		EnrolledAt:             enrolledAtTime,
 		RenewalCount:           renewalCount,
 		LastRenewedAt:          lastRenewedAtTime,
+		ReportedRawExec:        rawExecFromColumn(reportedRawExec),
+		FirstConnectedAt:       firstConnectedAtTime,
+		ClockSkew:              clockSkew,
+		ClockSkewMeasuredAt:    clockSkewAt,
 		EnrollingTokenID:       enrollingTokenID,
 		PolicyFingerprint:      self.PolicyFingerprint,
 		DaemonVersion:          self.DaemonVersion,
@@ -863,6 +921,34 @@ func formatTime(t time.Time) any {
 		return nil
 	}
 	return t.UTC().Format(timeLayout)
+}
+
+// rawExecFromColumn maps reported_raw_exec to the domain type. A stored value
+// outside the vocabulary reads as not reported: declined, never served.
+func rawExecFromColumn(v sql.NullInt64) registry.RawExecReport {
+	if !v.Valid {
+		return registry.RawExecNotReported
+	}
+	switch v.Int64 {
+	case 0:
+		return registry.RawExecReportedDisabled
+	case 1:
+		return registry.RawExecReportedEnabled
+	default:
+		return registry.RawExecNotReported
+	}
+}
+
+// skewFromColumns maps the clock-skew columns to the domain pair. Either
+// column NULL, a zero measured-at time, or a millisecond count a Duration
+// cannot hold, reads as not measured, so the skew is never non-zero while
+// ClockSkewMeasuredAt is zero. A stored 0 ms is a measured zero skew.
+func skewFromColumns(ms sql.NullInt64, at time.Time) (time.Duration, time.Time) {
+	const maxMs = math.MaxInt64 / int64(time.Millisecond)
+	if !ms.Valid || at.IsZero() || ms.Int64 > maxMs || ms.Int64 < -maxMs {
+		return 0, time.Time{}
+	}
+	return time.Duration(ms.Int64) * time.Millisecond, at
 }
 
 // parseTime is the inverse of formatTime.

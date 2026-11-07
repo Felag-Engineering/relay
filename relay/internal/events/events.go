@@ -60,7 +60,7 @@ type Event struct {
 }
 
 // RegistryTransition is one of the three registry facts the Console's fleet
-// view needs. Heartbeats are deliberately absent: UpdateLastSeen publishes
+// view needs. Heartbeats are deliberately absent: RecordHeartbeat publishes
 // nothing at all — internal/eventsink's ObserveRegistry decorator is where
 // that omission is enforced, because at a 100k-Node fleet the heartbeat rate
 // would evict the connect/disconnect history the Console actually needs,

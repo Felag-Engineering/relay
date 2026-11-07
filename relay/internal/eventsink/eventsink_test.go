@@ -111,7 +111,7 @@ func TestObserveRegistry_SetRelayLabels_ErrNotFound_PublishesNothing(t *testing.
 // TestObserveRegistry_HeartbeatAndEverythingElsePublishNothing is the
 // acceptance table: every registry.Repository method OTHER than
 // SetConnected and a successful SetRelayLabels must publish nothing —
-// UpdateLastSeen (the heartbeat) most of all.
+// RecordHeartbeat (the heartbeat) most of all.
 func TestObserveRegistry_HeartbeatAndEverythingElsePublishNothing(t *testing.T) {
 	bus := events.NewBus()
 	inner := registry.NewInMemory()
@@ -129,7 +129,11 @@ func TestObserveRegistry_HeartbeatAndEverythingElsePublishNothing(t *testing.T) 
 		call func() error
 	}{
 		{"Upsert", func() error { _, err := reg.Upsert(registry.Report{NodeID: "node-2"}); return err }},
-		{"UpdateLastSeen", func() error { return reg.UpdateLastSeen("node-1", time.Now()) }},
+		{"RecordHeartbeat", func() error {
+			return reg.RecordHeartbeat("node-1", time.Now(), registry.MeasuredClockSkew(time.Second))
+		}},
+		{"MarkConnected", func() error { return reg.MarkConnected("node-1", time.Now()) }},
+		{"RecordPolicySnapshot", func() error { return reg.RecordPolicySnapshot("node-1", true) }},
 		{"SetRevoked", func() error { return reg.SetRevoked("node-1", time.Now()) }},
 		{"SetRevokedAll", func() error { _, err := reg.SetRevokedAll([]string{"node-1"}, time.Now()); return err }},
 		{"RecordEnrollment", func() error { return reg.RecordEnrollment("node-1", registry.Certificate{}, time.Now()) }},

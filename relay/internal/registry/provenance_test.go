@@ -17,13 +17,14 @@ import (
 // implementation.
 
 // TestReport_CannotCarryRelayKnowledge is the structural half: registry.Report
-// is the ONLY thing a daemon supplies, and none of #440's fields may appear on
+// is the ONLY thing a daemon supplies, and none of these fields may appear on
 // it. Mirrors the existing guarantee for RelayLabels and RevokedAt.
 //
 // The Relay minted the certificate. A daemon that could report its own expiry
 // could claim an identity that never lapses.
 func TestReport_CannotCarryRelayKnowledge(t *testing.T) {
-	forbidden := []string{"CertNotAfter", "EnrolledAt", "RenewalCount", "LastRenewedAt", "Connected", "RevokedAt", "RelayLabels", "TagLabels"}
+	forbidden := []string{"CertNotAfter", "EnrolledAt", "RenewalCount", "LastRenewedAt", "Connected", "RevokedAt", "RelayLabels", "TagLabels",
+		"ReportedRawExec", "FirstConnectedAt", "ClockSkew", "ClockSkewMeasuredAt"}
 	rt := reflect.TypeOf(registry.Report{})
 	for i := 0; i < rt.NumField(); i++ {
 		name := rt.Field(i).Name

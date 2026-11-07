@@ -77,7 +77,9 @@ func NewInMemory(opts ...Option) *InMemory {
 // and RelayLabels and TagLabels are initialized to empty maps.
 //
 // On update: overwrites CertFingerprint, Facts, NodeLabels, PolicyFingerprint,
-// DaemonVersion, TemplateSetFingerprint, and LastSeen.
+// DaemonVersion, TemplateSetFingerprint, and LastSeen, and resets
+// ReportedRawExec to not reported. FirstConnectedAt, ClockSkew and
+// ClockSkewMeasuredAt are never written or cleared.
 // RelayLabels and TagLabels are never touched (the node side cannot reach them). EnrollingTokenID
 // is preserved from the first enrollment — a reconnecting Hello cannot rewrite
 // provenance.
@@ -124,6 +126,7 @@ func (r *InMemory) updateFromReport(n *Node, rep Report) {
 	n.PolicyFingerprint = rep.PolicyFingerprint
 	n.DaemonVersion = rep.DaemonVersion
 	n.TemplateSetFingerprint = rep.TemplateSetFingerprint
+	n.ReportedRawExec = RawExecNotReported
 }
 
 // withNode runs fn on the stored record for nodeID under the write lock.
@@ -140,10 +143,42 @@ func (r *InMemory) withNode(nodeID string, fn func(n *Node)) error {
 	return nil
 }
 
-// UpdateLastSeen records the most recent contact time for nodeID. Returns
+// RecordHeartbeat records a heartbeat for nodeID: LastSeen and the clock skew
+// in one write. The skew is truncated to the millisecond, as the SQLite column
+// stores it. Returns ErrNotFound if the Node is not in the registry.
+func (r *InMemory) RecordHeartbeat(nodeID string, at time.Time, skew ClockSkewReading) error {
+	return r.withNode(nodeID, func(n *Node) {
+		n.LastSeen = at
+		d, measured := skew.Value()
+		if !measured || at.IsZero() {
+			n.ClockSkew = 0
+			n.ClockSkewMeasuredAt = time.Time{}
+			return
+		}
+		n.ClockSkew = d.Truncate(time.Millisecond)
+		n.ClockSkewMeasuredAt = at
+	})
+}
+
+// MarkConnected sets FirstConnectedAt to at only if it is unset. Returns
 // ErrNotFound if the Node is not in the registry.
-func (r *InMemory) UpdateLastSeen(nodeID string, at time.Time) error {
-	return r.withNode(nodeID, func(n *Node) { n.LastSeen = at })
+func (r *InMemory) MarkConnected(nodeID string, at time.Time) error {
+	return r.withNode(nodeID, func(n *Node) {
+		if n.FirstConnectedAt.IsZero() {
+			n.FirstConnectedAt = at
+		}
+	})
+}
+
+// RecordPolicySnapshot records the Raw Exec state a Node reported. Returns
+// ErrNotFound if the Node is not in the registry.
+func (r *InMemory) RecordPolicySnapshot(nodeID string, rawExecEnabled bool) error {
+	return r.withNode(nodeID, func(n *Node) {
+		n.ReportedRawExec = RawExecReportedDisabled
+		if rawExecEnabled {
+			n.ReportedRawExec = RawExecReportedEnabled
+		}
+	})
 }
 
 // SetRelayLabels replaces the relay-space label set for nodeID. Facts and
@@ -387,6 +422,10 @@ func (r *InMemory) copyNode(n *Node) Node {
 		EnrolledAt:             n.EnrolledAt,
 		RenewalCount:           n.RenewalCount,
 		LastRenewedAt:          n.LastRenewedAt,
+		ReportedRawExec:        n.ReportedRawExec,
+		FirstConnectedAt:       n.FirstConnectedAt,
+		ClockSkew:              n.ClockSkew,
+		ClockSkewMeasuredAt:    n.ClockSkewMeasuredAt,
 		// Derived on read from the live connection set, exactly as Outdated is
 		// derived from the configured minimum. Never read off the stored record,
 		// because there is no stored record — see Node.Connected.

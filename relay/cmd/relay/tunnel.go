@@ -399,7 +399,7 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[relayv1.DaemonMessag
 				slog.Debug("heartbeat", "unix_millis", hb.UnixMillis)
 				timer.Reset(deadline)
 				if s.reg != nil {
-					if err := s.reg.UpdateLastSeen(nodeID, time.Now()); err != nil {
+					if err := s.reg.RecordHeartbeat(nodeID, time.Now(), registry.ClockSkewReading{}); err != nil {
 						slog.Warn("update last-seen failed", "node_id", nodeID, "err", err)
 					}
 				}
