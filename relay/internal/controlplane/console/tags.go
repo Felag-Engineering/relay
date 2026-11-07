@@ -179,7 +179,7 @@ func readTagForm(w http.ResponseWriter, r *http.Request, pg Page, limit int64, h
 		tagRefusal(w, pg, http.StatusRequestEntityTooLarge, bodyTooLargeHeading, href, label)
 		return false
 	}
-	http.Error(w, "could not read the submitted form", http.StatusBadRequest)
+	refuseUnreadableForm(w)
 	return false
 }
 

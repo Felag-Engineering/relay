@@ -628,8 +628,7 @@ func writePrelude(d Deps, w http.ResponseWriter, r *http.Request, title string) 
 		unavailable(w, accountAdminName)
 		return capability.Principal{}, Page{}, false
 	}
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "could not read the submitted form", http.StatusBadRequest)
+	if !parseSubmittedForm(w, r) {
 		return capability.Principal{}, Page{}, false
 	}
 	pg, ok := page(d, w, r, title)
