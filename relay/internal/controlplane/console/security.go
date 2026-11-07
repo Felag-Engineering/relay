@@ -355,12 +355,11 @@ func boundAuthenticatedBody(w http.ResponseWriter, r *http.Request, log *slog.Lo
 			http.Error(w, bodyTooLargeHeading, http.StatusRequestEntityTooLarge)
 			return false
 		}
-		http.Error(w, "could not read the submitted form", http.StatusBadRequest)
+		refuseUnreadableForm(w)
 		return false
 	}
 	r.Body = io.NopCloser(bytes.NewReader(body))
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "could not read the submitted form", http.StatusBadRequest)
+	if !parseSubmittedForm(w, r) {
 		return false
 	}
 	if err := rc.SetReadDeadline(time.Time{}); err != nil && !errors.Is(err, http.ErrNotSupported) {
