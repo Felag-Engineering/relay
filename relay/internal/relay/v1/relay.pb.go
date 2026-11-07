@@ -860,13 +860,18 @@ func (*RelayMessage_TaskCancel) isRelayMessage_Body() {}
 func (*RelayMessage_PolicyQuery) isRelayMessage_Body() {}
 
 type Hello struct {
-	state                  protoimpl.MessageState `protogen:"open.v1"`
-	NodeId                 string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
-	DaemonVersion          string                 `protobuf:"bytes,2,opt,name=daemon_version,json=daemonVersion,proto3" json:"daemon_version,omitempty"`
-	Facts                  *Facts                 `protobuf:"bytes,3,opt,name=facts,proto3" json:"facts,omitempty"`
-	Labels                 []*Label               `protobuf:"bytes,4,rep,name=labels,proto3" json:"labels,omitempty"`                                                                 // node-space + relay-space (relay-space is authoritative)
-	PolicyFingerprint      string                 `protobuf:"bytes,5,opt,name=policy_fingerprint,json=policyFingerprint,proto3" json:"policy_fingerprint,omitempty"`                  // hash of the loaded Policy; report-only, for the Relay to detect drift/display; the Relay never sets Policy (ADR-0002)
-	TemplateSetFingerprint string                 `protobuf:"bytes,6,opt,name=template_set_fingerprint,json=templateSetFingerprint,proto3" json:"template_set_fingerprint,omitempty"` // hash of the loaded Template Operation set, beside policy_fingerprint; report-only drift signal, never settable over the wire (ADR-0021/ADR-0002). Empty = no templates loaded; the literal "unloadable" = the local template set failed to load and the Node's template vocabulary is empty (fail closed)
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Never set by the relay-daemon and never read by the Relay: a Node's identity is
+	// the Node ID in its verified client certificate (invariant 6, ADR-0006). Kept,
+	// not deleted or reserved, because buf's FILE breaking rules forbid removing it.
+	//
+	// Deprecated: Marked as deprecated in relay/v1/relay.proto.
+	NodeId                 string   `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	DaemonVersion          string   `protobuf:"bytes,2,opt,name=daemon_version,json=daemonVersion,proto3" json:"daemon_version,omitempty"`
+	Facts                  *Facts   `protobuf:"bytes,3,opt,name=facts,proto3" json:"facts,omitempty"`
+	Labels                 []*Label `protobuf:"bytes,4,rep,name=labels,proto3" json:"labels,omitempty"`                                                                 // node-space only; any other namespace is dropped (invariant 7)
+	PolicyFingerprint      string   `protobuf:"bytes,5,opt,name=policy_fingerprint,json=policyFingerprint,proto3" json:"policy_fingerprint,omitempty"`                  // hash of the loaded Policy; report-only, for the Relay to detect drift/display; the Relay never sets Policy (ADR-0002)
+	TemplateSetFingerprint string   `protobuf:"bytes,6,opt,name=template_set_fingerprint,json=templateSetFingerprint,proto3" json:"template_set_fingerprint,omitempty"` // hash of the loaded Template Operation set, beside policy_fingerprint; report-only drift signal, never settable over the wire (ADR-0021/ADR-0002). Empty = no templates loaded; the literal "unloadable" = the local template set failed to load and the Node's template vocabulary is empty (fail closed)
 	unknownFields          protoimpl.UnknownFields
 	sizeCache              protoimpl.SizeCache
 }
@@ -901,6 +906,7 @@ func (*Hello) Descriptor() ([]byte, []int) {
 	return file_relay_v1_relay_proto_rawDescGZIP(), []int{7}
 }
 
+// Deprecated: Marked as deprecated in relay/v1/relay.proto.
 func (x *Hello) GetNodeId() string {
 	if x != nil {
 		return x.NodeId
@@ -2362,9 +2368,9 @@ const file_relay_v1_relay_proto_rawDesc = "" +
 	"\vtask_cancel\x18\x03 \x01(\v2\x14.relay.v1.TaskCancelH\x00R\n" +
 	"taskCancel\x12:\n" +
 	"\fpolicy_query\x18\x04 \x01(\v2\x15.relay.v1.PolicyQueryH\x00R\vpolicyQueryB\x06\n" +
-	"\x04body\"\x80\x02\n" +
-	"\x05Hello\x12\x17\n" +
-	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12%\n" +
+	"\x04body\"\x84\x02\n" +
+	"\x05Hello\x12\x1b\n" +
+	"\anode_id\x18\x01 \x01(\tB\x02\x18\x01R\x06nodeId\x12%\n" +
 	"\x0edaemon_version\x18\x02 \x01(\tR\rdaemonVersion\x12%\n" +
 	"\x05facts\x18\x03 \x01(\v2\x0f.relay.v1.FactsR\x05facts\x12'\n" +
 	"\x06labels\x18\x04 \x03(\v2\x0f.relay.v1.LabelR\x06labels\x12-\n" +

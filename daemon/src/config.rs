@@ -319,7 +319,7 @@ impl Config {
             .filter(|v| !v.is_empty());
 
         // Facts.hostname is the human-readable descriptor, not the
-        // Relay-assigned identity UUID (see node_id on Hello, ADR-0006). Gathered
+        // Relay-assigned identity UUID (the Node ID in its client certificate, ADR-0006). Gathered
         // via the shared collector so kernel/IPs are populated and the hostname
         // policy (kernel hostname first, $HOSTNAME an explicit fallback) matches
         // the live `system.facts` Operation exactly — see system_facts.rs.

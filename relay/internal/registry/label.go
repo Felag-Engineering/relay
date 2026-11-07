@@ -244,8 +244,6 @@ const MaxLoggedLabelKeyBytes = 128
 // there is one hazard and there must be one helper: both the Hello ingress
 // (cmd/relay/tunnel.go) and the read-back scan (internal/store) bound the same
 // attacker-influenced key for the same reason, and a second copy would drift.
-// The tunnel also bounds the wire hello.node_id with it, the same hazard: an
-// attacker-controlled string headed for a log.
 func BoundLogKey(k string) (bounded string, truncated bool) {
 	return textbound.Truncate(k, MaxLoggedLabelKeyBytes)
 }

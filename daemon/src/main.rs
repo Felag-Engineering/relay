@@ -140,6 +140,35 @@ fn startup_policy(
     }
 }
 
+/// Builds the `Hello` the relay-daemon opens the stream with.
+///
+/// It never sets `node_id`: the Relay takes a Node's identity only from the
+/// verified client certificate (NC-38, ADR-0006). `..Default::default()` leaves
+/// that deprecated field out without naming it.
+fn hello(
+    facts: Facts,
+    node_labels: &[(String, String)],
+    policy: &policy::Policy,
+    templates: &templates::TemplateSet,
+) -> Hello {
+    Hello {
+        // The build-stamped version (ADR-0014): this is the sole input to the
+        // Relay's minimum-daemon-version dispatch gate, so it is always valid
+        // semver and always ordered truthfully against the release it
+        // precedes — see version.rs.
+        daemon_version: version::version().to_string(),
+        facts: Some(facts),
+        labels: enroll::node_labels_to_proto(node_labels),
+        policy_fingerprint: policy.fingerprint().to_string(),
+        // Beside the Policy fingerprint, from the same live set the dispatch
+        // path resolves against (ADR-0021): the Relay's fleet-wide
+        // template-drift signal. Report-only — templates are locally rooted
+        // and never settable over the wire (ADR-0002).
+        template_set_fingerprint: templates.fingerprint().to_string(),
+        ..Default::default()
+    }
+}
+
 /// Assembles a `PolicySnapshot` from the live, loaded Policy for the Relay to
 /// display.
 ///
@@ -261,7 +290,6 @@ const MAX_INFLIGHT_TASKS: usize = 1024;
 /// it is the process-lifetime [`Services`], never rebuilt per connection.
 async fn run_tunnel(
     channel: Channel,
-    identity: &crate::identity::Identity,
     facts: Facts,
     node_labels: Vec<(String, String)>,
     services: Arc<Services>,
@@ -271,27 +299,14 @@ async fn run_tunnel(
     let (tx, rx) = mpsc::channel::<DaemonMessage>(32);
 
     // Send Hello as the first outbound message on the bidi stream.
-    // node_id is the Relay-assigned identity (from the enrolled cert CN),
-    // aligning the app-layer identity with the transport-layer client cert
-    // (ADR-0006 amendment 2).
     if tx
         .send(DaemonMessage {
-            body: Some(daemon_message::Body::Hello(Hello {
-                node_id: identity.node_id.clone(),
-                // The build-stamped version (issue #249, ADR-0014): this is the
-                // sole input to the Relay's minimum-daemon-version dispatch
-                // gate, so it is always valid semver and always ordered
-                // truthfully against the release it precedes — see version.rs.
-                daemon_version: version::version().to_string(),
-                facts: Some(facts),
-                labels: enroll::node_labels_to_proto(&node_labels),
-                policy_fingerprint: services.policy.fingerprint().to_string(),
-                // Beside the Policy fingerprint, from the same live set the
-                // dispatch path resolves against (ADR-0021): the Relay's
-                // fleet-wide template-drift signal. Report-only — templates are
-                // locally rooted and never settable over the wire (ADR-0002).
-                template_set_fingerprint: services.templates.fingerprint().to_string(),
-            })),
+            body: Some(daemon_message::Body::Hello(hello(
+                facts,
+                &node_labels,
+                &services.policy,
+                &services.templates,
+            ))),
         })
         .await
         .is_err()
@@ -663,7 +678,6 @@ async fn reconnect_loop(
 
                 match run_tunnel(
                     channel,
-                    &identity,
                     config.facts.clone(),
                     config.node_labels.clone(),
                     Arc::clone(&services),
@@ -882,10 +896,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        gen::Facts, heartbeat_delay, now_millis, policy_snapshot, ArgMatcher, DenyRule,
+        gen::Facts, heartbeat_delay, hello, now_millis, policy_snapshot, ArgMatcher, DenyRule,
         HEARTBEAT_INTERVAL, HEARTBEAT_JITTER_FRACTION,
     };
-    use crate::policy;
+    use crate::{enroll, policy, templates, version};
     use std::time::Duration;
 
     /// The documented `journalctl -g` pattern must match what the production
@@ -1102,6 +1116,38 @@ mod tests {
         // from the same policy.fingerprint() call on the same Arc<Policy>.
         let p = policy::from_toml_str(FIXTURE).expect("fixture must parse");
         assert_eq!(policy_snapshot(&p).policy_fingerprint, p.fingerprint());
+    }
+
+    // -----------------------------------------------------------------------
+    // hello
+    // -----------------------------------------------------------------------
+
+    /// Proves NC-38.
+    #[test]
+    #[allow(deprecated)] // reads Hello.node_id only to prove it is never set
+    fn hello_never_sets_the_node_id() {
+        use prost::Message;
+
+        let p = policy::from_toml_str(FIXTURE).expect("fixture must parse");
+        let t = templates::TemplateSet::empty();
+        let facts = Facts {
+            hostname: "host-1".to_string(),
+            ..Default::default()
+        };
+        let labels = vec![("role".to_string(), "web".to_string())];
+
+        let h = hello(facts.clone(), &labels, &p, &t);
+
+        assert!(h.node_id.is_empty());
+        // Field 1, wire type 2 encodes as tag byte 0x0a and leads the message
+        // when set; daemon_version is non-empty, so the buffer is never empty.
+        assert_ne!(h.encode_to_vec().first(), Some(&0x0a));
+
+        assert_eq!(h.daemon_version, version::version());
+        assert_eq!(h.policy_fingerprint, p.fingerprint());
+        assert_eq!(h.template_set_fingerprint, t.fingerprint());
+        assert_eq!(h.facts, Some(facts));
+        assert_eq!(h.labels, enroll::node_labels_to_proto(&labels));
     }
 
     // -----------------------------------------------------------------------
