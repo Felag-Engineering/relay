@@ -56,3 +56,33 @@ func TestValidVersion(t *testing.T) {
 		})
 	}
 }
+
+func TestDowngrade(t *testing.T) {
+	tests := []struct {
+		name           string
+		before, after  string
+		lower, compare bool
+	}{
+		{"lower", "0.2.0", "0.1.9", true, true},
+		{"equal", "0.2.0", "0.2.0", false, true},
+		{"higher", "0.1.9", "0.2.0", false, true},
+		{"v-prefix before only", "v0.2.0", "0.1.9", true, true},
+		{"v-prefix after only", "0.2.0", "v0.1.9", true, true},
+		{"pre-release below its release", "0.2.0", "0.2.0-rc.1", true, true},
+		{"build metadata only", "0.2.0+a", "0.2.0+b", false, true},
+		{"empty before", "", "0.2.0", false, false},
+		{"empty after", "0.2.0", "", false, false},
+		{"both empty", "", "", false, false},
+		{"malformed before", "latest", "0.2.0", false, false},
+		{"malformed after", "0.2.0", "1.2.x", false, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lower, comparable := Downgrade(tt.before, tt.after)
+			if lower != tt.lower || comparable != tt.compare {
+				t.Errorf("Downgrade(%q, %q) = (%v, %v), want (%v, %v)",
+					tt.before, tt.after, lower, comparable, tt.lower, tt.compare)
+			}
+		})
+	}
+}

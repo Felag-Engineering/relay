@@ -23,6 +23,18 @@ func Outdated(reported, minimum string) bool {
 	return semver.Compare(normReported, normMinimum) < 0
 }
 
+// Downgrade reports whether after is a lower daemon version than before.
+// comparable is false when either side is empty or does not parse as semver;
+// lower is then false and means nothing, so an unparseable side is unknown,
+// never "not a downgrade".
+func Downgrade(before, after string) (lower, comparable bool) {
+	nb, na := normalize(before), normalize(after)
+	if !semver.IsValid(nb) || !semver.IsValid(na) {
+		return false, false
+	}
+	return semver.Compare(na, nb) < 0, true
+}
+
 // ValidVersion reports whether v is a valid semver version, accepting both
 // bare ("0.1.0") and "v"-prefixed ("v0.1.0") forms. Used by startup config
 // validation of min_daemon_version.

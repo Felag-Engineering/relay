@@ -234,6 +234,27 @@ const (
 	// Truncated, Args or RawExecArgv.
 	KindJobHalt = "job_halt"
 
+	// The Node connection kinds record a change in what a Node reported
+	// between two connects, or a stream replacing a live one. Policy: the
+	// reported Policy fingerprint or Raw Exec state changed. Version: the
+	// reported daemon version changed. Cert: the client certificate
+	// fingerprint changed. Replaced: a stream opened while another stream for
+	// the Node was live.
+	//
+	// NodeID is the subject. Principal and Attribution are empty because no
+	// Account acted (the reasoning of KindProtocolViolation). The records are
+	// evidence of what a Node reported, not of its state (ADR-0017). Reason is
+	// Relay-rendered key=value text in the format auditsink.ConnectionRecorder
+	// defines; there is no Stdout, Stderr, Truncated, Selector or Args, since
+	// Args means Operation arguments. The writer throttles per Node and per
+	// kind and carries the count of events in Reason. Throttle state is
+	// in-process, so a restart may add a record and lose a pending count; the
+	// writer is fail-open, so a failed write leaves a log line and no row.
+	KindNodePolicyChanged        = "node_policy_changed"
+	KindNodeDaemonVersionChanged = "node_daemon_version_changed"
+	KindNodeCertChanged          = "node_cert_changed"
+	KindNodeStreamReplaced       = "node_stream_replaced"
+
 	// The Console's human authentication lane
 	// (docs/design/console/12-login.md). Every attempt is recorded, successful
 	// or not — this is the first link in the chain the UI advisory requires
@@ -351,6 +372,10 @@ var allKinds = []string{
 	KindPolicyAlias,
 	KindTagWrite,
 	KindJobHalt,
+	KindNodePolicyChanged,
+	KindNodeDaemonVersionChanged,
+	KindNodeCertChanged,
+	KindNodeStreamReplaced,
 }
 
 // Kinds returns every Kind this package defines, in declaration order.
@@ -437,6 +462,10 @@ var notAnAuthFailureKinds = []string{
 	KindPolicyAlias,
 	KindTagWrite,
 	KindJobHalt,
+	KindNodePolicyChanged,
+	KindNodeDaemonVersionChanged,
+	KindNodeCertChanged,
+	KindNodeStreamReplaced,
 }
 
 // AuthFailureKinds is every Kind recording a credential that was submitted

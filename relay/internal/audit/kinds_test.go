@@ -181,3 +181,31 @@ func TestAuthFailureKinds_ReturnsACopy(t *testing.T) {
 		t.Error("a caller mutated the package's list through the slice AuthFailureKinds() returned")
 	}
 }
+
+func TestConnectionKinds_AreNotAuthFailures(t *testing.T) {
+	want := map[string]string{
+		KindNodePolicyChanged:        "node_policy_changed",
+		KindNodeDaemonVersionChanged: "node_daemon_version_changed",
+		KindNodeCertChanged:          "node_cert_changed",
+		KindNodeStreamReplaced:       "node_stream_replaced",
+	}
+	all := map[string]bool{}
+	for _, k := range Kinds() {
+		all[k] = true
+	}
+	authFailure := map[string]bool{}
+	for _, k := range AuthFailureKinds() {
+		authFailure[k] = true
+	}
+	for got, literal := range want {
+		if got != literal {
+			t.Errorf("kind = %q, want %q", got, literal)
+		}
+		if !all[literal] {
+			t.Errorf("Kinds() lacks %q", literal)
+		}
+		if authFailure[literal] {
+			t.Errorf("AuthFailureKinds() contains %q", literal)
+		}
+	}
+}
