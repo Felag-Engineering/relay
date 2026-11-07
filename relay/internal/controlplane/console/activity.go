@@ -157,6 +157,7 @@ var activityNonCallKinds = []string{
 	audit.KindNodeRevoke, audit.KindTokenMint, audit.KindTokenRevoke,
 	audit.KindProtocolViolation, audit.KindRevokedNodeDial, audit.KindPolicyAlias, audit.KindTagWrite, audit.KindJobHalt,
 	audit.KindConfigReload, audit.KindConfigReloadRefused,
+	audit.KindNodePolicyChanged, audit.KindNodeDaemonVersionChanged, audit.KindNodeCertChanged, audit.KindNodeStreamReplaced,
 }
 
 // kindOf maps a trail record onto a row family.
