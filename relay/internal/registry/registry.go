@@ -67,6 +67,36 @@ type Facts struct {
 	IPAddresses []string
 }
 
+// RawExecReport is whether the Node's last PolicySnapshot on its current
+// stream said Raw Exec is enabled. Self-reported, kept beside the Policy
+// fingerprint and never inside Facts. It is evidence of what the Node reported
+// (ADR-0017) and never permits or refuses a dispatch; the Relay records it and
+// never evaluates or sets it (invariant 12, ADR-0002).
+type RawExecReport int
+
+const (
+	// RawExecNotReported is the zero value: no PolicySnapshot since the last connect.
+	RawExecNotReported RawExecReport = iota
+	RawExecReportedDisabled
+	RawExecReportedEnabled
+)
+
+// ClockSkewReading is one heartbeat's clock-skew measurement. The zero value is
+// not measured, so a caller that builds one without MeasuredClockSkew cannot
+// claim a measurement by accident. A positive skew means the Node's clock is ahead.
+type ClockSkewReading struct {
+	skew     time.Duration
+	measured bool
+}
+
+// MeasuredClockSkew returns a reading that carries the measurement d.
+func MeasuredClockSkew(d time.Duration) ClockSkewReading {
+	return ClockSkewReading{skew: d, measured: true}
+}
+
+// Value returns the measured skew and whether there is one.
+func (r ClockSkewReading) Value() (time.Duration, bool) { return r.skew, r.measured }
+
 // Node is the stored record for a managed Node. Returned by Get and List.
 //
 // NodeLabels holds node-space labels (bare keys, namespace tracked by which map).
@@ -125,6 +155,28 @@ type Node struct {
 	// until the Node drops off the fleet.
 	RenewalCount  int
 	LastRenewedAt time.Time
+
+	// ReportedRawExec is the Raw Exec state the Node self-reported in its last
+	// PolicySnapshot. Written only by RecordPolicySnapshot; Upsert resets it to
+	// RawExecNotReported on every connect, because each connect replaces the
+	// self-report (NC-25).
+	ReportedRawExec RawExecReport
+
+	// FirstConnectedAt is a Relay-authored marker written once, only by
+	// MarkConnected. Enrollment, Upsert and nothing a Node reports ever write
+	// it. Zero means never connected. A value backfilled on upgrade is an upper
+	// bound: the Node connected at or before it, not necessarily at it. Whether
+	// it is set is the meaning; its time is advisory.
+	FirstConnectedAt time.Time
+
+	// ClockSkew is the Relay-measured difference between the last heartbeat's
+	// timestamp and the Relay's clock (positive means the Node's clock is
+	// ahead), measured at ClockSkewMeasuredAt. It is kept apart from the
+	// self-reported Facts (NC-37, invariant 9) and stored to the millisecond.
+	// A zero ClockSkewMeasuredAt means not measured, and ClockSkew is then
+	// zero. Only RecordHeartbeat writes them.
+	ClockSkew           time.Duration
+	ClockSkewMeasuredAt time.Time
 
 	// Connected is DERIVED and NEVER STORED: whether this Node holds a live
 	// Tunnel at the instant of the read.
@@ -205,6 +257,13 @@ func (n Node) Quarantined() bool {
 // is the worst of the three possible answers.
 func (n Node) CertProvenanceKnown() bool { return !n.CertNotAfter.IsZero() }
 
+// ClockSkewKnown reports whether the Relay has measured this Node's clock skew.
+//
+// "Not measured" and "zero skew" must never be confused at a call site: a
+// surface that finds this false says the skew is unknown rather than showing
+// a clock that agrees with the Relay's.
+func (n Node) ClockSkewKnown() bool { return !n.ClockSkewMeasuredAt.IsZero() }
+
 // Certificate is what the Relay issued to a Node, as read back off the signed
 // certificate itself.
 type Certificate struct {
@@ -284,12 +343,27 @@ type Repository interface {
 	// overwritten on both INSERT and UPDATE (like Facts and NodeLabels), so
 	// each (re)connect refreshes the stored values to what the Node currently
 	// reports. RelayLabels, TagLabels and
-	// EnrollingTokenID provenance are never touched.
+	// EnrollingTokenID provenance are never touched. ReportedRawExec is reset to
+	// not reported on both INSERT and UPDATE. FirstConnectedAt, ClockSkew and
+	// ClockSkewMeasuredAt are never written or cleared.
 	Upsert(r Report) (Node, error)
 
-	// UpdateLastSeen records the most recent contact time for a Node. Returns
-	// ErrNotFound if the Node is not in the registry.
-	UpdateLastSeen(nodeID string, at time.Time) error
+	// RecordHeartbeat records a heartbeat: it sets LastSeen to at and replaces
+	// the stored clock skew in one write. A measured reading stores the skew
+	// with ClockSkewMeasuredAt = at; a reading that is not measured stores not
+	// measured. It never touches any other field. Returns ErrNotFound if the
+	// Node is not in the registry.
+	RecordHeartbeat(nodeID string, at time.Time, skew ClockSkewReading) error
+
+	// MarkConnected sets FirstConnectedAt to at only if it is unset, so later
+	// calls leave it alone. Returns ErrNotFound if the Node is not in the
+	// registry.
+	MarkConnected(nodeID string, at time.Time) error
+
+	// RecordPolicySnapshot sets ReportedRawExec to the enabled or disabled
+	// state and touches nothing else. Returns ErrNotFound if the Node is not in
+	// the registry.
+	RecordPolicySnapshot(nodeID string, rawExecEnabled bool) error
 
 	// SetRelayLabels replaces the relay-space label set for a Node. The provided
 	// map becomes the complete new set — this is a replace, not a merge. Calling

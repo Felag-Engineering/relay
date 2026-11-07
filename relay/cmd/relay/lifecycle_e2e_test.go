@@ -246,7 +246,7 @@ func TestLifecycle_SeedEnrollMTLSRenewRevoke(t *testing.T) {
 	}()
 	select {
 	case <-heartbeatDone:
-		// LastSeen advanced — UpdateLastSeen was called on the Heartbeat.
+		// LastSeen advanced — RecordHeartbeat was called on the Heartbeat.
 	case <-time.After(5 * time.Second):
 		t.Fatal("timeout: LastSeen did not advance after Heartbeat")
 	}

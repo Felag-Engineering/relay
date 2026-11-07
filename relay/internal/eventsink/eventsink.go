@@ -165,11 +165,11 @@ type registryObserver struct {
 // ObserveRegistry wraps r, publishing onto b on exactly three methods:
 // SetConnected(id, true) -> TransitionConnected, SetConnected(id, false) ->
 // TransitionDisconnected, and a successful SetRelayLabels ->
-// TransitionLabelsChanged. Every other method — Upsert, UpdateLastSeen,
-// SetRevoked, SetRevokedAll, RecordEnrollment, RecordRenewal, Get, List,
-// RevokedNodeIDs, Count — delegates and publishes NOTHING.
+// TransitionLabelsChanged. Every other method — Upsert, RecordHeartbeat,
+// MarkConnected, RecordPolicySnapshot, SetRevoked, SetRevokedAll,
+// RecordEnrollment, RecordRenewal, Get, List, RevokedNodeIDs, Count — delegates and publishes NOTHING.
 //
-// UpdateLastSeen is the load-bearing omission: it is the heartbeat, called
+// RecordHeartbeat is the load-bearing omission: it is the heartbeat, called
 // on every message from every connected Node. Publishing it would let a
 // 100k-Node fleet evict the connect/disconnect history the Console actually
 // needs from the ring buffer thirty times a second (acceptance criterion).
@@ -181,11 +181,22 @@ func (o registryObserver) Upsert(rep registry.Report) (registry.Node, error) {
 	return o.r.Upsert(rep)
 }
 
-// UpdateLastSeen is the heartbeat — the load-bearing omission this whole
+// RecordHeartbeat is the heartbeat — the load-bearing omission this whole
 // decorator exists to enforce (see ObserveRegistry's doc comment). It
 // delegates and publishes nothing.
-func (o registryObserver) UpdateLastSeen(nodeID string, at time.Time) error {
-	return o.r.UpdateLastSeen(nodeID, at)
+func (o registryObserver) RecordHeartbeat(nodeID string, at time.Time, skew registry.ClockSkewReading) error {
+	return o.r.RecordHeartbeat(nodeID, at, skew)
+}
+
+// MarkConnected and RecordPolicySnapshot run once per connect and are not one
+// of the three transitions the fleet view needs; they delegate and publish
+// nothing.
+func (o registryObserver) MarkConnected(nodeID string, at time.Time) error {
+	return o.r.MarkConnected(nodeID, at)
+}
+
+func (o registryObserver) RecordPolicySnapshot(nodeID string, rawExecEnabled bool) error {
+	return o.r.RecordPolicySnapshot(nodeID, rawExecEnabled)
 }
 
 func (o registryObserver) SetRelayLabels(nodeID string, labels map[string]string) error {
