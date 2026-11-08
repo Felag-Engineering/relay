@@ -33,32 +33,28 @@ func (a *sqliteAudit) AppendWithTemporaryAccount(ctx context.Context, acct accou
 		return accounts.Account{}, errors.New("store: refusing a temporary password with no hash or expiry")
 	}
 
-	tx, err := a.db.BeginTx(ctx, nil)
+	var created accounts.Account
+	err := inTx(ctx, a.db, "account create with temporary password", "account create with temporary password", func(tx *sql.Tx) error {
+		var err error
+		created, err = insertAccountExec(ctx, tx, acct)
+		if err != nil {
+			return err
+		}
+		if err := setTemporaryPasswordExec(ctx, tx, created.ID, h, until, time.Now()); err != nil {
+			return err
+		}
+		rs, err := recs(created)
+		if err != nil {
+			return err
+		}
+		prepared, err := prepareTemporaryAccountRecords(rs, created.ID)
+		if err != nil {
+			return err
+		}
+		return insertChained(ctx, tx, prepared)
+	})
 	if err != nil {
-		return accounts.Account{}, fmt.Errorf("begin account create with temporary password: %w", err)
-	}
-	defer tx.Rollback() //nolint:errcheck
-
-	created, err := insertAccountExec(ctx, tx, acct)
-	if err != nil {
 		return accounts.Account{}, err
-	}
-	if err := setTemporaryPasswordExec(ctx, tx, created.ID, h, until, time.Now()); err != nil {
-		return accounts.Account{}, err
-	}
-	rs, err := recs(created)
-	if err != nil {
-		return accounts.Account{}, err
-	}
-	prepared, err := prepareTemporaryAccountRecords(rs, created.ID)
-	if err != nil {
-		return accounts.Account{}, err
-	}
-	if err := insertChained(ctx, tx, prepared); err != nil {
-		return accounts.Account{}, err
-	}
-	if err := tx.Commit(); err != nil {
-		return accounts.Account{}, fmt.Errorf("commit account create with temporary password: %w", err)
 	}
 	return created, nil
 }
@@ -98,44 +94,34 @@ func (a *sqliteAudit) AppendWithTemporaryPassword(ctx context.Context, accountID
 		return err
 	}
 
-	tx, err := a.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin temporary password: %w", err)
-	}
-	defer tx.Rollback() //nolint:errcheck
+	return inTx(ctx, a.db, "temporary password", "temporary password and record", func(tx *sql.Tx) error {
+		var kind string
+		err := tx.QueryRowContext(ctx, `SELECT kind FROM accounts WHERE id = ?`, accountID).Scan(&kind)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			return accounts.ErrNotFound
+		case err != nil:
+			return fmt.Errorf("read account kind: %w", err)
+		case accounts.Kind(kind) != accounts.KindHuman:
+			return accounts.ErrMachinePassword
+		}
 
-	var kind string
-	err = tx.QueryRowContext(ctx, `SELECT kind FROM accounts WHERE id = ?`, accountID).Scan(&kind)
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		return accounts.ErrNotFound
-	case err != nil:
-		return fmt.Errorf("read account kind: %w", err)
-	case accounts.Kind(kind) != accounts.KindHuman:
-		return accounts.ErrMachinePassword
-	}
+		var temporaryUntil string
+		err = tx.QueryRowContext(ctx,
+			`SELECT temporary_until FROM account_passwords WHERE account_id = ?`, accountID).Scan(&temporaryUntil)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+		case err != nil:
+			return fmt.Errorf("read account password state: %w", err)
+		case temporaryUntil == "":
+			return accounts.ErrPasswordOwned
+		}
 
-	var temporaryUntil string
-	err = tx.QueryRowContext(ctx,
-		`SELECT temporary_until FROM account_passwords WHERE account_id = ?`, accountID).Scan(&temporaryUntil)
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-	case err != nil:
-		return fmt.Errorf("read account password state: %w", err)
-	case temporaryUntil == "":
-		return accounts.ErrPasswordOwned
-	}
-
-	if err := setTemporaryPasswordExec(ctx, tx, accountID, h, until, time.Now()); err != nil {
-		return err
-	}
-	if err := insertChained(ctx, tx, []preparedAudit{p}); err != nil {
-		return err
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit temporary password and record: %w", err)
-	}
-	return nil
+		if err := setTemporaryPasswordExec(ctx, tx, accountID, h, until, time.Now()); err != nil {
+			return err
+		}
+		return insertChained(ctx, tx, []preparedAudit{p})
+	})
 }
 
 // AppendWithPasswordChange replaces accountID's hash with h if it still is
@@ -149,34 +135,24 @@ func (a *sqliteAudit) AppendWithPasswordChange(ctx context.Context, accountID st
 		return err
 	}
 
-	tx, err := a.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin password change: %w", err)
-	}
-	defer tx.Rollback() //nolint:errcheck
-
-	res, err := tx.ExecContext(ctx, `
-		UPDATE account_passwords
-		SET password_hash = ?, updated_at = ?, temporary_until = ''
-		WHERE account_id = ? AND password_hash = ?`,
-		h.Encoded(), time.Now().UTC().Format(time.RFC3339Nano), accountID, expect.Encoded())
-	if err != nil {
-		return fmt.Errorf("store: change account password: %w", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("store: change account password: %w", err)
-	}
-	if n == 0 {
-		return accounts.ErrPasswordChanged
-	}
-	if err := insertChained(ctx, tx, []preparedAudit{p}); err != nil {
-		return err
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit password change and record: %w", err)
-	}
-	return nil
+	return inTx(ctx, a.db, "password change", "password change and record", func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, `
+			UPDATE account_passwords
+			SET password_hash = ?, updated_at = ?, temporary_until = ''
+			WHERE account_id = ? AND password_hash = ?`,
+			h.Encoded(), time.Now().UTC().Format(time.RFC3339Nano), accountID, expect.Encoded())
+		if err != nil {
+			return fmt.Errorf("store: change account password: %w", err)
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("store: change account password: %w", err)
+		}
+		if n == 0 {
+			return accounts.ErrPasswordChanged
+		}
+		return insertChained(ctx, tx, []preparedAudit{p})
+	})
 }
 
 func preparePasswordRecord(r audit.Record, kind string) (preparedAudit, error) {

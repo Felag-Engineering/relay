@@ -88,18 +88,9 @@ func (a *sqliteAudit) Append(ctx context.Context, r audit.Record) error {
 	if err != nil {
 		return err
 	}
-	tx, err := a.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin audit append: %w", err)
-	}
-	defer tx.Rollback() //nolint:errcheck
-	if err := insertChained(ctx, tx, []preparedAudit{p}); err != nil {
-		return err
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit audit record: %w", err)
-	}
-	return nil
+	return inTx(ctx, a.db, "audit append", "audit record", func(tx *sql.Tx) error {
+		return insertChained(ctx, tx, []preparedAudit{p})
+	})
 }
 
 // AppendAll persists every Record in rs in one transaction: on a nil error
@@ -126,20 +117,9 @@ func (a *sqliteAudit) AppendAll(ctx context.Context, rs []audit.Record) error {
 		prepared[i] = p
 	}
 
-	tx, err := a.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin audit append: %w", err)
-	}
-	defer tx.Rollback() //nolint:errcheck
-
-	if err := insertChained(ctx, tx, prepared); err != nil {
-		return err
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit audit records: %w", err)
-	}
-	return nil
+	return inTx(ctx, a.db, "audit append", "audit records", func(tx *sql.Tx) error {
+		return insertChained(ctx, tx, prepared)
+	})
 }
 
 // AppendWithTasks inserts every task as Pending and chains r onto the trail,
@@ -169,23 +149,14 @@ func (a *sqliteAudit) AppendWithTasks(ctx context.Context, r audit.Record, tasks
 		return err
 	}
 
-	tx, err := a.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin dispatch intent: %w", err)
-	}
-	defer tx.Rollback() //nolint:errcheck
-	for _, t := range tasks {
-		if err := createTaskExec(ctx, tx, t); err != nil {
-			return err
+	return inTx(ctx, a.db, "dispatch intent", "dispatch intent and tasks", func(tx *sql.Tx) error {
+		for _, t := range tasks {
+			if err := createTaskExec(ctx, tx, t); err != nil {
+				return err
+			}
 		}
-	}
-	if err := insertChained(ctx, tx, []preparedAudit{p}); err != nil {
-		return err
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit dispatch intent and tasks: %w", err)
-	}
-	return nil
+		return insertChained(ctx, tx, []preparedAudit{p})
+	})
 }
 
 // List returns all Records, ordered by Timestamp, ties broken by ID.
