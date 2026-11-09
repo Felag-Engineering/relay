@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/Felag-Engineering/relay/relay/internal/accounts"
@@ -25,30 +24,20 @@ type execer interface {
 // change returns the record so a change can report what it found (whether a
 // password was there to clear) into the record it is written with.
 func (s *Store) recordWith(ctx context.Context, change func(context.Context, execer) (audit.Record, error)) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin credential change: %w", err)
-	}
-	defer tx.Rollback() //nolint:errcheck
-
-	rec, err := change(ctx, tx)
-	if err != nil {
-		return err
-	}
-	if rec.ID == "" {
-		return errors.New("store: refusing to record a credential change with no audit record id")
-	}
-	p, err := prepareAudit(rec)
-	if err != nil {
-		return err
-	}
-	if err := insertChained(ctx, tx, []preparedAudit{p}); err != nil {
-		return err
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit credential change and audit record: %w", err)
-	}
-	return nil
+	return inTx(ctx, s.db, "credential change", "credential change and audit record", func(tx *sql.Tx) error {
+		rec, err := change(ctx, tx)
+		if err != nil {
+			return err
+		}
+		if rec.ID == "" {
+			return errors.New("store: refusing to record a credential change with no audit record id")
+		}
+		p, err := prepareAudit(rec)
+		if err != nil {
+			return err
+		}
+		return insertChained(ctx, tx, []preparedAudit{p})
+	})
 }
 
 // SetPasswordRecorded sets accountID's password and appends rec atomically.

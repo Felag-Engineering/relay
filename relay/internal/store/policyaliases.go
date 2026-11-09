@@ -68,54 +68,44 @@ func (a *sqliteAudit) AppendWithPolicyAlias(ctx context.Context, r audit.Record,
 		return err
 	}
 
-	tx, err := a.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin policy alias change: %w", err)
-	}
-	defer tx.Rollback() //nolint:errcheck
-
-	var current string
-	err = tx.QueryRowContext(ctx, `SELECT alias FROM policy_aliases WHERE fingerprint = ?`, c.Fingerprint).Scan(&current)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return fmt.Errorf("read policy alias: %w", err)
-	}
-	if current != c.From {
-		return policyalias.ErrChanged
-	}
-
-	if c.To != "" {
-		var other string
-		err := tx.QueryRowContext(ctx, `SELECT fingerprint FROM policy_aliases WHERE alias = ? AND fingerprint <> ?`, c.To, c.Fingerprint).Scan(&other)
-		if err == nil {
-			return policyalias.ErrTaken
+	return inTx(ctx, a.db, "policy alias change", "policy alias change and record", func(tx *sql.Tx) error {
+		var current string
+		err := tx.QueryRowContext(ctx, `SELECT alias FROM policy_aliases WHERE fingerprint = ?`, c.Fingerprint).Scan(&current)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("read policy alias: %w", err)
 		}
-		if !errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("check policy alias uniqueness: %w", err)
+		if current != c.From {
+			return policyalias.ErrChanged
 		}
-	}
 
-	if c.To == "" {
-		_, err = tx.ExecContext(ctx, `DELETE FROM policy_aliases WHERE fingerprint = ?`, c.Fingerprint)
-	} else {
-		_, err = tx.ExecContext(ctx, `
-			INSERT INTO policy_aliases (fingerprint, alias, updated_at)
-			VALUES (?, ?, ?)
-			ON CONFLICT(fingerprint) DO UPDATE SET
-				alias = excluded.alias,
-				updated_at = excluded.updated_at`,
-			c.Fingerprint, c.To, formatTime(roundTripTime(time.Now().UTC())))
-	}
-	if err != nil {
-		return fmt.Errorf("write policy alias: %w", err)
-	}
+		if c.To != "" {
+			var other string
+			err := tx.QueryRowContext(ctx, `SELECT fingerprint FROM policy_aliases WHERE alias = ? AND fingerprint <> ?`, c.To, c.Fingerprint).Scan(&other)
+			if err == nil {
+				return policyalias.ErrTaken
+			}
+			if !errors.Is(err, sql.ErrNoRows) {
+				return fmt.Errorf("check policy alias uniqueness: %w", err)
+			}
+		}
 
-	if err := insertChained(ctx, tx, []preparedAudit{p}); err != nil {
-		return err
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit policy alias change and record: %w", err)
-	}
-	return nil
+		if c.To == "" {
+			_, err = tx.ExecContext(ctx, `DELETE FROM policy_aliases WHERE fingerprint = ?`, c.Fingerprint)
+		} else {
+			_, err = tx.ExecContext(ctx, `
+				INSERT INTO policy_aliases (fingerprint, alias, updated_at)
+				VALUES (?, ?, ?)
+				ON CONFLICT(fingerprint) DO UPDATE SET
+					alias = excluded.alias,
+					updated_at = excluded.updated_at`,
+				c.Fingerprint, c.To, formatTime(roundTripTime(time.Now().UTC())))
+		}
+		if err != nil {
+			return fmt.Errorf("write policy alias: %w", err)
+		}
+
+		return insertChained(ctx, tx, []preparedAudit{p})
+	})
 }
 
 // wellFormedFingerprint reports whether fp is 64 lowercase hexadecimal

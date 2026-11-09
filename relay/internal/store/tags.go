@@ -25,19 +25,9 @@ func (a *sqliteAudit) AppendWithTagWrite(ctx context.Context, rs []audit.Record,
 		return err
 	}
 
-	tx, err := a.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin tag write: %w", err)
-	}
-	defer tx.Rollback() //nolint:errcheck
-
-	if err := writeTagChanges(ctx, tx, changes, prepared); err != nil {
-		return err
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit tag write and records: %w", err)
-	}
-	return nil
+	return inTx(ctx, a.db, "tag write", "tag write and records", func(tx *sql.Tx) error {
+		return writeTagChanges(ctx, tx, changes, prepared)
+	})
 }
 
 // prepareTagWrite is every refusal that needs no transaction: a malformed call,
