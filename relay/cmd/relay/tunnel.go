@@ -191,15 +191,6 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[relayv1.DaemonMessag
 	// and the registry below carry only bounded values.
 	report, refusedFields := protoconv.HelloReportFromProto(hello)
 
-	// Sanity-check: warn if hello.NodeId disagrees with the cert identity, but
-	// always use the cert identity and never let the wire value win.
-	if hello.NodeId != "" && hello.NodeId != nodeID {
-		slog.Warn("hello.node_id differs from cert identity; using cert",
-			"cert_node_id", nodeID,
-			"hello_node_id", fmt.Sprintf("%q", boundedLogValue(hello.NodeId)),
-		)
-	}
-
 	slog.Info("node connected",
 		"node_id", nodeID,
 		"daemon_version", report.DaemonVersion,

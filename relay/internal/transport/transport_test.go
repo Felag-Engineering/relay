@@ -153,12 +153,12 @@ func dial(t *testing.T, lis *bufconn.Listener, clientTLS *tls.Config) *grpc.Clie
 	return conn
 }
 
-// sendHello sends a Hello on the stream with NodeId set to helloID.
-func sendHello(t *testing.T, stream relayv1.Tunnel_OpenClient, helloID string) {
+// sendHello sends an empty Hello on the stream.
+func sendHello(t *testing.T, stream relayv1.Tunnel_OpenClient) {
 	t.Helper()
 	err := stream.Send(&relayv1.DaemonMessage{
 		Body: &relayv1.DaemonMessage_Hello{
-			Hello: &relayv1.Hello{NodeId: helloID},
+			Hello: &relayv1.Hello{},
 		},
 	})
 	if err != nil {
@@ -170,10 +170,10 @@ func sendHello(t *testing.T, stream relayv1.Tunnel_OpenClient, helloID string) {
 // the server aborts the stream concurrently with the client's Send, so Send
 // may return io.EOF; per the gRPC ClientStream contract the RPC status must
 // then be retrieved via Recv, which the caller does next.
-func trySendHello(stream relayv1.Tunnel_OpenClient, helloID string) {
+func trySendHello(stream relayv1.Tunnel_OpenClient) {
 	_ = stream.Send(&relayv1.DaemonMessage{
 		Body: &relayv1.DaemonMessage_Hello{
-			Hello: &relayv1.Hello{NodeId: helloID},
+			Hello: &relayv1.Hello{},
 		},
 	})
 }
@@ -198,8 +198,8 @@ func TestTransport_AcceptValidClientCert(t *testing.T) {
 		grpc.ChainUnaryInterceptor(transport.UnaryServerInterceptor(certless, nil)),
 	)
 
-	// Mint a client cert for "node-alpha". Hello carries a DIFFERENT NodeId to
-	// prove that the cert CN — not the wire value — is the authoritative identity.
+	// Mint a client cert for "node-alpha"; the cert CN is the authoritative
+	// identity.
 	csrPEM, key := newInlineCSR(t, "will-be-overridden-by-sign")
 	certPEM, err := ts.relayCA.SignCSR(csrPEM, "node-alpha")
 	if err != nil {
@@ -220,8 +220,7 @@ func TestTransport_AcceptValidClientCert(t *testing.T) {
 		t.Fatalf("open stream: %v", err)
 	}
 
-	// Send Hello with a NodeId that differs from the cert CN.
-	sendHello(t, stream, "impersonator-id")
+	sendHello(t, stream)
 
 	msg, err := stream.Recv()
 	if err != nil {
@@ -231,7 +230,7 @@ func TestTransport_AcceptValidClientCert(t *testing.T) {
 		t.Fatalf("expected Ping, got %T", msg.Body)
 	}
 
-	// The cert CN must win over the wire-supplied NodeId.
+	// The identity is the cert CN.
 	if gotNodeID != "node-alpha" {
 		t.Errorf("node_id = %q, want %q", gotNodeID, "node-alpha")
 	}
@@ -259,7 +258,7 @@ func TestTransport_RejectNoCert(t *testing.T) {
 	stream, err := relayv1.NewTunnelClient(conn).Open(ctx)
 	if err == nil {
 		// If Open didn't fail immediately, try sending to force the RPC through.
-		trySendHello(stream, "anon")
+		trySendHello(stream)
 		_, err = stream.Recv()
 	}
 	if err == nil {
@@ -303,7 +302,7 @@ func TestTransport_RejectUntrustedCert(t *testing.T) {
 
 	stream, err := relayv1.NewTunnelClient(conn).Open(ctx)
 	if err == nil {
-		trySendHello(stream, "rogue")
+		trySendHello(stream)
 		_, err = stream.Recv()
 	}
 	// The TLS handshake should fail because the server rejects the untrusted cert.
@@ -358,7 +357,7 @@ func TestTransport_CertlessSeam(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open certless stream: %v", err)
 	}
-	sendHello(t, stream, "enrolling-node")
+	sendHello(t, stream)
 
 	msg, err := stream.Recv()
 	if err != nil {
@@ -405,7 +404,7 @@ func TestTransport_RejectRevokedCert_Handshake(t *testing.T) {
 
 	stream, err := relayv1.NewTunnelClient(conn).Open(ctx)
 	if err == nil {
-		trySendHello(stream, "node-revoked")
+		trySendHello(stream)
 		_, err = stream.Recv()
 	}
 	// The connection must fail (handshake or interceptor rejection).
@@ -451,7 +450,7 @@ func TestTransport_RejectRevoked_Interceptor(t *testing.T) {
 
 	stream, err := relayv1.NewTunnelClient(conn).Open(ctx)
 	if err == nil {
-		trySendHello(stream, "node-intercepted")
+		trySendHello(stream)
 		_, err = stream.Recv()
 	}
 	if err == nil {

@@ -101,10 +101,13 @@ message RelayMessage {
 }
 
 message Hello {
-  string node_id          = 1;
+  // Never set by the relay-daemon and never read by the Relay: a Node's identity is
+  // the Node ID in its verified client certificate (invariant 6, ADR-0006). Kept,
+  // not deleted or reserved, because buf's FILE breaking rules forbid removing it.
+  string node_id          = 1 [deprecated = true];
   string daemon_version   = 2;
   Facts  facts            = 3;
-  repeated Label labels   = 4;   // node-space + relay-space (relay-space is authoritative)
+  repeated Label labels   = 4;   // node-space only; any other namespace is dropped (invariant 7)
   string policy_fingerprint = 5; // hash of the loaded Policy; report-only, for the Relay to detect drift/display; the Relay never sets Policy (ADR-0002)
   string template_set_fingerprint = 6; // hash of the loaded Template Operation set, beside policy_fingerprint; report-only drift signal, never settable over the wire (ADR-0021/ADR-0002). Empty = no templates loaded; the literal "unloadable" = the local template set failed to load and the Node's template vocabulary is empty (fail closed)
 }

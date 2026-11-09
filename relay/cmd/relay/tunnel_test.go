@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -30,6 +31,8 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 // testStreamWithContext wraps a ServerStream, replacing its Context. Used by
@@ -74,13 +77,11 @@ func newBufconnConn(t *testing.T, srv *grpc.Server) *grpc.ClientConn {
 }
 
 // TestTunnelOpen_HelloPing verifies the Hello → Ping exchange when identity is
-// driven through an interceptor (mirroring production). The injected cert
-// node_id ("cert-node-1") intentionally differs from hello.NodeId
-// ("hello-node-1"): receiving a Ping (not Unauthenticated) proves the handler
-// accepted the interceptor-provided identity, never the wire value.
+// driven through an interceptor (mirroring production): receiving a Ping (not
+// Unauthenticated) proves the handler accepted the interceptor-provided
+// identity.
 func TestTunnelOpen_HelloPing(t *testing.T) {
-	const certNodeID = "cert-node-1"   // injected by interceptor (authoritative)
-	const helloNodeID = "hello-node-1" // wire-supplied (must not become node_id)
+	const certNodeID = "cert-node-1" // injected by interceptor (authoritative)
 
 	srv := grpc.NewServer(grpc.StreamInterceptor(injectNodeIDInterceptor(certNodeID)))
 	relayv1.RegisterTunnelServer(srv, &tunnelServer{})
@@ -97,7 +98,6 @@ func TestTunnelOpen_HelloPing(t *testing.T) {
 	err = stream.Send(&relayv1.DaemonMessage{
 		Body: &relayv1.DaemonMessage_Hello{
 			Hello: &relayv1.Hello{
-				NodeId:        helloNodeID,
 				DaemonVersion: "0.0.1-test",
 				Facts: &relayv1.Facts{
 					Hostname: "test-host",
@@ -125,7 +125,7 @@ func TestTunnelOpen_HelloPing(t *testing.T) {
 
 // TestTunnelOpen_FailClosed verifies that with no interceptor injecting
 // node_id, the handler returns codes.Unauthenticated — it never falls back to
-// the wire-supplied hello.NodeId.
+// a forged Hello node_id.
 func TestTunnelOpen_FailClosed(t *testing.T) {
 	// No interceptor: NodeIDFromContext will return ok==false.
 	srv := grpc.NewServer()
@@ -142,9 +142,7 @@ func TestTunnelOpen_FailClosed(t *testing.T) {
 
 	if err = stream.Send(&relayv1.DaemonMessage{
 		Body: &relayv1.DaemonMessage_Hello{
-			Hello: &relayv1.Hello{
-				NodeId: "attacker-supplied-id",
-			},
+			Hello: forgeHelloNodeID(t, &relayv1.Hello{}, "attacker-supplied-id"),
 		},
 	}); err != nil {
 		t.Fatalf("send hello: %v", err)
@@ -182,7 +180,7 @@ func TestTunnelOpen_RevokeTearsDownLiveStream(t *testing.T) {
 	// Send Hello to advance the handler past the initial recv.
 	if err := stream.Send(&relayv1.DaemonMessage{
 		Body: &relayv1.DaemonMessage_Hello{
-			Hello: &relayv1.Hello{NodeId: nodeID},
+			Hello: &relayv1.Hello{},
 		},
 	}); err != nil {
 		t.Fatalf("send hello: %v", err)
@@ -246,7 +244,6 @@ func TestTunnelOpen_HelloRegistersNode(t *testing.T) {
 	if err := stream.Send(&relayv1.DaemonMessage{
 		Body: &relayv1.DaemonMessage_Hello{
 			Hello: &relayv1.Hello{
-				NodeId:        certNodeID,
 				DaemonVersion: "0.0.1-test",
 				Facts:         &relayv1.Facts{Hostname: "h", Os: "linux"},
 				Labels: []*relayv1.Label{
@@ -319,8 +316,7 @@ func TestOpen_MalformedNodeLabelDoesNotDropTheStream(t *testing.T) {
 	if err := stream.Send(&relayv1.DaemonMessage{
 		Body: &relayv1.DaemonMessage_Hello{
 			Hello: &relayv1.Hello{
-				NodeId: certNodeID,
-				Facts:  &relayv1.Facts{Hostname: "h", Os: "linux"},
+				Facts: &relayv1.Facts{Hostname: "h", Os: "linux"},
 				Labels: []*relayv1.Label{
 					// The measured payload (#504's evidence).
 					{Key: "node:role", Value: "web, relay:quarantine=on"},
@@ -377,8 +373,7 @@ func TestOpen_HostileNodeLabelCannotRenderTwoPredicates(t *testing.T) {
 	if err := stream.Send(&relayv1.DaemonMessage{
 		Body: &relayv1.DaemonMessage_Hello{
 			Hello: &relayv1.Hello{
-				NodeId: certNodeID,
-				Facts:  &relayv1.Facts{Hostname: "h", Os: "linux"},
+				Facts: &relayv1.Facts{Hostname: "h", Os: "linux"},
 				Labels: []*relayv1.Label{
 					// The measured payload (#504's evidence).
 					{Key: "node:role", Value: "web, relay:quarantine=on"},
@@ -442,7 +437,7 @@ func TestTunnelOpen_HeartbeatUpdatesLastSeen(t *testing.T) {
 
 	if err := stream.Send(&relayv1.DaemonMessage{
 		Body: &relayv1.DaemonMessage_Hello{
-			Hello: &relayv1.Hello{NodeId: certNodeID},
+			Hello: &relayv1.Hello{},
 		},
 	}); err != nil {
 		t.Fatalf("send hello: %v", err)
@@ -729,7 +724,7 @@ func TestTunnelOpen_PolicySnapshotCapturesIntoCache(t *testing.T) {
 
 	if err := stream.Send(&relayv1.DaemonMessage{
 		Body: &relayv1.DaemonMessage_Hello{
-			Hello: &relayv1.Hello{NodeId: certNodeID},
+			Hello: &relayv1.Hello{},
 		},
 	}); err != nil {
 		t.Fatalf("send hello: %v", err)
@@ -796,7 +791,7 @@ func openNodeStream(ctx context.Context, t *testing.T, conn *grpc.ClientConn, no
 		t.Fatalf("open stream: %v", err)
 	}
 	if err := stream.Send(&relayv1.DaemonMessage{
-		Body: &relayv1.DaemonMessage_Hello{Hello: &relayv1.Hello{NodeId: nodeID}},
+		Body: &relayv1.DaemonMessage_Hello{Hello: &relayv1.Hello{}},
 	}); err != nil {
 		t.Fatalf("send hello: %v", err)
 	}
@@ -1286,7 +1281,7 @@ func TestTunnelOpen_AReplacementThatFailsBeforeRegisteringResolvesTheTasksInFlig
 		t.Fatalf("open stream B: %v", err)
 	}
 	if err := streamB.Send(&relayv1.DaemonMessage{
-		Body: &relayv1.DaemonMessage_Hello{Hello: &relayv1.Hello{NodeId: nodeID}},
+		Body: &relayv1.DaemonMessage_Hello{Hello: &relayv1.Hello{}},
 	}); err != nil {
 		t.Fatalf("send hello on B: %v", err)
 	}
@@ -1376,7 +1371,7 @@ func TestTunnelOpen_ANewStreamThatFailsBeforeRegisteringLeavesALiveNodeConnected
 		t.Fatalf("open stream B: %v", err)
 	}
 	if err := streamB.Send(&relayv1.DaemonMessage{
-		Body: &relayv1.DaemonMessage_Hello{Hello: &relayv1.Hello{NodeId: nodeID}},
+		Body: &relayv1.DaemonMessage_Hello{Hello: &relayv1.Hello{}},
 	}); err != nil {
 		t.Fatalf("send hello on B: %v", err)
 	}
@@ -1518,7 +1513,7 @@ func TestTunnelOpen_HelloMalformedPolicyFingerprintIsStoredAsNotReported(t *test
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			reg := openWithHello(t, nodeID, &relayv1.Hello{NodeId: nodeID, PolicyFingerprint: tt.fp})
+			reg := openWithHello(t, nodeID, &relayv1.Hello{PolicyFingerprint: tt.fp})
 			n, ok := reg.Get(nodeID)
 			if !ok {
 				t.Fatal("node not registered")
@@ -1537,7 +1532,6 @@ func TestTunnelOpen_HelloWellFormedPolicyFingerprintIsUnchanged(t *testing.T) {
 	policyFP := strings.Repeat("0123456789abcdef", 4)
 	templateFP := strings.Repeat("fedcba9876543210", 4)
 	reg := openWithHello(t, nodeID, &relayv1.Hello{
-		NodeId:                 nodeID,
 		PolicyFingerprint:      policyFP,
 		TemplateSetFingerprint: templateFP,
 		DaemonVersion:          "0.0.1-test",
@@ -1558,7 +1552,6 @@ func TestTunnelOpen_HelloWellFormedPolicyFingerprintIsUnchanged(t *testing.T) {
 func TestTunnelOpen_HelloBoundsEverySelfReportedField(t *testing.T) {
 	const nodeID = "cert-node-bounds"
 	reg := openWithHello(t, nodeID, &relayv1.Hello{
-		NodeId:                 nodeID,
 		TemplateSetFingerprint: "sha256:not-a-fingerprint",
 		DaemonVersion:          "1.4.2, tag:x=y",
 		Facts: &relayv1.Facts{
@@ -1597,9 +1590,8 @@ func TestTunnelOpen_HelloBoundsEverySelfReportedField(t *testing.T) {
 
 // TestTunnelOpen_MalformedHelloFieldsAreLoggedByNameNeverByValue pins #1068's
 // audit note: one bounded warning per connect names the refused fields from a
-// closed set, no log line carries a refused value, and a hostile
-// hello.node_id is bounded before it is logged. Not parallel: it swaps the
-// default slog logger.
+// closed set, and no log line carries a refused value. Not parallel: it
+// swaps the default slog logger.
 func TestTunnelOpen_MalformedHelloFieldsAreLoggedByNameNeverByValue(t *testing.T) {
 	const nodeID = "cert-node-log"
 	logs := &syncBuffer{}
@@ -1609,16 +1601,12 @@ func TestTunnelOpen_MalformedHelloFieldsAreLoggedByNameNeverByValue(t *testing.T
 
 	huge := strings.Repeat("a", 1<<20)
 	openWithHello(t, nodeID, &relayv1.Hello{
-		// A printable-ASCII id: the exact length bound below holds only
-		// because %q does not expand printable bytes. A hostile non-printable
-		// id is longer once quoted, though still bounded.
-		NodeId:            strings.Repeat("n", 1<<20),
 		PolicyFingerprint: huge,
 		Facts:             &relayv1.Facts{Hostname: "web\u202e01"},
 	})
 
 	var refusals int
-	var connected, differs bool
+	var connected bool
 	for _, line := range strings.Split(strings.TrimRight(logs.String(), "\n"), "\n") {
 		if strings.Contains(line, huge) || strings.Contains(line, "\u202e") || strings.Contains(line, `\u202e`) {
 			t.Errorf("a log line carries a refused wire value: %.200s", line)
@@ -1626,10 +1614,8 @@ func TestTunnelOpen_MalformedHelloFieldsAreLoggedByNameNeverByValue(t *testing.T
 		var entry struct {
 			Msg           string   `json:"msg"`
 			NodeID        string   `json:"node_id"`
-			CertNodeID    string   `json:"cert_node_id"`
 			RefusedFields []string `json:"refused_fields"`
 			Hostname      *string  `json:"hostname"`
-			HelloNodeID   string   `json:"hello_node_id"`
 		}
 		if err := json.Unmarshal([]byte(line), &entry); err != nil {
 			continue
@@ -1651,14 +1637,6 @@ func TestTunnelOpen_MalformedHelloFieldsAreLoggedByNameNeverByValue(t *testing.T
 			if entry.Hostname == nil || *entry.Hostname != "" {
 				t.Errorf("node connected hostname = %v, want the bounded empty value", entry.Hostname)
 			}
-		case "hello.node_id differs from cert identity; using cert":
-			if entry.CertNodeID != nodeID {
-				continue
-			}
-			differs = true
-			if len(entry.HelloNodeID) > registry.MaxLoggedLabelKeyBytes+2 {
-				t.Errorf("hello_node_id logged at %d bytes, want at most %d", len(entry.HelloNodeID), registry.MaxLoggedLabelKeyBytes+2)
-			}
 		}
 	}
 	if refusals != 1 {
@@ -1666,9 +1644,6 @@ func TestTunnelOpen_MalformedHelloFieldsAreLoggedByNameNeverByValue(t *testing.T
 	}
 	if !connected {
 		t.Errorf("no \"node connected\" record for %q; logs:\n%.2000s", nodeID, logs.String())
-	}
-	if !differs {
-		t.Errorf("no \"hello.node_id differs\" record for cert node %q; logs:\n%.2000s", nodeID, logs.String())
 	}
 }
 
@@ -1697,7 +1672,7 @@ func ipAddressesOf(n int) []string {
 // truncated, and the stream stays up.
 func TestTunnelOpen_HelloOverTheNodeLabelCapRecordsNoNodeLabels(t *testing.T) {
 	const nodeID = "cert-node-label-cap"
-	reg := openWithHello(t, nodeID, &relayv1.Hello{NodeId: nodeID, Labels: nodeLabelsOf(registry.MaxNodeLabels + 1)})
+	reg := openWithHello(t, nodeID, &relayv1.Hello{Labels: nodeLabelsOf(registry.MaxNodeLabels + 1)})
 	n, ok := reg.Get(nodeID)
 	if !ok {
 		t.Fatal("node not registered")
@@ -1711,11 +1686,11 @@ func TestTunnelOpen_HelloOverTheNodeLabelCapRecordsNoNodeLabels(t *testing.T) {
 // earlier set is a self-report the Node no longer makes.
 func TestTunnelOpen_HelloOverTheNodeLabelCapReplacesAnEarlierSet(t *testing.T) {
 	const nodeID = "cert-node-label-cap-reconnect"
-	reg := openWithHello(t, nodeID, &relayv1.Hello{NodeId: nodeID, Labels: nodeLabelsOf(2)})
+	reg := openWithHello(t, nodeID, &relayv1.Hello{Labels: nodeLabelsOf(2)})
 	if n, _ := reg.Get(nodeID); len(n.NodeLabels) != 2 {
 		t.Fatalf("first Hello stored %d labels, want 2", len(n.NodeLabels))
 	}
-	openWithHelloOn(t, reg, nodeID, &relayv1.Hello{NodeId: nodeID, Labels: nodeLabelsOf(registry.MaxNodeLabels + 1)})
+	openWithHelloOn(t, reg, nodeID, &relayv1.Hello{Labels: nodeLabelsOf(registry.MaxNodeLabels + 1)})
 	n, _ := reg.Get(nodeID)
 	if len(n.NodeLabels) != 0 {
 		t.Errorf("NodeLabels has %d entries after an over-cap reconnect, want none", len(n.NodeLabels))
@@ -1724,7 +1699,7 @@ func TestTunnelOpen_HelloOverTheNodeLabelCapReplacesAnEarlierSet(t *testing.T) {
 
 func TestTunnelOpen_HelloAtTheNodeLabelCapKeepsEveryLabel(t *testing.T) {
 	const nodeID = "cert-node-label-at-cap"
-	reg := openWithHello(t, nodeID, &relayv1.Hello{NodeId: nodeID, Labels: nodeLabelsOf(registry.MaxNodeLabels)})
+	reg := openWithHello(t, nodeID, &relayv1.Hello{Labels: nodeLabelsOf(registry.MaxNodeLabels)})
 	n, _ := reg.Get(nodeID)
 	if len(n.NodeLabels) != registry.MaxNodeLabels {
 		t.Fatalf("NodeLabels has %d entries, want all %d", len(n.NodeLabels), registry.MaxNodeLabels)
@@ -1739,8 +1714,7 @@ func TestTunnelOpen_HelloAtTheNodeLabelCapKeepsEveryLabel(t *testing.T) {
 func TestTunnelOpen_HelloOverTheIPAddressCapRecordsNoAddresses(t *testing.T) {
 	const nodeID = "cert-node-ip-cap"
 	reg := openWithHello(t, nodeID, &relayv1.Hello{
-		NodeId: nodeID,
-		Facts:  &relayv1.Facts{Hostname: "web-01", IpAddresses: ipAddressesOf(registry.MaxReportedIPAddresses + 1)},
+		Facts: &relayv1.Facts{Hostname: "web-01", IpAddresses: ipAddressesOf(registry.MaxReportedIPAddresses + 1)},
 	})
 	n, _ := reg.Get(nodeID)
 	if n.Facts.IPAddresses != nil {
@@ -1754,8 +1728,7 @@ func TestTunnelOpen_HelloOverTheIPAddressCapRecordsNoAddresses(t *testing.T) {
 func TestTunnelOpen_HelloAtTheIPAddressCapKeepsEveryAddress(t *testing.T) {
 	const nodeID = "cert-node-ip-at-cap"
 	reg := openWithHello(t, nodeID, &relayv1.Hello{
-		NodeId: nodeID,
-		Facts:  &relayv1.Facts{IpAddresses: ipAddressesOf(registry.MaxReportedIPAddresses)},
+		Facts: &relayv1.Facts{IpAddresses: ipAddressesOf(registry.MaxReportedIPAddresses)},
 	})
 	if n, _ := reg.Get(nodeID); len(n.Facts.IPAddresses) != registry.MaxReportedIPAddresses {
 		t.Errorf("at the cap: %d addresses kept, want all %d", len(n.Facts.IPAddresses), registry.MaxReportedIPAddresses)
@@ -1775,7 +1748,7 @@ func TestTunnelOpen_OverCapLabelsAreLoggedByCountNeverByKeyOrValue(t *testing.T)
 	slog.SetDefault(slog.New(slog.NewJSONHandler(logs, nil)))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
-	openWithHello(t, nodeID, &relayv1.Hello{NodeId: nodeID, Labels: nodeLabelsOf(registry.MaxNodeLabels + 1)})
+	openWithHello(t, nodeID, &relayv1.Hello{Labels: nodeLabelsOf(registry.MaxNodeLabels + 1)})
 
 	var warnings int
 	for _, line := range strings.Split(strings.TrimRight(logs.String(), "\n"), "\n") {
@@ -1813,8 +1786,7 @@ func TestTunnelOpen_OverCapIPAddressesAreLoggedByFieldNeverByAddress(t *testing.
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
 	openWithHello(t, nodeID, &relayv1.Hello{
-		NodeId: nodeID,
-		Facts:  &relayv1.Facts{IpAddresses: ipAddressesOf(registry.MaxReportedIPAddresses + 1)},
+		Facts: &relayv1.Facts{IpAddresses: ipAddressesOf(registry.MaxReportedIPAddresses + 1)},
 	})
 
 	if strings.Contains(logs.String(), "10.9.") {
@@ -1822,5 +1794,88 @@ func TestTunnelOpen_OverCapIPAddressesAreLoggedByFieldNeverByAddress(t *testing.
 	}
 	if !strings.Contains(logs.String(), registry.FieldIPAddresses) {
 		t.Errorf("no log line names %s; logs:\n%.2000s", registry.FieldIPAddresses, logs.String())
+	}
+}
+
+// forgeHelloNodeID sets the deprecated Hello.node_id. A relay-daemon never
+// sets it (NC-38), so only a forging test does; protoreflect does it without
+// naming the deprecated identifier (staticcheck SA1019).
+func forgeHelloNodeID(t *testing.T, h *relayv1.Hello, id string) *relayv1.Hello {
+	t.Helper()
+	m := h.ProtoReflect()
+	fd := m.Descriptor().Fields().ByName("node_id")
+	if fd == nil {
+		t.Fatal("Hello has no node_id field")
+	}
+	m.Set(fd, protoreflect.ValueOfString(id))
+	return h
+}
+
+// TestTunnelOpen_ForgedHelloNodeIDIsKeyedByTheCertificateAndNeverLogged pins
+// that a forged Hello.node_id changes nothing: the Node is keyed by the
+// certificate identity and no log line carries the forged value. Not
+// parallel: it swaps the default slog logger.
+//
+// Proves NC-38.
+func TestTunnelOpen_ForgedHelloNodeIDIsKeyedByTheCertificateAndNeverLogged(t *testing.T) {
+	logs := &syncBuffer{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	const certNodeID = "cert-node-1"
+	const forged = "forged-hello-node-id-7f3a"
+	hello := forgeHelloNodeID(t, &relayv1.Hello{
+		DaemonVersion: "0.0.1-test",
+		Facts:         &relayv1.Facts{Hostname: "forge-host", Os: "linux"},
+		// One malformed label and one malformed field, so the scan below also
+		// covers the two refusal log branches.
+		Labels:            []*relayv1.Label{{Key: "node:Bad Key", Value: "v"}},
+		PolicyFingerprint: strings.Repeat("a", 1<<10),
+	}, forged)
+
+	wire, err := proto.Marshal(hello)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !bytes.Contains(wire, []byte(forged)) {
+		t.Fatal("the forged node_id is not on the wire; the test would prove nothing")
+	}
+
+	reg := openWithHello(t, certNodeID, hello)
+
+	nodes := reg.List()
+	if len(nodes) != 1 || nodes[0].NodeID != certNodeID {
+		t.Fatalf("registry holds %+v, want exactly one Node keyed %q", nodes, certNodeID)
+	}
+	if _, ok := reg.Get(forged); ok {
+		t.Errorf("a Node was registered under the forged node_id %q", forged)
+	}
+
+	var connected, refusedLabels, refusedFields bool
+	for _, line := range strings.Split(strings.TrimRight(logs.String(), "\n"), "\n") {
+		if strings.Contains(line, forged) {
+			t.Errorf("a log line carries the forged node_id: %.200s", line)
+		}
+		var entry struct {
+			Msg    string `json:"msg"`
+			NodeID string `json:"node_id"`
+		}
+		if json.Unmarshal([]byte(line), &entry) == nil && entry.NodeID == certNodeID {
+			switch entry.Msg {
+			case "node connected":
+				connected = true
+			case "refused malformed node labels":
+				refusedLabels = true
+			case "refused malformed Hello fields; recorded as not reported":
+				refusedFields = true
+			}
+		}
+	}
+	if !refusedLabels || !refusedFields {
+		t.Errorf("refusal records logged: labels=%v fields=%v, want both; logs:\n%.2000s", refusedLabels, refusedFields, logs.String())
+	}
+	if !connected {
+		t.Errorf("no \"node connected\" record for %q; logs:\n%.2000s", certNodeID, logs.String())
 	}
 }

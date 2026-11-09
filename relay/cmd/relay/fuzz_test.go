@@ -112,7 +112,6 @@ func FuzzDaemonMessageUnmarshal(f *testing.F) {
 	seed, err := proto.Marshal(&relayv1.DaemonMessage{
 		Body: &relayv1.DaemonMessage_Hello{
 			Hello: &relayv1.Hello{
-				NodeId:        "node-seed",
 				DaemonVersion: "0.1.0",
 				Facts: &relayv1.Facts{
 					Hostname: "h",

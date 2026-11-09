@@ -38,6 +38,8 @@ targets.
   verifies the other.
 - **NC-3** A Node's identity is the Node ID in its verified client certificate, never a value
   the daemon sends.
+- **NC-38** `Hello` carries no Node ID: its field is deprecated in `/proto`, the daemon never
+  sets it and the Relay never reads it.
 - **NC-4** On every connect the daemon verifies the Relay's server certificate against the CA it
   pinned at enrollment, and trusts no system or public roots.
 - **NC-5** The daemon reads its identity from its state directory at each connect, so a renewed
@@ -141,7 +143,6 @@ Stream replacement is not a refusal: the older stream ends because a newer one e
 | NC-35 | Between two connects of the same Node, a change in the client certificate fingerprint writes one audit record with the before and after fingerprints. The record blocks nothing. | v0.2.1 |
 | NC-36 | The Relay counts stream replacements per Node and, while it runs, writes at most one audit record per Node per 10 minutes, carrying the number of replacements since the previous record, so a single replacement is recorded and a flapping pair writes a bounded number of records (R54). | v0.2.1 |
 | NC-37 | The Relay measures each heartbeat's timestamp against its own clock and records the difference on the Node's registry record as its clock skew: a Relay-measured value, kept apart from the self-reported Facts. Clock skew never blocks a connection or a dispatch. | v0.2.1 |
-| NC-38 | `Hello` carries no Node ID: its field is deprecated in `/proto`, the daemon never sets it and the Relay never reads it. | v0.2.1 |
 | NC-39 | The change records of NC-33, NC-34 and NC-35 are limited per Node and per kind: while the Relay runs, at most one record per 10 minutes, carrying the number of changes since the previous record of that kind, so a single change is recorded at once and a Node that keeps changing its report, or two parties sharing one certificate, write a bounded number of records (R51, R54). | v0.2.1 |
 
 ## Out of scope
@@ -174,6 +175,7 @@ Stream replacement is not a refusal: the older stream ends because a newer one e
 <!-- proof:begin -->
 | Claim | Proven by | Seam |
 |---|---|---|
+| NC-38 | `TestHello_NodeIDIsDeprecatedInTheContract`, `TestRelay_NoFileSelectsTheHelloNodeID`, `TestTunnelOpen_ForgedHelloNodeIDIsKeyedByTheCertificateAndNeverLogged`, `hello_never_sets_the_node_id` | Node plane, Relay, daemon |
 
 Unproven: NC-1, NC-2, NC-3, NC-4, NC-5, NC-6, NC-7, NC-8, NC-9, NC-10, NC-11, NC-12, NC-13, NC-14, NC-15, NC-16, NC-17, NC-18, NC-19, NC-20, NC-21, NC-22, NC-23, NC-24, NC-25, NC-26, NC-27, NC-28, NC-29, NC-30, NC-31, NC-32.
 <!-- proof:end -->
