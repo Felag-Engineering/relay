@@ -186,94 +186,86 @@ func (s *Sink) Record(ctx context.Context, e capability.AuditEntry) error {
 	base.ApprovalID = e.ApprovalID
 	base.PlanHash = e.PlanHash
 
-	if e.Kind == capability.AuditKindRefusal {
-		base.Kind = audit.KindRefusal
+	// Every Kind with no Results is named here and handled before the default
+	// case: an entry with no Results looks exactly like a Dispatch with no
+	// Results, so a Kind that fell through would be recorded as something that
+	// ran — a park, a decision or an intent rendered as an outcome.
+	switch e.Kind {
+	case capability.AuditKindRefusal:
 		base.Reason = e.Reason
 		base.JobID = e.JobID
-		err := s.append(ctx, base)
-		s.logDecision(audit.KindRefusal, e, 0, "")
-		return err
-	}
+		return s.appendDecision(ctx, audit.KindRefusal, e, base)
 
-	if e.Kind == capability.AuditKindPlan {
-		base.Kind = audit.KindPlan
-		err := s.append(ctx, base)
-		s.logDecision(audit.KindPlan, e, 0, "")
-		return err
-	}
+	case capability.AuditKindPlan:
+		return s.appendDecision(ctx, audit.KindPlan, e, base)
 
-	// A parked dispatch (ADR-0027). It must be handled BEFORE the
-	// dispatch fall-through below: an entry with no Results looks exactly like
-	// a Dispatch with no Results, so without this branch a park would be
-	// recorded as something that ran. Reason carries the Relay-authored
-	// summary and the request ID, which is what makes the park answerable
-	// later.
-	if e.Kind == capability.AuditKindApprovalRequested {
-		base.Kind = audit.KindApprovalRequested
+	// A parked dispatch (ADR-0027). Reason carries the Relay-authored summary
+	// and the request ID, which is what makes the park answerable later.
+	case capability.AuditKindApprovalRequested:
 		base.Reason = e.Reason
-		err := s.append(ctx, base)
-		s.logDecision(audit.KindApprovalRequested, e, 0, "")
-		return err
-	}
+		return s.appendDecision(ctx, audit.KindApprovalRequested, e, base)
 
-	// A re-drive of an already-parked dispatch: same shape as a park,
-	// but nothing was created — the caller bounced off the existing pending
+	// A re-drive of an already-parked dispatch: same shape as a park, but
+	// nothing was created — the caller bounced off the existing pending
 	// Request. Recorded under its own kind so approval_requested keeps meaning
-	// "a request was created", and handled before the fall-through for the same
-	// no-Results reason as its neighbours.
-	if e.Kind == capability.AuditKindApprovalPendingObserved {
-		base.Kind = audit.KindApprovalPendingObserved
+	// "a request was created".
+	case capability.AuditKindApprovalPendingObserved:
 		base.Reason = e.Reason
-		err := s.append(ctx, base)
-		s.logDecision(audit.KindApprovalPendingObserved, e, 0, "")
-		return err
-	}
+		return s.appendDecision(ctx, audit.KindApprovalPendingObserved, e, base)
 
-	// A decision on a parked dispatch (ADR-0027). Like a park it must be
-	// handled before the dispatch fall-through, and for the same reason: it
-	// carries no Results, so the fall-through would record it as a Dispatch
-	// with no Results — an answer to a question rendered as something that ran.
-	if e.Kind == capability.AuditKindApprovalDecided {
-		base.Kind = audit.KindApprovalDecided
+	// A decision on a parked dispatch (ADR-0027): an answer to a question.
+	case capability.AuditKindApprovalDecided:
 		base.Reason = e.Reason
 		base.ApprovalAnswer = approvalAnswer(e.ApprovalAnswer)
 		base.DecisionChannel = decisionChannel(e.DecisionChannel)
-		err := s.append(ctx, base)
-		s.logDecision(audit.KindApprovalDecided, e, 0, "")
-		return err
-	}
+		return s.appendDecision(ctx, audit.KindApprovalDecided, e, base)
 
-	// A mutate Job's halt. Handled before the dispatch fall-through, which
-	// would record its no-Results entry as a dispatch. It is the Relay's act,
-	// with no Account, so the record carries no Principal, Attribution or
-	// Selector (the requester is one join away on job_id); repeating the
-	// arguments would copy the arguments residual risk onto one more row. The
-	// approval link set above stays, as on every Kind.
-	if e.Kind == capability.AuditKindJobHalt {
-		if !e.Halt.Halted() || e.JobID == "" {
-			return errors.New("auditsink: a job halt entry names a halt and a Job")
-		}
-		rec := base
-		rec.Principal = ""
-		rec.Attribution = audit.Attribution{}
-		rec.Selector = ""
-		rec.Args = nil
-		rec.RawExecArgv = nil
-		rec.Kind = audit.KindJobHalt
-		rec.JobID = e.JobID
-		rec.NodeID = e.Halt.NodeID
-		rec.Reason = jobHaltReason(e.Halt)
-		err := s.append(ctx, rec)
-		s.logDecision(audit.KindJobHalt, e, 0, "")
-		return err
-	}
+	case capability.AuditKindJobHalt:
+		return s.recordJobHalt(ctx, e, base)
 
+	default:
+		return s.recordDispatch(ctx, e, base)
+	}
+}
+
+// appendDecision appends rec as a record of the given kind and emits the
+// kind's "audit decision" log line, whether or not the append succeeded.
+// It is for the Kinds that are exactly one row and carry no Results.
+func (s *Sink) appendDecision(ctx context.Context, kind string, e capability.AuditEntry, rec audit.Record) error {
+	rec.Kind = kind
+	err := s.append(ctx, rec)
+	s.logDecision(kind, e, 0, "")
+	return err
+}
+
+// recordJobHalt records a mutate Job's halt. It is the Relay's act, with no
+// Account, so the record carries no Principal, Attribution or Selector (the
+// requester is one join away on job_id); repeating the arguments would copy
+// the arguments residual risk onto one more row. The approval link already on
+// base stays, as on every Kind.
+func (s *Sink) recordJobHalt(ctx context.Context, e capability.AuditEntry, base audit.Record) error {
+	if !e.Halt.Halted() || e.JobID == "" {
+		return errors.New("auditsink: a job halt entry names a halt and a Job")
+	}
+	rec := base
+	rec.Principal = ""
+	rec.Attribution = audit.Attribution{}
+	rec.Selector = ""
+	rec.Args = nil
+	rec.RawExecArgv = nil
+	rec.JobID = e.JobID
+	rec.NodeID = e.Halt.NodeID
+	rec.Reason = jobHaltReason(e.Halt)
+	return s.appendDecision(ctx, audit.KindJobHalt, e, rec)
+}
+
+// recordDispatch records a dispatch's outcome: one row per NodeResult, or one
+// job-level row with an empty NodeID when the dispatcher produced none. A
+// failed append does not stop the rest; the failures are joined.
+func (s *Sink) recordDispatch(ctx context.Context, e capability.AuditEntry, base audit.Record) error {
 	base.JobID = e.JobID
 	if len(e.Results) == 0 {
-		base.Kind = audit.KindDispatch
-		err := s.append(ctx, base)
-		s.logDecision(audit.KindDispatch, e, 0, "")
-		return err
+		return s.appendDecision(ctx, audit.KindDispatch, e, base)
 	}
 
 	// read-class Operations record WHAT was read, never what came back
