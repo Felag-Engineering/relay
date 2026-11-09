@@ -181,8 +181,7 @@ func yourAccountPrelude(d Deps, w http.ResponseWriter, r *http.Request, needSess
 // handleChangePassword implements POST /console/account/password.
 func handleChangePassword(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if err := r.ParseForm(); err != nil {
-			http.Error(w, "could not read the submitted form", http.StatusBadRequest)
+		if !parseSubmittedForm(w, r) {
 			return
 		}
 		pg, cs, ok := yourAccountPrelude(d, w, r, true)

@@ -241,6 +241,25 @@ func unavailable(w http.ResponseWriter, what string) {
 		http.StatusInternalServerError)
 }
 
+// unreadableFormMessage is the plain-text 400 for a POST whose body could not
+// be read or parsed as a form.
+const unreadableFormMessage = "could not read the submitted form"
+
+// refuseUnreadableForm answers 400 for a form body that could not be read.
+func refuseUnreadableForm(w http.ResponseWriter) {
+	http.Error(w, unreadableFormMessage, http.StatusBadRequest)
+}
+
+// parseSubmittedForm parses the request's form. It reports false after
+// answering 400, so a caller returns without reading any field.
+func parseSubmittedForm(w http.ResponseWriter, r *http.Request) bool {
+	if err := r.ParseForm(); err != nil {
+		refuseUnreadableForm(w)
+		return false
+	}
+	return true
+}
+
 // unreadable renders a screen whose backing seam IS wired and FAILED.
 //
 // It is a separate sentence from unavailable's on purpose. The two are

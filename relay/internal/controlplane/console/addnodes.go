@@ -170,8 +170,7 @@ func handleMintEnrollmentToken(d Deps) http.HandlerFunc {
 			unavailable(w, addNodesUnavailableSubject)
 			return
 		}
-		if err := r.ParseForm(); err != nil {
-			http.Error(w, "could not read the submitted form", http.StatusBadRequest)
+		if !parseSubmittedForm(w, r) {
 			return
 		}
 		pg, ok := page(d, w, r, "Add Nodes")
