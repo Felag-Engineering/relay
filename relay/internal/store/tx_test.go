@@ -44,7 +44,7 @@ func TestInTx(t *testing.T) {
 			}
 			return sentinel
 		})
-		if err != sentinel { //nolint:errorlint // the contract is that the error is not wrapped
+		if err != sentinel { // identity, not errors.Is: the contract is that the error is not wrapped
 			t.Fatalf("err=%v, want the sentinel itself", err)
 		}
 		if count() != 1 {
