@@ -189,15 +189,15 @@ func TestSetRelayLabels_NotFound(t *testing.T) {
 	}
 }
 
-func TestUpdateLastSeen_NotFound(t *testing.T) {
+func TestRecordHeartbeat_NotFound(t *testing.T) {
 	reg := NewInMemory()
-	err := reg.UpdateLastSeen("does-not-exist", time.Now())
+	err := reg.RecordHeartbeat("does-not-exist", time.Now(), ClockSkewReading{})
 	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("expected ErrNotFound, got %v", err)
 	}
 }
 
-func TestUpdateLastSeen(t *testing.T) {
+func TestRecordHeartbeat(t *testing.T) {
 	reg := NewInMemory()
 	_, err := reg.Upsert(Report{NodeID: "node-ls"})
 	if err != nil {
@@ -205,8 +205,8 @@ func TestUpdateLastSeen(t *testing.T) {
 	}
 
 	newTime := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
-	if err := reg.UpdateLastSeen("node-ls", newTime); err != nil {
-		t.Fatalf("UpdateLastSeen: %v", err)
+	if err := reg.RecordHeartbeat("node-ls", newTime, ClockSkewReading{}); err != nil {
+		t.Fatalf("RecordHeartbeat: %v", err)
 	}
 
 	n, ok := reg.Get("node-ls")

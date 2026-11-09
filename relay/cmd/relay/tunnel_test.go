@@ -421,7 +421,7 @@ func TestOpen_HostileNodeLabelCannotRenderTwoPredicates(t *testing.T) {
 // TestTunnelOpen_HeartbeatUpdatesLastSeen verifies that receiving a Heartbeat
 // causes the handler to advance the Node's LastSeen timestamp in the registry.
 // The registry is seeded with a fixed old clock so Hello records LastSeen=oldTime;
-// UpdateLastSeen is called with the handler's real time.Now(), which is strictly
+// RecordHeartbeat is called with the handler's real time.Now(), which is strictly
 // after oldTime, so the advance is observable.
 func TestTunnelOpen_HeartbeatUpdatesLastSeen(t *testing.T) {
 	const certNodeID = "cert-node-hb"
@@ -466,7 +466,7 @@ func TestTunnelOpen_HeartbeatUpdatesLastSeen(t *testing.T) {
 		t.Fatalf("LastSeen after Hello: got %v, want %v", n.LastSeen, oldTime)
 	}
 
-	// Send a Heartbeat — the handler will call UpdateLastSeen(nodeID, time.Now()).
+	// Send a Heartbeat — the handler will call RecordHeartbeat(nodeID, time.Now()).
 	if err := stream.Send(&relayv1.DaemonMessage{
 		Body: &relayv1.DaemonMessage_Heartbeat{
 			Heartbeat: &relayv1.Heartbeat{UnixMillis: time.Now().UnixMilli()},
@@ -492,10 +492,46 @@ func TestTunnelOpen_HeartbeatUpdatesLastSeen(t *testing.T) {
 
 	select {
 	case <-found:
-		// LastSeen advanced past oldTime — UpdateLastSeen was called.
+		// LastSeen advanced past oldTime — RecordHeartbeat was called.
 	case <-time.After(5 * time.Second):
 		t.Fatal("timeout: LastSeen was not updated after Heartbeat")
 	}
+}
+
+// TestTunnelOpen_HeartbeatRecordsSkewNotMeasured pins that the heartbeat
+// records through RecordHeartbeat with the skew not measured, which replaces
+// any stored measurement.
+func TestTunnelOpen_HeartbeatRecordsSkewNotMeasured(t *testing.T) {
+	const certNodeID = "cert-node-skew"
+	reg := registry.NewInMemory()
+	srv := grpc.NewServer(grpc.StreamInterceptor(injectNodeIDInterceptor(certNodeID)))
+	relayv1.RegisterTunnelServer(srv, &tunnelServer{reg: reg})
+	conn := newBufconnConn(t, srv)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	stream := openNodeStream(ctx, t, conn, certNodeID)
+
+	seeded := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	if err := reg.RecordHeartbeat(certNodeID, seeded, registry.MeasuredClockSkew(5*time.Minute)); err != nil {
+		t.Fatalf("seed skew: %v", err)
+	}
+	if n, _ := reg.Get(certNodeID); !n.ClockSkewKnown() {
+		t.Fatal("seeded skew reads as not known")
+	}
+
+	if err := stream.Send(&relayv1.DaemonMessage{
+		Body: &relayv1.DaemonMessage_Heartbeat{
+			Heartbeat: &relayv1.Heartbeat{UnixMillis: time.Now().UnixMilli()},
+		},
+	}); err != nil {
+		t.Fatalf("send heartbeat: %v", err)
+	}
+
+	waitUntil(t, "the heartbeat to replace the seeded skew with not measured", 5*time.Second, func() bool {
+		n, ok := reg.Get(certNodeID)
+		return ok && n.LastSeen.After(seeded) && !n.ClockSkewKnown()
+	})
 }
 
 // TestNodeLabelsFromHello is a pure unit test for the nodeLabelsFromHello

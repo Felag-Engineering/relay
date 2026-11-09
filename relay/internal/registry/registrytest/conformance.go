@@ -362,40 +362,254 @@ func RunRepositoryConformance(t *testing.T, newRepo Factory) {
 	})
 
 	// ----------------------------------------------------------------
-	// UpdateLastSeen
+	// RecordHeartbeat
 	// ----------------------------------------------------------------
 
-	t.Run("UpdateLastSeen_RoundTripsAndTouchesNothingElse", func(t *testing.T) {
+	t.Run("RecordHeartbeat_RoundTripsAndTouchesNothingElse", func(t *testing.T) {
 		r := fresh(t)
 		mustUpsert(t, r, fullReport("node-a"))
 		at := time.Date(2026, 5, 4, 3, 2, 1, 123456789, time.UTC)
-		mustNil(t, "UpdateLastSeen", r.UpdateLastSeen("node-a", at))
+		mustNil(t, "RecordHeartbeat", r.RecordHeartbeat("node-a", at, registry.ClockSkewReading{}))
 
 		got := mustGet(t, r, "node-a")
 		if !got.LastSeen.Equal(at) {
 			t.Errorf("LastSeen = %v, want %v (nanoseconds included)", got.LastSeen, at)
 		}
-		checkFullReport(t, "after UpdateLastSeen", got)
+		checkFullReport(t, "after RecordHeartbeat", got)
+		if !got.FirstConnectedAt.IsZero() || got.ReportedRawExec != registry.RawExecNotReported {
+			t.Errorf("RecordHeartbeat touched FirstConnectedAt or ReportedRawExec: %+v", got)
+		}
 	})
 
-	t.Run("UpdateLastSeen_NonUTCInstantIsTheSameInstant", func(t *testing.T) {
+	t.Run("RecordHeartbeat_NonUTCInstantIsTheSameInstant", func(t *testing.T) {
 		r := fresh(t)
 		mustUpsert(t, r, registry.Report{NodeID: "node-a"})
 		at := time.Date(2026, 5, 4, 3, 2, 1, 0, time.FixedZone("UTC+5", 5*60*60))
-		mustNil(t, "UpdateLastSeen", r.UpdateLastSeen("node-a", at))
+		mustNil(t, "RecordHeartbeat", r.RecordHeartbeat("node-a", at, registry.ClockSkewReading{}))
 		if got := mustGet(t, r, "node-a").LastSeen; !got.Equal(at) {
 			t.Errorf("LastSeen = %v, want the same instant as %v", got, at)
 		}
 	})
 
-	t.Run("UpdateLastSeen_UnknownNodeIsNotFound", func(t *testing.T) {
+	t.Run("RecordHeartbeat_UnknownNodeIsNotFound", func(t *testing.T) {
 		r := fresh(t)
-		if err := r.UpdateLastSeen("ghost", time.Now()); !errors.Is(err, registry.ErrNotFound) {
+		if err := r.RecordHeartbeat("ghost", time.Now(), registry.ClockSkewReading{}); !errors.Is(err, registry.ErrNotFound) {
 			t.Fatalf("err = %v, want ErrNotFound", err)
 		}
 		if _, ok := r.Get("ghost"); ok {
-			t.Error("UpdateLastSeen on an unknown Node created it")
+			t.Error("RecordHeartbeat on an unknown Node created it")
 		}
+	})
+
+	// ----------------------------------------------------------------
+	// Clock skew (NC-37's storage)
+	// ----------------------------------------------------------------
+
+	t.Run("ClockSkew_UnmeasuredReadsAsNotKnown", func(t *testing.T) {
+		r := fresh(t)
+		mustUpsert(t, r, registry.Report{NodeID: "node-a"})
+		checkSkewUnknown(t, "fresh Node", mustGet(t, r, "node-a"))
+
+		mustNil(t, "RecordHeartbeat", r.RecordHeartbeat("node-a", time.Now(), registry.ClockSkewReading{}))
+		checkSkewUnknown(t, "after a not-measured heartbeat", mustGet(t, r, "node-a"))
+	})
+
+	t.Run("ClockSkew_MeasuredRoundTrips", func(t *testing.T) {
+		for _, skew := range []time.Duration{5 * time.Minute, -3 * time.Second} {
+			r := fresh(t)
+			mustUpsert(t, r, registry.Report{NodeID: "node-a"})
+			at := time.Date(2026, 5, 4, 3, 2, 1, 0, time.UTC)
+			mustNil(t, "RecordHeartbeat", r.RecordHeartbeat("node-a", at, registry.MeasuredClockSkew(skew)))
+
+			for what, n := range map[string]registry.Node{
+				"Get":  mustGet(t, r, "node-a"),
+				"List": onlyNode(t, r.List()),
+			} {
+				if !n.ClockSkewKnown() || n.ClockSkew != skew || !n.ClockSkewMeasuredAt.Equal(at) {
+					t.Errorf("%s skew %v: got known=%v skew=%v measuredAt=%v", what, skew, n.ClockSkewKnown(), n.ClockSkew, n.ClockSkewMeasuredAt)
+				}
+			}
+		}
+	})
+
+	t.Run("ClockSkew_StoredToTheMillisecond", func(t *testing.T) {
+		r := fresh(t)
+		mustUpsert(t, r, registry.Report{NodeID: "node-a"})
+		at := time.Date(2026, 5, 4, 3, 2, 1, 0, time.UTC)
+		for in, want := range map[time.Duration]time.Duration{
+			1500 * time.Microsecond:  time.Millisecond,
+			-1500 * time.Microsecond: -time.Millisecond,
+		} {
+			mustNil(t, "RecordHeartbeat", r.RecordHeartbeat("node-a", at, registry.MeasuredClockSkew(in)))
+			if got := mustGet(t, r, "node-a").ClockSkew; got != want {
+				t.Errorf("skew %v read back as %v, want %v", in, got, want)
+			}
+		}
+	})
+
+	t.Run("ClockSkew_MeasuredZeroIsKnown", func(t *testing.T) {
+		for _, skew := range []time.Duration{0, 500 * time.Microsecond} {
+			r := fresh(t)
+			mustUpsert(t, r, registry.Report{NodeID: "node-a"})
+			at := time.Date(2026, 5, 4, 3, 2, 1, 0, time.UTC)
+			mustNil(t, "RecordHeartbeat", r.RecordHeartbeat("node-a", at, registry.MeasuredClockSkew(skew)))
+			n := mustGet(t, r, "node-a")
+			if !n.ClockSkewKnown() || n.ClockSkew != 0 {
+				t.Errorf("skew %v: got known=%v skew=%v, want known with zero skew", skew, n.ClockSkewKnown(), n.ClockSkew)
+			}
+		}
+	})
+
+	t.Run("ClockSkew_NotMeasuredHeartbeatClearsIt", func(t *testing.T) {
+		r := fresh(t)
+		mustUpsert(t, r, registry.Report{NodeID: "node-a"})
+		at := time.Date(2026, 5, 4, 3, 2, 1, 0, time.UTC)
+		mustNil(t, "RecordHeartbeat", r.RecordHeartbeat("node-a", at, registry.MeasuredClockSkew(time.Minute)))
+		if !mustGet(t, r, "node-a").ClockSkewKnown() {
+			t.Fatal("a measured heartbeat did not record the skew")
+		}
+		mustNil(t, "RecordHeartbeat", r.RecordHeartbeat("node-a", at.Add(time.Second), registry.ClockSkewReading{}))
+		checkSkewUnknown(t, "after a not-measured heartbeat", mustGet(t, r, "node-a"))
+	})
+
+	t.Run("ClockSkew_UpsertNeverWritesOrClearsIt", func(t *testing.T) {
+		r := fresh(t)
+		n := mustUpsert(t, r, registry.Report{NodeID: "node-a"})
+		checkSkewUnknown(t, "fresh Upsert", n)
+
+		at := time.Date(2026, 5, 4, 3, 2, 1, 0, time.UTC)
+		mustNil(t, "RecordHeartbeat", r.RecordHeartbeat("node-a", at, registry.MeasuredClockSkew(42*time.Second)))
+		n = mustUpsert(t, r, registry.Report{NodeID: "node-a"})
+		for what, got := range map[string]registry.Node{"Upsert": n, "Get": mustGet(t, r, "node-a")} {
+			if got.ClockSkew != 42*time.Second || !got.ClockSkewMeasuredAt.Equal(at) {
+				t.Errorf("%s after a second Upsert: skew=%v measuredAt=%v, want 42s at %v", what, got.ClockSkew, got.ClockSkewMeasuredAt, at)
+			}
+		}
+	})
+
+	// ----------------------------------------------------------------
+	// Reported Raw Exec state
+	// ----------------------------------------------------------------
+
+	t.Run("ReportedRawExec_NotReportedOnInsert", func(t *testing.T) {
+		r := fresh(t)
+		if n := mustUpsert(t, r, registry.Report{NodeID: "node-a"}); n.ReportedRawExec != registry.RawExecNotReported {
+			t.Errorf("Upsert result ReportedRawExec = %v, want not reported", n.ReportedRawExec)
+		}
+		if n := mustGet(t, r, "node-a"); n.ReportedRawExec != registry.RawExecNotReported {
+			t.Errorf("Get ReportedRawExec = %v, want not reported", n.ReportedRawExec)
+		}
+	})
+
+	t.Run("ReportedRawExec_RecordPolicySnapshotSetsEitherState", func(t *testing.T) {
+		r := fresh(t)
+		mustUpsert(t, r, fullReport("node-a"))
+		at := time.Date(2026, 5, 4, 3, 2, 1, 0, time.UTC)
+		mustNil(t, "RecordHeartbeat", r.RecordHeartbeat("node-a", at, registry.MeasuredClockSkew(time.Minute)))
+		mustNil(t, "MarkConnected", r.MarkConnected("node-a", at))
+
+		for enabled, want := range map[bool]registry.RawExecReport{
+			true:  registry.RawExecReportedEnabled,
+			false: registry.RawExecReportedDisabled,
+		} {
+			mustNil(t, "RecordPolicySnapshot", r.RecordPolicySnapshot("node-a", enabled))
+			got := mustGet(t, r, "node-a")
+			if got.ReportedRawExec != want {
+				t.Errorf("RecordPolicySnapshot(%v): ReportedRawExec = %v, want %v", enabled, got.ReportedRawExec, want)
+			}
+			checkFullReport(t, "after RecordPolicySnapshot", got)
+			if !got.LastSeen.Equal(at) || !got.FirstConnectedAt.Equal(at) || got.ClockSkew != time.Minute {
+				t.Errorf("RecordPolicySnapshot touched LastSeen, FirstConnectedAt or the skew: %+v", got)
+			}
+		}
+	})
+
+	t.Run("ReportedRawExec_UpsertResetsItOnEachConnect", func(t *testing.T) {
+		r := fresh(t)
+		mustUpsert(t, r, registry.Report{NodeID: "node-a"})
+		mustNil(t, "RecordPolicySnapshot", r.RecordPolicySnapshot("node-a", true))
+		if got := mustGet(t, r, "node-a").ReportedRawExec; got != registry.RawExecReportedEnabled {
+			t.Fatalf("ReportedRawExec = %v, want enabled", got)
+		}
+		if n := mustUpsert(t, r, registry.Report{NodeID: "node-a"}); n.ReportedRawExec != registry.RawExecNotReported {
+			t.Errorf("Upsert result ReportedRawExec = %v, want not reported", n.ReportedRawExec)
+		}
+		if got := mustGet(t, r, "node-a").ReportedRawExec; got != registry.RawExecNotReported {
+			t.Errorf("Get ReportedRawExec = %v, want not reported", got)
+		}
+	})
+
+	t.Run("ReportedRawExec_UnknownNodeIsNotFound", func(t *testing.T) {
+		r := fresh(t)
+		if err := r.RecordPolicySnapshot("ghost", true); !errors.Is(err, registry.ErrNotFound) {
+			t.Fatalf("err = %v, want ErrNotFound", err)
+		}
+		if _, ok := r.Get("ghost"); ok {
+			t.Error("RecordPolicySnapshot on an unknown Node created it")
+		}
+	})
+
+	// ----------------------------------------------------------------
+	// First-connect marker
+	// ----------------------------------------------------------------
+
+	t.Run("FirstConnectedAt_MarkConnectedSetsItOnce", func(t *testing.T) {
+		r := fresh(t)
+		mustUpsert(t, r, registry.Report{NodeID: "node-a"})
+		first := time.Date(2026, 5, 4, 3, 2, 1, 0, time.UTC)
+		mustNil(t, "MarkConnected", r.MarkConnected("node-a", first))
+		mustNil(t, "MarkConnected", r.MarkConnected("node-a", first.Add(time.Hour)))
+		if got := mustGet(t, r, "node-a").FirstConnectedAt; !got.Equal(first) {
+			t.Errorf("FirstConnectedAt = %v, want the first call's %v", got, first)
+		}
+	})
+
+	t.Run("FirstConnectedAt_EnrollmentAndUpsertNeverWriteIt", func(t *testing.T) {
+		r := fresh(t)
+		at := time.Date(2026, 5, 4, 3, 2, 1, 0, time.UTC)
+		cert := registry.Certificate{Fingerprint: "fp", NotAfter: at.Add(24 * time.Hour)}
+
+		mustUpsert(t, r, registry.Report{NodeID: "node-a"})
+		mustNil(t, "RecordEnrollment", r.RecordEnrollment("node-a", cert, at))
+		mustUpsert(t, r, registry.Report{NodeID: "node-a"})
+		mustNil(t, "RecordRenewal", r.RecordRenewal("node-a", cert, at))
+		mustNil(t, "RecordHeartbeat", r.RecordHeartbeat("node-a", at, registry.ClockSkewReading{}))
+		if got := mustGet(t, r, "node-a").FirstConnectedAt; !got.IsZero() {
+			t.Fatalf("FirstConnectedAt = %v before any MarkConnected, want zero", got)
+		}
+
+		mustNil(t, "MarkConnected", r.MarkConnected("node-a", at))
+		mustUpsert(t, r, registry.Report{NodeID: "node-a"})
+		mustNil(t, "RecordEnrollment", r.RecordEnrollment("node-a", cert, at.Add(time.Hour)))
+		if got := mustGet(t, r, "node-a").FirstConnectedAt; !got.Equal(at) {
+			t.Errorf("FirstConnectedAt = %v after Upsert and RecordEnrollment, want %v", got, at)
+		}
+	})
+
+	t.Run("FirstConnectedAt_UnknownNodeIsNotFound", func(t *testing.T) {
+		r := fresh(t)
+		if err := r.MarkConnected("ghost", time.Now()); !errors.Is(err, registry.ErrNotFound) {
+			t.Fatalf("err = %v, want ErrNotFound", err)
+		}
+		if _, ok := r.Get("ghost"); ok {
+			t.Error("MarkConnected on an unknown Node created it")
+		}
+	})
+
+	t.Run("ConnectionObservations_ArePerNode", func(t *testing.T) {
+		r := fresh(t)
+		mustUpsert(t, r, registry.Report{NodeID: "node-a"})
+		mustUpsert(t, r, registry.Report{NodeID: "node-b"})
+		at := time.Date(2026, 5, 4, 3, 2, 1, 0, time.UTC)
+		mustNil(t, "RecordPolicySnapshot", r.RecordPolicySnapshot("node-a", true))
+		mustNil(t, "MarkConnected", r.MarkConnected("node-a", at))
+		mustNil(t, "RecordHeartbeat", r.RecordHeartbeat("node-a", at, registry.MeasuredClockSkew(time.Minute)))
+
+		b := mustGet(t, r, "node-b")
+		if b.ReportedRawExec != registry.RawExecNotReported || !b.FirstConnectedAt.IsZero() {
+			t.Errorf("node-b picked up node-a's observations: %+v", b)
+		}
+		checkSkewUnknown(t, "node-b", b)
 	})
 
 	// ----------------------------------------------------------------
@@ -931,7 +1145,7 @@ func RunRepositoryConformance(t *testing.T, newRepo Factory) {
 		r := fresh(t)
 		mustUpsert(t, r, registry.Report{NodeID: "node-a"})
 
-		mustNil(t, "UpdateLastSeen", r.UpdateLastSeen("node-a", time.Now()))
+		mustNil(t, "RecordHeartbeat", r.RecordHeartbeat("node-a", time.Now(), registry.ClockSkewReading{}))
 		if n := mustGet(t, r, "node-a"); n.Connected {
 			t.Error("a Node that has never opened a Tunnel reports connected because it was seen recently")
 		}
@@ -1081,7 +1295,16 @@ func nodesEqual(a, b registry.Node) bool {
 		a.TemplateSetFingerprint == b.TemplateSetFingerprint && a.RevokedAt.Equal(b.RevokedAt) &&
 		a.CertNotAfter.Equal(b.CertNotAfter) && a.EnrolledAt.Equal(b.EnrolledAt) &&
 		a.RenewalCount == b.RenewalCount && a.LastRenewedAt.Equal(b.LastRenewedAt) &&
+		a.ReportedRawExec == b.ReportedRawExec && a.FirstConnectedAt.Equal(b.FirstConnectedAt) &&
+		a.ClockSkew == b.ClockSkew && a.ClockSkewMeasuredAt.Equal(b.ClockSkewMeasuredAt) &&
 		a.Connected == b.Connected && a.Outdated == b.Outdated
+}
+
+func checkSkewUnknown(t *testing.T, what string, n registry.Node) {
+	t.Helper()
+	if n.ClockSkewKnown() || n.ClockSkew != 0 || !n.ClockSkewMeasuredAt.IsZero() {
+		t.Errorf("%s: skew known=%v skew=%v measuredAt=%v, want not measured", what, n.ClockSkewKnown(), n.ClockSkew, n.ClockSkewMeasuredAt)
+	}
 }
 
 func mustUpsert(t *testing.T, r registry.Repository, rep registry.Report) registry.Node {

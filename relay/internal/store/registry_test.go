@@ -306,20 +306,20 @@ func TestSqliteRegistry_SetRelayLabels_NotFound(t *testing.T) {
 	}
 }
 
-func TestSqliteRegistry_UpdateLastSeen(t *testing.T) {
+func TestSqliteRegistry_RecordHeartbeat(t *testing.T) {
 	st, _ := openTestStore(t)
 	reg := st.Registry()
 
-	if err := reg.UpdateLastSeen("does-not-exist", time.Now()); !errors.Is(err, registry.ErrNotFound) {
-		t.Errorf("UpdateLastSeen not found: want ErrNotFound, got %v", err)
+	if err := reg.RecordHeartbeat("does-not-exist", time.Now(), registry.ClockSkewReading{}); !errors.Is(err, registry.ErrNotFound) {
+		t.Errorf("RecordHeartbeat not found: want ErrNotFound, got %v", err)
 	}
 
 	if _, err := reg.Upsert(registry.Report{NodeID: "node-ls"}); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 	newTime := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
-	if err := reg.UpdateLastSeen("node-ls", newTime); err != nil {
-		t.Fatalf("UpdateLastSeen: %v", err)
+	if err := reg.RecordHeartbeat("node-ls", newTime, registry.ClockSkewReading{}); err != nil {
+		t.Fatalf("RecordHeartbeat: %v", err)
 	}
 	got, ok := reg.Get("node-ls")
 	if !ok {
