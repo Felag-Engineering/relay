@@ -47,6 +47,15 @@ type taskSink interface {
 	deliverVerdict(nodeID string, verdict *relayv1.PolicyVerdict)
 }
 
+// connectionObserver is told each change in what a Node presents between two
+// of its connects. It records and never fails: a change record never refuses
+// a connection (NC-34, NC-35). The method names are exported so an auditsink
+// recorder satisfies it directly.
+type connectionObserver interface {
+	DaemonVersionChanged(nodeID, before, after string)
+	CertChanged(nodeID, before, after string)
+}
+
 // heartbeatInterval is the relay-daemon's built-in heartbeat period. It is not
 // a setting: the daemon's HEARTBEAT_INTERVAL carries the same value, and
 // TestLivenessConstants_AgreeWithTheDaemon pins the two together.
@@ -143,6 +152,13 @@ type tunnelServer struct {
 	// fan-out and class (ADR-0042). It never sets a Node's templates, exactly as it
 	// never sets Policy (ADR-0002). Nil-guarded like policy/reg/conns.
 	vocab *nodevocab.Cache
+	// changes records a changed daemon version or client certificate between
+	// two connects (NC-34, NC-35). Set by newServer; nil-guarded like
+	// reg/policy/vocab, and tests inject a capture.
+	changes connectionObserver
+	// connects serializes one Node's baseline read, Upsert, first-connect marker
+	// and change records. The zero value is ready to use.
+	connects keyedMutex
 	// sink is set by newServer when Config.ControlEnabled (production
 	// execution), by installDevHarness in a devharness-tagged build, or
 	// injected directly by tests; nil when the control plane is disabled.
@@ -253,8 +269,9 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[relayv1.DaemonMessag
 
 	// Record the Node's identity, facts, and node: labels in the registry.
 	// CertFingerprint is recomputed from the verified leaf so the Upsert does
-	// not blank the value that Enrollment stored (Upsert always overwrites it;
-	// same cert → same fingerprint → no information loss).
+	// not blank the value that Enrollment stored (Upsert always overwrites it).
+	// A renewed certificate's new fingerprint replaces the stored one, and the
+	// change is recorded (NC-35).
 	// EnrollingTokenID is intentionally omitted: Upsert's update path preserves
 	// existing provenance (memory.go:93-94).
 	// Nil-guard mirrors the conns nil-guard above so tests that build
@@ -297,23 +314,12 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[relayv1.DaemonMessag
 			slog.Warn("refused malformed Hello fields; recorded as not reported",
 				"node_id", nodeID, "refused_fields", refusedFields)
 		}
-		if _, err := s.reg.Upsert(registry.Report{
-			NodeID:            nodeID,
-			CertFingerprint:   fp,
-			Facts:             report.Facts,
-			PolicyFingerprint: report.PolicyFingerprint,
-			DaemonVersion:     report.DaemonVersion,
-			// Report-only, beside the Policy fingerprint (ADR-0021): the
-			// fleet-wide template-drift signal. Recording it never gives the
-			// Relay the power to change it (ADR-0002).
-			TemplateSetFingerprint: report.TemplateSetFingerprint,
-		}.WithNodeLabels(labels)); err != nil {
-			slog.Warn("registry upsert on hello failed", "node_id", nodeID, "err", err)
-		}
+		s.recordConnect(nodeID, fp, report, labels)
 	}
 
-	// Send Ping after the registry Upsert so a client that receives the Ping is
-	// guaranteed the registration is complete — tests use Ping as the sync point.
+	// Send Ping after the registry Upsert, the first-connect marker and the
+	// change records, so a client that receives the Ping sees all three; tests
+	// use Ping as the sync point.
 	if err := stream.Send(&relayv1.RelayMessage{
 		Body: &relayv1.RelayMessage_Ping{
 			Ping: &relayv1.Ping{UnixMillis: time.Now().UnixMilli()},
@@ -436,6 +442,123 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[relayv1.DaemonMessag
 				s.vocab.Set(nodeID, vocabFromProto(ts))
 			}
 		}
+	}
+}
+
+// valueChange is one value a Node presented before and presents now.
+type valueChange struct{ before, after string }
+
+// connectChanges is what differs between a Node's stored record and one connect.
+type connectChanges struct {
+	daemonVersion *valueChange
+	cert          *valueChange
+}
+
+// changesSinceLastConnect compares the record read before this connect's
+// Upsert with what this connect presents.
+//
+// The first-connect marker, not the emptiness of the stored version, decides
+// whether a version change is recorded: a Node that reports nothing on its
+// first connect cannot hide its next report, and an empty side is a real "not
+// reported" value (NC-34). The certificate needs no marker: enrollment stores
+// its fingerprint, so a renewal before the first connect is caught on that
+// connect (NC-35). A connect presenting no fingerprint is not compared.
+func changesSinceLastConnect(baseline registry.Node, daemonVersion, certFingerprint string) connectChanges {
+	var c connectChanges
+	if !baseline.FirstConnectedAt.IsZero() && baseline.DaemonVersion != daemonVersion {
+		c.daemonVersion = &valueChange{baseline.DaemonVersion, daemonVersion}
+	}
+	if baseline.CertFingerprint != "" && certFingerprint != "" && baseline.CertFingerprint != certFingerprint {
+		c.cert = &valueChange{baseline.CertFingerprint, certFingerprint}
+	}
+	return c
+}
+
+// recordConnect stores what a connect presents and records what changed since
+// the Node's previous connect. The baseline read, the Upsert, the first-connect
+// marker and the change records are one critical section per Node: two
+// overlapping connects of one Node would otherwise compare against the same
+// stale baseline and record A->C twice instead of A->B then B->C (NC-34,
+// NC-35). The lock is held only here, never across the Ping, the stream claim
+// or the receive loop, so no peer can stall it and different Nodes never wait
+// on each other.
+func (s *tunnelServer) recordConnect(nodeID, fp string, report protoconv.HelloReport, labels map[string]string) {
+	unlock := s.connects.lock(nodeID)
+	defer unlock()
+
+	// The baseline is read before the Upsert overwrites it. A not-found, or a
+	// store read error (Get reports both as not found), gives an empty Node
+	// and so no change record: fail open toward the connection.
+	baseline, _ := s.reg.Get(nodeID)
+	if _, err := s.reg.Upsert(registry.Report{
+		NodeID:            nodeID,
+		CertFingerprint:   fp,
+		Facts:             report.Facts,
+		PolicyFingerprint: report.PolicyFingerprint,
+		DaemonVersion:     report.DaemonVersion,
+		// Report-only, beside the Policy fingerprint (ADR-0021): the
+		// fleet-wide template-drift signal. Recording it never gives the
+		// Relay the power to change it (ADR-0002).
+		TemplateSetFingerprint: report.TemplateSetFingerprint,
+	}.WithNodeLabels(labels)); err != nil {
+		slog.Warn("registry upsert on hello failed", "node_id", nodeID, "err", err)
+	} else {
+		// Only after a successful Upsert: a failed one leaves the old report,
+		// so the next connect compares against the same baseline.
+		if err := s.reg.MarkConnected(nodeID, time.Now()); err != nil {
+			slog.Warn("registry first-connect marker not written", "node_id", nodeID, "err", err)
+		}
+		s.recordConnectChanges(nodeID, changesSinceLastConnect(baseline, report.DaemonVersion, fp))
+	}
+}
+
+// keyedMutex is a mutex per key whose entries exist only while held or awaited,
+// so it does not grow with every Node ever seen. The zero value is ready.
+type keyedMutex struct {
+	mu      sync.Mutex
+	entries map[string]*keyedMutexEntry
+}
+
+type keyedMutexEntry struct {
+	mu   sync.Mutex
+	refs int
+}
+
+// lock blocks until key is free and returns the function that releases it.
+func (k *keyedMutex) lock(key string) (unlock func()) {
+	k.mu.Lock()
+	if k.entries == nil {
+		k.entries = make(map[string]*keyedMutexEntry)
+	}
+	e := k.entries[key]
+	if e == nil {
+		e = &keyedMutexEntry{}
+		k.entries[key] = e
+	}
+	e.refs++
+	k.mu.Unlock()
+
+	e.mu.Lock()
+	return func() {
+		e.mu.Unlock()
+		k.mu.Lock()
+		defer k.mu.Unlock()
+		if e.refs--; e.refs == 0 {
+			delete(k.entries, key)
+		}
+	}
+}
+
+// recordConnectChanges hands each change to the observer, if any.
+func (s *tunnelServer) recordConnectChanges(nodeID string, c connectChanges) {
+	if s.changes == nil {
+		return
+	}
+	if c.daemonVersion != nil {
+		s.changes.DaemonVersionChanged(nodeID, c.daemonVersion.before, c.daemonVersion.after)
+	}
+	if c.cert != nil {
+		s.changes.CertChanged(nodeID, c.cert.before, c.cert.after)
 	}
 }
 

@@ -38,6 +38,7 @@ func TestConnectionObservationWriters_EachHasOnlyItsDefiningCallers(t *testing.T
 			"internal/registry/registrytest/conformance.go",
 		},
 		"MarkConnected": {
+			"cmd/relay/tunnel.go",
 			"internal/eventsink/eventsink.go",
 			"internal/registry/registrytest/conformance.go",
 		},
