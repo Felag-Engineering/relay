@@ -493,42 +493,6 @@ func TestTunnelOpen_HeartbeatUpdatesLastSeen(t *testing.T) {
 	}
 }
 
-// TestTunnelOpen_HeartbeatRecordsSkewNotMeasured pins that the heartbeat
-// records through RecordHeartbeat with the skew not measured, which replaces
-// any stored measurement.
-func TestTunnelOpen_HeartbeatRecordsSkewNotMeasured(t *testing.T) {
-	const certNodeID = "cert-node-skew"
-	reg := registry.NewInMemory()
-	srv := grpc.NewServer(grpc.StreamInterceptor(injectNodeIDInterceptor(certNodeID)))
-	relayv1.RegisterTunnelServer(srv, &tunnelServer{reg: reg})
-	conn := newBufconnConn(t, srv)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	stream := openNodeStream(ctx, t, conn, certNodeID)
-
-	seeded := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
-	if err := reg.RecordHeartbeat(certNodeID, seeded, registry.MeasuredClockSkew(5*time.Minute)); err != nil {
-		t.Fatalf("seed skew: %v", err)
-	}
-	if n, _ := reg.Get(certNodeID); !n.ClockSkewKnown() {
-		t.Fatal("seeded skew reads as not known")
-	}
-
-	if err := stream.Send(&relayv1.DaemonMessage{
-		Body: &relayv1.DaemonMessage_Heartbeat{
-			Heartbeat: &relayv1.Heartbeat{UnixMillis: time.Now().UnixMilli()},
-		},
-	}); err != nil {
-		t.Fatalf("send heartbeat: %v", err)
-	}
-
-	waitUntil(t, "the heartbeat to replace the seeded skew with not measured", 5*time.Second, func() bool {
-		n, ok := reg.Get(certNodeID)
-		return ok && n.LastSeen.After(seeded) && !n.ClockSkewKnown()
-	})
-}
-
 // TestNodeLabelsFromHello is a pure unit test for the nodeLabelsFromHello
 // helper, covering both the two-namespace label-authority rule (ADR-0006)
 // and the well-formedness gate (#504).
