@@ -10,7 +10,9 @@ How agent skills should consume this repo's domain documentation when exploring 
   `CONTEXT-MAP.md` and there should not be one.
 - **`docs/specs/<capability>.md`**: the capability specification for your area, if one
   exists: what it does today, across every surface. Absence means unwritten, not undefined.
-- **`docs/adr/`**: the ADRs that touch your area, the record of *why*.
+- **`docs/adr/`**: the decision log, the record of *why*. The spec and the invariants are what
+  you implement from; read an ADR when the spec is still `aspirational` or `stub`, or when the
+  task is to change a decision (`workflow.md`, *How to work here*, step 1).
 
 These files always exist here and are load-bearing. Their absence is a bug, not a signal to
 proceed silently.

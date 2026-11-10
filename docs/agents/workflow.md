@@ -51,9 +51,14 @@ Two entries skip the top of the chain:
 
 ## How to work here
 
-1. **Read before writing.** `GLOSSARY.md`, the capability specification for what you touch,
-   then the ADRs governing it. `docs/agents/domain.md` carries the consumer rules; the
-   invariants in `AGENTS.md` are the index into `docs/adr/`.
+1. **Read before writing.** The glossary terms you touch, the invariants in `AGENTS.md`, and
+   the capability specification for what you touch. **Those govern the code; the ADRs are the
+   decision log behind them.** An ADR says why a claim or an invariant is the way it is, and is
+   read to change a decision (`/propose`, `/spec-author`, `/design`), never as a second source
+   of requirements when implementing one. A spec's `**Governed by:**` line is the index from a
+   capability into the log. The one exception is a spec still `aspirational` or `stub`: its
+   claims do not bind yet, so the ADRs it cites are the binding text for that capability and
+   are read until it is migrated. `docs/agents/domain.md` carries the consumer rules.
 2. **Shape before you spec.** Resolve ambiguity by interrogation, not guessing, and stress-test
    the idea against the codebase and the ADRs first.
 3. **Spec, design, decompose, implement**, in the order of the chain above. A capability

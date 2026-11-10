@@ -15,9 +15,10 @@ The product is **Relay**. **Gleipnir** is the separate first-party AI-agent syst
 it: a consumer of Relay, never a component of it (ADR-0016).
 
 Orient in this order: [docs/how-relay-works.md](docs/how-relay-works.md) for the product in
-plain words, the invariants below, [GLOSSARY.md](GLOSSARY.md) for the language,
-[docs/specs/](docs/specs/) for the capability you are touching, then the [ADRs](docs/adr/) each
-invariant names. [README.md](README.md) is the outside view.
+plain words, the invariants below, [GLOSSARY.md](GLOSSARY.md) for the language, then
+[docs/specs/](docs/specs/) for the capability you are touching. The [ADRs](docs/adr/) are the
+decision log behind both: read one to learn or change a why. [README.md](README.md) is the
+outside view.
 
 ## Ubiquitous language — use it exactly
 
@@ -207,7 +208,8 @@ The full chain (spec, design, decompose, implement), its human gates and the aut
 are [docs/agents/workflow.md](docs/agents/workflow.md); its *How to work here* section is the
 step-by-step. The rules no session may skip:
 
-- **Read before writing:** the glossary terms you touch, the capability spec, its ADRs.
+- **Read before writing:** the glossary terms you touch and the capability spec; its ADRs
+  only while that spec is `aspirational` or `stub` (`workflow.md`, step 1).
 - **If you are implementing, you read a spec's claims and never write them.** A change that
   would make a claim in a migrated spec untrue is a stop-and-escalate. Bugs never get specs.
 - **Contract-first.** Wire or Operation changes start in `/proto`, then regenerate.
@@ -223,7 +225,8 @@ step-by-step. The rules no session may skip:
 
 A comment says what the code cannot: why it is this way, what it must never do, what would
 break. No issue or PR numbers in shipped code (a test may cite the issue it regresses); cite the
-ADR, the invariant or the spec claim, and where none holds the reason, state it. Present tense, never what the code used to do.
+spec claim or the invariant, an ADR only where the trade-off itself is the reason, and where
+none holds the reason, state it. Present tense, never what the code used to do.
 Short headers; rationale that needs a page belongs in an ADR. Match this section, not older,
 denser neighbours. `make lint-comments` enforces the first rule.
 
