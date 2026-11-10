@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/Felag-Engineering/relay/relay/internal/auditsink"
 	"github.com/Felag-Engineering/relay/relay/internal/dispatch"
 	"github.com/Felag-Engineering/relay/relay/internal/nodevocab"
 	"github.com/Felag-Engineering/relay/relay/internal/policyview"
@@ -46,13 +48,14 @@ type taskSink interface {
 	deliverVerdict(nodeID string, verdict *relayv1.PolicyVerdict)
 }
 
-// connectionObserver is told each change in what a Node presents between two
-// of its connects. It records and never fails: a change record never refuses
-// a connection (NC-34, NC-35). The method names are exported so an auditsink
-// recorder satisfies it directly.
+// connectionObserver is told each change in what a Node presents or reports
+// between two of its connects. It records and never fails: a change record
+// never refuses a connection (NC-33, NC-34, NC-35). The method names are
+// exported so an auditsink recorder satisfies it directly.
 type connectionObserver interface {
 	DaemonVersionChanged(nodeID, before, after string)
 	CertChanged(nodeID, before, after string)
+	PolicyChanged(nodeID string, c auditsink.PolicyChange)
 }
 
 // heartbeatInterval is the relay-daemon's built-in heartbeat period. It is not
@@ -151,13 +154,19 @@ type tunnelServer struct {
 	// fan-out and class (ADR-0042). It never sets a Node's templates, exactly as it
 	// never sets Policy (ADR-0002). Nil-guarded like policy/reg/conns.
 	vocab *nodevocab.Cache
-	// changes records a changed daemon version or client certificate between
-	// two connects (NC-34, NC-35). Set by newServer; nil-guarded like
-	// reg/policy/vocab, and tests inject a capture.
+	// changes records a changed Policy fingerprint or Raw Exec state, daemon
+	// version or client certificate between two connects (NC-33, NC-34, NC-35).
+	// Set by newServer; nil-guarded like reg/policy/vocab, and tests inject a
+	// capture.
 	changes connectionObserver
 	// connects serializes one Node's baseline read, Upsert, first-connect marker
-	// and change records. The zero value is ready to use.
+	// and change records, and the stream's Policy record. It is never held
+	// across network I/O. The zero value is ready to use.
 	connects keyedMutex
+	// latestHello is each Node's count of recorded Hellos, so a stream's Policy
+	// resolution can tell, under the Node's connects lock, whether a newer
+	// Hello replaced it. One counter per Node, never per stream.
+	latestHello helloCounts
 	// sink is set by newServer when Config.ControlEnabled (production
 	// execution), by installDevHarness in a devharness-tagged build, or
 	// injected directly by tests; nil when the control plane is disabled.
@@ -225,6 +234,15 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[relayv1.DaemonMessag
 		cctx = stream.Context()
 	}
 
+	// The Policy record is resolved at teardown if no message after Hello
+	// resolved it. Registered before the claim, so (defers run last-in
+	// first-out) it runs after the claim ends and the Router has learned of
+	// it: a slow audit write never delays the offline resolution. A stream
+	// that ends before any message after Hello records only a changed
+	// fingerprint, with Raw Exec unknown (NC-33).
+	var policyRec *streamPolicyRecord
+	defer func() { s.resolvePolicyRecord(nodeID, policyRec, nil) }()
+
 	// Mark the Node connected for as long as this stream lives.
 	//
 	// This is the seam that makes "connected now?" a fact the registry holds
@@ -266,11 +284,12 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[relayv1.DaemonMessag
 		}
 	}()
 
-	s.recordHello(stream.Context(), nodeID, hello, refusedFields, report)
+	policyRec = s.recordHello(stream.Context(), nodeID, hello, refusedFields, report)
 
 	// Send Ping after the registry Upsert, the first-connect marker and the
 	// change records, so a client that receives the Ping sees all three; tests
-	// use Ping as the sync point.
+	// use Ping as the sync point. The Policy record waits for the first
+	// message after Hello (NC-33).
 	if err := stream.Send(&relayv1.RelayMessage{
 		Body: &relayv1.RelayMessage_Ping{
 			Ping: &relayv1.Ping{UnixMillis: time.Now().UnixMilli()},
@@ -345,9 +364,9 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[relayv1.DaemonMessag
 			return err
 		case m := <-recvMsg:
 			if m.GetHeartbeat() != nil {
-				timer.Reset(deadline)
+				timer.Reset(deadline) // never waits on, or depends on, the write in handleDaemonMessage
 			}
-			s.handleDaemonMessage(nodeID, m)
+			s.handleDaemonMessage(nodeID, m, policyRec)
 		}
 	}
 }
@@ -359,11 +378,13 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[relayv1.DaemonMessag
 // one, and the change is recorded (NC-35). EnrollingTokenID is intentionally
 // omitted: Upsert's update path preserves existing provenance.
 //
-// A nil registry records nothing, so tests that build &tunnelServer{} without
-// one keep passing.
-func (s *tunnelServer) recordHello(ctx context.Context, nodeID string, hello *relayv1.Hello, refusedFields []string, report protoconv.HelloReport) {
+// It returns the stream's pending Policy record, or nil when nothing was
+// recorded: a failed Upsert leaves the old report, so no Policy record is
+// written (NC-33). A nil registry records nothing, so tests that build
+// &tunnelServer{} without one keep passing.
+func (s *tunnelServer) recordHello(ctx context.Context, nodeID string, hello *relayv1.Hello, refusedFields []string, report protoconv.HelloReport) *streamPolicyRecord {
 	if s.reg == nil {
-		return
+		return nil
 	}
 	fp, _ := transport.PeerCertFingerprint(ctx)
 	labels, refused := nodeLabelsFromHello(hello.GetLabels())
@@ -401,18 +422,24 @@ func (s *tunnelServer) recordHello(ctx context.Context, nodeID string, hello *re
 		slog.Warn("refused malformed Hello fields; recorded as not reported",
 			"node_id", nodeID, "refused_fields", refusedFields)
 	}
-	s.recordConnect(nodeID, fp, report, labels)
+	baseline, helloSeq, ok := s.recordConnect(nodeID, fp, report, labels)
+	if !ok {
+		return nil
+	}
+	return &streamPolicyRecord{baseline: baseline, fingerprint: report.PolicyFingerprint, helloSeq: helloSeq}
 }
 
 // handleDaemonMessage applies one post-Hello message from the Node keyed by
 // the certificate-derived nodeID, never a wire value. The liveness timer is
-// the caller's: only a Heartbeat resets it.
-func (s *tunnelServer) handleDaemonMessage(nodeID string, m *relayv1.DaemonMessage) {
+// the caller's: only a Heartbeat resets it. policyRec is the stream's pending
+// Policy record, resolved by the first message after Hello.
+func (s *tunnelServer) handleDaemonMessage(nodeID string, m *relayv1.DaemonMessage, policyRec *streamPolicyRecord) {
 	if hb := m.GetHeartbeat(); hb != nil {
 		slog.Debug("heartbeat", "unix_millis", hb.UnixMillis)
 		if s.reg != nil {
-			if err := s.reg.RecordHeartbeat(nodeID, time.Now(), registry.ClockSkewReading{}); err != nil {
-				slog.Warn("update last-seen failed", "node_id", nodeID, "err", err)
+			received := time.Now()
+			if err := s.reg.RecordHeartbeat(nodeID, received, heartbeatClockSkew(hb.UnixMillis, received)); err != nil {
+				slog.Warn("registry heartbeat write failed", "node_id", nodeID, "err", err)
 			}
 		}
 	}
@@ -435,6 +462,9 @@ func (s *tunnelServer) handleDaemonMessage(nodeID string, m *relayv1.DaemonMessa
 	if ps := m.GetPolicy(); ps != nil && s.policy != nil {
 		s.policy.Set(nodeID, snapshotFromProto(ps))
 	}
+	// Only the first message after Hello resolves the Policy record; a
+	// PolicySnapshot is stored with it, any other message is not.
+	s.resolvePolicyRecord(nodeID, policyRec, m.GetPolicy())
 	// Capture a reported TemplateSnapshot into the nodevocab.Cache. Same posture
 	// as the PolicySnapshot capture above: it RECORDS a report-only daemon
 	// value, for discovery and, since ADR-0042, as the input to a Template
@@ -479,17 +509,20 @@ func changesSinceLastConnect(baseline registry.Node, daemonVersion, certFingerpr
 // marker and the change records are one critical section per Node: two
 // overlapping connects of one Node would otherwise compare against the same
 // stale baseline and record A->C twice instead of A->B then B->C (NC-34,
-// NC-35). The lock is held only here, never across the Ping, the stream claim
-// or the receive loop, so no peer can stall it and different Nodes never wait
-// on each other.
-func (s *tunnelServer) recordConnect(nodeID, fp string, report protoconv.HelloReport, labels map[string]string) {
+// NC-35). The per-Node lock is also held for the stream's Policy record
+// (resolvePolicyRecord), and never across network I/O, so no peer can stall it
+// and different Nodes never wait on each other. It returns the baseline, this
+// Hello's sequence number among the Node's recorded Hellos, and whether the
+// Upsert succeeded, so the stream's Policy record compares against the same
+// baseline and can tell later whether a newer Hello replaced it.
+func (s *tunnelServer) recordConnect(nodeID, fp string, report protoconv.HelloReport, labels map[string]string) (baseline registry.Node, helloSeq uint64, upserted bool) {
 	unlock := s.connects.lock(nodeID)
 	defer unlock()
 
 	// The baseline is read before the Upsert overwrites it. A not-found, or a
 	// store read error (Get reports both as not found), gives an empty Node
 	// and so no change record: fail open toward the connection.
-	baseline, _ := s.reg.Get(nodeID)
+	baseline, _ = s.reg.Get(nodeID)
 	if _, err := s.reg.Upsert(registry.Report{
 		NodeID:            nodeID,
 		CertFingerprint:   fp,
@@ -502,13 +535,133 @@ func (s *tunnelServer) recordConnect(nodeID, fp string, report protoconv.HelloRe
 		TemplateSetFingerprint: report.TemplateSetFingerprint,
 	}.WithNodeLabels(labels)); err != nil {
 		slog.Warn("registry upsert on hello failed", "node_id", nodeID, "err", err)
-	} else {
-		// Only after a successful Upsert: a failed one leaves the old report,
-		// so the next connect compares against the same baseline.
-		if err := s.reg.MarkConnected(nodeID, time.Now()); err != nil {
-			slog.Warn("registry first-connect marker not written", "node_id", nodeID, "err", err)
+		return baseline, 0, false
+	}
+	// Only after a successful Upsert: a failed one leaves the old report,
+	// so the next connect compares against the same baseline.
+	if err := s.reg.MarkConnected(nodeID, time.Now()); err != nil {
+		slog.Warn("registry first-connect marker not written", "node_id", nodeID, "err", err)
+	}
+	helloSeq = s.latestHello.next(nodeID)
+	s.recordConnectChanges(nodeID, changesSinceLastConnect(baseline, report.DaemonVersion, fp))
+	return baseline, helloSeq, true
+}
+
+// helloCounts counts the recorded Hellos of each Node. It grows with the
+// number of Nodes, not streams. The zero value is ready to use; next is called
+// under the Node's connects lock, so the count and the registry's last Upsert
+// agree on which Hello is newest.
+type helloCounts struct {
+	mu sync.Mutex
+	m  map[string]uint64
+}
+
+func (h *helloCounts) next(nodeID string) uint64 {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.m == nil {
+		h.m = make(map[string]uint64)
+	}
+	h.m[nodeID]++
+	return h.m[nodeID]
+}
+
+func (h *helloCounts) current(nodeID string) uint64 {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.m[nodeID]
+}
+
+// streamPolicyRecord is one stream's pending Policy record: the baseline read
+// before its Upsert and the fingerprint its Hello reported. It is resolved
+// once, on the first message after Hello or at the stream's end, by the
+// handler goroutine only.
+type streamPolicyRecord struct {
+	baseline    registry.Node
+	fingerprint string
+	helloSeq    uint64
+	resolved    bool
+}
+
+// policyChangeSinceLastConnect compares the record read before this connect's
+// Upsert with the Hello's Policy fingerprint and the stream's PolicySnapshot
+// (nil when none was resolved). The first-connect marker decides whether
+// anything is recorded, as for the daemon version (NC-33, NC-34). A Raw Exec
+// change is recorded only when both states are known: an unknown side never
+// makes a Raw Exec-only change. The fingerprint compared is the Hello's
+// bounded one, which is what the registry stores.
+func policyChangeSinceLastConnect(baseline registry.Node, fingerprint string, snapshot *relayv1.PolicySnapshot) (auditsink.PolicyChange, bool) {
+	if baseline.FirstConnectedAt.IsZero() {
+		return auditsink.PolicyChange{}, false
+	}
+	before := rawExecReported(baseline.ReportedRawExec)
+	var after *bool
+	if snapshot != nil {
+		v := snapshot.GetRawExecEnabled()
+		after = &v
+	}
+	fpChanged := baseline.PolicyFingerprint != fingerprint
+	rawChanged := before != nil && after != nil && *before != *after
+	if !fpChanged && !rawChanged {
+		return auditsink.PolicyChange{}, false
+	}
+	return auditsink.PolicyChange{
+		FingerprintBefore: baseline.PolicyFingerprint,
+		FingerprintAfter:  fingerprint,
+		RawExecBefore:     before,
+		RawExecAfter:      after,
+	}, true
+}
+
+// rawExecReported is the stored Raw Exec report as a tri-state: nil when the
+// Node reported none.
+func rawExecReported(r registry.RawExecReport) *bool {
+	var v bool
+	switch r {
+	case registry.RawExecReportedDisabled:
+		v = false
+	case registry.RawExecReportedEnabled:
+		v = true
+	default:
+		return nil
+	}
+	return &v
+}
+
+// resolvePolicyRecord stores the stream's Raw Exec report and records a
+// changed Policy fingerprint or Raw Exec state. The Relay records the flag the
+// daemon reports and never evaluates or sets it (invariant 12, ADR-0002). Only
+// the first message after Hello counts, so a later PolicySnapshot on the
+// stream never rewrites the stored state (NC-20). The record is written even
+// if the snapshot is not stored: it is evidence of what was reported, and a
+// store failure never refuses the stream. The per-Node lock keeps this from
+// interleaving with an overlapping connect's baseline read and Upsert.
+//
+// A stream whose Hello a newer Hello of the same Node has replaced writes
+// nothing: the registry's Raw Exec state is the current stream's, and a
+// displaced stream's late snapshot must not overwrite it nor emit a record out
+// of order against its stale baseline. The newer stream's own resolution
+// records what changed from the registry state its connect found (NC-33,
+// NC-13). A displaced stream's own change is therefore not recorded separately.
+func (s *tunnelServer) resolvePolicyRecord(nodeID string, p *streamPolicyRecord, snapshot *relayv1.PolicySnapshot) {
+	if p == nil || p.resolved {
+		return
+	}
+	p.resolved = true
+
+	unlock := s.connects.lock(nodeID)
+	defer unlock()
+
+	if s.latestHello.current(nodeID) != p.helloSeq {
+		return
+	}
+	if snapshot != nil {
+		if err := s.reg.RecordPolicySnapshot(nodeID, snapshot.GetRawExecEnabled()); err != nil {
+			slog.Warn("registry reported Raw Exec state not written", "node_id", nodeID, "err", err)
 		}
-		s.recordConnectChanges(nodeID, changesSinceLastConnect(baseline, report.DaemonVersion, fp))
+	}
+	if c, ok := policyChangeSinceLastConnect(p.baseline, p.fingerprint, snapshot); ok && s.changes != nil {
+		s.changes.PolicyChanged(nodeID, c)
 	}
 }
 
@@ -685,4 +838,24 @@ func argMatchersToArgSets(matchers []*relayv1.ArgMatcher) [][]string {
 func boundedLogValue(k string) string {
 	bounded, _ := registry.BoundLogKey(k)
 	return bounded
+}
+
+// heartbeatClockSkew is a heartbeat's clock skew: the Node's timestamp minus the
+// Relay's receive time, so a positive skew means the Node's clock is ahead. It
+// includes the one-way network delay, which is the accepted error of measuring
+// without a round trip (NC-37). A timestamp of zero or less is a daemon that did
+// not report one, or reported an invalid one; a difference beyond what a time.Duration holds is no
+// measurement. Both are recorded as not measured, never as a clamped value.
+// The value is advisory and decides nothing.
+func heartbeatClockSkew(unixMillis int64, received time.Time) registry.ClockSkewReading {
+	if unixMillis <= 0 {
+		return registry.ClockSkewReading{}
+	}
+	d := time.UnixMilli(unixMillis).Sub(received)
+	// Sub saturates rather than overflowing, so a saturated result is a
+	// difference that does not fit.
+	if d == math.MaxInt64 || d == math.MinInt64 {
+		return registry.ClockSkewReading{}
+	}
+	return registry.MeasuredClockSkew(d)
 }

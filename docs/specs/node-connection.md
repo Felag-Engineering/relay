@@ -66,6 +66,9 @@ targets.
   unanswered for 60 seconds.
 - **NC-11** `last_seen` records the Node's last contact, a heartbeat or a `Hello`. Connected is
   never derived from it.
+- **NC-37** The Relay measures each heartbeat's timestamp against its own clock and records the
+  difference on the Node's registry record as its clock skew: a Relay-measured value, kept apart
+  from the self-reported Facts. Clock skew never blocks a connection or a dispatch.
 - **NC-12** There is no Task acknowledgement: no message acknowledges a Task and no
   `unacknowledged` outcome exists. A Task sent to a silently dead Node waits out NC-9 (R52).
 
@@ -113,6 +116,14 @@ outcome is `execution.md`'s (invariant 4).
   fields (invariant 7; R3, R51).
 - **NC-25** Each connect replaces the self-reported fields of the Node's registry record. Facts
   and `node:` label changes are recorded and never audited.
+- **NC-33** Between two connects of the same Node, a change in the reported Policy fingerprint
+  or in whether Raw Exec is enabled writes one audit record with the before and after values. A
+  Node's first connect writes none, and the record blocks nothing.
+- **NC-39** The change records of NC-33, NC-34 and NC-35 are limited per Node and per kind:
+  while the Relay runs, at most one record per 10 minutes, carrying the number of changes since
+  the previous record of that kind, so a single change is recorded at once and a Node that keeps
+  changing its report, or two parties sharing one certificate, write a bounded number of records
+  (R51, R54).
 
 ### Daemon versions
 
@@ -144,10 +155,7 @@ Stream replacement is not a refusal: the older stream ends because a newer one e
 
 | Claim | Statement | Milestone |
 |---|---|---|
-| NC-33 | Between two connects of the same Node, a change in the reported Policy fingerprint or in whether Raw Exec is enabled writes one audit record with the before and after values. A Node's first connect writes none, and the record blocks nothing. | v0.2.1 |
 | NC-36 | The Relay counts stream replacements per Node and, while it runs, writes at most one audit record per Node per 10 minutes, carrying the number of replacements since the previous record, so a single replacement is recorded and a flapping pair writes a bounded number of records (R54). | v0.2.1 |
-| NC-37 | The Relay measures each heartbeat's timestamp against its own clock and records the difference on the Node's registry record as its clock skew: a Relay-measured value, kept apart from the self-reported Facts. Clock skew never blocks a connection or a dispatch. | v0.2.1 |
-| NC-39 | The change records of NC-33, NC-34 and NC-35 are limited per Node and per kind: while the Relay runs, at most one record per 10 minutes, carrying the number of changes since the previous record of that kind, so a single change is recorded at once and a Node that keeps changing its report, or two parties sharing one certificate, write a bounded number of records (R51, R54). | v0.2.1 |
 
 ## Out of scope
 
@@ -179,9 +187,12 @@ Stream replacement is not a refusal: the older stream ends because a newer one e
 <!-- proof:begin -->
 | Claim | Proven by | Seam |
 |---|---|---|
+| NC-33 | `TestPolicyChangedReason`, `TestTunnelOpen_ChangedPolicyFingerprintWritesOneRecord`, `TestTunnelOpen_ChangedPolicyWritesOneNodePolicyChangedRow`, `TestTunnelOpen_FailedPolicyRecordKeepsTheStreamUp`, `TestTunnelOpen_FirstConnectWritesNoPolicyRecord`, `TestTunnelOpen_OtherFirstMessageResolvesThePolicyRecordWithoutTheSnapshot`, `TestTunnelOpen_PolicyFingerprintAndRawExecChangeWriteOneRecord`, `TestTunnelOpen_RawExecOnlyChangeWritesOneRecord`, `TestTunnelOpen_StreamEndingBeforeItsPolicySnapshotRecordsRawExecUnknown` | Relay, auditsink |
 | NC-34 | `TestDaemonVersionChangedReason`, `TestTunnelOpen_ChangedDaemonVersionWritesOneRecord`, `TestTunnelOpen_DaemonVersionBelowTheMinimumStillConnects`, `TestTunnelOpen_DaemonVersionBelowTheMinimumStillConnectsAndIsAudited`, `TestTunnelOpen_FirstConnectReportingNothingCannotHideTheNextReport`, `TestTunnelOpen_FirstConnectWritesNoVersionRecord`, `TestTunnelOpen_LowerDaemonVersionIsPassedAsADowngrade`, `TestTunnelOpen_OverlappingConnectsOfOneNodeRecordThePersistedOrder`, `TestTunnelOpen_UnreportedDaemonVersionIsRecordedAsUnknownSide` | Relay, auditsink |
 | NC-35 | `TestTunnelOpen_RenewThenReconnectWritesOneCertChangedRecord`, `TestTunnelOpen_RenewalBeforeTheFirstConnectIsRecordedOnThatConnect`, `TestTunnelOpen_SameCertificateReconnectWritesNoCertRecord` | Relay |
+| NC-37 | `TestHeartbeatClockSkew`, `TestRepositoryConformance`, `TestSQLiteRegistryConformance`, `TestTunnelOpen_HeartbeatFiveMinutesOutRecordsAboutThatSkew`, `TestTunnelOpen_NodeYearsOutKeepsItsStreamAndAnswersATask`, `TestTunnelOpen_NonPositiveHeartbeatTimestampRecordsSkewNotMeasured` | Relay, registry, store |
 | NC-38 | `TestHello_NodeIDIsDeprecatedInTheContract`, `TestRelay_NoFileSelectsTheHelloNodeID`, `TestTunnelOpen_ForgedHelloNodeIDIsKeyedByTheCertificateAndNeverLogged`, `hello_never_sets_the_node_id` | Node plane, Relay, daemon |
+| NC-39 | `TestConnectionRecorder_FirstEventRecordedAtOnce`, `TestConnectionRecorder_KindsAreThrottledIndependently`, `TestConnectionRecorder_NextRecordCarriesTheCountAndItsOwnValues`, `TestConnectionRecorder_NodesAreThrottledIndependently`, `TestConnectionRecorder_SweepDropsIdleEntriesAndKeepsPending`, `TestConnectionRecorder_ThrottledWithinTheWindow`, `TestTunnelOpen_AlternatingDaemonVersionsWriteOneRowPerWindow` | Relay, auditsink |
 
 Unproven: NC-1, NC-2, NC-3, NC-4, NC-5, NC-6, NC-7, NC-8, NC-9, NC-10, NC-11, NC-12, NC-13, NC-14, NC-15, NC-16, NC-17, NC-18, NC-19, NC-20, NC-21, NC-22, NC-23, NC-24, NC-25, NC-26, NC-27, NC-28, NC-29, NC-30, NC-31, NC-32.
 <!-- proof:end -->
