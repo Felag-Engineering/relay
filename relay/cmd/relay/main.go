@@ -532,7 +532,11 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 	// read it. Display-only, and likewise independent of ControlEnabled.
 	vocabCache := nodevocab.New()
 
-	ts := &tunnelServer{conns: conns, reg: reg, policy: policyCache, vocab: vocabCache}
+	// Changes between a Node's connects are recorded, limited per Node and
+	// kind; a record never refuses a connection (NC-34, NC-35).
+	connectionChanges := auditsink.NewConnectionRecorder(auditSink, hooks.testConnectionClock)
+
+	ts := &tunnelServer{conns: conns, reg: reg, policy: policyCache, vocab: vocabCache, changes: connectionChanges}
 	// ts.sink is set below, ONLY inside the cfg.ControlEnabled branch:
 	// execution is on if and only if the control plane (its only consumer
 	// surface, MCP + /api/v1) is on. Disabled: ts.sink stays nil. Integration tests, or

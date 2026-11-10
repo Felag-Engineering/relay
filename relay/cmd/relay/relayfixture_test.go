@@ -54,6 +54,7 @@ type fixtureSpec struct {
 	mcpOptions   []mcp.Option
 
 	revokedDialClock func() time.Time
+	connectionClock  func() time.Time
 }
 
 // FixtureOption customizes a relay fixture.
@@ -105,6 +106,13 @@ func WithMCPServerOptions(opts ...mcp.Option) FixtureOption {
 // TestControlSurfaces_TestOnlyRevokedDialClockIsNilInProduction).
 func WithRevokedDialClock(now func() time.Time) FixtureOption {
 	return func(s *fixtureSpec) { s.revokedDialClock = now }
+}
+
+// WithConnectionClock replaces the clock of the Node connection recorder via
+// serverHooks. Test-only: production never populates the hook (see
+// TestControlSurfaces_TestOnlyConnectionClockIsNilInProduction).
+func WithConnectionClock(now func() time.Time) FixtureOption {
+	return func(s *fixtureSpec) { s.connectionClock = now }
 }
 
 // relayFixture is a running Relay plus the handles tests reach for.
@@ -163,7 +171,7 @@ func startRelay(t *testing.T, opts ...FixtureOption) *relayFixture {
 		f(&cfg)
 	}
 
-	srv, deps, err := newServerWithHooks(cfg, testStartupFiles(t, cfg), serverHooks{testMCPOptions: spec.mcpOptions, testRevokedDialClock: spec.revokedDialClock})
+	srv, deps, err := newServerWithHooks(cfg, testStartupFiles(t, cfg), serverHooks{testMCPOptions: spec.mcpOptions, testRevokedDialClock: spec.revokedDialClock, testConnectionClock: spec.connectionClock})
 	if err != nil {
 		t.Fatalf("newServer: %v", err)
 	}

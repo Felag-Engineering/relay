@@ -1470,8 +1470,15 @@ func openWithHello(t *testing.T, nodeID string, hello *relayv1.Hello) *registry.
 // Node: the shape of a reconnect.
 func openWithHelloOn(t *testing.T, reg *registry.InMemory, nodeID string, hello *relayv1.Hello) *registry.InMemory {
 	t.Helper()
+	openWithHelloServer(t, &tunnelServer{reg: reg}, nodeID, hello)
+	return reg
+}
+
+// openWithHelloServer is one connect against ts: Hello, then the Ping.
+func openWithHelloServer(t *testing.T, ts *tunnelServer, nodeID string, hello *relayv1.Hello) {
+	t.Helper()
 	srv := grpc.NewServer(grpc.StreamInterceptor(injectNodeIDInterceptor(nodeID)))
-	relayv1.RegisterTunnelServer(srv, &tunnelServer{reg: reg})
+	relayv1.RegisterTunnelServer(srv, ts)
 	conn := newBufconnConn(t, srv)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -1493,7 +1500,6 @@ func openWithHelloOn(t *testing.T, reg *registry.InMemory, nodeID string, hello 
 	if msg.GetPing() == nil {
 		t.Fatalf("expected Ping, got %T", msg.Body)
 	}
-	return reg
 }
 
 // TestTunnelOpen_HelloMalformedPolicyFingerprintIsStoredAsNotReported pins
