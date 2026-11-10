@@ -17,8 +17,6 @@ import (
 // production writer; eventsink is a pass-through that decides nothing (invariant 10), and
 // registrytest is the shared conformance suite.
 //
-// The tunnel joins a method's list when it starts calling that method.
-//
 // MUTATION: call RecordHeartbeat, MarkConnected or RecordPolicySnapshot from
 // any other non-test file and this test goes red. TestLabelWriters_Fixtures
 // arms the scanner.
@@ -43,6 +41,7 @@ func TestConnectionObservationWriters_EachHasOnlyItsDefiningCallers(t *testing.T
 			"internal/registry/registrytest/conformance.go",
 		},
 		"RecordPolicySnapshot": {
+			"cmd/relay/tunnel.go",
 			"internal/eventsink/eventsink.go",
 			"internal/registry/registrytest/conformance.go",
 		},

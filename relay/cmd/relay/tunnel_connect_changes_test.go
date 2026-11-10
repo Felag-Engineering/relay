@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"io"
 	"reflect"
 	"slices"
 	"strings"
@@ -25,6 +26,37 @@ type captureChanges struct {
 	mu       sync.Mutex
 	versions []capturedChange
 	certs    []capturedChange
+	policies []capturedPolicy
+}
+
+// capturedPolicy is one Policy change the tunnel handed to a connectionObserver.
+type capturedPolicy struct {
+	nodeID string
+	change auditsink.PolicyChange
+}
+
+func (c *captureChanges) PolicyChanged(nodeID string, change auditsink.PolicyChange) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.policies = append(c.policies, capturedPolicy{nodeID, change})
+}
+
+func (c *captureChanges) policyChanges() []capturedPolicy {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return slices.Clone(c.policies)
+}
+
+// wantPolicyChanges compares with DeepEqual because PolicyChange holds *bool.
+func wantPolicyChanges(t *testing.T, rec *captureChanges, want ...capturedPolicy) {
+	t.Helper()
+	got := rec.policyChanges()
+	if len(got) == 0 && len(want) == 0 {
+		return
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("policy changes = %+v, want %+v", got, want)
+	}
 }
 
 func (c *captureChanges) DaemonVersionChanged(nodeID, before, after string) {
@@ -284,6 +316,293 @@ func TestChangesSinceLastConnect(t *testing.T) {
 	}
 }
 
+func boolp(b bool) *bool { return &b }
+
+func policyMsg(rawExec bool) *relayv1.DaemonMessage {
+	return &relayv1.DaemonMessage{Body: &relayv1.DaemonMessage_Policy{
+		Policy: &relayv1.PolicySnapshot{RawExecEnabled: rawExec},
+	}}
+}
+
+func heartbeatMsg() *relayv1.DaemonMessage {
+	return &relayv1.DaemonMessage{Body: &relayv1.DaemonMessage_Heartbeat{
+		Heartbeat: &relayv1.Heartbeat{UnixMillis: time.Now().UnixMilli()},
+	}}
+}
+
+func policyHello(fp string) *relayv1.Hello { return &relayv1.Hello{PolicyFingerprint: fp} }
+
+// openThenEnd is one whole stream: Hello, the Ping, msgs, then a clean end.
+// The client sees EOF only after the handler and every deferred step,
+// including the end-of-stream Policy record, has run, so assertions after it
+// need no polling.
+func openThenEnd(t *testing.T, ts *tunnelServer, nodeID string, hello *relayv1.Hello, msgs ...*relayv1.DaemonMessage) {
+	t.Helper()
+	srv := grpc.NewServer(grpc.StreamInterceptor(injectNodeIDInterceptor(nodeID)))
+	relayv1.RegisterTunnelServer(srv, ts)
+	conn := newBufconnConn(t, srv)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	stream, err := relayv1.NewTunnelClient(conn).Open(ctx)
+	if err != nil {
+		t.Fatalf("open stream: %v", err)
+	}
+	if err := stream.Send(&relayv1.DaemonMessage{Body: &relayv1.DaemonMessage_Hello{Hello: hello}}); err != nil {
+		t.Fatalf("send hello: %v", err)
+	}
+	msg, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("recv ping: %v", err)
+	}
+	if msg.GetPing() == nil {
+		t.Fatalf("expected Ping, got %T", msg.Body)
+	}
+	for _, m := range msgs {
+		if err := stream.Send(m); err != nil {
+			t.Fatalf("send: %v", err)
+		}
+	}
+	if err := stream.CloseSend(); err != nil {
+		t.Fatalf("close send: %v", err)
+	}
+	for {
+		if _, err := stream.Recv(); err != nil {
+			if !errors.Is(err, io.EOF) {
+				t.Fatalf("stream ended with %v, want a clean end", err)
+			}
+			return
+		}
+	}
+}
+
+func connectOnce(t *testing.T, reg registry.Repository, rec connectionObserver, nodeID string, hello *relayv1.Hello, msgs ...*relayv1.DaemonMessage) {
+	t.Helper()
+	openThenEnd(t, &tunnelServer{reg: reg, changes: rec}, nodeID, hello, msgs...)
+}
+
+func rawExecOf(reg registry.Repository, nodeID string) registry.RawExecReport {
+	n, _ := reg.Get(nodeID)
+	return n.ReportedRawExec
+}
+
+// Proves NC-33.
+func TestTunnelOpen_ChangedPolicyFingerprintWritesOneRecord(t *testing.T) {
+	const nodeID = "cert-node-pfp"
+	fpA, fpB := strings.Repeat("a", 64), strings.Repeat("b", 64)
+	reg, rec := registry.NewInMemory(), &captureChanges{}
+	connectOnce(t, reg, rec, nodeID, policyHello(fpA), policyMsg(false))
+	connectOnce(t, reg, rec, nodeID, policyHello(fpB), policyMsg(false))
+	want := capturedPolicy{nodeID, auditsink.PolicyChange{
+		FingerprintBefore: fpA, FingerprintAfter: fpB, RawExecBefore: boolp(false), RawExecAfter: boolp(false),
+	}}
+	wantPolicyChanges(t, rec, want)
+
+	connectOnce(t, reg, rec, nodeID, policyHello(fpB), policyMsg(false))
+	wantPolicyChanges(t, rec, want)
+	if got := rawExecOf(reg, nodeID); got != registry.RawExecReportedDisabled {
+		t.Errorf("ReportedRawExec = %v, want disabled", got)
+	}
+}
+
+// Proves NC-33.
+func TestTunnelOpen_RawExecOnlyChangeWritesOneRecord(t *testing.T) {
+	const nodeID = "cert-node-praw"
+	fpA := strings.Repeat("a", 64)
+	reg, rec := registry.NewInMemory(), &captureChanges{}
+	connectOnce(t, reg, rec, nodeID, policyHello(fpA), policyMsg(false))
+	connectOnce(t, reg, rec, nodeID, policyHello(fpA), policyMsg(true))
+	wantPolicyChanges(t, rec, capturedPolicy{nodeID, auditsink.PolicyChange{
+		FingerprintBefore: fpA, FingerprintAfter: fpA, RawExecBefore: boolp(false), RawExecAfter: boolp(true),
+	}})
+	if got := rawExecOf(reg, nodeID); got != registry.RawExecReportedEnabled {
+		t.Errorf("ReportedRawExec = %v, want enabled", got)
+	}
+}
+
+// Proves NC-33.
+func TestTunnelOpen_PolicyFingerprintAndRawExecChangeWriteOneRecord(t *testing.T) {
+	const nodeID = "cert-node-pboth"
+	fpA, fpB := strings.Repeat("a", 64), strings.Repeat("b", 64)
+	reg, rec := registry.NewInMemory(), &captureChanges{}
+	connectOnce(t, reg, rec, nodeID, policyHello(fpA), policyMsg(false))
+	connectOnce(t, reg, rec, nodeID, policyHello(fpB), policyMsg(true))
+	wantPolicyChanges(t, rec, capturedPolicy{nodeID, auditsink.PolicyChange{
+		FingerprintBefore: fpA, FingerprintAfter: fpB, RawExecBefore: boolp(false), RawExecAfter: boolp(true),
+	}})
+}
+
+// Proves NC-33.
+func TestTunnelOpen_FirstConnectWritesNoPolicyRecord(t *testing.T) {
+	fpA := strings.Repeat("a", 64)
+	t.Run("empty registry", func(t *testing.T) {
+		const nodeID = "cert-node-pfirst"
+		reg, rec := registry.NewInMemory(), &captureChanges{}
+		connectOnce(t, reg, rec, nodeID, policyHello(fpA), policyMsg(true))
+		wantPolicyChanges(t, rec)
+		if got := rawExecOf(reg, nodeID); got != registry.RawExecReportedEnabled {
+			t.Errorf("ReportedRawExec = %v, want enabled", got)
+		}
+	})
+	t.Run("enrolled but never connected", func(t *testing.T) {
+		const nodeID = "cert-node-pfirst-enrolled"
+		reg, rec := registry.NewInMemory(), &captureChanges{}
+		if _, err := reg.Upsert(registry.Report{NodeID: nodeID, CertFingerprint: strings.Repeat("a", 64)}); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+		connectOnce(t, reg, rec, nodeID, policyHello(fpA), policyMsg(true))
+		wantPolicyChanges(t, rec)
+		if got := rawExecOf(reg, nodeID); got != registry.RawExecReportedEnabled {
+			t.Errorf("ReportedRawExec = %v, want enabled", got)
+		}
+	})
+}
+
+// Proves NC-33.
+func TestTunnelOpen_StreamEndingBeforeItsPolicySnapshotRecordsRawExecUnknown(t *testing.T) {
+	const nodeID = "cert-node-pend"
+	fpA, fpB := strings.Repeat("a", 64), strings.Repeat("b", 64)
+	reg, rec := registry.NewInMemory(), &captureChanges{}
+	connectOnce(t, reg, rec, nodeID, policyHello(fpA), policyMsg(true))
+	connectOnce(t, reg, rec, nodeID, policyHello(fpB))
+	wantPolicyChanges(t, rec, capturedPolicy{nodeID, auditsink.PolicyChange{
+		FingerprintBefore: fpA, FingerprintAfter: fpB, RawExecBefore: boolp(true),
+	}})
+	if got := rawExecOf(reg, nodeID); got != registry.RawExecNotReported {
+		t.Errorf("ReportedRawExec = %v, want not reported", got)
+	}
+}
+
+// Proves NC-33.
+func TestTunnelOpen_OtherFirstMessageResolvesThePolicyRecordWithoutTheSnapshot(t *testing.T) {
+	const nodeID = "cert-node-pother"
+	fpA, fpB := strings.Repeat("a", 64), strings.Repeat("b", 64)
+	reg, rec := registry.NewInMemory(), &captureChanges{}
+	connectOnce(t, reg, rec, nodeID, policyHello(fpA), policyMsg(false))
+	connectOnce(t, reg, rec, nodeID, policyHello(fpB), heartbeatMsg(), policyMsg(true))
+	want := capturedPolicy{nodeID, auditsink.PolicyChange{
+		FingerprintBefore: fpA, FingerprintAfter: fpB, RawExecBefore: boolp(false),
+	}}
+	wantPolicyChanges(t, rec, want)
+	if got := rawExecOf(reg, nodeID); got != registry.RawExecNotReported {
+		t.Errorf("ReportedRawExec = %v, want not reported (the later snapshot is not stored)", got)
+	}
+
+	connectOnce(t, reg, rec, nodeID, policyHello(fpB), heartbeatMsg(), policyMsg(true))
+	wantPolicyChanges(t, rec, want)
+}
+
+// Proves NC-33.
+func TestTunnelOpen_FailedPolicyRecordKeepsTheStreamUp(t *testing.T) {
+	const nodeID = "cert-node-pfail"
+	fpA, fpB := strings.Repeat("a", 64), strings.Repeat("b", 64)
+	reg := registry.NewInMemory()
+	rec := auditsink.NewConnectionRecorder(auditsink.New(failAppend{}), nil)
+	connectOnce(t, reg, rec, nodeID, policyHello(fpA), policyMsg(false))
+
+	srv := grpc.NewServer(grpc.StreamInterceptor(injectNodeIDInterceptor(nodeID)))
+	relayv1.RegisterTunnelServer(srv, &tunnelServer{reg: reg, changes: rec})
+	conn := newBufconnConn(t, srv)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	stream, err := relayv1.NewTunnelClient(conn).Open(ctx)
+	if err != nil {
+		t.Fatalf("open stream: %v", err)
+	}
+	if err := stream.Send(&relayv1.DaemonMessage{Body: &relayv1.DaemonMessage_Hello{Hello: policyHello(fpB)}}); err != nil {
+		t.Fatalf("send hello: %v", err)
+	}
+	msg, err := stream.Recv()
+	if err != nil || msg.GetPing() == nil {
+		t.Fatalf("recv ping = %v, %v", msg, err)
+	}
+	// This snapshot's record write fails.
+	if err := stream.Send(policyMsg(true)); err != nil {
+		t.Fatalf("send policy: %v", err)
+	}
+	waitUntil(t, "the Raw Exec report to be stored", 5*time.Second, func() bool {
+		return rawExecOf(reg, nodeID) == registry.RawExecReportedEnabled
+	})
+	before, _ := reg.Get(nodeID)
+	if err := stream.Send(heartbeatMsg()); err != nil {
+		t.Fatalf("send heartbeat: %v", err)
+	}
+	waitUntil(t, "LastSeen to advance", 5*time.Second, func() bool {
+		n, _ := reg.Get(nodeID)
+		return n.LastSeen.After(before.LastSeen)
+	})
+}
+
+func TestTunnelOpen_FailedUpsertWritesNoPolicyRecord(t *testing.T) {
+	const nodeID = "cert-node-pfailup"
+	fpA, fpB := strings.Repeat("a", 64), strings.Repeat("b", 64)
+	inner, rec := registry.NewInMemory(), &captureChanges{}
+	if _, err := inner.Upsert(registry.Report{NodeID: nodeID, PolicyFingerprint: fpA}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := inner.MarkConnected(nodeID, time.Now()); err != nil {
+		t.Fatalf("seed marker: %v", err)
+	}
+	if err := inner.RecordPolicySnapshot(nodeID, false); err != nil {
+		t.Fatalf("seed raw exec: %v", err)
+	}
+	connectOnce(t, failingUpsertRegistry{inner}, rec, nodeID, policyHello(fpB), policyMsg(true))
+	wantPolicyChanges(t, rec)
+	if got := rawExecOf(inner, nodeID); got != registry.RawExecReportedDisabled {
+		t.Errorf("ReportedRawExec = %v, want disabled", got)
+	}
+}
+
+// A Raw Exec-only change, which only a lying Node produces, is missed when the
+// previous stream's snapshot was not stored: that stream ended before its
+// PolicySnapshot, leaving the Raw Exec baseline unknown.
+func TestTunnelOpen_RawExecOnlyChangeAfterAnUnreportedStreamIsMissed(t *testing.T) {
+	const nodeID = "cert-node-pmiss"
+	fpA := strings.Repeat("a", 64)
+	reg, rec := registry.NewInMemory(), &captureChanges{}
+	connectOnce(t, reg, rec, nodeID, policyHello(fpA), policyMsg(false))
+	connectOnce(t, reg, rec, nodeID, policyHello(fpA))
+	connectOnce(t, reg, rec, nodeID, policyHello(fpA), policyMsg(true))
+	wantPolicyChanges(t, rec)
+}
+
+func TestPolicyChangeSinceLastConnect(t *testing.T) {
+	marked := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	fpA, fpB := strings.Repeat("a", 64), strings.Repeat("b", 64)
+	snap := func(v bool) *relayv1.PolicySnapshot { return &relayv1.PolicySnapshot{RawExecEnabled: v} }
+	node := func(fp string, raw registry.RawExecReport) registry.Node {
+		return registry.Node{FirstConnectedAt: marked, PolicyFingerprint: fp, ReportedRawExec: raw}
+	}
+	tests := []struct {
+		name     string
+		baseline registry.Node
+		fp       string
+		snapshot *relayv1.PolicySnapshot
+		want     *auditsink.PolicyChange
+	}{
+		{"marker unset", registry.Node{PolicyFingerprint: fpA}, fpB, snap(true), nil},
+		{"same fingerprint, raw exec equal", node(fpA, registry.RawExecReportedDisabled), fpA, snap(false), nil},
+		{"fingerprint differs, no snapshot", node(fpA, registry.RawExecReportedDisabled), fpB, nil,
+			&auditsink.PolicyChange{FingerprintBefore: fpA, FingerprintAfter: fpB, RawExecBefore: boolp(false)}},
+		{"same fingerprint, before unknown", node(fpA, registry.RawExecNotReported), fpA, snap(true), nil},
+		{"same fingerprint, snapshot missing", node(fpA, registry.RawExecReportedEnabled), fpA, nil, nil},
+		{"raw exec only", node(fpA, registry.RawExecReportedDisabled), fpA, snap(true),
+			&auditsink.PolicyChange{FingerprintBefore: fpA, FingerprintAfter: fpA, RawExecBefore: boolp(false), RawExecAfter: boolp(true)}},
+		{"both differ", node(fpA, registry.RawExecReportedEnabled), fpB, snap(false),
+			&auditsink.PolicyChange{FingerprintBefore: fpA, FingerprintAfter: fpB, RawExecBefore: boolp(true), RawExecAfter: boolp(false)}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := policyChangeSinceLastConnect(tt.baseline, tt.fp, tt.snapshot)
+			if ok != (tt.want != nil) {
+				t.Fatalf("changed = %v, want %v", ok, tt.want != nil)
+			}
+			if tt.want != nil && !reflect.DeepEqual(got, *tt.want) {
+				t.Errorf("change = %+v, want %+v", got, *tt.want)
+			}
+		})
+	}
+}
+
 // firstUpsertGated blocks its first Upsert until released, after announcing
 // that it was reached.
 type firstUpsertGated struct {
@@ -330,6 +649,68 @@ func TestTunnelOpen_OverlappingConnectsOfOneNodeRecordThePersistedOrder(t *testi
 	<-second
 
 	wantVersionChanges(t, rec, capturedChange{nodeID, "0.1.0", "0.2.0"}, capturedChange{nodeID, "0.2.0", "0.3.0"})
+}
+
+// A displaced stream's late PolicySnapshot writes neither the Raw Exec state
+// nor a Policy record; the current stream's stand.
+func TestTunnelOpen_DisplacedStreamsLateSnapshotWritesNothing(t *testing.T) {
+	const nodeID = "cert-node-displaced"
+	fpA, fpB, fpC := strings.Repeat("a", 64), strings.Repeat("b", 64), strings.Repeat("c", 64)
+	inner, rec := registry.NewInMemory(), &captureChanges{}
+	connectOnce(t, inner, rec, nodeID, policyHello(fpA), policyMsg(false))
+	ts := &tunnelServer{reg: inner, changes: rec}
+
+	dial := func(hello *relayv1.Hello) (relayv1.Tunnel_OpenClient, func()) {
+		srv := grpc.NewServer(grpc.StreamInterceptor(injectNodeIDInterceptor(nodeID)))
+		relayv1.RegisterTunnelServer(srv, ts)
+		conn := newBufconnConn(t, srv)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		stream, err := relayv1.NewTunnelClient(conn).Open(ctx)
+		if err != nil {
+			t.Fatalf("open: %v", err)
+		}
+		if err := stream.Send(&relayv1.DaemonMessage{Body: &relayv1.DaemonMessage_Hello{Hello: hello}}); err != nil {
+			t.Fatalf("hello: %v", err)
+		}
+		if _, err := stream.Recv(); err != nil {
+			t.Fatalf("ping: %v", err)
+		}
+		return stream, cancel
+	}
+	drain := func(s relayv1.Tunnel_OpenClient) {
+		if err := s.CloseSend(); err != nil {
+			t.Fatalf("close send: %v", err)
+		}
+		for {
+			if _, err := s.Recv(); err != nil {
+				if !errors.Is(err, io.EOF) {
+					t.Fatalf("stream ended with %v, want a clean end", err)
+				}
+				return
+			}
+		}
+	}
+
+	a, cancelA := dial(policyHello(fpB))
+	defer cancelA()
+	b, cancelB := dial(policyHello(fpC))
+	defer cancelB()
+	if err := b.Send(policyMsg(true)); err != nil {
+		t.Fatalf("send B snapshot: %v", err)
+	}
+	drain(b)
+	if err := a.Send(policyMsg(false)); err != nil {
+		t.Fatalf("send A snapshot: %v", err)
+	}
+	drain(a)
+
+	if got := rawExecOf(inner, nodeID); got != registry.RawExecReportedEnabled {
+		t.Errorf("ReportedRawExec = %v, want B's (enabled)", got)
+	}
+	wantPolicyChanges(t, rec, capturedPolicy{nodeID, auditsink.PolicyChange{
+		// A's Hello cleared the stored Raw Exec state, so B's baseline is unknown.
+		FingerprintBefore: fpB, FingerprintAfter: fpC, RawExecAfter: boolp(true),
+	}})
 }
 
 func TestKeyedMutexSerializesOneKeyAndDropsIdleEntries(t *testing.T) {
