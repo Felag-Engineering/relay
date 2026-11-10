@@ -76,6 +76,7 @@ func TestPolicyChangedReason(t *testing.T) {
 	}
 }
 
+// Proves NC-34.
 func TestDaemonVersionChangedReason(t *testing.T) {
 	tests := []struct {
 		name          string

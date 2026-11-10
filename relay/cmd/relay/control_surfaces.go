@@ -144,7 +144,8 @@ type surfaceDeps struct {
 // serverHooks. Never a Config field, env var or flag — invariant 11
 // keeps what bounds acceptance operator-set on the host.
 // TestControlSurfaces_TestOnlyMCPOptionHookIsEmptyInProduction and
-// TestControlSurfaces_TestOnlyRevokedDialClockIsNilInProduction pin that.
+// TestControlSurfaces_TestOnlyRevokedDialClockIsNilInProduction, and
+// TestControlSurfaces_TestOnlyConnectionClockIsNilInProduction pin that.
 type serverHooks struct {
 	// testMCPOptions are appended AFTER the production mcp.New options of
 	// mcpSurface, so a test can construct the real MCP surface with an
@@ -155,6 +156,10 @@ type serverHooks struct {
 	// test can cross the hourly throttle window. Nil in production: the real
 	// clock.
 	testRevokedDialClock func() time.Time
+
+	// testConnectionClock replaces the Node connection recorder's clock so a
+	// test can cross its 10-minute window. Nil in production: the real clock.
+	testConnectionClock func() time.Time
 }
 
 // controlSurface is a self-mounting control-plane surface: it knows how to

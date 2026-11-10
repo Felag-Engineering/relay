@@ -31,6 +31,7 @@ var _ dispatch.ViolationRecorder = (*auditsink.Sink)(nil)
 var _ dispatch.SettlementRecorder = (*auditsink.Sink)(nil)
 
 var _ transport.RevokedDialObserver = (*auditsink.RevokedDialRecorder)(nil)
+var _ connectionObserver = (*auditsink.ConnectionRecorder)(nil)
 
 // violationRecorder composes the one place a protocol violation's records
 // are written: the durable audit row, the aggregate by-rule counter, and the
