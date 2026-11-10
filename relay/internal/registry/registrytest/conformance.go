@@ -403,8 +403,13 @@ func RunRepositoryConformance(t *testing.T, newRepo Factory) {
 
 	// ----------------------------------------------------------------
 	// Clock skew (NC-37's storage)
+	//
+	// The "Proves NC-37." lines below are for the reader: spec-proof reads
+	// tags only above a top-level Test function, which is where the two
+	// conformance runners carry them.
 	// ----------------------------------------------------------------
 
+	// Proves NC-37.
 	t.Run("ClockSkew_UnmeasuredReadsAsNotKnown", func(t *testing.T) {
 		r := fresh(t)
 		mustUpsert(t, r, registry.Report{NodeID: "node-a"})
@@ -414,6 +419,7 @@ func RunRepositoryConformance(t *testing.T, newRepo Factory) {
 		checkSkewUnknown(t, "after a not-measured heartbeat", mustGet(t, r, "node-a"))
 	})
 
+	// Proves NC-37.
 	t.Run("ClockSkew_MeasuredRoundTrips", func(t *testing.T) {
 		for _, skew := range []time.Duration{5 * time.Minute, -3 * time.Second} {
 			r := fresh(t)
@@ -472,6 +478,7 @@ func RunRepositoryConformance(t *testing.T, newRepo Factory) {
 		checkSkewUnknown(t, "after a not-measured heartbeat", mustGet(t, r, "node-a"))
 	})
 
+	// Proves NC-37.
 	t.Run("ClockSkew_UpsertNeverWritesOrClearsIt", func(t *testing.T) {
 		r := fresh(t)
 		n := mustUpsert(t, r, registry.Report{NodeID: "node-a"})
