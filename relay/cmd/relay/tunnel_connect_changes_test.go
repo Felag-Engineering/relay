@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -27,6 +28,7 @@ type captureChanges struct {
 	versions []capturedChange
 	certs    []capturedChange
 	policies []capturedPolicy
+	replaced []string
 }
 
 // capturedPolicy is one Policy change the tunnel handed to a connectionObserver.
@@ -39,6 +41,18 @@ func (c *captureChanges) PolicyChanged(nodeID string, change auditsink.PolicyCha
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.policies = append(c.policies, capturedPolicy{nodeID, change})
+}
+
+func (c *captureChanges) StreamReplaced(nodeID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.replaced = append(c.replaced, nodeID)
+}
+
+func (c *captureChanges) replacements() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return slices.Clone(c.replaced)
 }
 
 func (c *captureChanges) policyChanges() []capturedPolicy {
@@ -713,6 +727,69 @@ func TestTunnelOpen_DisplacedStreamsLateSnapshotWritesNothing(t *testing.T) {
 	}})
 }
 
+// replacementProbe asks the claims for the Node's liveness from inside
+// StreamReplaced, which cannot be answered while streamClaims.mu is held.
+type replacementProbe struct {
+	*captureChanges
+	ts       *tunnelServer
+	blocked  atomic.Bool
+	liveSeen atomic.Bool
+}
+
+func (p *replacementProbe) StreamReplaced(nodeID string) {
+	done := make(chan bool, 1)
+	go func() { done <- p.ts.claims.anyLive(nodeID) }()
+	select {
+	case live := <-done:
+		p.liveSeen.Store(live)
+	case <-time.After(2 * time.Second):
+		p.blocked.Store(true)
+	}
+	p.captureChanges.StreamReplaced(nodeID)
+}
+
+// The replacement is recorded after streamClaims.mu is released, so a
+// recorder (or the registry behind it) may ask the claims about the Node.
+func TestTunnelOpen_ReplacementIsReportedOutsideTheClaimsLock(t *testing.T) {
+	const nodeID = "cert-node-outside-lock"
+	probe := &replacementProbe{captureChanges: &captureChanges{}}
+	ts := &tunnelServer{reg: registry.NewInMemory(), changes: probe}
+	probe.ts = ts
+
+	dial := func() {
+		srv := grpc.NewServer(grpc.StreamInterceptor(injectNodeIDInterceptor(nodeID)))
+		relayv1.RegisterTunnelServer(srv, ts)
+		conn := newBufconnConn(t, srv)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		t.Cleanup(cancel)
+		stream, err := relayv1.NewTunnelClient(conn).Open(ctx)
+		if err != nil {
+			t.Fatalf("open: %v", err)
+		}
+		if err := stream.Send(&relayv1.DaemonMessage{Body: &relayv1.DaemonMessage_Hello{Hello: &relayv1.Hello{}}}); err != nil {
+			t.Fatalf("hello: %v", err)
+		}
+		if _, err := stream.Recv(); err != nil {
+			t.Fatalf("ping: %v", err)
+		}
+	}
+
+	dial()
+	if got := probe.replacements(); len(got) != 0 {
+		t.Fatalf("replacements after the first stream = %v, want none", got)
+	}
+	dial()
+	if probe.blocked.Load() {
+		t.Error("StreamReplaced ran with streamClaims.mu held: anyLive did not return")
+	}
+	if !probe.liveSeen.Load() {
+		t.Error("anyLive reported no live stream from inside StreamReplaced")
+	}
+	if got := probe.replacements(); !slices.Equal(got, []string{nodeID}) {
+		t.Errorf("replacements = %v, want [%s]", got, nodeID)
+	}
+}
+
 func TestKeyedMutexSerializesOneKeyAndDropsIdleEntries(t *testing.T) {
 	var k keyedMutex
 	unlockA := k.lock("a")
@@ -734,5 +811,25 @@ func TestKeyedMutexSerializesOneKeyAndDropsIdleEntries(t *testing.T) {
 	defer k.mu.Unlock()
 	if len(k.entries) != 0 {
 		t.Fatalf("entries left after every holder released: %d", len(k.entries))
+	}
+}
+
+func TestStreamClaims_OpenReportsAnOverlap(t *testing.T) {
+	var c streamClaims
+	genA, overlapped := c.open(nil, "n")
+	if overlapped {
+		t.Error("first stream for a Node reported an overlap")
+	}
+	genB, overlapped := c.open(nil, "n")
+	if !overlapped {
+		t.Error("second live stream for a Node reported no overlap")
+	}
+	if _, overlapped := c.open(nil, "m"); overlapped {
+		t.Error("a stream for another Node reported an overlap")
+	}
+	c.close(nil, "n", genA)
+	c.close(nil, "n", genB)
+	if _, overlapped := c.open(nil, "n"); overlapped {
+		t.Error("a stream opened after every earlier one closed reported an overlap")
 	}
 }

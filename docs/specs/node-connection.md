@@ -1,6 +1,6 @@
 # Node connection
 
-**Status:** designed, not built, as of `2026-11-09`.
+**Status:** current as of `2026-11-10`.
 **Claim prefix:** `NC`
 **Governed by:** ADR-0004, ADR-0005, ADR-0006, ADR-0014, ADR-0017, ADR-0031; invariants 4, 6, 7,
 8, 11, 14.
@@ -79,6 +79,7 @@ targets.
   as the cause.
 - **NC-14** Only the current stream receives Tasks.
 - **NC-15** Ending a replaced stream never marks the Node offline.
+- **NC-36** The Relay counts stream replacements per Node and, while it runs, writes at most one audit record per Node per 10 minutes, carrying the number of replacements since the previous record, so a single replacement is recorded and a flapping pair writes a bounded number of records (R54).
 
 At-most-once across a replaced or dropped stream is `daemon-installation.md`'s, and a Task's
 outcome is `execution.md`'s (invariant 4).
@@ -151,12 +152,6 @@ outcome is `execution.md`'s (invariant 4).
 
 Stream replacement is not a refusal: the older stream ends because a newer one exists (NC-13).
 
-## Designed, not built
-
-| Claim | Statement | Milestone |
-|---|---|---|
-| NC-36 | The Relay counts stream replacements per Node and, while it runs, writes at most one audit record per Node per 10 minutes, carrying the number of replacements since the previous record, so a single replacement is recorded and a flapping pair writes a bounded number of records (R54). | v0.2.1 |
-
 ## Out of scope
 
 - **Issuing, renewing and revoking certificates, the join string, the first-contact pin and the
@@ -190,6 +185,7 @@ Stream replacement is not a refusal: the older stream ends because a newer one e
 | NC-33 | `TestPolicyChangedReason`, `TestTunnelOpen_ChangedPolicyFingerprintWritesOneRecord`, `TestTunnelOpen_ChangedPolicyWritesOneNodePolicyChangedRow`, `TestTunnelOpen_FailedPolicyRecordKeepsTheStreamUp`, `TestTunnelOpen_FirstConnectWritesNoPolicyRecord`, `TestTunnelOpen_OtherFirstMessageResolvesThePolicyRecordWithoutTheSnapshot`, `TestTunnelOpen_PolicyFingerprintAndRawExecChangeWriteOneRecord`, `TestTunnelOpen_RawExecOnlyChangeWritesOneRecord`, `TestTunnelOpen_StreamEndingBeforeItsPolicySnapshotRecordsRawExecUnknown` | Relay, auditsink |
 | NC-34 | `TestDaemonVersionChangedReason`, `TestTunnelOpen_ChangedDaemonVersionWritesOneRecord`, `TestTunnelOpen_DaemonVersionBelowTheMinimumStillConnects`, `TestTunnelOpen_DaemonVersionBelowTheMinimumStillConnectsAndIsAudited`, `TestTunnelOpen_FirstConnectReportingNothingCannotHideTheNextReport`, `TestTunnelOpen_FirstConnectWritesNoVersionRecord`, `TestTunnelOpen_LowerDaemonVersionIsPassedAsADowngrade`, `TestTunnelOpen_OverlappingConnectsOfOneNodeRecordThePersistedOrder`, `TestTunnelOpen_UnreportedDaemonVersionIsRecordedAsUnknownSide` | Relay, auditsink |
 | NC-35 | `TestTunnelOpen_RenewThenReconnectWritesOneCertChangedRecord`, `TestTunnelOpen_RenewalBeforeTheFirstConnectIsRecordedOnThatConnect`, `TestTunnelOpen_SameCertificateReconnectWritesNoCertRecord` | Relay |
+| NC-36 | `TestConnectionRecorder_ConcurrentFirstEventsRecordOnce`, `TestConnectionRecorder_FailedEntrySurvivesTheSweep`, `TestConnectionRecorder_FirstEventRecordedAtOnce`, `TestConnectionRecorder_KindsAreThrottledIndependently`, `TestConnectionRecorder_ReplacementsInsideTheWindowAreCarriedByTheNextRecord`, `TestConnectionRecorder_SweepDropsIdleEntriesAndKeepsPending`, `TestConnectionRecorder_WriteFailureLosesNoCount`, `TestTunnelOpen_TwoStreamsOnOneCertificateWriteOneReplacedRow`, `TestTunnelOpen_TwoStreamsOnOneCertificateWriteOneReplacedRowWithControlPlane` | Relay, auditsink |
 | NC-37 | `TestHeartbeatClockSkew`, `TestRepositoryConformance`, `TestSQLiteRegistryConformance`, `TestTunnelOpen_HeartbeatFiveMinutesOutRecordsAboutThatSkew`, `TestTunnelOpen_NodeYearsOutKeepsItsStreamAndAnswersATask`, `TestTunnelOpen_NonPositiveHeartbeatTimestampRecordsSkewNotMeasured` | Relay, registry, store |
 | NC-38 | `TestHello_NodeIDIsDeprecatedInTheContract`, `TestRelay_NoFileSelectsTheHelloNodeID`, `TestTunnelOpen_ForgedHelloNodeIDIsKeyedByTheCertificateAndNeverLogged`, `hello_never_sets_the_node_id` | Node plane, Relay, daemon |
 | NC-39 | `TestConnectionRecorder_FirstEventRecordedAtOnce`, `TestConnectionRecorder_KindsAreThrottledIndependently`, `TestConnectionRecorder_NextRecordCarriesTheCountAndItsOwnValues`, `TestConnectionRecorder_NodesAreThrottledIndependently`, `TestConnectionRecorder_SweepDropsIdleEntriesAndKeepsPending`, `TestConnectionRecorder_ThrottledWithinTheWindow`, `TestTunnelOpen_AlternatingDaemonVersionsWriteOneRowPerWindow` | Relay, auditsink |

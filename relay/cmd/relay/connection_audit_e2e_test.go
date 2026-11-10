@@ -202,6 +202,56 @@ func TestTunnelOpen_AlternatingDaemonVersionsWriteOneRowPerWindow(t *testing.T) 
 	}
 }
 
+// twoStreamsWriteOneReplacedRow opens a second stream for a Node while its first
+// is live and requires exactly one node_stream_replaced row. A stream that was
+// fully torn down before it is not an overlap. The row is written before the
+// Ping, so it exists when connAuditConnect returns. It asserts nothing about
+// how the older stream ends.
+func twoStreamsWriteOneReplacedRow(t *testing.T, opts ...FixtureOption) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	clk := &revokedDialClock{t: time.Date(2026, 11, 9, 12, 0, 0, 0, time.UTC)}
+	f := startRelay(t, append(opts, WithConnectionClock(clk.Now))...)
+	nodeID, cert, pool := connAuditEnroll(ctx, t, f)
+	rows := func() []audit.Record {
+		t.Helper()
+		return connAuditRecords(ctx, t, f, nodeID, audit.KindNodeStreamReplaced)
+	}
+
+	connAuditSession(ctx, t, f, cert, pool, &relayv1.Hello{})
+	if n := len(rows()); n != 0 {
+		t.Fatalf("rows after one stream that ended before the next = %d, want 0", n)
+	}
+	endA := connAuditConnect(ctx, t, f, cert, pool, &relayv1.Hello{})
+	defer endA()
+	if n := len(rows()); n != 0 {
+		t.Fatalf("rows with one live stream = %d, want 0", n)
+	}
+	endB := connAuditConnect(ctx, t, f, cert, pool, &relayv1.Hello{})
+	defer endB()
+
+	recs := rows()
+	if len(recs) != 1 {
+		t.Fatalf("rows with two live streams = %d, want 1", len(recs))
+	}
+	if recs[0].Reason != "replacements=1" || recs[0].Principal != "" || !recs[0].Timestamp.Equal(clk.Now().UTC()) {
+		t.Errorf("row = Reason %q Principal %q Timestamp %v, want replacements=1 / none / %v",
+			recs[0].Reason, recs[0].Principal, recs[0].Timestamp, clk.Now().UTC())
+	}
+}
+
+// Proves NC-36.
+func TestTunnelOpen_TwoStreamsOnOneCertificateWriteOneReplacedRow(t *testing.T) {
+	twoStreamsWriteOneReplacedRow(t)
+}
+
+// Proves NC-36.
+func TestTunnelOpen_TwoStreamsOnOneCertificateWriteOneReplacedRowWithControlPlane(t *testing.T) {
+	twoStreamsWriteOneReplacedRow(t, WithControlPlane())
+}
+
 // connAuditRecords returns the audit records of one kind for nodeID.
 func connAuditRecords(ctx context.Context, t *testing.T, f *relayFixture, nodeID, kind string) []audit.Record {
 	t.Helper()

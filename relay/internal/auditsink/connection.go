@@ -141,8 +141,9 @@ func (r *ConnectionRecorder) CertChanged(nodeID, before, after string) {
 	r.record(nodeID, audit.KindNodeCertChanged, func(n int) string { return certChangedReason(before, after, n) })
 }
 
-// StreamReplaced records one stream for nodeID opening while another was
-// live. It never returns an error.
+// StreamReplaced records one stream opened for nodeID while another stream for
+// the Node was live (NC-36). It never returns an error: the connection must
+// not depend on the trail.
 func (r *ConnectionRecorder) StreamReplaced(nodeID string) {
 	r.record(nodeID, audit.KindNodeStreamReplaced, streamReplacedReason)
 }

@@ -532,8 +532,9 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 	// read it. Display-only, and likewise independent of ControlEnabled.
 	vocabCache := nodevocab.New()
 
-	// Changes between a Node's connects are recorded, limited per Node and
-	// kind; a record never refuses a connection (NC-33, NC-34, NC-35, NC-39).
+	// Changes between a Node's connects, and a stream replacing a live one,
+	// are recorded, limited per Node and kind; a record never refuses a
+	// connection (NC-33, NC-34, NC-35, NC-36, NC-39).
 	connectionChanges := auditsink.NewConnectionRecorder(auditSink, hooks.testConnectionClock)
 
 	ts := &tunnelServer{conns: conns, reg: reg, policy: policyCache, vocab: vocabCache, changes: connectionChanges}
