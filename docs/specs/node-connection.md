@@ -1,6 +1,6 @@
 # Node connection
 
-**Status:** designed, not built, as of `2026-11-05`.
+**Status:** designed, not built, as of `2026-11-09`.
 **Claim prefix:** `NC`
 **Governed by:** ADR-0004, ADR-0005, ADR-0006, ADR-0014, ADR-0017, ADR-0031; invariants 4, 6, 7,
 8, 11, 14.
@@ -45,6 +45,9 @@ targets.
 - **NC-5** The daemon reads its identity from its state directory at each connect, so a renewed
   certificate is used from the next connect; nothing forces a reconnect. The registry records
   the certificate fingerprint presented on the Node's latest connect.
+- **NC-35** Between two connects of the same Node, a change in the client certificate
+  fingerprint writes one audit record with the before and after fingerprints. The record
+  blocks nothing.
 - **NC-6** The Relay presents one server certificate on both listeners and re-issues it
   in-process before it expires, so a running Relay never presents an expired one (ADR-0031).
   Only the Node plane asks for a client certificate.
@@ -117,6 +120,9 @@ outcome is `execution.md`'s (invariant 4).
   flagged `outdated` in the registry, and the minimum-version gate refuses it at dispatch
   (`execution.md`; invariant 14).
 - **NC-27** No Node-plane message installs, upgrades or replaces a binary (invariant 14).
+- **NC-34** Between two connects of the same Node, a change in the reported daemon version
+  writes one audit record with the before and after versions, marked as a downgrade when the
+  new version is lower. The record blocks nothing.
 
 ## Refusals
 
@@ -139,8 +145,6 @@ Stream replacement is not a refusal: the older stream ends because a newer one e
 | Claim | Statement | Milestone |
 |---|---|---|
 | NC-33 | Between two connects of the same Node, a change in the reported Policy fingerprint or in whether Raw Exec is enabled writes one audit record with the before and after values. A Node's first connect writes none, and the record blocks nothing. | v0.2.1 |
-| NC-34 | Between two connects of the same Node, a change in the reported daemon version writes one audit record with the before and after versions, marked as a downgrade when the new version is lower. The record blocks nothing. | v0.2.1 |
-| NC-35 | Between two connects of the same Node, a change in the client certificate fingerprint writes one audit record with the before and after fingerprints. The record blocks nothing. | v0.2.1 |
 | NC-36 | The Relay counts stream replacements per Node and, while it runs, writes at most one audit record per Node per 10 minutes, carrying the number of replacements since the previous record, so a single replacement is recorded and a flapping pair writes a bounded number of records (R54). | v0.2.1 |
 | NC-37 | The Relay measures each heartbeat's timestamp against its own clock and records the difference on the Node's registry record as its clock skew: a Relay-measured value, kept apart from the self-reported Facts. Clock skew never blocks a connection or a dispatch. | v0.2.1 |
 | NC-39 | The change records of NC-33, NC-34 and NC-35 are limited per Node and per kind: while the Relay runs, at most one record per 10 minutes, carrying the number of changes since the previous record of that kind, so a single change is recorded at once and a Node that keeps changing its report, or two parties sharing one certificate, write a bounded number of records (R51, R54). | v0.2.1 |
@@ -175,6 +179,8 @@ Stream replacement is not a refusal: the older stream ends because a newer one e
 <!-- proof:begin -->
 | Claim | Proven by | Seam |
 |---|---|---|
+| NC-34 | `TestDaemonVersionChangedReason`, `TestTunnelOpen_ChangedDaemonVersionWritesOneRecord`, `TestTunnelOpen_DaemonVersionBelowTheMinimumStillConnects`, `TestTunnelOpen_DaemonVersionBelowTheMinimumStillConnectsAndIsAudited`, `TestTunnelOpen_FirstConnectReportingNothingCannotHideTheNextReport`, `TestTunnelOpen_FirstConnectWritesNoVersionRecord`, `TestTunnelOpen_LowerDaemonVersionIsPassedAsADowngrade`, `TestTunnelOpen_OverlappingConnectsOfOneNodeRecordThePersistedOrder`, `TestTunnelOpen_UnreportedDaemonVersionIsRecordedAsUnknownSide` | Relay, auditsink |
+| NC-35 | `TestTunnelOpen_RenewThenReconnectWritesOneCertChangedRecord`, `TestTunnelOpen_RenewalBeforeTheFirstConnectIsRecordedOnThatConnect`, `TestTunnelOpen_SameCertificateReconnectWritesNoCertRecord` | Relay |
 | NC-38 | `TestHello_NodeIDIsDeprecatedInTheContract`, `TestRelay_NoFileSelectsTheHelloNodeID`, `TestTunnelOpen_ForgedHelloNodeIDIsKeyedByTheCertificateAndNeverLogged`, `hello_never_sets_the_node_id` | Node plane, Relay, daemon |
 
 Unproven: NC-1, NC-2, NC-3, NC-4, NC-5, NC-6, NC-7, NC-8, NC-9, NC-10, NC-11, NC-12, NC-13, NC-14, NC-15, NC-16, NC-17, NC-18, NC-19, NC-20, NC-21, NC-22, NC-23, NC-24, NC-25, NC-26, NC-27, NC-28, NC-29, NC-30, NC-31, NC-32.
