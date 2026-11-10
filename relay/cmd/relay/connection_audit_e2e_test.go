@@ -4,10 +4,14 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
+	"io"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/Felag-Engineering/relay/relay/internal/audit"
+	"github.com/Felag-Engineering/relay/relay/internal/registry"
 	relayv1 "github.com/Felag-Engineering/relay/relay/internal/relay/v1"
 	"github.com/Felag-Engineering/relay/relay/internal/relaytest"
 )
@@ -71,6 +75,131 @@ func connAuditConnect(ctx context.Context, t *testing.T, f *relayFixture, cert t
 		t.Fatalf("expected Ping after Hello, got %T", msg.Body)
 	}
 	return cancel
+}
+
+// connAuditSession is one whole stream: connAuditConnect, then msgs, then a
+// clean end. The client's EOF arrives only after the handler and every
+// deferred step has run, so every write of the stream, the Policy record
+// included, has happened when it returns.
+func connAuditSession(ctx context.Context, t *testing.T, f *relayFixture, cert tls.Certificate, pool *x509.CertPool, hello *relayv1.Hello, msgs ...*relayv1.DaemonMessage) {
+	t.Helper()
+	conn := dialTLS(t, f.Bufconn, &tls.Config{Certificates: []tls.Certificate{cert}, RootCAs: pool})
+	sctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stream, err := relayv1.NewTunnelClient(conn).Open(sctx)
+	if err != nil {
+		t.Fatalf("Tunnel Open: %v", err)
+	}
+	if err := stream.Send(&relayv1.DaemonMessage{Body: &relayv1.DaemonMessage_Hello{Hello: hello}}); err != nil {
+		t.Fatalf("send Hello: %v", err)
+	}
+	msg, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("recv Ping: %v", err)
+	}
+	if msg.GetPing() == nil {
+		t.Fatalf("expected Ping after Hello, got %T", msg.Body)
+	}
+	for _, m := range msgs {
+		if err := stream.Send(m); err != nil {
+			t.Fatalf("send: %v", err)
+		}
+	}
+	if err := stream.CloseSend(); err != nil {
+		t.Fatalf("CloseSend: %v", err)
+	}
+	for {
+		if _, err := stream.Recv(); err != nil {
+			if !errors.Is(err, io.EOF) {
+				t.Fatalf("stream ended with %v, want a clean end", err)
+			}
+			return
+		}
+	}
+}
+
+// Proves NC-33.
+func TestTunnelOpen_ChangedPolicyWritesOneNodePolicyChangedRow(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	fpA, fpB := strings.Repeat("a", 64), strings.Repeat("b", 64)
+	clk := &revokedDialClock{t: time.Date(2026, 11, 9, 12, 0, 0, 0, time.UTC)}
+	f := startRelay(t, WithConnectionClock(clk.Now))
+	nodeID, cert, pool := connAuditEnroll(ctx, t, f)
+
+	connAuditSession(ctx, t, f, cert, pool, &relayv1.Hello{PolicyFingerprint: fpA}, policyMsg(false))
+	if n := len(connAuditRecords(ctx, t, f, nodeID, audit.KindNodePolicyChanged)); n != 0 {
+		t.Fatalf("policy records after the first connect = %d, want 0", n)
+	}
+
+	connAuditSession(ctx, t, f, cert, pool, &relayv1.Hello{PolicyFingerprint: fpB}, policyMsg(true))
+	recs := connAuditRecords(ctx, t, f, nodeID, audit.KindNodePolicyChanged)
+	if len(recs) != 1 {
+		t.Fatalf("policy records after the change = %d, want 1", len(recs))
+	}
+	want := "policy_fingerprint_before=" + fpA + " policy_fingerprint_after=" + fpB +
+		" raw_exec_before=false raw_exec_after=true changes=1"
+	if recs[0].Reason != want {
+		t.Errorf("Reason = %q, want %q", recs[0].Reason, want)
+	}
+	if recs[0].Principal != "" {
+		t.Errorf("Principal = %q, want empty", recs[0].Principal)
+	}
+	if !recs[0].Timestamp.Equal(clk.Now().UTC()) {
+		t.Errorf("Timestamp = %v, want the injected clock %v", recs[0].Timestamp, clk.Now().UTC())
+	}
+	if n, _ := f.Deps.registry.Get(nodeID); n.ReportedRawExec != registry.RawExecReportedEnabled {
+		t.Errorf("ReportedRawExec = %v, want enabled", n.ReportedRawExec)
+	}
+}
+
+// Proves NC-39.
+func TestTunnelOpen_AlternatingDaemonVersionsWriteOneRowPerWindow(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	clk := &revokedDialClock{t: time.Date(2026, 11, 9, 12, 0, 0, 0, time.UTC)}
+	f := startRelay(t, WithConnectionClock(clk.Now))
+	nodeID, cert, pool := connAuditEnroll(ctx, t, f)
+
+	// The version record is written before the Ping, so it is complete when
+	// connAuditConnect returns.
+	connect := func(version string) {
+		t.Helper()
+		connAuditConnect(ctx, t, f, cert, pool, &relayv1.Hello{DaemonVersion: version})()
+	}
+	rows := func() []audit.Record {
+		t.Helper()
+		return connAuditRecords(ctx, t, f, nodeID, audit.KindNodeDaemonVersionChanged)
+	}
+
+	connect("0.1.0") // first connect: none
+	if n := len(rows()); n != 0 {
+		t.Fatalf("rows after the first connect = %d, want 0", n)
+	}
+	connect("0.2.0")
+	recs := rows()
+	if len(recs) != 1 || recs[0].Reason != "version_before=0.1.0 version_after=0.2.0 downgrade=false changes=1" {
+		t.Fatalf("rows after the first change = %+v, want one with changes=1", recs)
+	}
+	for _, v := range []string{"0.1.0", "0.2.0", "0.1.0"} {
+		connect(v)
+	}
+	if n := len(rows()); n != 1 {
+		t.Fatalf("rows inside the window = %d, want 1", n)
+	}
+
+	clk.Advance(10 * time.Minute) // the recorder's window
+	connect("0.2.0")
+	recs = rows()
+	if len(recs) != 2 || recs[1].Reason != "version_before=0.1.0 version_after=0.2.0 downgrade=false changes=4" {
+		t.Fatalf("rows after the window = %+v, want a second with changes=4", recs)
+	}
+	connect("0.1.0")
+	if n := len(rows()); n != 2 {
+		t.Errorf("rows inside the new window = %d, want 2", n)
+	}
 }
 
 // connAuditRecords returns the audit records of one kind for nodeID.

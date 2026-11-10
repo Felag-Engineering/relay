@@ -44,6 +44,7 @@ func versionEvents(r *ConnectionRecorder, node string, n int) {
 	}
 }
 
+// Proves NC-33.
 func TestPolicyChangedReason(t *testing.T) {
 	tests := []struct {
 		name string
@@ -137,6 +138,7 @@ func TestConnectionReasons_MalformedValueRendersNone(t *testing.T) {
 	}
 }
 
+// Proves NC-39.
 func TestConnectionRecorder_FirstEventRecordedAtOnce(t *testing.T) {
 	kinds := []struct {
 		kind   string
@@ -179,6 +181,7 @@ func TestConnectionRecorder_FirstEventRecordedAtOnce(t *testing.T) {
 	}
 }
 
+// Proves NC-39.
 func TestConnectionRecorder_ThrottledWithinTheWindow(t *testing.T) {
 	_, repo, _ := openSinkStore(t)
 	clk := newDialClock()
@@ -193,6 +196,7 @@ func TestConnectionRecorder_ThrottledWithinTheWindow(t *testing.T) {
 	}
 }
 
+// Proves NC-39.
 func TestConnectionRecorder_NextRecordCarriesTheCountAndItsOwnValues(t *testing.T) {
 	_, repo, _ := openSinkStore(t)
 	clk := newDialClock()
@@ -221,6 +225,7 @@ func TestConnectionRecorder_NextRecordCarriesTheCountAndItsOwnValues(t *testing.
 	}
 }
 
+// Proves NC-39.
 func TestConnectionRecorder_KindsAreThrottledIndependently(t *testing.T) {
 	_, repo, _ := openSinkStore(t)
 	clk := newDialClock()
@@ -241,6 +246,7 @@ func TestConnectionRecorder_KindsAreThrottledIndependently(t *testing.T) {
 	}
 }
 
+// Proves NC-39.
 func TestConnectionRecorder_NodesAreThrottledIndependently(t *testing.T) {
 	_, repo, _ := openSinkStore(t)
 	r := NewConnectionRecorder(New(repo), newDialClock().Now)
@@ -344,6 +350,7 @@ func TestConnectionRecorder_FailedWriteLogsOneWarningAndReturns(t *testing.T) {
 	}
 }
 
+// Proves NC-39.
 func TestConnectionRecorder_SweepDropsIdleEntriesAndKeepsPending(t *testing.T) {
 	t.Run("idle entries go, at most once per window", func(t *testing.T) {
 		_, repo, _ := openSinkStore(t)
@@ -386,6 +393,25 @@ func TestConnectionRecorder_SweepDropsIdleEntriesAndKeepsPending(t *testing.T) {
 		recs := connectionRecords(t, repo, "node-a", audit.KindNodeStreamReplaced)
 		if len(recs) != 2 || recs[1].Reason != "replacements=2" {
 			t.Errorf("records = %+v, want a second with replacements=2", recs)
+		}
+	})
+
+	t.Run("a pending change count survives the sweep", func(t *testing.T) {
+		_, repo, _ := openSinkStore(t)
+		clk := newDialClock()
+		r := NewConnectionRecorder(New(repo), clk.Now)
+
+		r.PolicyChanged("node-a", PolicyChange{FingerprintAfter: fp('a')})
+		r.PolicyChanged("node-a", PolicyChange{FingerprintAfter: fp('a')})
+		clk.Advance(connectionWindow)
+		r.DaemonVersionChanged("node-b", "0.1.0", "0.2.0") // sweeps; node-a has a pending count
+		if got := entryCount(r); got != 2 {
+			t.Fatalf("entries = %d, want 2", got)
+		}
+		r.PolicyChanged("node-a", PolicyChange{FingerprintAfter: fp('b')})
+		recs := connectionRecords(t, repo, "node-a", audit.KindNodePolicyChanged)
+		if len(recs) != 2 || !strings.HasSuffix(recs[1].Reason, "changes=2") {
+			t.Errorf("records = %+v, want a second ending changes=2", recs)
 		}
 	})
 }
