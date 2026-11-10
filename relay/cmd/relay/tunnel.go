@@ -284,57 +284,7 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[relayv1.DaemonMessag
 		}
 	}()
 
-	// Record the Node's identity, facts, and node: labels in the registry.
-	// CertFingerprint is recomputed from the verified leaf so the Upsert does
-	// not blank the value that Enrollment stored (Upsert always overwrites it).
-	// A renewed certificate's new fingerprint replaces the stored one, and the
-	// change is recorded (NC-35).
-	// EnrollingTokenID is intentionally omitted: Upsert's update path preserves
-	// existing provenance (memory.go:93-94).
-	// Nil-guard mirrors the conns nil-guard above so tests that build
-	// &tunnelServer{} without a registry keep compiling and passing.
-	if s.reg != nil {
-		fp, _ := transport.PeerCertFingerprint(stream.Context())
-		labels, refused := nodeLabelsFromHello(hello.GetLabels())
-		// One bounded warning per connect, never one per refused label: a
-		// hostile or misconfigured Node can send an unbounded number of
-		// labels, and this is the one place that count would otherwise be
-		// attacker-controlled log volume.
-		//
-		// The key is BOUNDED BEFORE IT IS QUOTED, and the two do different
-		// jobs: %q bounds control characters and newlines, and the
-		// truncation bounds LENGTH. Quoting alone does not — a wire key is
-		// attacker-controlled up to gRPC's 4 MiB message limit, so a
-		// reconnect-looping Node could write megabytes per connect.
-		// enroll/handler.go reached the same conclusion for its
-		// attacker-controlled TokenID and fixed it with looksLikeTokenID,
-		// exact shape validation, rather than with quoting.
-		//
-		// The VALUE is never logged: it is exactly the self-reported
-		// string this check just decided not to trust.
-		if len(refused) > 0 {
-			slog.Warn("refused malformed node labels", "node_id", nodeID,
-				"refused_count", len(refused),
-				"first_refused_key", fmt.Sprintf("%q", boundedLogValue(refused[0])))
-		}
-		// A set over the per-Node cap is recorded as not reported, never
-		// truncated: keeping the previous set would serve a self-report the
-		// Node no longer makes. One line per connect, counts only.
-		if !registry.WithinNodeLabelCap(len(labels)) {
-			slog.Warn("refused node labels over the per-Node limit; recorded as not reported",
-				"node_id", nodeID, "count", len(labels), "limit", registry.MaxNodeLabels)
-			labels = map[string]string{}
-		}
-		// Field names from a closed set, never a value, once per connect: the
-		// refused value is exactly what this check decided not to trust.
-		if len(refusedFields) > 0 {
-			slog.Warn("refused malformed Hello fields; recorded as not reported",
-				"node_id", nodeID, "refused_fields", refusedFields)
-		}
-		if baseline, helloSeq, ok := s.recordConnect(nodeID, fp, report, labels); ok {
-			policyRec = &streamPolicyRecord{baseline: baseline, fingerprint: report.PolicyFingerprint, helloSeq: helloSeq}
-		}
-	}
+	policyRec = s.recordHello(stream.Context(), nodeID, hello, refusedFields, report)
 
 	// Send Ping after the registry Upsert, the first-connect marker and the
 	// change records, so a client that receives the Ping sees all three; tests
@@ -413,58 +363,115 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[relayv1.DaemonMessag
 			}
 			return err
 		case m := <-recvMsg:
-			if hb := m.GetHeartbeat(); hb != nil {
-				slog.Debug("heartbeat", "unix_millis", hb.UnixMillis)
-				timer.Reset(deadline) // never waits on, or depends on, the write below
-				if s.reg != nil {
-					received := time.Now()
-					if err := s.reg.RecordHeartbeat(nodeID, received, heartbeatClockSkew(hb.UnixMillis, received)); err != nil {
-						slog.Warn("registry heartbeat write failed", "node_id", nodeID, "err", err)
-					}
-				}
+			if m.GetHeartbeat() != nil {
+				timer.Reset(deadline) // never waits on, or depends on, the write in handleDaemonMessage
 			}
-			// Deliver TaskResult to the sink (if set) — the real production
-			// sink is how a dispatched Task's result reaches the
-			// waiting Router.Dispatch call. Nil, and this block a zero-cost
-			// no-op, when the control plane is disabled.
-			if s.sink != nil {
-				if tr := m.GetTaskResult(); tr != nil {
-					s.sink.deliver(nodeID, tr)
-				}
-			}
-			// Deliver PolicyVerdict to the sink (if set); nil-guarded like
-			// deliver above.
-			if s.sink != nil {
-				if pv := m.GetPolicyVerdict(); pv != nil {
-					s.sink.deliverVerdict(nodeID, pv)
-				}
-			}
-			// Capture a reported PolicySnapshot into the display-only
-			// policyview.Cache. This RECORDS a report-only daemon
-			// value for describe_node to display — it never sets or
-			// modifies Node Policy (ADR-0002), exactly like the
-			// PolicyFingerprint the registry already records on Hello.
-			// Keyed by the cert-derived nodeID (never a wire value), like
-			// every other write in this handler. Unconditional (not gated
-			// by s.sink): this is the production capture path, not a
-			// test-only seam.
-			if ps := m.GetPolicy(); ps != nil && s.policy != nil {
-				s.policy.Set(nodeID, snapshotFromProto(ps))
-			}
-			// Only the first message after Hello resolves the Policy record;
-			// a PolicySnapshot is stored with it, any other message is not.
-			s.resolvePolicyRecord(nodeID, policyRec, m.GetPolicy())
-			// Capture a reported TemplateSnapshot into the nodevocab.Cache.
-			// Same posture as the PolicySnapshot capture above: it
-			// RECORDS a report-only daemon value — for discovery, and since
-			// ADR-0042 as the input to a Template dispatch's fan-out and
-			// class — and can never set or modify the Node's templates
-			// (ADR-0002, ADR-0021). Keyed by the cert-derived nodeID, never a
-			// wire value.
-			if ts := m.GetTemplates(); ts != nil && s.vocab != nil {
-				s.vocab.Set(nodeID, vocabFromProto(ts))
+			s.handleDaemonMessage(nodeID, m, policyRec)
+		}
+	}
+}
+
+// recordHello records a connecting Node's identity, facts and node: labels in
+// the registry. CertFingerprint is recomputed from the verified leaf so the
+// Upsert does not blank the value that Enrollment stored (Upsert always
+// overwrites it). A renewed certificate's new fingerprint replaces the stored
+// one, and the change is recorded (NC-35). EnrollingTokenID is intentionally
+// omitted: Upsert's update path preserves existing provenance.
+//
+// It returns the stream's pending Policy record, or nil when nothing was
+// recorded: a failed Upsert leaves the old report, so no Policy record is
+// written (NC-33). A nil registry records nothing, so tests that build
+// &tunnelServer{} without one keep passing.
+func (s *tunnelServer) recordHello(ctx context.Context, nodeID string, hello *relayv1.Hello, refusedFields []string, report protoconv.HelloReport) *streamPolicyRecord {
+	if s.reg == nil {
+		return nil
+	}
+	fp, _ := transport.PeerCertFingerprint(ctx)
+	labels, refused := nodeLabelsFromHello(hello.GetLabels())
+	// One bounded warning per connect, never one per refused label: a hostile
+	// or misconfigured Node can send an unbounded number of labels, and this is
+	// the one place that count would otherwise be attacker-controlled log
+	// volume.
+	//
+	// The key is BOUNDED BEFORE IT IS QUOTED, and the two do different jobs: %q
+	// bounds control characters and newlines, and the truncation bounds LENGTH.
+	// Quoting alone does not: a wire key is attacker-controlled up to gRPC's
+	// 4 MiB message limit, so a reconnect-looping Node could write megabytes
+	// per connect. enroll/handler.go reached the same conclusion for its
+	// attacker-controlled TokenID and fixed it with looksLikeTokenID, exact
+	// shape validation, rather than with quoting.
+	//
+	// The VALUE is never logged: it is exactly the self-reported string this
+	// check just decided not to trust.
+	if len(refused) > 0 {
+		slog.Warn("refused malformed node labels", "node_id", nodeID,
+			"refused_count", len(refused),
+			"first_refused_key", fmt.Sprintf("%q", boundedLogValue(refused[0])))
+	}
+	// A set over the per-Node cap is recorded as not reported, never
+	// truncated: keeping the previous set would serve a self-report the Node no
+	// longer makes. One line per connect, counts only.
+	if !registry.WithinNodeLabelCap(len(labels)) {
+		slog.Warn("refused node labels over the per-Node limit; recorded as not reported",
+			"node_id", nodeID, "count", len(labels), "limit", registry.MaxNodeLabels)
+		labels = map[string]string{}
+	}
+	// Field names from a closed set, never a value, once per connect: the
+	// refused value is exactly what this check decided not to trust.
+	if len(refusedFields) > 0 {
+		slog.Warn("refused malformed Hello fields; recorded as not reported",
+			"node_id", nodeID, "refused_fields", refusedFields)
+	}
+	baseline, helloSeq, ok := s.recordConnect(nodeID, fp, report, labels)
+	if !ok {
+		return nil
+	}
+	return &streamPolicyRecord{baseline: baseline, fingerprint: report.PolicyFingerprint, helloSeq: helloSeq}
+}
+
+// handleDaemonMessage applies one post-Hello message from the Node keyed by
+// the certificate-derived nodeID, never a wire value. The liveness timer is
+// the caller's: only a Heartbeat resets it. policyRec is the stream's pending
+// Policy record, resolved by the first message after Hello.
+func (s *tunnelServer) handleDaemonMessage(nodeID string, m *relayv1.DaemonMessage, policyRec *streamPolicyRecord) {
+	if hb := m.GetHeartbeat(); hb != nil {
+		slog.Debug("heartbeat", "unix_millis", hb.UnixMillis)
+		if s.reg != nil {
+			received := time.Now()
+			if err := s.reg.RecordHeartbeat(nodeID, received, heartbeatClockSkew(hb.UnixMillis, received)); err != nil {
+				slog.Warn("registry heartbeat write failed", "node_id", nodeID, "err", err)
 			}
 		}
+	}
+	// Deliver TaskResult and PolicyVerdict to the sink (if set): the real
+	// production sink is how a dispatched Task's result reaches the waiting
+	// Router.Dispatch call. Nil when the control plane is disabled.
+	if s.sink != nil {
+		if tr := m.GetTaskResult(); tr != nil {
+			s.sink.deliver(nodeID, tr)
+		}
+		if pv := m.GetPolicyVerdict(); pv != nil {
+			s.sink.deliverVerdict(nodeID, pv)
+		}
+	}
+	// Capture a reported PolicySnapshot into the display-only policyview.Cache.
+	// This RECORDS a report-only daemon value for describe_node to display; it
+	// never sets or modifies Node Policy (ADR-0002), exactly like the
+	// PolicyFingerprint the registry already records on Hello. Unconditional
+	// (not gated by s.sink): this is the production capture path.
+	if ps := m.GetPolicy(); ps != nil && s.policy != nil {
+		s.policy.Set(nodeID, snapshotFromProto(ps))
+	}
+	// Only the first message after Hello resolves the Policy record; a
+	// PolicySnapshot is stored with it, any other message is not.
+	s.resolvePolicyRecord(nodeID, policyRec, m.GetPolicy())
+	// Capture a reported TemplateSnapshot into the nodevocab.Cache. Same posture
+	// as the PolicySnapshot capture above: it RECORDS a report-only daemon
+	// value, for discovery and, since ADR-0042, as the input to a Template
+	// dispatch's fan-out and class, and can never set or modify the Node's
+	// templates (ADR-0002, ADR-0021).
+	if ts := m.GetTemplates(); ts != nil && s.vocab != nil {
+		s.vocab.Set(nodeID, vocabFromProto(ts))
 	}
 }
 
