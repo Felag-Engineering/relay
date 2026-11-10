@@ -49,13 +49,15 @@ type taskSink interface {
 }
 
 // connectionObserver is told each change in what a Node presents or reports
-// between two of its connects. It records and never fails: a change record
-// never refuses a connection (NC-33, NC-34, NC-35). The method names are
+// between two of its connects, and each stream opened while another stream for
+// the Node was live. It records and never fails: a record never refuses a
+// connection (NC-33, NC-34, NC-35, NC-36). The method names are
 // exported so an auditsink recorder satisfies it directly.
 type connectionObserver interface {
 	DaemonVersionChanged(nodeID, before, after string)
 	CertChanged(nodeID, before, after string)
 	PolicyChanged(nodeID string, c auditsink.PolicyChange)
+	StreamReplaced(nodeID string)
 }
 
 // heartbeatInterval is the relay-daemon's built-in heartbeat period. It is not
@@ -86,7 +88,7 @@ const missedHeartbeatAllowance = 3
 // SetConnected(true), then write false over it. SetConnected is in-memory and
 // its event publication does not block, so the critical section stays short.
 // anyLive is called with the Router's lock held, so nothing holding
-// streamClaims.mu may call into the Router.
+// streamClaims.mu may call into the Router or write to the audit trail.
 type streamClaims struct {
 	mu   sync.Mutex
 	next uint64
@@ -96,12 +98,16 @@ type streamClaims struct {
 // open records a new live stream for nodeID, marks the Node connected, and
 // returns the stream's generation. A uint64 generation, not a pointer, is the
 // identity: Go does not promise distinct pointers to distinct zero-size values.
-func (c *streamClaims) open(reg registry.Repository, nodeID string) uint64 {
+// It also reports whether another stream for nodeID was live when this one
+// opened: a replacement (NC-36). The caller records it, never open, so nothing
+// is written under c.mu.
+func (c *streamClaims) open(reg registry.Repository, nodeID string) (gen uint64, overlapped bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.live == nil {
 		c.live = make(map[string]map[uint64]struct{})
 	}
+	overlapped = len(c.live[nodeID]) > 0
 	c.next++
 	if c.live[nodeID] == nil {
 		c.live[nodeID] = make(map[uint64]struct{})
@@ -110,7 +116,7 @@ func (c *streamClaims) open(reg registry.Repository, nodeID string) uint64 {
 	if reg != nil {
 		reg.SetConnected(nodeID, true)
 	}
-	return c.next
+	return c.next, overlapped
 }
 
 // close ends the claim gen. If it was nodeID's last live stream it marks the
@@ -155,9 +161,10 @@ type tunnelServer struct {
 	// never sets Policy (ADR-0002). Nil-guarded like policy/reg/conns.
 	vocab *nodevocab.Cache
 	// changes records a changed Policy fingerprint or Raw Exec state, daemon
-	// version or client certificate between two connects (NC-33, NC-34, NC-35).
-	// Set by newServer; nil-guarded like reg/policy/vocab, and tests inject a
-	// capture.
+	// version or client certificate between two connects, and a stream
+	// replacing a live one (NC-33, NC-34, NC-35, NC-36). Set by newServer in
+	// both execution modes; nil-guarded like reg/policy/vocab, and tests inject
+	// a capture.
 	changes connectionObserver
 	// connects serializes one Node's baseline read, Upsert, first-connect marker
 	// and change records, and the stream's Policy record. It is never held
@@ -255,7 +262,7 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[relayv1.DaemonMessag
 	// Claimed BEFORE the Upsert so there is no window in which a Node is in
 	// the registry but not yet marked connected; a reader landing in that gap
 	// would see a Node that is plainly here as offline.
-	gen := s.claims.open(s.reg, nodeID)
+	gen, overlapped := s.claims.open(s.reg, nodeID)
 
 	// The teardown order is load-bearing. The claim ends first, clearing
 	// connectedness only if this was the Node's last live stream, so a
@@ -284,12 +291,22 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[relayv1.DaemonMessag
 		}
 	}()
 
+	// A stream opened while another stream for the Node was live is a
+	// replacement (NC-36). Every stream passes through the claims, Router or
+	// not, so it is counted with execution on or off. It is recorded after open
+	// has released streamClaims.mu: the write waits on the audit store, and the
+	// Router takes streamClaims.mu under its own lock (anyLive). The recorder
+	// throttles it per Node.
+	if overlapped && s.changes != nil {
+		s.changes.StreamReplaced(nodeID)
+	}
+
 	policyRec = s.recordHello(stream.Context(), nodeID, hello, refusedFields, report)
 
-	// Send Ping after the registry Upsert, the first-connect marker and the
-	// change records, so a client that receives the Ping sees all three; tests
-	// use Ping as the sync point. The Policy record waits for the first
-	// message after Hello (NC-33).
+	// Send Ping after the replacement record, the registry Upsert, the
+	// first-connect marker and the change records, so a client that receives
+	// the Ping sees them all; tests use Ping as the sync point. The Policy
+	// record waits for the first message after Hello (NC-33).
 	if err := stream.Send(&relayv1.RelayMessage{
 		Body: &relayv1.RelayMessage_Ping{
 			Ping: &relayv1.Ping{UnixMillis: time.Now().UnixMilli()},

@@ -138,7 +138,7 @@ func TestConnectionReasons_MalformedValueRendersNone(t *testing.T) {
 	}
 }
 
-// Proves NC-39.
+// Proves NC-36, NC-39.
 func TestConnectionRecorder_FirstEventRecordedAtOnce(t *testing.T) {
 	kinds := []struct {
 		kind   string
@@ -225,7 +225,7 @@ func TestConnectionRecorder_NextRecordCarriesTheCountAndItsOwnValues(t *testing.
 	}
 }
 
-// Proves NC-39.
+// Proves NC-36, NC-39.
 func TestConnectionRecorder_KindsAreThrottledIndependently(t *testing.T) {
 	_, repo, _ := openSinkStore(t)
 	clk := newDialClock()
@@ -261,6 +261,7 @@ func TestConnectionRecorder_NodesAreThrottledIndependently(t *testing.T) {
 	}
 }
 
+// Proves NC-36.
 func TestConnectionRecorder_WriteFailureLosesNoCount(t *testing.T) {
 	_, repo, _ := openSinkStore(t)
 	clk := newDialClock()
@@ -350,7 +351,7 @@ func TestConnectionRecorder_FailedWriteLogsOneWarningAndReturns(t *testing.T) {
 	}
 }
 
-// Proves NC-39.
+// Proves NC-36, NC-39.
 func TestConnectionRecorder_SweepDropsIdleEntriesAndKeepsPending(t *testing.T) {
 	t.Run("idle entries go, at most once per window", func(t *testing.T) {
 		_, repo, _ := openSinkStore(t)
@@ -416,6 +417,7 @@ func TestConnectionRecorder_SweepDropsIdleEntriesAndKeepsPending(t *testing.T) {
 	})
 }
 
+// Proves NC-36.
 func TestConnectionRecorder_FailedEntrySurvivesTheSweep(t *testing.T) {
 	_, repo, _ := openSinkStore(t)
 	clk := newDialClock()
@@ -434,6 +436,7 @@ func TestConnectionRecorder_FailedEntrySurvivesTheSweep(t *testing.T) {
 	}
 }
 
+// Proves NC-36.
 func TestConnectionRecorder_ConcurrentFirstEventsRecordOnce(t *testing.T) {
 	_, repo, _ := openSinkStore(t)
 	r := NewConnectionRecorder(New(repo), newDialClock().Now)
@@ -471,5 +474,42 @@ func TestConnectionRecorder_EmptyNodeIDIsIgnored(t *testing.T) {
 	}
 	if got := entryCount(r); got != 0 {
 		t.Errorf("entries = %d, want 0", got)
+	}
+}
+
+// Proves NC-36.
+func TestConnectionRecorder_ReplacementsInsideTheWindowAreCarriedByTheNextRecord(t *testing.T) {
+	_, repo, _ := openSinkStore(t)
+	clk := newDialClock()
+	r := NewConnectionRecorder(New(repo), clk.Now)
+	rows := func() []audit.Record {
+		return connectionRecords(t, repo, "node-a", audit.KindNodeStreamReplaced)
+	}
+
+	r.StreamReplaced("node-a")
+	recs := rows()
+	if len(recs) != 1 || recs[0].Reason != "replacements=1" {
+		t.Fatalf("records after the first = %+v, want one with replacements=1", recs)
+	}
+
+	for range 3 {
+		r.StreamReplaced("node-a")
+	}
+	clk.Advance(connectionWindow - time.Second)
+	r.StreamReplaced("node-a")
+	if n := len(rows()); n != 1 {
+		t.Fatalf("records inside the window = %d, want 1", n)
+	}
+
+	clk.Advance(time.Second)
+	r.StreamReplaced("node-a")
+	recs = rows()
+	if len(recs) != 2 || recs[1].Reason != "replacements=5" {
+		t.Fatalf("records after the window = %+v, want a second with replacements=5", recs)
+	}
+
+	r.StreamReplaced("node-a")
+	if n := len(rows()); n != 2 {
+		t.Errorf("records inside the new window = %d, want 2", n)
 	}
 }
