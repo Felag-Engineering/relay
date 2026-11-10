@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"strings"
 	"sync"
 	"time"
@@ -414,10 +415,11 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[relayv1.DaemonMessag
 		case m := <-recvMsg:
 			if hb := m.GetHeartbeat(); hb != nil {
 				slog.Debug("heartbeat", "unix_millis", hb.UnixMillis)
-				timer.Reset(deadline)
+				timer.Reset(deadline) // never waits on, or depends on, the write below
 				if s.reg != nil {
-					if err := s.reg.RecordHeartbeat(nodeID, time.Now(), registry.ClockSkewReading{}); err != nil {
-						slog.Warn("update last-seen failed", "node_id", nodeID, "err", err)
+					received := time.Now()
+					if err := s.reg.RecordHeartbeat(nodeID, received, heartbeatClockSkew(hb.UnixMillis, received)); err != nil {
+						slog.Warn("registry heartbeat write failed", "node_id", nodeID, "err", err)
 					}
 				}
 			}
@@ -829,4 +831,24 @@ func argMatchersToArgSets(matchers []*relayv1.ArgMatcher) [][]string {
 func boundedLogValue(k string) string {
 	bounded, _ := registry.BoundLogKey(k)
 	return bounded
+}
+
+// heartbeatClockSkew is a heartbeat's clock skew: the Node's timestamp minus the
+// Relay's receive time, so a positive skew means the Node's clock is ahead. It
+// includes the one-way network delay, which is the accepted error of measuring
+// without a round trip (NC-37). A timestamp of zero or less is a daemon that did
+// not report one, or reported an invalid one; a difference beyond what a time.Duration holds is no
+// measurement. Both are recorded as not measured, never as a clamped value.
+// The value is advisory and decides nothing.
+func heartbeatClockSkew(unixMillis int64, received time.Time) registry.ClockSkewReading {
+	if unixMillis <= 0 {
+		return registry.ClockSkewReading{}
+	}
+	d := time.UnixMilli(unixMillis).Sub(received)
+	// Sub saturates rather than overflowing, so a saturated result is a
+	// difference that does not fit.
+	if d == math.MaxInt64 || d == math.MinInt64 {
+		return registry.ClockSkewReading{}
+	}
+	return registry.MeasuredClockSkew(d)
 }
