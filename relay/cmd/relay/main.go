@@ -45,6 +45,7 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/transport"
 	"github.com/Felag-Engineering/relay/relay/internal/version"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 )
 
 // Config holds the Relay's startup parameters, converted from the configuration
@@ -402,14 +403,6 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 	denylist := revocation.NewDenylist()
 	conns := revocation.NewConnections()
 
-	// Enrollment_Enroll is the only certless RPC: daemons call it before they have
-	// a client certificate. All other RPCs (including Tunnel and Enrollment_Renew)
-	// remain mTLS-required. Renew is intentionally absent here: it is authenticated
-	// by the caller's existing mTLS client cert, not a token.
-	certless := map[string]struct{}{
-		relayv1.Enrollment_Enroll_FullMethodName: {},
-	}
-
 	limiter := ratelimit.New(rateConfig(live.OperatorSettings()),
 		ratelimit.WithConfigSource(func() ratelimit.Config { return rateConfig(live.OperatorSettings()) }))
 
@@ -434,49 +427,7 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 	// serverCert is assigned below, before any listener serves; the
 	// scrape-time certificate closure reads it.
 	var serverCert *ca.ServerCertificate
-	appMetrics := metrics.New(metrics.GaugeSources{
-		Connected: conns.Count,
-		Nodes:     reg.Count,
-		Frozen:    func() (bool, error) { return st.Freeze().Frozen(context.Background()) },
-		// This binary's own build stamp — the composition root is the
-		// only place that knows it; internal/metrics never imports
-		// internal/version.
-		Build: metrics.BuildInfo{
-			Version:   version.Version,
-			Commit:    version.Commit,
-			BuildDate: version.BuildDate,
-		},
-		// The read-back label filter's live counters, read straight
-		// off the Store rather than duplicated here — see
-		// Store.LabelsDeclined and metrics.GaugeSources.LabelsDeclined.
-		LabelsDeclined: st.LabelsDeclined,
-		// One indexed count per scrape, bounded by approvalsWaitingTimeout. A
-		// Request past its deadline cannot be answered; the sweeper retires it
-		// within approval.DefaultSweepInterval, so it is not counted as waiting.
-		ApprovalsWaiting: func() (int, error) {
-			ctx, cancel := context.WithTimeout(context.Background(), approvalsWaitingTimeout)
-			defer cancel()
-			return st.Approvals().CountWaiting(ctx, time.Now())
-		},
-		CertificateRemaining: func(c metrics.Certificate) (time.Duration, bool) {
-			var notAfter time.Time
-			switch c {
-			case metrics.CertificateRelayCA:
-				notAfter = relayCA.NotAfter()
-			case metrics.CertificateServer:
-				// The leaf is re-issued at the next handshake, so on an idle
-				// Relay this can fall toward zero: alert on the relay_ca series.
-				if serverCert == nil {
-					return 0, false
-				}
-				notAfter = serverCert.NotAfter()
-			}
-			if notAfter.IsZero() {
-				return 0, false
-			}
-			return time.Until(notAfter), true
-		},
-	})
+	appMetrics := newAppMetrics(st, reg, conns, relayCA, func() *ca.ServerCertificate { return serverCert })
 
 	// The Relay's one TLS server certificate, presented on both listeners and
 	// re-issued in-process before it expires so the fleet never fail-closes on
@@ -707,95 +658,23 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 		// apiTokenSvc is constructed above, before the shared capability
 		// objects (NewAccountAdmin needs it), and reused here.
 
-		// OAuth 2.1 protected-resource support (ADR-0024). Discovery
-		// happens ONCE, here at startup, so a misconfigured issuer fails the
-		// Relay's boot loudly rather than every request quietly.
 		var authOpts []controlplane.AuthOption
-		if cfg.OAuthIssuer != "" {
-			oauthCfg := controlplane.OAuthConfig{
-				Issuer:        cfg.OAuthIssuer,
-				Audience:      cfg.OAuthAudience,
-				AccountClaim:  cfg.OAuthAccountClaim,
-				RequiredScope: cfg.OAuthRequiredScope,
-			}
-			if oauthCfg.Audience == "" {
-				return nil, nil, fmt.Errorf("-oauth-audience is required with -oauth-issuer: without the audience check, a token minted for any other service sharing the IdP would authenticate here")
-			}
-			if cfg.OAuthPublicURL == "" {
-				return nil, nil, fmt.Errorf("-oauth-public-url is required with -oauth-issuer: it is how a harness is told where to find this Relay's protected-resource metadata")
-			}
-			verifier, err := controlplane.NewOIDCVerifier(context.Background(), oauthCfg)
-			if err != nil {
-				return nil, nil, fmt.Errorf("oauth resource server: %w", err)
-			}
-			metadataURL := strings.TrimSuffix(cfg.OAuthPublicURL, "/") + controlplane.ProtectedResourceMetadataPath
-			// A read-only Account view: resolving a session must never be able
-			// to create one (ADR-0024, no auto-provisioning).
-			authOpts = append(authOpts, controlplane.WithOAuth(oauthCfg, verifier, st.Accounts(), metadataURL))
-			slog.Info("oauth resource server enabled",
-				"issuer", cfg.OAuthIssuer,
-				"audience", cfg.OAuthAudience,
-				"account_claim", oauthCfg.AccountClaim,
-				"metadata_url", metadataURL,
-			)
+		oauthOpt, oauthOn, err := oauthAuthOption(cfg, st.Accounts())
+		if err != nil {
+			return nil, nil, err
+		}
+		if oauthOn {
+			authOpts = append(authOpts, oauthOpt)
 		}
 
-		// The Admin Console's human authentication lane (ADR-0009).
-		//
-		// Built BEFORE the authenticator because it is one of its credential
-		// lanes: browser sessions sit beside API Tokens and OAuth at the one
-		// authentication boundary (invariant 10), rather than the Console
-		// authenticating its own requests, which would be a second control
-		// path and the first one to be forgotten.
+		// The Admin Console's human authentication lane, built BEFORE the
+		// authenticator because it is one of its credential lanes; see
+		// consoleAuthLane.
 		var consoleAuthSvc *consoleauth.Service
 		if cfg.ConsoleEnabled {
-			consoleSessions := consoleauth.NewStore(
-				consoleauth.WithLifetimes(cfg.ConsoleSessionMaxAge, cfg.ConsoleSessionIdle),
-			)
-			// auditSink, not a nil Auditor: consoleauth FAILS a sign-in it
-			// cannot record, and handing it nothing to record with would turn
-			// that fail-closed property into a silent no-op, as a nil sink
-			// would for every read record. The counter wraps it and always
-			// delegates.
-			consoleAuthSvc = consoleauth.NewService(
-				st.Accounts(), st.Passwords(), consoleSessions,
-				consoleauth.NewThrottle(), loginAuditCounter{next: auditSink, metrics: appMetrics},
-				consoleauth.WithStepUpWindow(cfg.ConsoleStepUpWindow),
-				consoleauth.WithLogger(logger),
-				consoleauth.WithPasswordChanges(auditSink),
-			)
-			// A re-issued temporary password ends the Account's Console
-			// sessions, so the credential it replaced leaves none behind.
-			temporaryPasswords.EndSessionsWith(consoleSessions)
-			authOpts = append(authOpts, controlplane.WithConsoleSessions(
-				consoleAuthSvc,
-				controlplane.ConsoleSessionOptions{
-					// The ONE hole this punches in the auth wrapper: the
-					// sign-in page and its stylesheet. The predicate is owned
-					// by the package that owns those routes, and its exact
-					// extent is asserted there.
-					Public: console.Unauthenticated,
-					// And the reach of the credential this lane resolves
-					// (ADR-0010): a Console session authenticates the Console,
-					// not /api/v1 and not /mcp. Owned by the same package for
-					// the same reason — it is a statement about which routes
-					// exist, and consoleSurface below mounts every one of
-					// them under this prefix.
-					Scope:        console.SessionScope,
-					Unauthorized: console.UnauthorizedHandler(),
-					// A session opened with a temporary password reaches only
-					// the password change and sign-out (ADR-0045 decision 5),
-					// bounded here at the one boundary.
-					PasswordChangeOnly:     console.PasswordChangeOnly,
-					PasswordChangeRequired: console.PasswordChangeRequiredHandler(),
-				},
-			))
-			slog.Info("admin console enabled",
-				"path", console.HomePath,
-				"session_max_age", cfg.ConsoleSessionMaxAge,
-				"session_idle", cfg.ConsoleSessionIdle,
-				"step_up_window", cfg.ConsoleStepUpWindow,
-			)
+			var opt controlplane.AuthOption
+			consoleAuthSvc, opt = consoleAuthLane(cfg, st, auditSink, appMetrics, logger, temporaryPasswords)
+			authOpts = append(authOpts, opt)
 		}
 
 		authOpts = append(authOpts, controlplane.WithAuthFailureCounter(appMetrics))
@@ -923,15 +802,7 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 	// AccountAdmin, read lane and Approvals above are still built, and
 	// SIGUSR1/2 drives freezeControl.
 
-	serverOpts := []grpc.ServerOption{
-		grpc.Creds(creds),
-		grpc.ChainStreamInterceptor(transport.StreamServerInterceptor(certless, denylist)),
-		grpc.ChainUnaryInterceptor(transport.UnaryServerInterceptor(certless, denylist)),
-	}
-	serverOpts = append(serverOpts, transport.KeepaliveServerOptions(transport.ProductionKeepalive())...)
-	srv := grpc.NewServer(serverOpts...)
-	relayv1.RegisterTunnelServer(srv, ts)
-	relayv1.RegisterEnrollmentServer(srv, enrollSrv)
+	srv := newNodePlaneServer(creds, denylist, ts, enrollSrv)
 
 	deps := &appDeps{
 		ca:         relayCA,
@@ -961,6 +832,178 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 		logger:        logger,
 	}
 	return srv, deps, nil
+}
+
+// newAppMetrics builds the real capability.MetricsSink and
+// enroll.EnrollmentObserver over the gauges a scrape reads. serverCert is read
+// at scrape time rather than taken as a value, because the server certificate
+// is issued after the metrics exist (its rotation observer reports to them)
+// and is re-issued about daily.
+func newAppMetrics(st *store.Store, reg registry.Repository, conns *revocation.Connections, relayCA *ca.CA, serverCert func() *ca.ServerCertificate) *metrics.Metrics {
+	return metrics.New(metrics.GaugeSources{
+		Connected: conns.Count,
+		Nodes:     reg.Count,
+		Frozen:    func() (bool, error) { return st.Freeze().Frozen(context.Background()) },
+		// This binary's own build stamp — the composition root is the
+		// only place that knows it; internal/metrics never imports
+		// internal/version.
+		Build: metrics.BuildInfo{
+			Version:   version.Version,
+			Commit:    version.Commit,
+			BuildDate: version.BuildDate,
+		},
+		// The read-back label filter's live counters, read straight
+		// off the Store rather than duplicated here — see
+		// Store.LabelsDeclined and metrics.GaugeSources.LabelsDeclined.
+		LabelsDeclined: st.LabelsDeclined,
+		// One indexed count per scrape, bounded by approvalsWaitingTimeout. A
+		// Request past its deadline cannot be answered; the sweeper retires it
+		// within approval.DefaultSweepInterval, so it is not counted as waiting.
+		ApprovalsWaiting: func() (int, error) {
+			ctx, cancel := context.WithTimeout(context.Background(), approvalsWaitingTimeout)
+			defer cancel()
+			return st.Approvals().CountWaiting(ctx, time.Now())
+		},
+		CertificateRemaining: func(c metrics.Certificate) (time.Duration, bool) {
+			var notAfter time.Time
+			switch c {
+			case metrics.CertificateRelayCA:
+				notAfter = relayCA.NotAfter()
+			case metrics.CertificateServer:
+				// The leaf is re-issued at the next handshake, so on an idle
+				// Relay this can fall toward zero: alert on the relay_ca series.
+				cert := serverCert()
+				if cert == nil {
+					return 0, false
+				}
+				notAfter = cert.NotAfter()
+			}
+			if notAfter.IsZero() {
+				return 0, false
+			}
+			return time.Until(notAfter), true
+		},
+	})
+}
+
+// oauthAuthOption builds the OAuth 2.1 protected-resource lane (ADR-0024), or
+// reports ok == false when no issuer is configured. Discovery happens ONCE,
+// here at startup, so a misconfigured issuer fails the Relay's boot loudly
+// rather than every request quietly. accounts is a read-only Account view:
+// resolving a session must never be able to create one (ADR-0024, no
+// auto-provisioning).
+func oauthAuthOption(cfg Config, accounts controlplane.AccountLookup) (opt controlplane.AuthOption, ok bool, err error) {
+	if cfg.OAuthIssuer == "" {
+		return nil, false, nil
+	}
+	oauthCfg := controlplane.OAuthConfig{
+		Issuer:        cfg.OAuthIssuer,
+		Audience:      cfg.OAuthAudience,
+		AccountClaim:  cfg.OAuthAccountClaim,
+		RequiredScope: cfg.OAuthRequiredScope,
+	}
+	if oauthCfg.Audience == "" {
+		return nil, false, fmt.Errorf("-oauth-audience is required with -oauth-issuer: without the audience check, a token minted for any other service sharing the IdP would authenticate here")
+	}
+	if cfg.OAuthPublicURL == "" {
+		return nil, false, fmt.Errorf("-oauth-public-url is required with -oauth-issuer: it is how a harness is told where to find this Relay's protected-resource metadata")
+	}
+	verifier, err := controlplane.NewOIDCVerifier(context.Background(), oauthCfg)
+	if err != nil {
+		return nil, false, fmt.Errorf("oauth resource server: %w", err)
+	}
+	metadataURL := strings.TrimSuffix(cfg.OAuthPublicURL, "/") + controlplane.ProtectedResourceMetadataPath
+	slog.Info("oauth resource server enabled",
+		"issuer", cfg.OAuthIssuer,
+		"audience", cfg.OAuthAudience,
+		"account_claim", oauthCfg.AccountClaim,
+		"metadata_url", metadataURL,
+	)
+	return controlplane.WithOAuth(oauthCfg, verifier, accounts, metadataURL), true, nil
+}
+
+// consoleAuthLane builds the Admin Console's human authentication lane
+// (ADR-0009) and the AuthOption that seats it in the authenticator. Browser
+// sessions sit beside API Tokens and OAuth at the one authentication boundary
+// (invariant 10), rather than the Console authenticating its own requests,
+// which would be a second control path and the first one to be forgotten.
+func consoleAuthLane(cfg Config, st *store.Store, auditSink *auditsink.Sink, appMetrics *metrics.Metrics, logger *slog.Logger, temporaryPasswords *capability.TemporaryPasswords) (*consoleauth.Service, controlplane.AuthOption) {
+	consoleSessions := consoleauth.NewStore(
+		consoleauth.WithLifetimes(cfg.ConsoleSessionMaxAge, cfg.ConsoleSessionIdle),
+	)
+	// auditSink, not a nil Auditor: consoleauth FAILS a sign-in it
+	// cannot record, and handing it nothing to record with would turn
+	// that fail-closed property into a silent no-op, as a nil sink
+	// would for every read record. The counter wraps it and always
+	// delegates.
+	consoleAuthSvc := consoleauth.NewService(
+		st.Accounts(), st.Passwords(), consoleSessions,
+		consoleauth.NewThrottle(), loginAuditCounter{next: auditSink, metrics: appMetrics},
+		consoleauth.WithStepUpWindow(cfg.ConsoleStepUpWindow),
+		consoleauth.WithLogger(logger),
+		consoleauth.WithPasswordChanges(auditSink),
+	)
+	// A re-issued temporary password ends the Account's Console
+	// sessions, so the credential it replaced leaves none behind.
+	temporaryPasswords.EndSessionsWith(consoleSessions)
+	opt := controlplane.WithConsoleSessions(
+		consoleAuthSvc,
+		controlplane.ConsoleSessionOptions{
+			// The ONE hole this punches in the auth wrapper: the
+			// sign-in page and its stylesheet. The predicate is owned
+			// by the package that owns those routes, and its exact
+			// extent is asserted there.
+			Public: console.Unauthenticated,
+			// And the reach of the credential this lane resolves
+			// (ADR-0010): a Console session authenticates the Console,
+			// not /api/v1 and not /mcp. Owned by the same package for
+			// the same reason — it is a statement about which routes
+			// exist, and consoleSurface mounts every one of them under
+			// this prefix.
+			Scope:        console.SessionScope,
+			Unauthorized: console.UnauthorizedHandler(),
+			// A session opened with a temporary password reaches only
+			// the password change and sign-out (ADR-0045 decision 5),
+			// bounded here at the one boundary.
+			PasswordChangeOnly:     console.PasswordChangeOnly,
+			PasswordChangeRequired: console.PasswordChangeRequiredHandler(),
+		},
+	)
+	slog.Info("admin console enabled",
+		"path", console.HomePath,
+		"session_max_age", cfg.ConsoleSessionMaxAge,
+		"session_idle", cfg.ConsoleSessionIdle,
+		"step_up_window", cfg.ConsoleStepUpWindow,
+	)
+	return consoleAuthSvc, opt
+}
+
+// certlessMethods is the set of node-plane RPCs a caller may reach without a
+// client certificate. Enrollment_Enroll is the only one: daemons call it before
+// they have a certificate. All other RPCs (including Tunnel and
+// Enrollment_Renew) remain mTLS-required. Renew is intentionally absent: it is
+// authenticated by the caller's existing mTLS client cert, not a token.
+func certlessMethods() map[string]struct{} {
+	return map[string]struct{}{
+		relayv1.Enrollment_Enroll_FullMethodName: {},
+	}
+}
+
+// newNodePlaneServer builds the node-plane gRPC server: mTLS credentials, the
+// certless and denylist interceptors on both stream and unary calls, the
+// production keepalive, and the Tunnel and Enrollment services.
+func newNodePlaneServer(creds credentials.TransportCredentials, denylist *revocation.Denylist, tunnel relayv1.TunnelServer, enrollment relayv1.EnrollmentServer) *grpc.Server {
+	certless := certlessMethods()
+	serverOpts := []grpc.ServerOption{
+		grpc.Creds(creds),
+		grpc.ChainStreamInterceptor(transport.StreamServerInterceptor(certless, denylist)),
+		grpc.ChainUnaryInterceptor(transport.UnaryServerInterceptor(certless, denylist)),
+	}
+	serverOpts = append(serverOpts, transport.KeepaliveServerOptions(transport.ProductionKeepalive())...)
+	srv := grpc.NewServer(serverOpts...)
+	relayv1.RegisterTunnelServer(srv, tunnel)
+	relayv1.RegisterEnrollmentServer(srv, enrollment)
+	return srv
 }
 
 func main() {
