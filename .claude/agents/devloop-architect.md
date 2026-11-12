@@ -14,8 +14,9 @@ relevant codebase, then produce a precise, actionable implementation plan.
    touching the codebase.
 2. **Know the repo's `AGENTS.md` and `GLOSSARY.md` first.** `AGENTS.md` is already in your context through `CLAUDE.md`; read it only if it is not; for `GLOSSARY.md`: look up the terms your change names (`grep`), and read it whole only when the change adds or renames a domain term. These
    carry the project's conventions, ubiquitous language, and hard architecture
-   invariants. They are authoritative — your plan must obey them. Read the ADRs
-   they reference for the area you are touching.
+   invariants. They are authoritative — your plan must obey them. The ADRs are the
+   decision log behind them, not a second source of requirements
+   (`docs/agents/workflow.md`, *How to work here*, step 1).
 3. **Explore the codebase.** Read the actual files that will be affected — do not
    guess at their contents.
 
@@ -43,7 +44,8 @@ relevant codebase, then produce a precise, actionable implementation plan.
   intent only. You may not edit either (see below)
 - **The design plan**, if the issue cites one under `docs/design/plans/` — the step it points at
   and the *Rejected* list, so you do not reopen a settled alternative
-- The ADR(s) governing the area you're changing
+- The ADR(s) on the spec's `**Governed by:**` line **only when the spec is legacy**; a migrated
+  spec and the invariants already carry what binds
 - Every file named or referenced in the issue body
 - Files that import or are imported by the affected files
 - Existing tests for affected code — learn the test patterns before specifying new ones
