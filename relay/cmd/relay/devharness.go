@@ -59,6 +59,26 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 )
 
+// harnessAccount is the Account name every harness op acts as. Only this
+// build-tag-excluded harness ever names it.
+const harnessAccount = "devharness"
+
+// The defaults an op uses when its request leaves the bound unset or
+// non-positive, in seconds as the request carries them.
+const (
+	defaultTokenTTLSeconds        = int64(time.Hour / time.Second)
+	defaultWaitNodeTimeoutSeconds = 30
+	defaultDispatchTimeoutSeconds = 15
+)
+
+// positiveOr returns n, or fallback when n is zero or negative.
+func positiveOr(n, fallback int64) int64 {
+	if n <= 0 {
+		return fallback
+	}
+	return n
+}
+
 // harnessState is threaded through every socket handler: deps for
 // registry/tokens/Freeze/store access, router as the transport-level Conduit
 // (raw "dispatch" op + list_connected/get_node's connected field), and execution
@@ -398,14 +418,11 @@ func dispatchHarnessRequest(ctx context.Context, st *harnessState, req harnessRe
 // SECURITY: the plaintext token and the join string are returned to the socket
 // client but MUST NEVER be logged (AGENTS.md: never log secrets).
 func harnessCreateToken(ctx context.Context, deps *appDeps, req harnessRequest) harnessResponse {
-	ttl := time.Duration(req.TTLSeconds) * time.Second
-	if ttl <= 0 {
-		ttl = time.Hour
-	}
+	ttl := time.Duration(positiveOr(req.TTLSeconds, defaultTokenTTLSeconds)) * time.Second
 	// The harness asks for unlimited use so a cross-binary test can re-enroll with one token.
 	minter := capability.Principal{
-		AccountID: "devharness",
-		Account:   "devharness",
+		AccountID: harnessAccount,
+		Account:   harnessAccount,
 		Role:      "admin",
 		Kind:      capability.PrincipalKindHuman,
 	}
@@ -421,10 +438,7 @@ func harnessCreateToken(ctx context.Context, deps *appDeps, req harnessRequest) 
 // completes Hello->Ping registration, mirroring the poll at
 // tunnel_dispatch_e2e_test.go:224-235.
 func harnessWaitNode(st *harnessState, req harnessRequest) harnessResponse {
-	timeout := time.Duration(req.TimeoutSeconds) * time.Second
-	if timeout <= 0 {
-		timeout = 30 * time.Second
-	}
+	timeout := time.Duration(positiveOr(req.TimeoutSeconds, defaultWaitNodeTimeoutSeconds)) * time.Second
 	nodeID, err := st.router.WaitForAny(timeout)
 	if err != nil {
 		return harnessResponse{Error: err.Error()}
@@ -442,10 +456,7 @@ func harnessDispatch(ctx context.Context, st *harnessState, req harnessRequest) 
 	if req.NodeID == "" || req.TaskID == "" || req.Operation == "" {
 		return harnessResponse{Error: "dispatch: node_id, task_id, and operation are required"}
 	}
-	timeoutSeconds := req.TimeoutSeconds
-	if timeoutSeconds <= 0 {
-		timeoutSeconds = 15
-	}
+	timeoutSeconds := positiveOr(req.TimeoutSeconds, defaultDispatchTimeoutSeconds)
 
 	dctx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
 	defer cancel()
@@ -510,17 +521,12 @@ func harnessGetNode(st *harnessState, req harnessRequest) harnessResponse {
 // on the response's Error field, not a transport error — callers that expect a
 // refusal must use the harness client's non-failing helper.
 func harnessRunJob(ctx context.Context, st *harnessState, req harnessRequest) harnessResponse {
-	sel, err := capability.ParseSelector(req.Selector)
+	sel, act, err := harnessJobTarget("run_job", req)
 	if err != nil {
-		return harnessResponse{Error: fmt.Sprintf("run_job: parse selector %q: %v", req.Selector, err)}
+		return harnessResponse{Error: err.Error()}
 	}
 
-	act, err := harnessRunJobAction(req)
-	if err != nil {
-		return harnessResponse{Error: fmt.Sprintf("run_job: %v", err)}
-	}
-
-	results, err := st.execution.Run(ctx, capability.Principal{Account: "devharness"}, sel, act)
+	results, err := st.execution.Run(ctx, capability.Principal{Account: harnessAccount}, sel, act)
 	if err != nil {
 		return harnessResponse{Error: err.Error()}
 	}
@@ -539,17 +545,12 @@ func harnessRunJob(ctx context.Context, st *harnessState, req harnessRequest) ha
 // capability layer: invariant 10) what each Node's live Policy would decide for
 // the same Selector and Action run_job takes. Nothing is dispatched.
 func harnessPreflightJob(ctx context.Context, st *harnessState, req harnessRequest) harnessResponse {
-	sel, err := capability.ParseSelector(req.Selector)
+	sel, act, err := harnessJobTarget("preflight_job", req)
 	if err != nil {
-		return harnessResponse{Error: fmt.Sprintf("preflight_job: parse selector %q: %v", req.Selector, err)}
+		return harnessResponse{Error: err.Error()}
 	}
 
-	act, err := harnessRunJobAction(req)
-	if err != nil {
-		return harnessResponse{Error: fmt.Sprintf("preflight_job: %v", err)}
-	}
-
-	pr, err := st.execution.Plan(ctx, capability.Principal{Account: "devharness"}, sel, act)
+	pr, err := st.execution.Plan(ctx, capability.Principal{Account: harnessAccount}, sel, act)
 	if err != nil {
 		return harnessResponse{Error: err.Error()}
 	}
@@ -568,6 +569,21 @@ func harnessPreflightJob(ctx context.Context, st *harnessState, req harnessReque
 		})
 	}
 	return resp
+}
+
+// harnessJobTarget parses the Selector and builds the Action that run_job and
+// preflight_job share, so the two ops can never disagree on what a request
+// names. op prefixes the error, as each op reports it.
+func harnessJobTarget(op string, req harnessRequest) (capability.Selector, jobs.Action, error) {
+	sel, err := capability.ParseSelector(req.Selector)
+	if err != nil {
+		return capability.Selector{}, jobs.Action{}, fmt.Errorf("%s: parse selector %q: %v", op, req.Selector, err)
+	}
+	act, err := harnessRunJobAction(req)
+	if err != nil {
+		return capability.Selector{}, jobs.Action{}, fmt.Errorf("%s: %v", op, err)
+	}
+	return sel, act, nil
 }
 
 // harnessRunJobAction builds run_job's Action: Raw Exec if raw_exec is
@@ -601,7 +617,7 @@ func harnessCancelJob(ctx context.Context, st *harnessState, req harnessRequest)
 	if req.JobID == "" {
 		return harnessResponse{Error: "cancel_job: job_id is required"}
 	}
-	p := capability.Principal{Account: "devharness", Kind: capability.PrincipalKindHuman}
+	p := capability.Principal{Account: harnessAccount, Kind: capability.PrincipalKindHuman}
 	if err := st.execution.CancelJob(ctx, p, req.JobID); err != nil {
 		return harnessResponse{Error: err.Error()}
 	}
@@ -639,17 +655,7 @@ func harnessQueryJob(ctx context.Context, st *harnessState, req harnessRequest) 
 	if err != nil {
 		return harnessResponse{Error: fmt.Sprintf("query_job: list tasks for job %q: %v", req.JobID, err)}
 	}
-	resp := harnessResponse{Tasks: make([]harnessTaskInfo, 0, len(tasks))}
-	for _, task := range tasks {
-		resp.Tasks = append(resp.Tasks, harnessTaskInfo{
-			TaskID:  task.ID,
-			NodeID:  task.NodeID,
-			State:   dispatchStateString(task.State),
-			Outcome: outcomeString(task.Outcome),
-			Stderr:  string(task.Stderr),
-		})
-	}
-	return resp
+	return harnessResponse{Tasks: harnessTaskInfos(tasks, false)}
 }
 
 // harnessListInFlight returns every Task currently Dispatched with no Result
@@ -666,18 +672,28 @@ func harnessListInFlight(ctx context.Context, st *harnessState) harnessResponse 
 	if err != nil {
 		return harnessResponse{Error: fmt.Sprintf("list_inflight: %v", err)}
 	}
-	resp := harnessResponse{Tasks: make([]harnessTaskInfo, 0, len(tasks))}
+	return harnessResponse{Tasks: harnessTaskInfos(tasks, true)}
+}
+
+// harnessTaskInfos renders tasks for query_job and list_inflight. withJobID
+// is list_inflight's: query_job's caller already holds the Job ID, so its
+// response leaves it off (harnessTaskInfo).
+func harnessTaskInfos(tasks []jobs.Task, withJobID bool) []harnessTaskInfo {
+	infos := make([]harnessTaskInfo, 0, len(tasks))
 	for _, task := range tasks {
-		resp.Tasks = append(resp.Tasks, harnessTaskInfo{
+		info := harnessTaskInfo{
 			TaskID:  task.ID,
-			JobID:   task.JobID,
 			NodeID:  task.NodeID,
 			State:   dispatchStateString(task.State),
 			Outcome: outcomeString(task.Outcome),
 			Stderr:  string(task.Stderr),
-		})
+		}
+		if withJobID {
+			info.JobID = task.JobID
+		}
+		infos = append(infos, info)
 	}
-	return resp
+	return infos
 }
 
 // harnessQueryAudit returns every audit.Record for job_id, or every Record if
