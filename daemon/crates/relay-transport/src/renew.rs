@@ -440,6 +440,7 @@ mod tests {
     // perform_renewal_with — happy path
     // -----------------------------------------------------------------------
 
+    /// Proves NC-5.
     #[tokio::test]
     async fn perform_renewal_happy_path() {
         let dir = TempDir::new("renew-happy");

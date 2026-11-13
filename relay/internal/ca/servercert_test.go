@@ -135,6 +135,7 @@ func verifyAgainstCA(t *testing.T, c *CA, leaf *x509.Certificate, at time.Time) 
 // TestServerCertificate_RotatesAtRenewalThreshold is the defect itself (#403):
 // a leaf that crosses its renewal instant is replaced in-process, with no
 // restart, and the replacement is a valid certificate under the same CA.
+// Proves NC-6.
 func TestServerCertificate_RotatesAtRenewalThreshold(t *testing.T) {
 	clk := newTestClock()
 	c, s, rec := testServerCert(t, clk)
@@ -188,6 +189,7 @@ func TestServerCertificate_RotatesAtRenewalThreshold(t *testing.T) {
 // from E2a: advance past expiry, and a valid certificate comes back anyway.
 // Renewal is driven by handshakes, not by a timer, so a Relay that sat idle
 // through its leaf's whole lifetime still re-issues on the next connection.
+// Proves NC-6.
 func TestServerCertificate_NeverServesAnExpiredLeaf(t *testing.T) {
 	clk := newTestClock()
 	c, s, _ := testServerCert(t, clk)

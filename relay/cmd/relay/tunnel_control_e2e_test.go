@@ -28,6 +28,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"os/exec"
 	"testing"
 	"time"
@@ -590,5 +591,35 @@ func TestE2E_RegistryFingerprintAfterReconnect(t *testing.T) {
 	if after.PolicyFingerprint != before.PolicyFingerprint {
 		t.Errorf("PolicyFingerprint changed after reconnect on an unchanged Policy file: got %q, want %q",
 			after.PolicyFingerprint, before.PolicyFingerprint)
+	}
+}
+
+// A daemon reads its Policy once per run and reports it in the Hello, so a
+// change to the Policy file on disk reaches the registry only after the
+// daemon restarts. The registry half of NC-20: the display caches are not
+// covered here.
+// Proves NC-20.
+func TestE2E_PolicyChangeReachesTheRegistryOnlyAfterTheDaemonRestarts(t *testing.T) {
+	node := startDaemonNode(t, relaytest.FixturePolicy)
+	before, ok := node.deps.registry.Get(node.nodeID)
+	if !ok || before.PolicyFingerprint == "" {
+		t.Fatalf("no Policy fingerprint after the initial connect: %+v (found %v)", before, ok)
+	}
+
+	// WriteFile on an existing file keeps its mode.
+	if err := os.WriteFile(node.policyPath, []byte(relaytest.FixturePolicy+relaytest.FixtureTemplatePolicyRule), 0); err != nil {
+		t.Fatalf("rewrite the Policy file: %v", err)
+	}
+	for _, wait := range []time.Duration{0, 2 * time.Second} {
+		time.Sleep(wait)
+		if n, _ := node.deps.registry.Get(node.nodeID); n.PolicyFingerprint != before.PolicyFingerprint {
+			t.Fatalf("the registry's fingerprint changed to %q while the daemon was still running", n.PolicyFingerprint)
+		}
+	}
+
+	node.restart()
+	after, _ := node.deps.registry.Get(node.nodeID)
+	if after.PolicyFingerprint == "" || after.PolicyFingerprint == before.PolicyFingerprint {
+		t.Errorf("fingerprint after the restart = %q, want a new, non-empty one (was %q)", after.PolicyFingerprint, before.PolicyFingerprint)
 	}
 }

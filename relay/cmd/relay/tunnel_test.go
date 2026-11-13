@@ -126,6 +126,7 @@ func TestTunnelOpen_HelloPing(t *testing.T) {
 // TestTunnelOpen_FailClosed verifies that with no interceptor injecting
 // node_id, the handler returns codes.Unauthenticated — it never falls back to
 // a forged Hello node_id.
+// Proves NC-3.
 func TestTunnelOpen_FailClosed(t *testing.T) {
 	// No interceptor: NodeIDFromContext will return ok==false.
 	srv := grpc.NewServer()
@@ -224,6 +225,7 @@ func TestTunnelOpen_RevokeTearsDownLiveStream(t *testing.T) {
 // labels causes the handler to upsert the Node into the registry with correct
 // facts and node: labels, and that relay: labels supplied on the stream are
 // structurally dropped (acceptance criterion for issue #29).
+// Proves NC-24.
 func TestTunnelOpen_HelloRegistersNode(t *testing.T) {
 	const certNodeID = "cert-node-1"
 	oldTime := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -297,6 +299,7 @@ func TestTunnelOpen_HelloRegistersNode(t *testing.T) {
 // is omitted, never sanitised, and never tears down the connection. An
 // unreachable Node can never be inspected, quarantined or remediated, so
 // fail-closed here means failing closed on the DATA, not on the connection.
+// Proves NC-22.
 func TestOpen_MalformedNodeLabelDoesNotDropTheStream(t *testing.T) {
 	const certNodeID = "cert-node-malformed"
 
@@ -418,6 +421,7 @@ func TestOpen_HostileNodeLabelCannotRenderTwoPredicates(t *testing.T) {
 // The registry is seeded with a fixed old clock so Hello records LastSeen=oldTime;
 // RecordHeartbeat is called with the handler's real time.Now(), which is strictly
 // after oldTime, so the advance is observable.
+// Proves NC-11.
 func TestTunnelOpen_HeartbeatUpdatesLastSeen(t *testing.T) {
 	const certNodeID = "cert-node-hb"
 	oldTime := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -496,6 +500,7 @@ func TestTunnelOpen_HeartbeatUpdatesLastSeen(t *testing.T) {
 // TestNodeLabelsFromHello is a pure unit test for the nodeLabelsFromHello
 // helper, covering both the two-namespace label-authority rule (ADR-0006)
 // and the well-formedness gate (#504).
+// Proves NC-24.
 func TestNodeLabelsFromHello(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -796,6 +801,7 @@ func waitUntil(t *testing.T, what string, within time.Duration, cond func() bool
 	}
 }
 
+// Proves NC-9.
 func TestTunnelServer_DefaultDeadlineIsThreeHeartbeatIntervals(t *testing.T) {
 	if got, want := (&tunnelServer{}).livenessDeadline(), 3*60*time.Second; got != want {
 		t.Fatalf("default liveness deadline = %v, want %v", got, want)
@@ -804,6 +810,7 @@ func TestTunnelServer_DefaultDeadlineIsThreeHeartbeatIntervals(t *testing.T) {
 
 // A Node that sends no Heartbeat within the deadline is closed with
 // Unavailable, marked offline, and its last_seen stays the last heartbeat.
+// Proves NC-7, NC-9, NC-11.
 func TestTunnelOpen_MissedHeartbeatsMarkOfflineAndCloseStream(t *testing.T) {
 	const nodeID = "node-missed-hb"
 	oldTime := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -839,6 +846,7 @@ func TestTunnelOpen_MissedHeartbeatsMarkOfflineAndCloseStream(t *testing.T) {
 	}
 }
 
+// Proves NC-7.
 func TestTunnelOpen_HeartbeatsWithinDeadlineKeepNodeConnected(t *testing.T) {
 	const nodeID = "node-steady-hb"
 	reg := registry.NewInMemory()
@@ -878,6 +886,7 @@ func TestTunnelOpen_HeartbeatsWithinDeadlineKeepNodeConnected(t *testing.T) {
 
 // Only a Heartbeat is liveness evidence: other traffic never extends the
 // deadline.
+// Proves NC-7.
 func TestTunnelOpen_OnlyHeartbeatsResetTheDeadline(t *testing.T) {
 	const nodeID = "node-chatty"
 	reg := registry.NewInMemory()
@@ -947,6 +956,7 @@ func awaitSignal(t *testing.T, what string, ch <-chan struct{}) {
 
 // The end of a replaced stream never marks the live Node offline: the registry
 // keeps the Node connected for as long as its newer stream lives.
+// Proves NC-15.
 func TestTunnelOpen_ReplacedStreamEndDoesNotMarkLiveNodeOffline(t *testing.T) {
 	const nodeID = "node-replaced"
 
@@ -1358,6 +1368,9 @@ func TestTunnelOpen_ANewStreamThatFailsBeforeRegisteringLeavesALiveNodeConnected
 // stream can never hold the Node. When the newer stream then ends, the Node is
 // offline and the Tasks in flight on it resolve node-offline, rather than
 // staying Dispatched for as long as the displaced stream keeps heartbeating.
+// This proves the path with execution on, where a Router is registered; with
+// the control plane off there is no Router and nothing displaces a stream.
+// Proves NC-13.
 func TestTunnelOpen_ANewerRegistrationEndsTheStreamItDisplaced(t *testing.T) {
 	const nodeID = "node-displaced"
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -1385,8 +1398,12 @@ func TestTunnelOpen_ANewerRegistrationEndsTheStreamItDisplaced(t *testing.T) {
 	}); err != nil && !errors.Is(err, io.EOF) {
 		t.Fatalf("heartbeat on A: %v", err)
 	}
-	if _, err := streamA.Recv(); status.Code(err) != codes.Aborted {
-		t.Fatalf("stream A ended with %v, want code Aborted", err)
+	_, errA := streamA.Recv()
+	if status.Code(errA) != codes.Aborted {
+		t.Fatalf("stream A ended with %v, want code Aborted", errA)
+	}
+	if !strings.Contains(status.Convert(errA).Message(), "newer stream") {
+		t.Fatalf("stream A ended with %q, want a message naming a newer stream", status.Convert(errA).Message())
 	}
 	awaitSignal(t, "stream A's teardown", sink.unregistered)
 
@@ -1469,6 +1486,7 @@ func openWithHelloServer(t *testing.T, ts *tunnelServer, nodeID string, hello *r
 // TestTunnelOpen_HelloMalformedPolicyFingerprintIsStoredAsNotReported pins
 // #1068: a Policy fingerprint that is not exactly 64 lowercase hex characters
 // is recorded as not reported, and the connection stays up.
+// Proves NC-22.
 func TestTunnelOpen_HelloMalformedPolicyFingerprintIsStoredAsNotReported(t *testing.T) {
 	const nodeID = "cert-node-fp"
 	hex64 := strings.Repeat("0123456789abcdef", 4)
@@ -1497,6 +1515,7 @@ func TestTunnelOpen_HelloMalformedPolicyFingerprintIsStoredAsNotReported(t *test
 
 // TestTunnelOpen_HelloWellFormedPolicyFingerprintIsUnchanged pins the other
 // half of #1068: what a well-behaved relay-daemon sends is stored verbatim.
+// Proves NC-21.
 func TestTunnelOpen_HelloWellFormedPolicyFingerprintIsUnchanged(t *testing.T) {
 	const nodeID = "cert-node-fp-ok"
 	policyFP := strings.Repeat("0123456789abcdef", 4)
@@ -1519,6 +1538,7 @@ func TestTunnelOpen_HelloWellFormedPolicyFingerprintIsUnchanged(t *testing.T) {
 // TestTunnelOpen_HelloBoundsEverySelfReportedField covers the free-text
 // fields beside the Policy fingerprint (#1068): each malformed one is stored
 // empty or omitted and every well-formed neighbour is kept.
+// Proves NC-21.
 func TestTunnelOpen_HelloBoundsEverySelfReportedField(t *testing.T) {
 	const nodeID = "cert-node-bounds"
 	reg := openWithHello(t, nodeID, &relayv1.Hello{
@@ -1640,6 +1660,7 @@ func ipAddressesOf(n int) []string {
 // TestTunnelOpen_HelloOverTheNodeLabelCapRecordsNoNodeLabels pins the per-Node
 // node: label count: a set over the cap is recorded as not reported, never
 // truncated, and the stream stays up.
+// Proves NC-22.
 func TestTunnelOpen_HelloOverTheNodeLabelCapRecordsNoNodeLabels(t *testing.T) {
 	const nodeID = "cert-node-label-cap"
 	reg := openWithHello(t, nodeID, &relayv1.Hello{Labels: nodeLabelsOf(registry.MaxNodeLabels + 1)})
@@ -1654,6 +1675,7 @@ func TestTunnelOpen_HelloOverTheNodeLabelCapRecordsNoNodeLabels(t *testing.T) {
 
 // A reconnect that goes over the cap replaces the earlier set with none: the
 // earlier set is a self-report the Node no longer makes.
+// Proves NC-25.
 func TestTunnelOpen_HelloOverTheNodeLabelCapReplacesAnEarlierSet(t *testing.T) {
 	const nodeID = "cert-node-label-cap-reconnect"
 	reg := openWithHello(t, nodeID, &relayv1.Hello{Labels: nodeLabelsOf(2)})
@@ -1681,6 +1703,7 @@ func TestTunnelOpen_HelloAtTheNodeLabelCapKeepsEveryLabel(t *testing.T) {
 	}
 }
 
+// Proves NC-21.
 func TestTunnelOpen_HelloOverTheIPAddressCapRecordsNoAddresses(t *testing.T) {
 	const nodeID = "cert-node-ip-cap"
 	reg := openWithHello(t, nodeID, &relayv1.Hello{
@@ -1695,6 +1718,7 @@ func TestTunnelOpen_HelloOverTheIPAddressCapRecordsNoAddresses(t *testing.T) {
 	}
 }
 
+// Proves NC-21.
 func TestTunnelOpen_HelloAtTheIPAddressCapKeepsEveryAddress(t *testing.T) {
 	const nodeID = "cert-node-ip-at-cap"
 	reg := openWithHello(t, nodeID, &relayv1.Hello{
@@ -1847,5 +1871,183 @@ func TestTunnelOpen_ForgedHelloNodeIDIsKeyedByTheCertificateAndNeverLogged(t *te
 	}
 	if !connected {
 		t.Errorf("no \"node connected\" record for %q; logs:\n%.2000s", certNodeID, logs.String())
+	}
+}
+
+// No message acknowledges a Task, so a Task sent to a Node that has silently
+// died is answered only by the heartbeat deadline closing the stream: the Task
+// resolves as a node-offline failure when the deadline passes, and the Node
+// received nothing but the Task itself.
+// Proves NC-12.
+func TestTunnelOpen_ATaskToASilentNodeResolvesNodeOfflineAtTheHeartbeatDeadline(t *testing.T) {
+	const nodeID = "node-silent"
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	repo, st := testTaskRepositoryWithStore(t)
+	tasks := newSignalInFlight(repo)
+	router, _, inner := newDispatchStack(tasks, nil, nil)
+	sink := newRegisterSignalSink(inner)
+	reg := registry.NewInMemory()
+
+	srv := grpc.NewServer(grpc.StreamInterceptor(injectNodeIDInterceptor(nodeID)))
+	relayv1.RegisterTunnelServer(srv, &tunnelServer{reg: reg, sink: sink, heartbeatDeadline: 500 * time.Millisecond})
+	conn := newBufconnConn(t, srv)
+
+	stream := openNodeStream(ctx, t, conn, nodeID)
+	awaitSignal(t, "the stream to register", sink.registered)
+
+	// Heartbeats only until the Task arrives, so the deadline cannot fire
+	// before the send.
+	stopHeartbeats := make(chan struct{})
+	heartbeatsStopped := make(chan struct{})
+	go func() {
+		defer close(heartbeatsStopped)
+		for {
+			select {
+			case <-stopHeartbeats:
+				return
+			case <-time.After(100 * time.Millisecond):
+				_ = stream.Send(&relayv1.DaemonMessage{
+					Body: &relayv1.DaemonMessage_Heartbeat{Heartbeat: &relayv1.Heartbeat{UnixMillis: time.Now().UnixMilli()}},
+				})
+			}
+		}
+	}()
+
+	task := seedDispatchedTask(t, st, tasks, nodeID, "task-silent")
+	dctx, settlement := jobs.WithSettlement(ctx)
+	defer settlement.Settle()
+	dispatched := make(chan error, 1)
+	go func() {
+		_, err := router.Dispatch(dctx, nodeID, task)
+		dispatched <- err
+	}()
+	msg, err := stream.Recv()
+	close(stopHeartbeats)
+	<-heartbeatsStopped
+	if err != nil || msg.GetTask().GetTaskId() != task.ID {
+		t.Fatalf("stream received (%v, %v), want the Task", msg, err)
+	}
+
+	// The Node neither answers nor heartbeats from here on.
+	if extra, err := stream.Recv(); status.Code(err) != codes.Unavailable {
+		t.Fatalf("stream after the Task = (%v, %v), want only the end of the stream with Unavailable", extra, err)
+	}
+	select {
+	case <-dispatched:
+	case <-ctx.Done():
+		t.Fatal("Dispatch did not return after the heartbeat deadline closed the stream")
+	}
+	got, err := tasks.Get(ctx, task.ID)
+	if err != nil || got.State != jobs.DispatchStateResolved || got.Outcome != jobs.OutcomeFailure || string(got.Stderr) != jobs.NodeOfflineMessage {
+		t.Fatalf("task = %+v (%v), want Resolved as a failure with the node-offline message", got, err)
+	}
+	if n, _ := reg.Get(nodeID); n.Connected {
+		t.Error("the node reads connected after its stream was closed at the deadline")
+	}
+}
+
+// The Node's self-report is read once per connection into the registry: a
+// second Hello, or a second PolicySnapshot, on the same stream changes no
+// registry field. This covers the registry only; the display caches
+// (policyview, nodevocab) replace their entry on each snapshot.
+// Proves NC-20.
+func TestTunnelOpen_ALaterHelloOrPolicySnapshotOnTheSameStreamChangesNoRegistryField(t *testing.T) {
+	const nodeID = "node-read-once"
+	oldTime := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	reg := registry.NewInMemory(registry.WithClock(func() time.Time { return oldTime }))
+	srv := grpc.NewServer(grpc.StreamInterceptor(injectNodeIDInterceptor(nodeID)))
+	relayv1.RegisterTunnelServer(srv, &tunnelServer{reg: reg})
+	conn := newBufconnConn(t, srv)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	stream, err := relayv1.NewTunnelClient(conn).Open(ctx)
+	if err != nil {
+		t.Fatalf("open stream: %v", err)
+	}
+	hello := func(version, hostname, role string) *relayv1.DaemonMessage {
+		return &relayv1.DaemonMessage{Body: &relayv1.DaemonMessage_Hello{Hello: &relayv1.Hello{
+			DaemonVersion: version,
+			Facts:         &relayv1.Facts{Hostname: hostname},
+			Labels:        []*relayv1.Label{{Key: "node:role", Value: role}},
+		}}}
+	}
+	policy := func(rawExec bool) *relayv1.DaemonMessage {
+		return &relayv1.DaemonMessage{Body: &relayv1.DaemonMessage_Policy{Policy: &relayv1.PolicySnapshot{RawExecEnabled: rawExec}}}
+	}
+	send := func(m *relayv1.DaemonMessage) {
+		t.Helper()
+		if err := stream.Send(m); err != nil {
+			t.Fatalf("send %T: %v", m.Body, err)
+		}
+	}
+
+	send(hello("1.0.0", "h1", "web"))
+	if msg, err := stream.Recv(); err != nil || msg.GetPing() == nil {
+		t.Fatalf("recv ping = (%v, %v)", msg, err)
+	}
+	send(policy(true))
+	send(hello("2.0.0", "h2", "db"))
+	send(policy(false))
+	// The handler reads one stream's messages in order, so the heartbeat is
+	// handled after every message above.
+	send(&relayv1.DaemonMessage{Body: &relayv1.DaemonMessage_Heartbeat{Heartbeat: &relayv1.Heartbeat{UnixMillis: time.Now().UnixMilli()}}})
+	waitUntil(t, "the heartbeat to be recorded", 5*time.Second, func() bool {
+		n, ok := reg.Get(nodeID)
+		return ok && n.LastSeen.After(oldTime)
+	})
+
+	n, _ := reg.Get(nodeID)
+	if n.DaemonVersion != "1.0.0" || n.Facts.Hostname != "h1" {
+		t.Errorf("version %q, hostname %q after a later Hello, want 1.0.0 and h1", n.DaemonVersion, n.Facts.Hostname)
+	}
+	if !reflect.DeepEqual(n.NodeLabels, map[string]string{"role": "web"}) {
+		t.Errorf("NodeLabels = %v after a later Hello, want role=web only", n.NodeLabels)
+	}
+	if n.ReportedRawExec != registry.RawExecReportedEnabled {
+		t.Errorf("ReportedRawExec = %v after a later PolicySnapshot, want the first one's (enabled)", n.ReportedRawExec)
+	}
+}
+
+// A stream whose first message is not a Hello is refused as InvalidArgument
+// and registers nothing.
+// Proves NC-32.
+func TestTunnelOpen_AFirstMessageThatIsNotHelloIsRefusedAsInvalidArgument(t *testing.T) {
+	tests := []struct {
+		name string
+		msg  *relayv1.DaemonMessage
+	}{
+		{"heartbeat", &relayv1.DaemonMessage{Body: &relayv1.DaemonMessage_Heartbeat{Heartbeat: &relayv1.Heartbeat{}}}},
+		{"task result", &relayv1.DaemonMessage{Body: &relayv1.DaemonMessage_TaskResult{TaskResult: &relayv1.TaskResult{TaskId: "t"}}}},
+		{"policy snapshot", &relayv1.DaemonMessage{Body: &relayv1.DaemonMessage_Policy{Policy: &relayv1.PolicySnapshot{}}}},
+		{"template snapshot", &relayv1.DaemonMessage{Body: &relayv1.DaemonMessage_Templates{Templates: &relayv1.TemplateSnapshot{}}}},
+		{"policy verdict", &relayv1.DaemonMessage{Body: &relayv1.DaemonMessage_PolicyVerdict{PolicyVerdict: &relayv1.PolicyVerdict{}}}},
+		{"stream chunk", &relayv1.DaemonMessage{Body: &relayv1.DaemonMessage_StreamChunk{StreamChunk: &relayv1.StreamChunk{}}}},
+		{"empty message", &relayv1.DaemonMessage{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := registry.NewInMemory()
+			srv := grpc.NewServer(grpc.StreamInterceptor(injectNodeIDInterceptor("node-no-hello")))
+			relayv1.RegisterTunnelServer(srv, &tunnelServer{reg: reg})
+			conn := newBufconnConn(t, srv)
+
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			stream, err := relayv1.NewTunnelClient(conn).Open(ctx)
+			if err != nil {
+				t.Fatalf("open stream: %v", err)
+			}
+			if err := stream.Send(tt.msg); err != nil {
+				t.Fatalf("send: %v", err)
+			}
+			if msg, err := stream.Recv(); status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("Recv = (%v, %v), want code InvalidArgument", msg, err)
+			}
+			if got := reg.List(); len(got) != 0 {
+				t.Errorf("registry holds %d Nodes after a refused first message, want 0", len(got))
+			}
+		})
 	}
 }

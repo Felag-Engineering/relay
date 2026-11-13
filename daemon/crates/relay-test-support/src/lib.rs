@@ -10,8 +10,8 @@
 //! The file constructors differ in how they set the mode, and tests depend on
 //! the difference: pick by what the test asserts, never by convenience.
 //!
-//! [`fake_relay`] is a fake Relay Enrollment server over real TLS. It writes no
-//! file and spawns no process.
+//! [`fake_relay`] is a fake Relay Enrollment and Tunnel server over real TLS. It
+//! writes no file and spawns no process.
 
 pub mod fake_relay;
 

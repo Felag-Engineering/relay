@@ -15,9 +15,13 @@ import (
 // conformance suite against sqliteRegistry — the same suite
 // registry.TestRepositoryConformance runs against InMemory, proving the
 // production store and the fake every other package tests against behave
-// alike. Its ClockSkew_* subtests prove the SQLite half of NC-37's storage.
+// alike. Its ClockSkew_* subtests prove the SQLite half of NC-37's storage;
+// RecordHeartbeat_RoundTripsAndTouchesNothingElse and Connected_IsNotInferredFromLastSeen
+// prove NC-11; ReadBack_DeclinesMalformedSelfReportedFields proves NC-22;
+// Upsert_UpdatePreservesRelayKnowledge proves NC-24; Upsert_UpdateOverwritesNodeRootedFields
+// proves NC-25.
 //
-// Proves NC-37.
+// Proves NC-11, NC-22, NC-24, NC-25, NC-37.
 func TestSQLiteRegistryConformance(t *testing.T) {
 	registrytest.RunRepositoryConformance(t, func(t *testing.T, cfg registrytest.Config) registry.Repository {
 		st, _ := openTestStore(t, WithMaxNodes(cfg.MaxNodes), WithMinDaemonVersion(cfg.MinDaemonVersion))

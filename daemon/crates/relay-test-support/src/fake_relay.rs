@@ -1,7 +1,9 @@
-//! A fake Relay Enrollment service over real TLS, for the tests that enroll a Node
-//! against one. It presents `[leaf, CA]` the way the Relay's node plane does, counts
-//! the `Enroll` calls it receives, and records the Enrollment Tokens and labels it
-//! saw. It writes no file and spawns no process.
+//! A fake Relay Enrollment and Tunnel server over real TLS, for the tests that enroll
+//! a Node against one or connect a Tunnel to one. It presents `[leaf, CA]` the way the
+//! Relay's node plane does, counts the `Enroll` calls it receives, and records the
+//! Enrollment Tokens and labels it saw. The fake Tunnel ([`start_fake_tunnel`]) records
+//! when each connection was accepted and each `Open` arrived, and the kinds of the first
+//! messages a daemon sends. It writes no file and spawns no process.
 //!
 //! Each [`pki`] call mints a fresh CA, so two fakes have distinct CAs.
 
@@ -9,7 +11,9 @@ use std::convert::Infallible;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use relay_proto::{EnrollRequest, EnrollResponse};
+use relay_proto::{
+    daemon_message, relay_message, DaemonMessage, EnrollRequest, EnrollResponse, Ping, RelayMessage,
+};
 use rustls_pki_types::pem::PemObject;
 use rustls_pki_types::CertificateSigningRequestDer;
 use tonic::codegen::{http, BoxFuture, Context, Poll, Service};
@@ -225,6 +229,153 @@ pub async fn start_silent_listener() -> (u16, tokio::task::JoinHandle<()>) {
         }
     });
     (port, task)
+}
+
+/// How the fake Tunnel answers `Open`.
+#[derive(Clone, Copy)]
+pub enum TunnelAnswer {
+    /// Refuses every `Open` at once with `UNAUTHENTICATED`, reading nothing.
+    RefuseOpen,
+    /// Reads the daemon's first three messages, answers with one `Ping`, and ends
+    /// the stream.
+    PingThenEnd,
+}
+
+/// What the fake Tunnel saw.
+#[derive(Default)]
+pub struct TunnelSeen {
+    /// When each TCP connection was accepted, before any TLS handshake.
+    pub accepts: Mutex<Vec<std::time::Instant>>,
+    /// When each `Tunnel.Open` call reached the service.
+    pub opens: Mutex<Vec<std::time::Instant>>,
+    /// For each `Open` that was answered, the kinds of the first three messages the
+    /// daemon sent, in order: `hello`, `heartbeat`, `task_result`, `stream_chunk`,
+    /// `policy`, `policy_verdict`, `templates` or `empty`.
+    pub first_messages: Mutex<Vec<Vec<&'static str>>>,
+    /// The `raw_exec_enabled` of each `PolicySnapshot` among those messages.
+    pub raw_exec_reported: Mutex<Vec<bool>>,
+}
+
+fn body_kind(body: &Option<daemon_message::Body>) -> &'static str {
+    match body {
+        Some(daemon_message::Body::Hello(_)) => "hello",
+        Some(daemon_message::Body::Heartbeat(_)) => "heartbeat",
+        Some(daemon_message::Body::TaskResult(_)) => "task_result",
+        Some(daemon_message::Body::StreamChunk(_)) => "stream_chunk",
+        Some(daemon_message::Body::Policy(_)) => "policy",
+        Some(daemon_message::Body::PolicyVerdict(_)) => "policy_verdict",
+        Some(daemon_message::Body::Templates(_)) => "templates",
+        None => "empty",
+    }
+}
+
+#[derive(Clone)]
+struct FakeTunnel {
+    seen: Arc<TunnelSeen>,
+    answer: TunnelAnswer,
+}
+
+impl tonic::server::StreamingService<DaemonMessage> for FakeTunnel {
+    type Response = RelayMessage;
+    type ResponseStream = tonic::codegen::BoxStream<RelayMessage>;
+    type Future = BoxFuture<tonic::Response<Self::ResponseStream>, tonic::Status>;
+
+    fn call(&mut self, req: tonic::Request<tonic::Streaming<DaemonMessage>>) -> Self::Future {
+        let this = self.clone();
+        Box::pin(async move {
+            this.seen
+                .opens
+                .lock()
+                .unwrap()
+                .push(std::time::Instant::now());
+            if let TunnelAnswer::RefuseOpen = this.answer {
+                return Err(tonic::Status::unauthenticated(
+                    "the fake Relay refuses Open",
+                ));
+            }
+            let mut inbound = req.into_inner();
+            let mut kinds = Vec::new();
+            while kinds.len() < 3 {
+                let Ok(Some(message)) = inbound.message().await else {
+                    break;
+                };
+                if let Some(daemon_message::Body::Policy(snapshot)) = &message.body {
+                    this.seen
+                        .raw_exec_reported
+                        .lock()
+                        .unwrap()
+                        .push(snapshot.raw_exec_enabled);
+                }
+                kinds.push(body_kind(&message.body));
+            }
+            this.seen.first_messages.lock().unwrap().push(kinds);
+            let ping = RelayMessage {
+                body: Some(relay_message::Body::Ping(Ping { unix_millis: 0 })),
+            };
+            let stream: Self::ResponseStream =
+                Box::pin(tonic::codegen::tokio_stream::once(Ok(ping)));
+            Ok(tonic::Response::new(stream))
+        })
+    }
+}
+
+impl Service<http::Request<tonic::body::Body>> for FakeTunnel {
+    type Response = http::Response<tonic::body::Body>;
+    type Error = Infallible;
+    type Future = BoxFuture<Self::Response, Infallible>;
+
+    fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Infallible>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn call(&mut self, req: http::Request<tonic::body::Body>) -> Self::Future {
+        let svc = self.clone();
+        Box::pin(async move {
+            if req.uri().path() != "/relay.v1.Tunnel/Open" {
+                return Ok(tonic::Status::unimplemented("not Tunnel.Open").into_http());
+            }
+            let mut grpc = tonic::server::Grpc::new(tonic_prost::ProstCodec::default());
+            Ok(grpc.streaming(svc, req).await)
+        })
+    }
+}
+
+/// Starts a fake Relay Tunnel on the IPv4 loopback, answering `Open` as `answer`
+/// says. It presents `server`'s leaf and CA over TLS, asking for no client
+/// certificate; `None` serves plaintext, for a test that hands the daemon a
+/// channel directly. Returns its port and what it saw.
+pub async fn start_fake_tunnel(
+    server: Option<&Pki>,
+    answer: TunnelAnswer,
+) -> (u16, Arc<TunnelSeen>) {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let incoming = TcpIncoming::bind(([127, 0, 0, 1], 0).into()).expect("bind");
+    let port = incoming.local_addr().expect("local_addr").port();
+    let seen = Arc::new(TunnelSeen::default());
+    let accepted = Arc::clone(&seen);
+    let incoming = tonic::codegen::tokio_stream::StreamExt::map(incoming, move |socket| {
+        accepted
+            .accepts
+            .lock()
+            .unwrap()
+            .push(std::time::Instant::now());
+        socket
+    });
+    let svc = FakeTunnel {
+        seen: Arc::clone(&seen),
+        answer,
+    };
+    let mut builder = Server::builder();
+    if let Some(server) = server {
+        let chain = format!("{}{}", server.leaf_pem, server.ca_pem);
+        let tls =
+            ServerTlsConfig::new().identity(TlsIdentity::from_pem(chain, &server.leaf_key_pem));
+        builder = builder.tls_config(tls).expect("server tls");
+    }
+    tokio::spawn(async move {
+        let _ = builder.serve_with_incoming(svc, incoming).await;
+    });
+    (port, seen)
 }
 
 /// A CSR's SubjectPublicKeyInfo, adapted to rcgen's signing API.

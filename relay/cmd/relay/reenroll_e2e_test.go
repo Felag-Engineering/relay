@@ -21,7 +21,7 @@ import (
 // new Node ID and a second record, and leaves the earlier record exactly as it was. Both
 // enrollments use the same hostname on purpose: nothing matches by host.
 //
-// Proves EN-16.
+// Proves EN-16, NC-31.
 func TestEnroll_SecondEnrollmentIsANewNode(t *testing.T) {
 	enrollOnce := func(t *testing.T, ctx context.Context, lis *bufconn.Listener, deps *appDeps, plaintext string) string {
 		t.Helper()

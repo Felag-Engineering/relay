@@ -524,6 +524,7 @@ func TestFacts_ZeroWidthSpaceIsAcceptedKnownGap(t *testing.T) {
 
 // --- MarkerOffline ---
 
+// Proves NC-11.
 func TestMarkers_OfflineComesFromConnectedness(t *testing.T) {
 	in := nodestate.Input{Node: registry.Node{NodeID: "n", Connected: false}, Now: testNow}
 	found := false

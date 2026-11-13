@@ -51,6 +51,7 @@ func rustSeconds(t *testing.T, relPath, name string) time.Duration {
 	return time.Duration(secs) * time.Second
 }
 
+// Proves NC-9, NC-10.
 func TestLivenessConstants_AgreeWithTheDaemon(t *testing.T) {
 	const mainRs = "daemon/src/main.rs"
 	const tunnelRs = "daemon/crates/relay-transport/src/tunnel.rs"

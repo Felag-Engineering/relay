@@ -78,6 +78,8 @@ func startRealServer(t *testing.T) (*bufconn.Listener, *appDeps) {
 //	(f) RevokeNode: assert still-open Tunnel stream tears down with
 //	    codes.Unauthenticated within 5 s (ADR-0006 immediate live-stream disconnect).
 //	(g) Reconnect with now-revoked cert: assert handshake-level rejection (err != nil).
+//
+// Proves NC-5.
 func TestLifecycle_SeedEnrollMTLSRenewRevoke(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()

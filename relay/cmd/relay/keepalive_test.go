@@ -50,6 +50,7 @@ func (c *blackHoleConn) Close() error {
 // left at its three-minute default. grpc-go clamps a server keepalive Time
 // below one second up to one second, so the shortest values this test can use
 // are one second each, and a dead link is noticed within about two.
+// Proves NC-10.
 func TestKeepalive_RelayClosesADeadLinkAndMarksTheNodeOffline(t *testing.T) {
 	const nodeID = "node-dead-link"
 	reg := registry.NewInMemory()

@@ -25,7 +25,7 @@ import (
 // Relay registers no gRPC server beyond the two. Invariant 14: the Relay never pushes
 // binaries and a daemon is upgraded only by the customer's config management.
 //
-// Proves DI-18.
+// Proves DI-18, NC-27.
 func TestNodePlane_NoRPCInstallsADaemon(t *testing.T) {
 	t.Run("the services and RPCs are a closed set", func(t *testing.T) {
 		got := map[string]bool{}

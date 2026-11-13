@@ -1,6 +1,6 @@
 # Node connection
 
-**Status:** current as of `2026-11-10`.
+**Status:** current as of `2026-11-12`.
 **Claim prefix:** `NC`
 **Governed by:** ADR-0004, ADR-0005, ADR-0006, ADR-0014, ADR-0017, ADR-0031; invariants 4, 6, 7,
 8, 11, 14.
@@ -24,7 +24,7 @@ targets.
 | relay-daemon | Dials the Relay, verifies it, holds the stream and reconnects. Which address it dials is `enrollment.md`. |
 | Registry reads | Connected state, `last_seen`, `outdated`, and the self-reported fields of the Node's registry record, on `list_nodes`, `describe_node`, the Control API's Node read and the Console fleet view, as `query.md` describes. |
 | Audit trail | The connection audit records designed below, read as `audit-and-read-lane.md` describes. |
-| Relay configuration | The certificate hostname and the minimum daemon version (`relay-configuration.md`). Every timing here is a built-in constant, not a setting. |
+| Relay configuration | The certificate hostname, the minimum daemon version and whether the control plane is enabled (NC-13) (`relay-configuration.md`). Every timing here is a built-in constant, not a setting. |
 | MCP, Control API, Console | No surface opens, closes or reshapes a connection. Revoking a Node ends its connection, and `enrollment.md` owns that. |
 
 ## Behaviour
@@ -74,12 +74,12 @@ targets.
 
 ### One current stream
 
-- **NC-13** The Relay holds one current stream per Node for dispatch. A stream opened for a Node
-  ID replaces the existing one, and the replaced stream ends with an error naming a newer stream
-  as the cause.
+- **NC-13** With the control plane enabled, the Relay holds one current stream per Node for
+  dispatch: a stream opened for a Node ID replaces the existing one, and the replaced stream ends
+  with an error naming a newer stream as the cause.
 - **NC-14** Only the current stream receives Tasks.
 - **NC-15** Ending a replaced stream never marks the Node offline.
-- **NC-36** The Relay counts stream replacements per Node and, while it runs, writes at most one audit record per Node per 10 minutes, carrying the number of replacements since the previous record, so a single replacement is recorded and a flapping pair writes a bounded number of records (R54).
+- **NC-36** The Relay counts stream replacements per Node, each a stream opened while another stream for the Node is live, with the control plane enabled or not, and, while it runs, writes at most one audit record per Node per 10 minutes, carrying the number of replacements since the previous record, so a single replacement is recorded and a flapping pair writes a bounded number of records (R54).
 
 At-most-once across a replaced or dropped stream is `daemon-installation.md`'s, and a Task's
 outcome is `execution.md`'s (invariant 4).
@@ -150,7 +150,7 @@ outcome is `execution.md`'s (invariant 4).
   Node ID (`enrollment.md`), brings the Node back.
 - **NC-32** A stream whose first message is not `Hello` is refused as an invalid argument.
 
-Stream replacement is not a refusal: the older stream ends because a newer one exists (NC-13).
+Stream replacement (NC-13) is not a refusal.
 
 ## Out of scope
 
@@ -176,12 +176,46 @@ Stream replacement is not a refusal: the older stream ends because a newer one e
 - **The Node plane's scale contract**, which nothing measures yet:
   `roadmap: relay/research/spec-future-work/node-connection`.
 - **Several Relays sharing a fleet**: deferred by ADR-0005 to a future ADR.
+- **With the control plane disabled, ending a displaced stream, which stream the Node's connected
+  state follows, and showing a certificate in use by more than one connection**: #1330.
 
 ## Proof
 
 <!-- proof:begin -->
 | Claim | Proven by | Seam |
 |---|---|---|
+| NC-1 | `TestTunnel_OpenIsTheOneBidirectionalStream`, `the_daemon_never_listens_on_an_inbound_port` | Node plane, daemon |
+| NC-2 | `TestCertlessMethods_OnlyEnroll`, `TestServerCertificate_OneLeafOnBothListenersOnlyTheNodePlaneAsksForAClientCert`, `TestTransport_AcceptValidClientCert`, `TestTransport_RejectUntrustedCert`, `wrong_ca_relay_is_refused` | Node plane, Relay, daemon |
+| NC-3 | `TestTransport_AcceptValidClientCert`, `TestTunnelOpen_FailClosed`, `TestTunnelOpen_TheNodeIsTheVerifiedCertificateNeverTheHello` | Node plane, Relay |
+| NC-4 | `ipv4_literal_relay_is_verified_by_its_ip_san_with_no_server_name`, `the_daemon_trusts_only_the_pinned_ca`, `wrong_ca_relay_is_refused` | daemon |
+| NC-5 | `TestLifecycle_SeedEnrollMTLSRenewRevoke`, `TestTunnelOpen_RenewThenReconnectWritesOneCertChangedRecord`, `perform_renewal_happy_path` | Relay, daemon |
+| NC-6 | `TestServerCertificate_NeverServesAnExpiredLeaf`, `TestServerCertificate_OneLeafOnBothListenersOnlyTheNodePlaneAsksForAClientCert`, `TestServerCertificate_RotatesAtRenewalThreshold`, `TestTransport_CertificateIsFetchedEveryHandshake` | Node plane, Relay, ca |
+| NC-7 | `TestTunnelOpen_HeartbeatsWithinDeadlineKeepNodeConnected`, `TestTunnelOpen_MissedHeartbeatsMarkOfflineAndCloseStream`, `TestTunnelOpen_OnlyHeartbeatsResetTheDeadline` | Relay |
+| NC-8 | `heartbeat_delay_bounds_and_midpoint`, `heartbeat_interval_is_sixty_seconds_jittered_twenty_percent` | daemon |
+| NC-9 | `TestLivenessConstants_AgreeWithTheDaemon`, `TestTunnelOpen_MissedHeartbeatsMarkOfflineAndCloseStream`, `TestTunnelServer_DefaultDeadlineIsThreeHeartbeatIntervals` | Relay |
+| NC-10 | `TestKeepalive_ProductionValuesAreThirtyAndTwentySeconds`, `TestKeepalive_RelayClosesADeadLinkAndMarksTheNodeOffline`, `TestLivenessConstants_AgreeWithTheDaemon`, `keepalive_is_sixty_seconds_each_way` | Node plane, Relay, daemon |
+| NC-11 | `TestMarkers_OfflineComesFromConnectedness`, `TestRepositoryConformance`, `TestSQLiteRegistryConformance`, `TestTunnelOpen_HeartbeatUpdatesLastSeen`, `TestTunnelOpen_MissedHeartbeatsMarkOfflineAndCloseStream` | Relay, nodestate, registry, store |
+| NC-12 | `TestNodePlane_NoMessageAcknowledgesATask`, `TestTunnelOpen_ATaskToASilentNodeResolvesNodeOfflineAtTheHeartbeatDeadline` | Node plane, Relay |
+| NC-13 | `TestRouter_ADisplacedRegistrationIsTold`, `TestRouter_ReplacedRegistrationFailsItsWaitersWithErrStreamReplaced`, `TestTunnelOpen_ANewerRegistrationEndsTheStreamItDisplaced` | Relay, dispatch |
+| NC-14 | `TestRouter_OnlyTheCurrentRegistrationReceivesTasks` | dispatch |
+| NC-15 | `TestRouter_ReplacedRegistrationEndDoesNotRunOfflineHook`, `TestTunnelOpen_ReplacedStreamEndDoesNotMarkLiveNodeOffline` | Relay, dispatch |
+| NC-16 | `backoff_next_delay_advances_and_jitter_bounds`, `backoff_progression_caps`, `backoff_reset_returns_to_base`, `reconnect_backoff_runs_from_one_second_to_a_thirty_second_cap`, `reconnect_loop_backoff_keeps_growing_while_the_relay_refuses_the_open`, `reconnect_loop_backoff_returns_to_base_after_an_open_that_succeeded`, `reconnect_loop_retries_a_relay_outside_the_pinned_ca_and_sends_it_nothing` | daemon |
+| NC-17 | `TestFleetE2E_RelayRestartDaemonReconnects_DedupHolds`, `backoff_never_runs_out`, `http_endpoint_is_rejected`, `reconnect_loop_retries_a_relay_outside_the_pinned_ca_and_sends_it_nothing`, `reconnect_loop_returns_an_error_for_a_non_https_endpoint` | Relay, daemon |
+| NC-18 | `TestTunnelOpen_AFleetConnectingAtOnceIsAdmittedWhole` | Relay |
+| NC-19 | `hello_never_sets_the_node_id`, `policy_snapshot_from_fixture_populates_all_fields`, `run_tunnel_opens_with_hello_then_the_policy_and_template_snapshots` | daemon |
+| NC-20 | `TestE2E_PolicyChangeReachesTheRegistryOnlyAfterTheDaemonRestarts`, `TestTunnelOpen_ALaterHelloOrPolicySnapshotOnTheSameStreamChangesNoRegistryField` | Relay |
+| NC-21 | `TestHelloReportFromProto`, `TestSelfReportBounds_AreTheSpecValues`, `TestTunnelOpen_HelloAtTheIPAddressCapKeepsEveryAddress`, `TestTunnelOpen_HelloBoundsEverySelfReportedField`, `TestTunnelOpen_HelloOverTheIPAddressCapRecordsNoAddresses`, `TestTunnelOpen_HelloWellFormedPolicyFingerprintIsUnchanged`, `TestWellFormedFingerprint`, `TestWellFormedNodeLabel`, `TestWellFormedSelfReportedText` | Relay, protoconv, registry |
+| NC-22 | `TestDeclineMalformedSelfReport`, `TestInMemory_DeclinesOverLongNodeLabelOnRead`, `TestOpen_MalformedNodeLabelDoesNotDropTheStream`, `TestRepositoryConformance`, `TestSQLiteRegistryConformance`, `TestTunnelOpen_HelloMalformedPolicyFingerprintIsStoredAsNotReported`, `TestTunnelOpen_HelloOverTheNodeLabelCapRecordsNoNodeLabels` | Relay, registry, store |
+| NC-23 | `TestBoundedSnapshots_ServeAFailingFingerprintAsEmpty`, `TestDescribeNode_SnapshotFingerprintsThatFailTheBoundAreServedEmpty`, `TestListOperations_TemplateSnapshotFingerprintThatFailsTheBoundIsServedEmpty` | capability |
+| NC-24 | `TestConnectionObservationWriters_EachHasOnlyItsDefiningCallers`, `TestLabelWriters_EachHasOnlyItsDefiningCallers`, `TestNodeLabelsFromHello`, `TestRepositoryConformance`, `TestSQLiteRegistryConformance`, `TestTunnelOpen_ANodeReportWritesNoRelayOrTagLabel`, `TestTunnelOpen_HelloRegistersNode` | Relay, registry, store |
+| NC-25 | `TestRepositoryConformance`, `TestSQLiteRegistryConformance`, `TestTunnelOpen_ChangedFactsAndNodeLabelsAreRecordedAndNeverAudited`, `TestTunnelOpen_HelloOverTheNodeLabelCapReplacesAnEarlierSet` | Relay, registry, store |
+| NC-26 | `TestMCP_RunOperation_OutdatedNodeVersionRefused`, `TestTunnelOpen_DaemonVersionBelowTheMinimumStillConnects`, `TestTunnelOpen_DaemonVersionBelowTheMinimumStillConnectsAndIsAudited` | MCP, Relay |
+| NC-27 | `TestNodePlane_NoRPCInstallsADaemon` | Node plane |
+| NC-28 | `TestServerCredentials_NilObserverStillRefusesARevokedCert`, `TestServerCredentials_RefusesAnUntrustedClientCertAtTheHandshake`, `TestTransport_RejectRevoked_Interceptor`, `TestUnaryInterceptor_RevokedAfterConnect_RenewRefused` | Node plane |
+| NC-29 | `TestCertlessMethods_OnlyEnroll`, `TestServerCertificate_OneLeafOnBothListenersOnlyTheNodePlaneAsksForAClientCert`, `TestStreamInterceptor_RefusesACertlessTunnelOpenBeforeItsHandler`, `TestTransport_RejectNoCert`, `TestUnaryInterceptor_RefusesWithoutVerifiedIdentity`, `TestUnaryInterceptor_RenewWithoutPeerCert_Refused` | Node plane, Relay |
+| NC-30 | `reconnect_loop_retries_a_relay_outside_the_pinned_ca_and_sends_it_nothing`, `wrong_ca_relay_is_refused` | daemon |
+| NC-31 | `TestEnroll_SecondEnrollmentIsANewNode`, `TestServerCredentials_RefusesAnExpiredClientCertAtTheHandshake` | Node plane, Relay |
+| NC-32 | `TestTunnelOpen_AFirstMessageThatIsNotHelloIsRefusedAsInvalidArgument` | Relay |
 | NC-33 | `TestPolicyChangedReason`, `TestTunnelOpen_ChangedPolicyFingerprintWritesOneRecord`, `TestTunnelOpen_ChangedPolicyWritesOneNodePolicyChangedRow`, `TestTunnelOpen_FailedPolicyRecordKeepsTheStreamUp`, `TestTunnelOpen_FirstConnectWritesNoPolicyRecord`, `TestTunnelOpen_OtherFirstMessageResolvesThePolicyRecordWithoutTheSnapshot`, `TestTunnelOpen_PolicyFingerprintAndRawExecChangeWriteOneRecord`, `TestTunnelOpen_RawExecOnlyChangeWritesOneRecord`, `TestTunnelOpen_StreamEndingBeforeItsPolicySnapshotRecordsRawExecUnknown` | Relay, auditsink |
 | NC-34 | `TestDaemonVersionChangedReason`, `TestTunnelOpen_ChangedDaemonVersionWritesOneRecord`, `TestTunnelOpen_DaemonVersionBelowTheMinimumStillConnects`, `TestTunnelOpen_DaemonVersionBelowTheMinimumStillConnectsAndIsAudited`, `TestTunnelOpen_FirstConnectReportingNothingCannotHideTheNextReport`, `TestTunnelOpen_FirstConnectWritesNoVersionRecord`, `TestTunnelOpen_LowerDaemonVersionIsPassedAsADowngrade`, `TestTunnelOpen_OverlappingConnectsOfOneNodeRecordThePersistedOrder`, `TestTunnelOpen_UnreportedDaemonVersionIsRecordedAsUnknownSide` | Relay, auditsink |
 | NC-35 | `TestTunnelOpen_RenewThenReconnectWritesOneCertChangedRecord`, `TestTunnelOpen_RenewalBeforeTheFirstConnectIsRecordedOnThatConnect`, `TestTunnelOpen_SameCertificateReconnectWritesNoCertRecord` | Relay |
@@ -190,7 +224,7 @@ Stream replacement is not a refusal: the older stream ends because a newer one e
 | NC-38 | `TestHello_NodeIDIsDeprecatedInTheContract`, `TestRelay_NoFileSelectsTheHelloNodeID`, `TestTunnelOpen_ForgedHelloNodeIDIsKeyedByTheCertificateAndNeverLogged`, `hello_never_sets_the_node_id` | Node plane, Relay, daemon |
 | NC-39 | `TestConnectionRecorder_FirstEventRecordedAtOnce`, `TestConnectionRecorder_KindsAreThrottledIndependently`, `TestConnectionRecorder_NextRecordCarriesTheCountAndItsOwnValues`, `TestConnectionRecorder_NodesAreThrottledIndependently`, `TestConnectionRecorder_SweepDropsIdleEntriesAndKeepsPending`, `TestConnectionRecorder_ThrottledWithinTheWindow`, `TestTunnelOpen_AlternatingDaemonVersionsWriteOneRowPerWindow` | Relay, auditsink |
 
-Unproven: NC-1, NC-2, NC-3, NC-4, NC-5, NC-6, NC-7, NC-8, NC-9, NC-10, NC-11, NC-12, NC-13, NC-14, NC-15, NC-16, NC-17, NC-18, NC-19, NC-20, NC-21, NC-22, NC-23, NC-24, NC-25, NC-26, NC-27, NC-28, NC-29, NC-30, NC-31, NC-32.
+Unproven: none.
 <!-- proof:end -->
 
 ## Retired

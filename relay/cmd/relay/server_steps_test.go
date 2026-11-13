@@ -39,6 +39,7 @@ func TestOAuthAuthOption_RefusesMissingPublicURL(t *testing.T) {
 
 // Enroll is the one RPC a daemon reaches before it holds a client certificate;
 // anything added to this set is reachable without mTLS.
+// Proves NC-2, NC-29.
 func TestCertlessMethods_OnlyEnroll(t *testing.T) {
 	got := certlessMethods()
 	if len(got) != 1 {

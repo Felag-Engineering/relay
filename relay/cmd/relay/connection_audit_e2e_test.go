@@ -278,7 +278,7 @@ func connAuditFingerprint(t *testing.T, f *relayFixture, nodeID string) string {
 	return n.CertFingerprint
 }
 
-// Proves NC-35.
+// Proves NC-35, NC-5.
 func TestTunnelOpen_RenewThenReconnectWritesOneCertChangedRecord(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -361,7 +361,7 @@ func TestTunnelOpen_SameCertificateReconnectWritesNoCertRecord(t *testing.T) {
 	}
 }
 
-// Proves NC-34.
+// Proves NC-34, NC-26.
 func TestTunnelOpen_DaemonVersionBelowTheMinimumStillConnectsAndIsAudited(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

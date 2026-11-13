@@ -633,6 +633,7 @@ func failingFingerprints() map[string]string {
 // TestBoundedSnapshots_ServeAFailingFingerprintAsEmpty pins the two pure
 // bound functions: a well-formed (or empty) fingerprint is kept, any other is
 // served as "", and no other field changes.
+// Proves NC-23.
 func TestBoundedSnapshots_ServeAFailingFingerprintAsEmpty(t *testing.T) {
 	hex64 := strings.Repeat("ab", 32)
 	policyKept := []string{"", hex64}
@@ -673,6 +674,7 @@ func TestBoundedSnapshots_ServeAFailingFingerprintAsEmpty(t *testing.T) {
 // TestDescribeNode_SnapshotFingerprintsThatFailTheBoundAreServedEmpty proves
 // the bound holds at the lane every surface reads through, and that a served
 // "" still reads as a reported snapshot.
+// Proves NC-23.
 func TestDescribeNode_SnapshotFingerprintsThatFailTheBoundAreServedEmpty(t *testing.T) {
 	for name, fp := range failingFingerprints() {
 		policy := fakePolicyView{"node-1": policyview.Snapshot{PolicyFingerprint: fp, RawExecEnabled: true}}
@@ -694,6 +696,7 @@ func TestDescribeNode_SnapshotFingerprintsThatFailTheBoundAreServedEmpty(t *test
 
 // TestListOperations_TemplateSnapshotFingerprintThatFailsTheBoundIsServedEmpty
 // is the same proof for list_operations' per-Node half.
+// Proves NC-23.
 func TestListOperations_TemplateSnapshotFingerprintThatFailsTheBoundIsServedEmpty(t *testing.T) {
 	for name, fp := range failingFingerprints() {
 		vocab := fakeTemplateVocab{"node-1": nodevocab.Snapshot{Fingerprint: fp, Templates: []nodevocab.Template{readTemplate("svc.status")}}}
