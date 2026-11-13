@@ -248,6 +248,7 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[relayv1.DaemonMessag
 	// that ends before any message after Hello records only a changed
 	// fingerprint, with Raw Exec unknown (NC-33).
 	var policyRec *streamPolicyRecord
+	var snaps streamSnapshots
 	defer func() { s.resolvePolicyRecord(nodeID, policyRec, nil) }()
 
 	// Mark the Node connected for as long as this stream lives.
@@ -383,7 +384,7 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[relayv1.DaemonMessag
 			if m.GetHeartbeat() != nil {
 				timer.Reset(deadline) // never waits on, or depends on, the write in handleDaemonMessage
 			}
-			s.handleDaemonMessage(nodeID, m, policyRec)
+			s.handleDaemonMessage(nodeID, m, policyRec, &snaps)
 		}
 	}
 }
@@ -449,8 +450,9 @@ func (s *tunnelServer) recordHello(ctx context.Context, nodeID string, hello *re
 // handleDaemonMessage applies one post-Hello message from the Node keyed by
 // the certificate-derived nodeID, never a wire value. The liveness timer is
 // the caller's: only a Heartbeat resets it. policyRec is the stream's pending
-// Policy record, resolved by the first message after Hello.
-func (s *tunnelServer) handleDaemonMessage(nodeID string, m *relayv1.DaemonMessage, policyRec *streamPolicyRecord) {
+// Policy record, resolved by the first message after Hello. snaps admits only
+// the stream's first PolicySnapshot and first TemplateSnapshot.
+func (s *tunnelServer) handleDaemonMessage(nodeID string, m *relayv1.DaemonMessage, policyRec *streamPolicyRecord, snaps *streamSnapshots) {
 	if hb := m.GetHeartbeat(); hb != nil {
 		slog.Debug("heartbeat", "unix_millis", hb.UnixMillis)
 		if s.reg != nil {
@@ -471,23 +473,23 @@ func (s *tunnelServer) handleDaemonMessage(nodeID string, m *relayv1.DaemonMessa
 			s.sink.deliverVerdict(nodeID, pv)
 		}
 	}
-	// Capture a reported PolicySnapshot into the display-only policyview.Cache.
-	// This RECORDS a report-only daemon value for describe_node to display; it
-	// never sets or modifies Node Policy (ADR-0002), exactly like the
-	// PolicyFingerprint the registry already records on Hello. Unconditional
-	// (not gated by s.sink): this is the production capture path.
-	if ps := m.GetPolicy(); ps != nil && s.policy != nil {
+	// A PolicySnapshot is a report-only daemon value: recording it never sets
+	// Node Policy (ADR-0002). Only the stream's first is recorded, so what a
+	// Node reports changes on a reconnect and never mid-stream (NC-20).
+	ps := m.GetPolicy()
+	if ps != nil && !snaps.policy.admit(nodeID, snapshotKindPolicy) {
+		ps = nil
+	}
+	if ps != nil && s.policy != nil {
 		s.policy.Set(nodeID, snapshotFromProto(ps))
 	}
 	// Only the first message after Hello resolves the Policy record; a
 	// PolicySnapshot is stored with it, any other message is not.
-	s.resolvePolicyRecord(nodeID, policyRec, m.GetPolicy())
-	// Capture a reported TemplateSnapshot into the nodevocab.Cache. Same posture
-	// as the PolicySnapshot capture above: it RECORDS a report-only daemon
-	// value, for discovery and, since ADR-0042, as the input to a Template
-	// dispatch's fan-out and class, and can never set or modify the Node's
-	// templates (ADR-0002, ADR-0021).
-	if ts := m.GetTemplates(); ts != nil && s.vocab != nil {
+	s.resolvePolicyRecord(nodeID, policyRec, ps)
+	// The same posture for a TemplateSnapshot. Since ADR-0042 the cache is the
+	// input to the fan-out and class of a Template dispatch, so a later report
+	// must not swap it mid-stream (NC-20).
+	if ts := m.GetTemplates(); ts != nil && snaps.templates.admit(nodeID, snapshotKindTemplates) && s.vocab != nil {
 		s.vocab.Set(nodeID, vocabFromProto(ts))
 	}
 }
@@ -598,6 +600,38 @@ type streamPolicyRecord struct {
 	fingerprint string
 	helloSeq    uint64
 	resolved    bool
+}
+
+// Snapshot kinds named in the log when a later snapshot is refused. A closed
+// set: no wire value reaches the log line.
+const (
+	snapshotKindPolicy    = "policy"
+	snapshotKindTemplates = "templates"
+)
+
+// streamSnapshots admits the first PolicySnapshot and the first
+// TemplateSnapshot on one stream and refuses every later one, so what a Node
+// reports changes only on a reconnect (NC-20). Handler goroutine only.
+type streamSnapshots struct {
+	policy, templates firstOfKind
+}
+
+// firstOfKind admits one snapshot of a kind and refuses the rest. It warns on
+// the first refusal only: a warning per message would let a Node choose the
+// log volume.
+type firstOfKind struct{ admitted, warned bool }
+
+func (f *firstOfKind) admit(nodeID, kind string) bool {
+	if !f.admitted {
+		f.admitted = true
+		return true
+	}
+	if !f.warned {
+		f.warned = true
+		slog.Warn("ignored a later snapshot on the same stream; a report is read once per connection",
+			"node_id", nodeID, "kind", kind)
+	}
+	return false
 }
 
 // policyChangeSinceLastConnect compares the record read before this connect's
