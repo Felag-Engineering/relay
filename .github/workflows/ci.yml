@@ -54,6 +54,11 @@ permissions:
 env:
   GOFLAGS: -count=1
   CARGO_INCREMENTAL: 0
+  # An exact stable, never the channel: a new stable changes cargo's output layout or
+  # lints under every open PR at once. Bumped deliberately, together with
+  # RELEASE_RUST_TOOLCHAIN in release.yml, security-nightly.yml's and
+  # install-matrix.yml's default.
+  RUST_TOOLCHAIN: 1.100.0
 
 jobs:
 
@@ -355,11 +360,11 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Set up Rust stable
+      - name: Set up Rust
         id: toolchain
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
-          toolchain: stable
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: rustfmt,clippy
           targets: x86_64-unknown-linux-musl # lint-daemon lints the shipped musl config
 
@@ -501,11 +506,11 @@ jobs:
           go-version-file: relay/go.mod
           cache: false
 
-      - name: Set up Rust stable
+      - name: Set up Rust
         id: toolchain
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
-          toolchain: stable
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
 
       - name: Restore Go build and module cache
         id: go-cache
@@ -671,11 +676,11 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Set up Rust stable (musl target)
+      - name: Set up Rust (musl target)
         id: toolchain
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
-          toolchain: stable
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: x86_64-unknown-linux-musl
 
       - name: Install musl linker
