@@ -12,28 +12,25 @@ set -euo pipefail
 cd "$(dirname "$0")/../daemon"
 [ -d target ] || exit 0
 
-names=(relay_daemon librelay_daemon)
-for t in tests/*.rs; do
-  [ -e "$t" ] && names+=("$(basename "$t" .rs)")
-done
-# The workspace members (crates/<name>/): their rlibs and build-script outputs.
-crates=()
+# Cargo 1.100 (the pinned CI toolchain) keeps each unit's artifacts, dep-info and
+# fingerprint under <profile>/build/<package>/<hash>/, so a first-party package's
+# whole build/<package>/ directory is its artifacts: lib, bin, test binaries and
+# build-script output. The cache key carries the rustc version, so a cache never
+# mixes this layout with the older deps/ and .fingerprint/ one.
+packages=(relay-daemon)
 for d in crates/*/; do
-  [ -d "$d" ] || continue
-  n=$(basename "$d")
-  crates+=("$n")
-  names+=("${n//-/_}" "lib${n//-/_}")
+  [ -d "$d" ] && packages+=("$(basename "$d")")
 done
 
 find target -type d -name incremental -prune -exec rm -rf {} +
-for n in "${names[@]}"; do
-  find target -path '*/deps/*' -name "${n}-*" -exec rm -rf {} +
+shopt -s nullglob
+for p in "${packages[@]}"; do
+  # target/<profile>/build/<p> and target/<triple>/<profile>/build/<p>
+  for dir in target/*/build/"$p" target/*/*/build/"$p"; do
+    rm -rf "$dir"
+  done
 done
-for n in "${crates[@]}"; do
-  find target -maxdepth 4 \( -path '*/.fingerprint/*' -o -path '*/build/*' \) -type d -name "${n}-*" -prune -exec rm -rf {} +
-done
-# depth 4 reaches target/<triple>/<profile>/{.fingerprint,build}/ as well as target/<profile>/…
-find target -maxdepth 4 \( -path '*/.fingerprint/*' -o -path '*/build/*' \) -type d -name 'relay-daemon-*' -prune -exec rm -rf {} +
-# Uplifted copies of the binary (target/<profile>/relay-daemon and the musl equivalent).
-find target -maxdepth 3 -type f \( -name relay-daemon -o -name relay-daemon.d \) -delete
+# Uplifted copies of the binary and the first-party libs (target/<profile>/relay-daemon,
+# librelay_*.rlib and their .d, and the musl equivalents).
+find target -maxdepth 3 -type f \( -name relay-daemon -o -name relay-daemon.d -o -name 'librelay_*' \) -delete
 du -sh target

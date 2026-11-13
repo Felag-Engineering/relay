@@ -70,9 +70,11 @@ Makefile             wraps both toolchains; `make verify` is the CI-equivalent g
   `go vet` and `golangci-lint`. Raising the Go
   version is a decision, not a chore (#572).
 - **Rust.** Stable, with the floor as `rust-version` in `daemon/Cargo.toml`, and deliberately no
-  `rust-toolchain.toml`. `make lint` and `make verify` build the daemon for musl, which needs
-  `rustup target add x86_64-unknown-linux-musl` and, on Debian or Ubuntu, `musl-tools`. Lint is
-  `cargo fmt` and `cargo clippy -- -D warnings`.
+  `rust-toolchain.toml`. CI and the release build on one exact stable, `RUST_TOOLCHAIN` in
+  `ci.yml`; `rustup toolchain install` it to reproduce a CI failure. `make lint` and
+  `make verify` build the daemon for musl, which needs `rustup target add
+  x86_64-unknown-linux-musl` and, on Debian or Ubuntu, `musl-tools`. Lint is `cargo fmt` and
+  `cargo clippy -- -D warnings`.
 - **Proto codegen is version-sensitive.** An unpinned plugin produces a spurious diff that
   false-positives the proto-drift gate; re-run `make proto-tools` before believing a drift you
   did not cause. Never hand-edit generated code (invariant 8).
