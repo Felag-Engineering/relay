@@ -24,7 +24,7 @@ targets.
 | relay-daemon | Dials the Relay, verifies it, holds the stream and reconnects. Which address it dials is `enrollment.md`. |
 | Registry reads | Connected state, `last_seen`, `outdated`, and the self-reported fields of the Node's registry record, on `list_nodes`, `describe_node`, the Control API's Node read and the Console fleet view, as `query.md` describes. |
 | Audit trail | The connection audit records designed below, read as `audit-and-read-lane.md` describes. |
-| Relay configuration | The certificate hostname and the minimum daemon version (`relay-configuration.md`). Every timing here is a built-in constant, not a setting. |
+| Relay configuration | The certificate hostname, the minimum daemon version and whether the control plane is enabled (NC-13) (`relay-configuration.md`). Every timing here is a built-in constant, not a setting. |
 | MCP, Control API, Console | No surface opens, closes or reshapes a connection. Revoking a Node ends its connection, and `enrollment.md` owns that. |
 
 ## Behaviour
@@ -74,12 +74,12 @@ targets.
 
 ### One current stream
 
-- **NC-13** The Relay holds one current stream per Node for dispatch. With execution on, a stream
-  opened for a Node ID replaces the existing one, and the replaced stream ends with an error
-  naming a newer stream as the cause.
+- **NC-13** With the control plane enabled, the Relay holds one current stream per Node for
+  dispatch: a stream opened for a Node ID replaces the existing one, and the replaced stream ends
+  with an error naming a newer stream as the cause.
 - **NC-14** Only the current stream receives Tasks.
 - **NC-15** Ending a replaced stream never marks the Node offline.
-- **NC-36** The Relay counts stream replacements per Node and, while it runs, writes at most one audit record per Node per 10 minutes, carrying the number of replacements since the previous record, so a single replacement is recorded and a flapping pair writes a bounded number of records (R54).
+- **NC-36** The Relay counts stream replacements per Node, each a stream opened while another stream for the Node is live, with the control plane enabled or not, and, while it runs, writes at most one audit record per Node per 10 minutes, carrying the number of replacements since the previous record, so a single replacement is recorded and a flapping pair writes a bounded number of records (R54).
 
 At-most-once across a replaced or dropped stream is `daemon-installation.md`'s, and a Task's
 outcome is `execution.md`'s (invariant 4).
@@ -150,8 +150,7 @@ outcome is `execution.md`'s (invariant 4).
   Node ID (`enrollment.md`), brings the Node back.
 - **NC-32** A stream whose first message is not `Hello` is refused as an invalid argument.
 
-Stream replacement is not a refusal: with execution on, the older stream ends because a newer
-one exists (NC-13).
+Stream replacement (NC-13) is not a refusal.
 
 ## Out of scope
 
@@ -177,6 +176,8 @@ one exists (NC-13).
 - **The Node plane's scale contract**, which nothing measures yet:
   `roadmap: relay/research/spec-future-work/node-connection`.
 - **Several Relays sharing a fleet**: deferred by ADR-0005 to a future ADR.
+- **With the control plane disabled, ending a displaced stream, which stream the Node's connected
+  state follows, and showing a certificate in use by more than one connection**: #1330.
 
 ## Proof
 
