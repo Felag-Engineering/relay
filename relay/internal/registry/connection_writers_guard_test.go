@@ -20,6 +20,7 @@ import (
 // MUTATION: call RecordHeartbeat, MarkConnected or RecordPolicySnapshot from
 // any other non-test file and this test goes red. TestLabelWriters_Fixtures
 // arms the scanner.
+// Proves NC-24.
 func TestConnectionObservationWriters_EachHasOnlyItsDefiningCallers(t *testing.T) {
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {

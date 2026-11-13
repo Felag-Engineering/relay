@@ -343,6 +343,7 @@ mod tests {
 
     /// Acceptance criterion for #28: a Relay presenting CA-A is refused when
     /// the client pins a different CA-B.
+    /// Proves NC-2, NC-4, NC-30.
     #[tokio::test]
     async fn wrong_ca_relay_is_refused() {
         let err = dial_with_mismatched_ca().await;
@@ -404,6 +405,7 @@ mod tests {
     }
 
     // Regression for #1187: an IPv4 literal behaves as before.
+    /// Proves NC-4.
     #[tokio::test]
     async fn ipv4_literal_relay_is_verified_by_its_ip_san_with_no_server_name() {
         let server = pki("127.0.0.1");
@@ -414,6 +416,7 @@ mod tests {
     }
 
     /// A non-https endpoint is rejected before any network dial is attempted.
+    /// Proves NC-17.
     #[tokio::test]
     async fn http_endpoint_is_rejected() {
         let (_, ca_pem) = make_self_signed("test");
@@ -430,6 +433,7 @@ mod tests {
     // Backoff (issue #176)
     // -----------------------------------------------------------------------
 
+    /// Proves NC-16.
     #[test]
     fn backoff_progression_caps() {
         let mut b = Backoff::new(Duration::from_secs(1), Duration::from_secs(30));
@@ -453,6 +457,7 @@ mod tests {
         }
     }
 
+    /// Proves NC-16.
     #[test]
     fn backoff_next_delay_advances_and_jitter_bounds() {
         let mut b = Backoff::new(Duration::from_secs(1), Duration::from_secs(30));
@@ -478,6 +483,7 @@ mod tests {
         assert_eq!(b.base_delay(), Duration::from_secs(30));
     }
 
+    /// Proves NC-16.
     #[test]
     fn backoff_reset_returns_to_base() {
         let mut b = Backoff::new(Duration::from_secs(1), Duration::from_secs(30));
@@ -495,6 +501,50 @@ mod tests {
             Duration::from_secs(1),
             "reset() should return base_delay() to 1s"
         );
+    }
+
+    /// The reconnect loop's backoff runs from 1 s to a 30 s cap, using these
+    /// constants. The tests above pass literals, so only this one pins them.
+    ///
+    /// Proves NC-16.
+    #[test]
+    fn reconnect_backoff_runs_from_one_second_to_a_thirty_second_cap() {
+        assert_eq!(RECONNECT_BACKOFF_BASE, Duration::from_secs(1));
+        assert_eq!(RECONNECT_BACKOFF_CAP, Duration::from_secs(30));
+        let mut b = Backoff::new(RECONNECT_BACKOFF_BASE, RECONNECT_BACKOFF_CAP);
+        for secs in [1u64, 2, 4, 8, 16, 30, 30] {
+            assert_eq!(b.base_delay(), Duration::from_secs(secs));
+            b.next_delay(0.5);
+        }
+    }
+
+    /// The backoff has no attempt limit: after an unbounded run of failures it
+    /// still yields a delay at the cap and never panics, so a daemon retries
+    /// indefinitely. The one error the loop treats as fatal is a non-https
+    /// endpoint (`http_endpoint_is_rejected`).
+    ///
+    /// Proves NC-17.
+    #[test]
+    fn backoff_never_runs_out() {
+        let mut b = Backoff::new(Duration::from_secs(1), Duration::from_secs(30));
+        b.attempt = u32::MAX;
+        let delay = b.next_delay(0.999);
+        assert!(
+            delay >= Duration::from_secs(15) && delay <= Duration::from_secs(30),
+            "delay at the cap must be in [15 s, 30 s], got {delay:?}"
+        );
+        assert_eq!(b.attempt, u32::MAX, "the attempt counter saturates");
+    }
+
+    /// The daemon pings the Relay every 60 s and abandons the link after 60 s
+    /// unanswered. That `build_channel` applies both to the channel is read from
+    /// its construction, which tonic gives no way to read back.
+    ///
+    /// Proves NC-10.
+    #[test]
+    fn keepalive_is_sixty_seconds_each_way() {
+        assert_eq!(KEEPALIVE_INTERVAL, Duration::from_secs(60));
+        assert_eq!(KEEPALIVE_TIMEOUT, Duration::from_secs(60));
     }
 
     // -----------------------------------------------------------------------

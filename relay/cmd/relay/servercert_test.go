@@ -375,7 +375,7 @@ func probeHandshake(t *testing.T, addr string, roots *x509.CertPool, serverName 
 	return probe
 }
 
-// Proves EN-9. Sharing the certificate between listeners (ADR-0031 §1) must
+// Proves EN-9, NC-2, NC-6, NC-29. Sharing the certificate between listeners (ADR-0031 §1) must
 // never share ClientAuth: that is the failure this change newly makes possible.
 func TestServerCertificate_OneLeafOnBothListenersOnlyTheNodePlaneAsksForAClientCert(t *testing.T) {
 	f := startRelay(t, WithTCPNodePlane(), WithControlPlane())

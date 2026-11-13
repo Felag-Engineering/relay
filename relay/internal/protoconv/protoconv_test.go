@@ -139,6 +139,7 @@ func TestFactsFromProtoWithRefusals(t *testing.T) {
 	})
 }
 
+// Proves NC-21.
 func TestHelloReportFromProto(t *testing.T) {
 	good := strings.Repeat("0123456789abcdef", 4)
 	other := strings.Repeat("fedcba9876543210", 4)

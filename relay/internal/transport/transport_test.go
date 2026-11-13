@@ -12,6 +12,8 @@ import (
 	"crypto/x509/pkix"
 	"encoding/hex"
 	"encoding/pem"
+	"errors"
+	"math/big"
 	"net"
 	"sync/atomic"
 	"testing"
@@ -24,6 +26,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 )
@@ -187,6 +190,7 @@ func (f *fakeChecker) IsRevoked(nodeID string) bool {
 	return f.revoked[nodeID]
 }
 
+// Proves NC-2, NC-3.
 func TestTransport_AcceptValidClientCert(t *testing.T) {
 	ts := newTestSetup(t)
 	var gotNodeID string
@@ -236,6 +240,7 @@ func TestTransport_AcceptValidClientCert(t *testing.T) {
 	}
 }
 
+// Proves NC-29.
 func TestTransport_RejectNoCert(t *testing.T) {
 	ts := newTestSetup(t)
 	var gotNodeID string
@@ -269,6 +274,7 @@ func TestTransport_RejectNoCert(t *testing.T) {
 	}
 }
 
+// Proves NC-2.
 func TestTransport_RejectUntrustedCert(t *testing.T) {
 	ts := newTestSetup(t)
 	var gotNodeID string
@@ -419,6 +425,7 @@ func TestTransport_RejectRevokedCert_Handshake(t *testing.T) {
 // layer: even when ServerCredentials has a nil checker (so TLS admits the cert),
 // the stream interceptor with a revoking checker returns codes.Unauthenticated.
 // This isolates the interceptor layer from the TLS handshake layer.
+// Proves NC-28.
 func TestTransport_RejectRevoked_Interceptor(t *testing.T) {
 	ts := newTestSetup(t)
 	var gotNodeID string
@@ -470,6 +477,7 @@ func TestTransport_RejectRevoked_Interceptor(t *testing.T) {
 // The test rotates the certificate between two handshakes and asserts the
 // second connection is served the new leaf. No rotation policy is under test
 // here — only that the transport consults the seam at all.
+// Proves NC-6.
 func TestTransport_CertificateIsFetchedEveryHandshake(t *testing.T) {
 	ts := newTestSetup(t)
 
@@ -745,6 +753,7 @@ func TestServerCredentials_DoesNotReportACertlessHandshake(t *testing.T) {
 	}
 }
 
+// Proves NC-28.
 func TestServerCredentials_NilObserverStillRefusesARevokedCert(t *testing.T) {
 	ts := newTestSetup(t)
 	checker := &fakeChecker{revoked: map[string]bool{"node-revoked": true}}
@@ -754,5 +763,150 @@ func TestServerCredentials_NilObserverStillRefusesARevokedCert(t *testing.T) {
 
 	if err := <-srvErr; err == nil {
 		t.Fatal("a revoked certificate was admitted with a nil observer")
+	}
+}
+
+// A client certificate that does not chain to the CA the Relay trusts is
+// refused by the handshake itself, before any stream or handler exists.
+// Proves NC-28.
+func TestServerCredentials_RefusesAnUntrustedClientCertAtTheHandshake(t *testing.T) {
+	ts := newTestSetup(t)
+	creds := transport.ServerCredentials(ts.certificate(), ts.clientCAs, nil, nil)
+
+	otherCA, err := catest.Generate()
+	if err != nil {
+		t.Fatalf("open the second CA: %v", err)
+	}
+	csrPEM, key := newInlineCSR(t, "node-untrusted")
+	certPEM, err := otherCA.SignCSR(csrPEM, "node-untrusted")
+	if err != nil {
+		t.Fatalf("SignCSR: %v", err)
+	}
+	untrusted := assembleClientCert(t, certPEM, key)
+
+	srvErr, _ := rawHandshake(t, ts, creds, &untrusted)
+	if err := <-srvErr; err == nil {
+		t.Fatal("a client certificate from a CA the Relay does not trust was admitted at the handshake")
+	}
+
+	// The same handshake with a certificate the Relay's CA signed succeeds, so
+	// the refusal above is the CA and not the harness.
+	srvErr, _ = rawHandshake(t, ts, creds, signedClientCert(t, ts, "node-trusted"))
+	if err := <-srvErr; err != nil {
+		t.Fatalf("a certificate from the trusted CA was refused: %v", err)
+	}
+}
+
+// issueLeaf signs a client-auth leaf for cn with the test-local CA, valid for
+// [notBefore, notAfter].
+func issueLeaf(t *testing.T, caCert *x509.Certificate, caKey *ecdsa.PrivateKey, cn string, notBefore, notAfter time.Time) *tls.Certificate {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate leaf key: %v", err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(time.Now().UnixNano()),
+		Subject:      pkix.Name{CommonName: cn},
+		NotBefore:    notBefore,
+		NotAfter:     notAfter,
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, caCert, &key.PublicKey, caKey)
+	if err != nil {
+		t.Fatalf("sign leaf: %v", err)
+	}
+	return &tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
+}
+
+// An expired client certificate is refused at the handshake, and the refusal is
+// the expiry: a currently valid leaf from the same CA is admitted. This test
+// asserts the handshake refusal only; that enrolling again, which mints a new
+// Node ID, is the way back is shown by TestEnroll_SecondEnrollmentIsANewNode.
+// Proves NC-31.
+func TestServerCredentials_RefusesAnExpiredClientCertAtTheHandshake(t *testing.T) {
+	// A test-local CA: the shared CA signs from the current time and cannot
+	// backdate a leaf.
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate CA key: %v", err)
+	}
+	caTmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "expiry-test-ca"},
+		NotBefore:             time.Now().Add(-72 * time.Hour),
+		NotAfter:              time.Now().Add(72 * time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatalf("self-sign CA: %v", err)
+	}
+	caCert, err := x509.ParseCertificate(caDER)
+	if err != nil {
+		t.Fatalf("parse CA: %v", err)
+	}
+	pool := x509.NewCertPool()
+	pool.AddCert(caCert)
+
+	ts := newTestSetup(t)
+	creds := transport.ServerCredentials(ts.certificate(), pool, nil, nil)
+	now := time.Now()
+
+	expired := issueLeaf(t, caCert, caKey, "node-expired", now.Add(-48*time.Hour), now.Add(-24*time.Hour))
+	srvErr, _ := rawHandshake(t, ts, creds, expired)
+	err = <-srvErr
+	var invalid x509.CertificateInvalidError
+	if !errors.As(err, &invalid) || invalid.Reason != x509.Expired {
+		t.Fatalf("server handshake error = %v, want an x509 expiry refusal", err)
+	}
+
+	valid := issueLeaf(t, caCert, caKey, "node-current", now.Add(-time.Hour), now.Add(time.Hour))
+	srvErr, _ = rawHandshake(t, ts, creds, valid)
+	if err := <-srvErr; err != nil {
+		t.Fatalf("a currently valid certificate from the same CA was refused: %v", err)
+	}
+}
+
+// certlessStream is a ServerStream that carries only a context.
+type certlessStream struct {
+	grpc.ServerStream
+	ctx context.Context
+}
+
+func (s certlessStream) Context() context.Context { return s.ctx }
+
+// Tunnel.Open is not certless: a call with no peer, or a TLS peer with no
+// verified chain, is refused as Unauthenticated before the handler runs.
+// Proves NC-29.
+func TestStreamInterceptor_RefusesACertlessTunnelOpenBeforeItsHandler(t *testing.T) {
+	cases := []struct {
+		name string
+		ctx  context.Context
+	}{
+		{"no peer", context.Background()},
+		{"TLS peer with no verified chains", peer.NewContext(context.Background(), &peer.Peer{
+			AuthInfo: credentials.TLSInfo{State: tls.ConnectionState{}},
+		})},
+	}
+	interceptor := transport.StreamServerInterceptor(productionCertless(), nil)
+	info := &grpc.StreamServerInfo{FullMethod: relayv1.Tunnel_Open_FullMethodName, IsClientStream: true, IsServerStream: true}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			handlerRan := false
+			err := interceptor(nil, certlessStream{ctx: tc.ctx}, info, func(any, grpc.ServerStream) error {
+				handlerRan = true
+				return nil
+			})
+			if code := status.Code(err); code != codes.Unauthenticated {
+				t.Fatalf("code = %v (err %v), want Unauthenticated", code, err)
+			}
+			if handlerRan {
+				t.Error("the Tunnel.Open handler ran on a refused call")
+			}
+		})
 	}
 }

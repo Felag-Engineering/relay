@@ -29,6 +29,7 @@ import (
 // daemon reconnects entirely on its own (no Relaunch) and the reconciled
 // resend resolves via the daemon's dedup path rather than a second real
 // execution.
+// Proves NC-17.
 func TestFleetE2E_RelayRestartDaemonReconnects_DedupHolds(t *testing.T) {
 	relayBin, daemonBin := skipUnlessFleetBins(t)
 

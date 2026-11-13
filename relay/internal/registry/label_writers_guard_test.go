@@ -85,6 +85,7 @@ func selectorUses(root string, names ...string) (map[string][]string, error) {
 // WriteInitialTags or ApplyTagChanges from any other non-test file and this test goes red. The
 // registrytest package is the shared conformance suite that seeds relay: labels
 // for the implementations under test.
+// Proves NC-24.
 func TestLabelWriters_EachHasOnlyItsDefiningCallers(t *testing.T) {
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {

@@ -1427,6 +1427,7 @@ func TestRouter_CurrentRegistrationEndRunsOfflineHookBeforeWaitersFail(t *testin
 
 // A replaced registration's end is not the Node going offline: a newer
 // registration already holds the slot, so the hook does not run.
+// Proves NC-15.
 func TestRouter_ReplacedRegistrationEndDoesNotRunOfflineHook(t *testing.T) {
 	var calls atomic.Int32
 	r := NewRouter(nil, nil, WithOnOffline(func(string, map[string]struct{}) { calls.Add(1) }))
@@ -1704,6 +1705,7 @@ func TestRouter_SupersededRegistrationEndRunsNoOfflineHook(t *testing.T) {
 
 // A registration the Node's newer one replaced in the Router tells its waiters
 // the same: the Node is not offline.
+// Proves NC-13.
 func TestRouter_ReplacedRegistrationFailsItsWaitersWithErrStreamReplaced(t *testing.T) {
 	r := NewRouter(nil, nil)
 	send := &recordingSend{}
@@ -1960,6 +1962,7 @@ func TestDispatch_AForgedResultWakingTwoCallersIsRecordedOnce(t *testing.T) {
 
 // A registration displaced by a newer one for the same Node is told, once,
 // so its caller can end that stream; the newer one is not.
+// Proves NC-13.
 func TestRouter_ADisplacedRegistrationIsTold(t *testing.T) {
 	r := NewRouter(nil, nil)
 	var oldTold, newTold atomic.Int32
@@ -1973,4 +1976,28 @@ func TestRouter_ADisplacedRegistrationIsTold(t *testing.T) {
 	if got := newTold.Load(); got != 0 {
 		t.Fatalf("current registration told %d times at its own end, want 0", got)
 	}
+}
+
+// Only the Node's current registration is sent Tasks: once a newer one
+// replaces it, a Task goes to the newer stream and never to the displaced one.
+// Proves NC-14.
+func TestRouter_OnlyTheCurrentRegistrationReceivesTasks(t *testing.T) {
+	r := NewRouter(nil, nil)
+	older, newer := &recordingSend{}, &recordingSend{}
+	unregisterOlder := r.Register("node-1", older.send)
+	unregisterNewer := r.Register("node-1", newer.send)
+
+	dispatched := make(chan error, 1)
+	go func() {
+		_, err := r.Dispatch(context.Background(), "node-1", jobs.Task{ID: "task-1", NodeID: "node-1"})
+		dispatched <- err
+	}()
+	waitUntil(t, time.Second, func() bool { return newer.len() == 1 })
+	if got := older.len(); got != 0 {
+		t.Errorf("the displaced registration was sent %d messages, want 0", got)
+	}
+
+	unregisterOlder()
+	unregisterNewer()
+	<-dispatched
 }

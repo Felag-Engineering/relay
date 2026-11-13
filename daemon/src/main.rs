@@ -896,10 +896,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        gen::Facts, heartbeat_delay, hello, now_millis, policy_snapshot, ArgMatcher, DenyRule,
-        HEARTBEAT_INTERVAL, HEARTBEAT_JITTER_FRACTION,
+        gen::Facts, heartbeat_delay, hello, now_millis, policy_snapshot, reconnect_loop,
+        run_tunnel, startup_policy, ArgMatcher, CancelRegistry, Config, DenyRule, Inflight,
+        Scheduler, Services, Shutdown, ShutdownContext, HEARTBEAT_INTERVAL,
+        HEARTBEAT_JITTER_FRACTION,
     };
+    use crate::test_support::fake_relay::{pki, start_fake_tunnel, TunnelAnswer, TunnelSeen};
+    use crate::test_support::TempDir;
     use crate::{enroll, policy, templates, version};
+    use std::path::Path;
+    use std::sync::Arc;
     use std::time::Duration;
 
     /// The documented `journalctl -g` pattern must match what the production
@@ -998,6 +1004,7 @@ mod tests {
     /// The Relay marks a Node offline after three missed intervals, so the
     /// interval and its jitter are a contract with `relay/cmd/relay`, which
     /// parses them from this file.
+    /// Proves NC-8.
     #[test]
     fn heartbeat_interval_is_sixty_seconds_jittered_twenty_percent() {
         assert_eq!(HEARTBEAT_INTERVAL, Duration::from_secs(60));
@@ -1008,6 +1015,7 @@ mod tests {
     // heartbeat_delay
     // -----------------------------------------------------------------------
 
+    /// Proves NC-8.
     #[test]
     fn heartbeat_delay_bounds_and_midpoint() {
         let interval = Duration::from_secs(10);
@@ -1056,6 +1064,7 @@ mod tests {
 
     const FIXTURE: &str = include_str!("../policy.example.toml");
 
+    /// Proves NC-19.
     #[test]
     fn policy_snapshot_from_fixture_populates_all_fields() {
         let p = policy::from_toml_str(FIXTURE).expect("fixture must parse");
@@ -1122,7 +1131,7 @@ mod tests {
     // hello
     // -----------------------------------------------------------------------
 
-    /// Proves NC-38.
+    /// Proves NC-38, NC-19.
     #[test]
     #[allow(deprecated)] // reads Hello.node_id only to prove it is never set
     fn hello_never_sets_the_node_id() {
@@ -1153,9 +1162,6 @@ mod tests {
     // -----------------------------------------------------------------------
     // startup_policy: refuse start versus deny-all
     // -----------------------------------------------------------------------
-
-    use super::startup_policy;
-    use std::path::Path;
 
     fn fragment(name: &str, text: &str) -> policy::Fragment {
         policy::Fragment {
@@ -1267,6 +1273,261 @@ mod tests {
         assert!(
             result.is_ok(),
             "a Policy-file failure never stops the daemon"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // The Tunnel connection against a fake Relay
+    // -----------------------------------------------------------------------
+
+    /// How far below a backoff step's floor a measured gap may fall. Each gap is
+    /// already at least the drawn delay, since the fake stamps a connection after
+    /// the dial; this only absorbs the two stamps' scheduling jitter, so it is a
+    /// tolerance on the floor and never a margin on an upper bound.
+    const CLOCK_SLACK: Duration = Duration::from_millis(50);
+
+    fn test_services(state_dir: &Path) -> Arc<Services> {
+        Arc::new(Services {
+            policy: policy::from_toml_str(FIXTURE).expect("fixture must parse"),
+            templates: templates::TemplateSet::empty(),
+            dedup: crate::dedup::DedupStore::open(state_dir).expect("open the dedup store"),
+            scheduler: Scheduler::new(),
+        })
+    }
+
+    fn test_ctx() -> ShutdownContext {
+        ShutdownContext {
+            shutdown: Shutdown::new(),
+            inflight: Inflight::default(),
+            grace: Duration::from_secs(1),
+            registry: CancelRegistry::new(),
+        }
+    }
+
+    /// A client identity that pins `ca_bundle_pem`. The fake Relay asks for no
+    /// client certificate, so the certificate itself is never checked.
+    fn test_identity(ca_bundle_pem: &str) -> crate::identity::Identity {
+        let key = rcgen::KeyPair::generate().expect("keygen");
+        let cert = rcgen::CertificateParams::new(vec!["client".to_string()])
+            .expect("params")
+            .self_signed(&key)
+            .expect("self_signed");
+        crate::identity::Identity {
+            node_id: "test-node".to_string(),
+            key_pem: key.serialize_pem(),
+            cert_pem: cert.pem(),
+            ca_bundle_pem: ca_bundle_pem.to_string(),
+        }
+    }
+
+    fn test_config(port: u16, state_dir: &Path) -> Config {
+        let endpoint = format!("https://127.0.0.1:{port}");
+        Config {
+            relay_addr: endpoint.clone(),
+            endpoint,
+            tls_server_name: None,
+            state_dir: state_dir.to_path_buf(),
+            policy_path: state_dir.join("policy.toml"),
+            policy_dir: state_dir.join("policy.d"),
+            template_dir: state_dir.join("templates.d"),
+            node_labels: vec![],
+            facts: Facts::default(),
+        }
+    }
+
+    fn gaps(instants: &[std::time::Instant]) -> Vec<Duration> {
+        instants.windows(2).map(|w| w[1] - w[0]).collect()
+    }
+
+    /// Runs `reconnect_loop` against the fake Relay until `enough` says what it
+    /// wanted to see has happened, then drops it. The loop must not return on
+    /// its own: it retries until told to stop. Real clock, so the whole run is
+    /// the sum of the backoff delays; `reconnect_loop`'s future is not `Send`,
+    /// so it is raced here and not spawned.
+    async fn run_until(
+        config: &Config,
+        identity: crate::identity::Identity,
+        state_dir: &Path,
+        seen: &TunnelSeen,
+        enough: impl Fn(&TunnelSeen) -> bool,
+    ) {
+        let observer = async {
+            while !enough(seen) {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        };
+        let overall = Duration::from_secs(30);
+        tokio::select! {
+            res = reconnect_loop(config, identity, test_services(state_dir), test_ctx()) => {
+                panic!("reconnect_loop returned ({}) although nothing stopped it", res.is_ok());
+            }
+            outcome = tokio::time::timeout(overall, observer) => {
+                outcome.expect("the daemon did not retry often enough within the time allowed");
+            }
+        }
+    }
+
+    /// The first thing a daemon sends on a new connection is the Hello, then its
+    /// PolicySnapshot, which carries whether Raw Exec is enabled, then its
+    /// TemplateSnapshot.
+    ///
+    /// Proves NC-19.
+    #[tokio::test]
+    async fn run_tunnel_opens_with_hello_then_the_policy_and_template_snapshots() {
+        let state = TempDir::new("nc19");
+        let services = test_services(state.path());
+        let (port, seen) = start_fake_tunnel(None, TunnelAnswer::PingThenEnd).await;
+        // run_tunnel takes any channel; the https rule belongs to the dial.
+        let channel = tonic::transport::Endpoint::from_shared(format!("http://127.0.0.1:{port}"))
+            .expect("endpoint")
+            .connect()
+            .await
+            .expect("connect to the fake Relay");
+
+        run_tunnel(
+            channel,
+            Facts::default(),
+            vec![],
+            Arc::clone(&services),
+            &test_ctx(),
+        )
+        .await;
+
+        assert_eq!(
+            *seen.first_messages.lock().unwrap(),
+            vec![vec!["hello", "policy", "templates"]]
+        );
+        assert!(
+            services.policy.raw_exec_enabled(),
+            "the fixture enables Raw Exec"
+        );
+        assert_eq!(*seen.raw_exec_reported.lock().unwrap(), vec![true]);
+    }
+
+    /// A Relay that refuses every `Open` never resets the backoff: the waits
+    /// between attempts keep growing, each at least half its step.
+    ///
+    /// Proves NC-16.
+    #[tokio::test]
+    async fn reconnect_loop_backoff_keeps_growing_while_the_relay_refuses_the_open() {
+        let state = TempDir::new("nc16-refused");
+        let server = pki("127.0.0.1");
+        let (port, seen) = start_fake_tunnel(Some(&server), TunnelAnswer::RefuseOpen).await;
+        let config = test_config(port, state.path());
+
+        run_until(
+            &config,
+            test_identity(&server.ca_pem),
+            state.path(),
+            &seen,
+            |s| s.opens.lock().unwrap().len() >= 4,
+        )
+        .await;
+
+        let opens = seen.opens.lock().unwrap().clone();
+        for (gap, floor_secs) in gaps(&opens).into_iter().zip([0.5, 1.0, 2.0]) {
+            assert!(
+                gap + CLOCK_SLACK >= Duration::from_secs_f64(floor_secs),
+                "gap {gap:?} is below the {floor_secs} s floor of its backoff step"
+            );
+        }
+    }
+
+    /// After an `Open` that succeeded, the next wait is back at the base step,
+    /// so the gaps never grow: without the reset the fourth would be at least 4 s.
+    ///
+    /// Proves NC-16.
+    #[tokio::test]
+    async fn reconnect_loop_backoff_returns_to_base_after_an_open_that_succeeded() {
+        let state = TempDir::new("nc16-reset");
+        let server = pki("127.0.0.1");
+        let (port, seen) = start_fake_tunnel(Some(&server), TunnelAnswer::PingThenEnd).await;
+        let config = test_config(port, state.path());
+
+        run_until(
+            &config,
+            test_identity(&server.ca_pem),
+            state.path(),
+            &seen,
+            |s| s.opens.lock().unwrap().len() >= 5,
+        )
+        .await;
+
+        let opens = seen.opens.lock().unwrap().clone();
+        for gap in gaps(&opens) {
+            assert!(
+                gap + CLOCK_SLACK >= Duration::from_millis(500) && gap < Duration::from_secs(3),
+                "gap {gap:?} is outside the base step [0.5 s, 1 s] plus the connect"
+            );
+        }
+    }
+
+    /// Against a Relay whose certificate is outside the CA the daemon pins, the
+    /// daemon sends nothing, Hello included, and retries without end on a
+    /// growing backoff: the TCP connection is accepted and no `Open` ever
+    /// reaches the service. Four attempts are a sample of "indefinitely"; the
+    /// loop has no attempt limit (`backoff_never_runs_out`), and the one fatal
+    /// error is a non-https endpoint (`http_endpoint_is_rejected`).
+    ///
+    /// Proves NC-16, NC-17, NC-30.
+    #[tokio::test]
+    async fn reconnect_loop_retries_a_relay_outside_the_pinned_ca_and_sends_it_nothing() {
+        let state = TempDir::new("nc17-wrong-ca");
+        let relay_pki = pki("127.0.0.1");
+        let pinned_pki = pki("127.0.0.1");
+        let (port, seen) = start_fake_tunnel(Some(&relay_pki), TunnelAnswer::PingThenEnd).await;
+        let config = test_config(port, state.path());
+
+        run_until(
+            &config,
+            test_identity(&pinned_pki.ca_pem),
+            state.path(),
+            &seen,
+            |s| s.accepts.lock().unwrap().len() >= 4,
+        )
+        .await;
+
+        assert!(
+            seen.opens.lock().unwrap().is_empty(),
+            "a stream was opened to a Relay outside the pinned CA"
+        );
+        assert!(seen.first_messages.lock().unwrap().is_empty());
+        let accepts = seen.accepts.lock().unwrap().clone();
+        for (gap, floor_secs) in gaps(&accepts).into_iter().zip([0.5, 1.0, 2.0]) {
+            assert!(
+                gap + CLOCK_SLACK >= Duration::from_secs_f64(floor_secs),
+                "gap {gap:?} is below the {floor_secs} s floor of its backoff step"
+            );
+        }
+    }
+
+    /// The one error that ends the loop is a non-https endpoint: it is refused
+    /// before any dial and `reconnect_loop` returns it rather than retrying.
+    ///
+    /// Proves NC-17.
+    #[tokio::test]
+    async fn reconnect_loop_returns_an_error_for_a_non_https_endpoint() {
+        let state = TempDir::new("nc17-http");
+        let server = pki("127.0.0.1");
+        let mut config = test_config(1, state.path());
+        config.endpoint = "http://127.0.0.1:1".to_string();
+
+        let res = tokio::time::timeout(
+            Duration::from_secs(5),
+            reconnect_loop(
+                &config,
+                test_identity(&server.ca_pem),
+                test_services(state.path()),
+                test_ctx(),
+            ),
+        )
+        .await
+        .expect("a non-https endpoint ends the loop at once and does not retry");
+
+        let err = res.expect_err("a non-https endpoint is fatal");
+        assert!(
+            err.to_string().contains("http"),
+            "the error names the bad scheme: {err}"
         );
     }
 }

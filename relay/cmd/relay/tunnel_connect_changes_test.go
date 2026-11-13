@@ -187,7 +187,7 @@ func TestTunnelOpen_FirstConnectReportingNothingCannotHideTheNextReport(t *testi
 // The tunnel half of "a version below the minimum still connects": it
 // consults no minimum, so the Ping arrives and the change is recorded.
 //
-// Proves NC-34.
+// Proves NC-34, NC-26.
 func TestTunnelOpen_DaemonVersionBelowTheMinimumStillConnects(t *testing.T) {
 	const nodeID = "cert-node-below"
 	reg, rec := registry.NewInMemory(), &captureChanges{}

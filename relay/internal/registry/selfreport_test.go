@@ -6,6 +6,7 @@ import (
 	"testing"
 )
 
+// Proves NC-21.
 func TestWellFormedFingerprint(t *testing.T) {
 	tests := []struct {
 		name string
@@ -31,6 +32,7 @@ func TestWellFormedFingerprint(t *testing.T) {
 	}
 }
 
+// Proves NC-21.
 func TestWellFormedSelfReportedText(t *testing.T) {
 	tests := []struct {
 		name string
@@ -80,6 +82,7 @@ func TestWithinNodeLabelCap(t *testing.T) {
 	}
 }
 
+// Proves NC-21.
 func TestWellFormedNodeLabel(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -105,6 +108,7 @@ func TestWellFormedNodeLabel(t *testing.T) {
 // TestDeclineMalformedSelfReport pins the one rule the ingress and the
 // read-back share: a field that fails is omitted and named, in a fixed order,
 // and a well-formed report comes back untouched with nothing named.
+// Proves NC-22.
 func TestDeclineMalformedSelfReport(t *testing.T) {
 	good := SelfReport{
 		Facts: Facts{Hostname: "web-01", OS: "linux", Kernel: "6.1.0", Arch: "x86_64",
@@ -184,6 +188,7 @@ func TestDeclineMalformedSelfReport_IPAddressCap(t *testing.T) {
 
 // TestInMemory_DeclinesOverLongNodeLabelOnRead: the fake declines a stored
 // node: Label over the length bounds exactly as the store's read-back does.
+// Proves NC-22.
 func TestInMemory_DeclinesOverLongNodeLabelOnRead(t *testing.T) {
 	r := NewInMemory()
 	atKey := strings.Repeat("k", MaxLabelKeyLen)
@@ -200,5 +205,17 @@ func TestInMemory_DeclinesOverLongNodeLabelOnRead(t *testing.T) {
 		if len(node.NodeLabels) != 1 || node.NodeLabels[atKey] != "web" {
 			t.Errorf("%s NodeLabels has %d entries, want only the one within the bounds", what, len(node.NodeLabels))
 		}
+	}
+}
+
+// The bounds are the ones the spec states. The cap tests derive their inputs
+// from these constants, so a changed constant would pass them.
+// Proves NC-21.
+func TestSelfReportBounds_AreTheSpecValues(t *testing.T) {
+	if MaxSelfReportedTextBytes != 253 {
+		t.Errorf("MaxSelfReportedTextBytes = %d, want 253", MaxSelfReportedTextBytes)
+	}
+	if MaxReportedIPAddresses != 256 {
+		t.Errorf("MaxReportedIPAddresses = %d, want 256", MaxReportedIPAddresses)
 	}
 }

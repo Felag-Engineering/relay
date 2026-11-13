@@ -16,9 +16,13 @@ import (
 // An external (registry_test) package because registrytest imports registry:
 // an internal test file importing it back is an import cycle.
 //
-// Its ClockSkew_* subtests prove the in-memory half of NC-37's storage.
+// Its ClockSkew_* subtests prove the in-memory half of NC-37's storage;
+// RecordHeartbeat_RoundTripsAndTouchesNothingElse and Connected_IsNotInferredFromLastSeen
+// prove NC-11; ReadBack_DeclinesMalformedSelfReportedFields proves NC-22;
+// Upsert_UpdatePreservesRelayKnowledge proves NC-24; Upsert_UpdateOverwritesNodeRootedFields
+// proves NC-25.
 //
-// Proves NC-37.
+// Proves NC-11, NC-22, NC-24, NC-25, NC-37.
 func TestRepositoryConformance(t *testing.T) {
 	registrytest.RunRepositoryConformance(t, func(t *testing.T, cfg registrytest.Config) registry.Repository {
 		return registry.NewInMemory(
