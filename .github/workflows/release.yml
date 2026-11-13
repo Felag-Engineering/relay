@@ -106,9 +106,9 @@ permissions: {}
 
 env:
   # The one place the release's Rust toolchain is named: an exact stable, never a channel,
-  # bumped deliberately (the daemon otherwise tracks stable, and there is no
-  # rust-toolchain.toml — CONTRIBUTING.md). CI keeps `stable`, so CI sees a new stable first.
-  RELEASE_RUST_TOOLCHAIN: 1.99.0
+  # bumped deliberately, together with ci.yml's RUST_TOOLCHAIN, so a release builds on the
+  # toolchain CI tested (there is no rust-toolchain.toml — CONTRIBUTING.md).
+  RELEASE_RUST_TOOLCHAIN: 1.100.0
 
 jobs:
   build:

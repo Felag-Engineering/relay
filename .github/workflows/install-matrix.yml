@@ -34,7 +34,7 @@ on:
       rust-toolchain:
         description: The Rust toolchain that builds the daemon; the release passes its pinned one.
         type: string
-        default: stable
+        default: 1.100.0 # ci.yml's RUST_TOOLCHAIN
       release-dist:
         description: >-
           The release's artifact holding its packages, role tarball and SHA256SUMS. Empty

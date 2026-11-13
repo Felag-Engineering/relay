@@ -1754,15 +1754,40 @@ fn mount_scanner_counts_aliased_includes() {
 // (g2) the files rustc actually compiled, from cargo's dep-info
 // ---------------------------------------------------------------------------
 
-/// The directory this test binary lives in (`target/<profile>/deps`), where cargo
-/// leaves one rustc dep-info `.d` file per compiled unit. The read-only crates are
-/// libraries of this package's dependency graph, so `cargo test` has compiled them.
-fn deps_dir() -> PathBuf {
-    std::env::current_exe()
-        .expect("current_exe")
-        .parent()
-        .expect("deps dir")
-        .to_path_buf()
+/// The profile directory this test binary was built under (`target/<profile>`, or
+/// `target/<triple>/<profile>`). Cargo leaves one rustc dep-info `.d` file per
+/// compiled unit beneath it: in `deps/` (cargo before 1.100), or in
+/// `build/<package>/<hash>/out/` (1.100 on). The read-only crates are libraries of
+/// this package's dependency graph, so `cargo test` has compiled them. Any other
+/// placement of this binary is refused, so the dep-info checks fail closed.
+fn profile_dir() -> PathBuf {
+    let exe = std::env::current_exe().expect("current_exe");
+    let dir = exe.parent().expect("test binary dir");
+    let named = |p: &Path, n: &str| p.file_name().is_some_and(|f| f == n);
+    if named(dir, "deps") {
+        return dir.parent().expect("profile dir").to_path_buf();
+    }
+    // <profile>/build/<package>/<hash>/out/<exe>
+    let build = dir.ancestors().nth(3);
+    match build {
+        Some(b) if named(dir, "out") && named(b, "build") => {
+            b.parent().expect("profile dir").to_path_buf()
+        }
+        _ => panic!(
+            "test binary {} is in neither cargo layout: the compiled-file check must fail closed",
+            exe.display()
+        ),
+    }
+}
+
+/// Every directory that may hold dep-info for `krate`'s compiled units.
+fn dep_info_dirs(krate: &str) -> Vec<PathBuf> {
+    let profile = profile_dir();
+    let mut dirs = vec![profile.join("deps")];
+    if let Ok(units) = fs::read_dir(profile.join("build").join(krate)) {
+        dirs.extend(units.flatten().map(|u| u.path().join("out")));
+    }
+    dirs.into_iter().filter(|d| d.is_dir()).collect()
 }
 
 /// Whether `p` sits under some checkout's `daemon/{crates,src,target}`.
@@ -1817,23 +1842,25 @@ fn dep_info_files(path: &Path) -> Vec<PathBuf> {
 }
 
 /// Every file rustc read for a read-only crate (sources, `include_str!` data,
-/// clippy.toml), across every `.d` file for it in the deps dir (the test build, and
-/// any clippy or ban-probe build that ran before it).
+/// clippy.toml), across every `.d` file for it under the profile dir (the test
+/// build, and any clippy or ban-probe build that ran before it).
 fn compiled_files(krate: &str) -> BTreeSet<PathBuf> {
     let prefix = format!("{}-", krate.replace('-', "_"));
     let mut out = BTreeSet::new();
     let mut units = 0;
-    for e in fs::read_dir(deps_dir()).expect("read deps dir").flatten() {
-        let name = e.file_name().to_string_lossy().into_owned();
-        if name.starts_with(&prefix) && name.ends_with(".d") {
-            units += 1;
-            out.extend(dep_info_files(&e.path()));
+    for dir in dep_info_dirs(krate) {
+        for e in fs::read_dir(&dir).expect("read dep-info dir").flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if name.starts_with(&prefix) && name.ends_with(".d") {
+                units += 1;
+                out.extend(dep_info_files(&e.path()));
+            }
         }
     }
     assert!(
         units > 0 && out.iter().any(|f| f.extension().is_some_and(|x| x == "rs")),
-        "no dep-info for {krate} in {}: the compiled-file check must fail closed",
-        deps_dir().display()
+        "no dep-info for {krate} under {}: the compiled-file check must fail closed",
+        profile_dir().display()
     );
     out
 }
@@ -1862,8 +1889,24 @@ fn compiled_key(krate: &str, file: &Path) -> Result<String, String> {
         ));
     }
     let name = file.file_name().unwrap().to_string_lossy();
-    let in_out_dir = file.to_string_lossy().contains(&format!("/build/{krate}-"))
-        && file.to_string_lossy().contains("/out/");
+    // A build script's OUT_DIR in this build's own profile dir, the file directly in
+    // it: `build/<krate>-<hash>/out/` before cargo 1.100, `build/<krate>/<hash>/out/`
+    // from 1.100 on. Anywhere else, a file of that name is an escape.
+    let build = profile_dir()
+        .join("build")
+        .canonicalize()
+        .expect("build dir");
+    let in_out_dir = file.strip_prefix(&build).is_ok_and(|rel| {
+        let parts: Vec<String> = rel
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+            .collect();
+        match parts.as_slice() {
+            [unit, out, _] => unit.starts_with(&format!("{krate}-")) && out == "out",
+            [package, _, out, _] => package == krate && out == "out",
+            _ => false,
+        }
+    });
     if krate == "relay-proto" && in_out_dir && name == "relay.v1.rs" {
         return Ok("OUT_DIR/relay.v1.rs".to_string());
     }
@@ -2057,8 +2100,8 @@ fn compiled_data_files_are_the_crates_own_or_the_pinned_fixtures() {
             .into_iter()
             .filter(|f| f.extension().is_none_or(|x| x != "rs"))
             .filter(|f| !f.starts_with(&own) && !allowed.contains(f))
-            // dep-info also lists the deps dir's own `.d` rules and build outputs.
-            .filter(|f| !f.starts_with(deps_dir().parent().unwrap()))
+            // dep-info also lists its own `.d` rules and build outputs.
+            .filter(|f| !f.starts_with(profile_dir()))
             .map(|f| f.display().to_string())
             .collect();
         assert!(
