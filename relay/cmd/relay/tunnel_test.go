@@ -17,10 +17,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Felag-Engineering/relay/relay/internal/auditsink"
 	"github.com/Felag-Engineering/relay/relay/internal/capability"
 	"github.com/Felag-Engineering/relay/relay/internal/dispatch"
 	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 	"github.com/Felag-Engineering/relay/relay/internal/nodestate"
+	"github.com/Felag-Engineering/relay/relay/internal/nodevocab"
 	"github.com/Felag-Engineering/relay/relay/internal/policyview"
 	"github.com/Felag-Engineering/relay/relay/internal/registry"
 	relayv1 "github.com/Felag-Engineering/relay/relay/internal/relay/v1"
@@ -1949,8 +1951,8 @@ func TestTunnelOpen_ATaskToASilentNodeResolvesNodeOfflineAtTheHeartbeatDeadline(
 
 // The Node's self-report is read once per connection into the registry: a
 // second Hello, or a second PolicySnapshot, on the same stream changes no
-// registry field. This covers the registry only; the display caches
-// (policyview, nodevocab) replace their entry on each snapshot.
+// registry field. This covers the registry only; the policyview and nodevocab caches are
+// covered by the sibling tests that follow.
 // Proves NC-20.
 func TestTunnelOpen_ALaterHelloOrPolicySnapshotOnTheSameStreamChangesNoRegistryField(t *testing.T) {
 	const nodeID = "node-read-once"
@@ -2007,6 +2009,193 @@ func TestTunnelOpen_ALaterHelloOrPolicySnapshotOnTheSameStreamChangesNoRegistryF
 	}
 	if n.ReportedRawExec != registry.RawExecReportedEnabled {
 		t.Errorf("ReportedRawExec = %v after a later PolicySnapshot, want the first one's (enabled)", n.ReportedRawExec)
+	}
+}
+
+// policySnap is a PolicySnapshot message with the fields the cache tests tell apart.
+func policySnap(fp string, rawExec bool, ops ...string) *relayv1.DaemonMessage {
+	return &relayv1.DaemonMessage{Body: &relayv1.DaemonMessage_Policy{Policy: &relayv1.PolicySnapshot{
+		PolicyFingerprint: fp,
+		RawExecEnabled:    rawExec,
+		AllowedOperations: ops,
+	}}}
+}
+
+// templateSnap is a TemplateSnapshot message carrying ts.
+func templateSnap(fp string, ts ...*relayv1.TemplateDescriptor) *relayv1.DaemonMessage {
+	return &relayv1.DaemonMessage{Body: &relayv1.DaemonMessage_Templates{Templates: &relayv1.TemplateSnapshot{
+		TemplateSetFingerprint: fp,
+		Templates:              ts,
+	}}}
+}
+
+// templateOf builds a TemplateDescriptor with the given name and risk class.
+func templateOf(name string, class relayv1.RiskClass) *relayv1.TemplateDescriptor {
+	return &relayv1.TemplateDescriptor{Name: name, RiskClass: class}
+}
+
+// A Node's PolicySnapshot and TemplateSnapshot are read once per connection:
+// a later one on the same stream, wherever after Hello it arrives, changes
+// neither the policyview nor the nodevocab cache. The nodevocab cache is all a Template dispatch reads
+// for its fan-out and class (capability/template.go reads it only through
+// nodeVocab.Get), so an unchanged entry is an unchanged dispatch input: the
+// class stays mutate and the later extra template reaches no Node.
+// Regresses #1329.
+// Proves NC-20.
+func TestTunnelOpen_ALaterPolicyOrTemplateSnapshotOnTheSameStreamChangesNoCache(t *testing.T) {
+	fp0, fpA, fpB := strings.Repeat("0", 64), strings.Repeat("a", 64), strings.Repeat("b", 64)
+	tfp0, tfpA, tfpB := strings.Repeat("1", 64), strings.Repeat("c", 64), strings.Repeat("d", 64)
+	snapA := policySnap(fpA, true, "system.facts")
+	snapB := policySnap(fpB, false, "system.facts", "service.restart")
+	tmplA := templateSnap(tfpA, templateOf("t.restart", relayv1.RiskClass_RISK_CLASS_MUTATE))
+	tmplB := templateSnap(tfpB,
+		templateOf("t.restart", relayv1.RiskClass_RISK_CLASS_READ),
+		templateOf("t.extra", relayv1.RiskClass_RISK_CLASS_READ))
+
+	tests := []struct {
+		name         string
+		msgs         []*relayv1.DaemonMessage
+		wantRawExec  registry.RawExecReport
+		wantRawAfter *bool
+	}{
+		{
+			name:         "right after Hello",
+			msgs:         []*relayv1.DaemonMessage{snapA, tmplA, snapB, tmplB, snapB, tmplB},
+			wantRawExec:  registry.RawExecReportedEnabled,
+			wantRawAfter: boolp(true),
+		},
+		{
+			// The heartbeat is the first message after Hello, so the Policy
+			// record resolves without a snapshot (NC-33); the cache still
+			// takes the first PolicySnapshot.
+			name:         "after other messages",
+			msgs:         []*relayv1.DaemonMessage{heartbeatMsg(), tmplA, heartbeatMsg(), snapA, tmplB, snapB},
+			wantRawExec:  registry.RawExecNotReported,
+			wantRawAfter: nil,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			const nodeID = "cert-node-cache-once"
+			var tick atomic.Int64
+			base := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+			clock := func() time.Time { return base.Add(time.Duration(tick.Add(1)) * time.Second) }
+			reg, rec := registry.NewInMemory(), &captureChanges{}
+			pol, vocab := policyview.New(policyview.WithClock(clock)), nodevocab.New()
+			ts := &tunnelServer{reg: reg, changes: rec, policy: pol, vocab: vocab}
+
+			openThenEnd(t, ts, nodeID, &relayv1.Hello{PolicyFingerprint: fp0, TemplateSetFingerprint: tfp0},
+				policySnap(fp0, false), templateSnap(tfp0, templateOf("t.base", relayv1.RiskClass_RISK_CLASS_READ)))
+			baseline, ok := pol.Get(nodeID)
+			if !ok {
+				t.Fatal("the baseline connect left no policy entry")
+			}
+
+			openThenEnd(t, ts, nodeID, &relayv1.Hello{PolicyFingerprint: fpA, TemplateSetFingerprint: tfpA}, tt.msgs...)
+
+			wantPolicy := policyview.New(policyview.WithClock(func() time.Time { return baseline.ReportedAt.Add(time.Second) }))
+			wantPolicy.Set(nodeID, snapshotFromProto(snapA.GetPolicy()))
+			wantSnap, _ := wantPolicy.Get(nodeID)
+			if got, _ := pol.Get(nodeID); !reflect.DeepEqual(got, wantSnap) {
+				t.Errorf("Policy view = %+v, want the stream's first snapshot %+v (a later one was recorded)", got, wantSnap)
+			}
+			wantVocab := nodevocab.New()
+			wantVocab.Set(nodeID, vocabFromProto(tmplA.GetTemplates()))
+			wantV, _ := wantVocab.Get(nodeID)
+			gotV, _ := vocab.Get(nodeID)
+			if !reflect.DeepEqual(gotV, wantV) {
+				t.Errorf("template cache = %+v, want the stream's first snapshot %+v", gotV, wantV)
+			}
+			for _, tm := range gotV.Templates {
+				if tm.Name == "t.restart" && tm.RiskClass != int32(relayv1.RiskClass_RISK_CLASS_MUTATE) {
+					t.Errorf("t.restart RiskClass = %d, want mutate", tm.RiskClass)
+				}
+				if tm.Name == "t.extra" {
+					t.Error("t.extra from a later snapshot is in the template cache")
+				}
+			}
+			if got := rawExecOf(reg, nodeID); got != tt.wantRawExec {
+				t.Errorf("ReportedRawExec = %v, want %v", got, tt.wantRawExec)
+			}
+			wantPolicyChanges(t, rec, capturedPolicy{nodeID, auditsink.PolicyChange{
+				FingerprintBefore: fp0, FingerprintAfter: fpA, RawExecBefore: boolp(false), RawExecAfter: tt.wantRawAfter,
+			}})
+		})
+	}
+}
+
+// A reconnect is a new stream: it replaces both caches with its own first
+// snapshots, and the refusals of the stream before it do not carry over.
+// Regresses #1329.
+// Proves NC-20.
+func TestTunnelOpen_AReconnectReplacesBothCachesWithItsOwnFirstSnapshots(t *testing.T) {
+	const nodeID = "cert-node-cache-reconnect"
+	h := func(c string) string { return strings.Repeat(c, 64) }
+	snapA, snapB := policySnap(h("a"), true), policySnap(h("b"), false)
+	snapC, snapD := policySnap(h("c"), false, "system.facts"), policySnap(h("d"), true)
+	tmplA := templateSnap(h("1"), templateOf("t.a", relayv1.RiskClass_RISK_CLASS_READ))
+	tmplB := templateSnap(h("2"), templateOf("t.b", relayv1.RiskClass_RISK_CLASS_READ))
+	tmplC := templateSnap(h("3"), templateOf("t.c", relayv1.RiskClass_RISK_CLASS_MUTATE))
+	tmplD := templateSnap(h("4"), templateOf("t.d", relayv1.RiskClass_RISK_CLASS_READ))
+
+	pol, vocab := policyview.New(), nodevocab.New()
+	ts := &tunnelServer{reg: registry.NewInMemory(), policy: pol, vocab: vocab}
+	check := func(stage string, wantP, wantT *relayv1.DaemonMessage) {
+		t.Helper()
+		got, _ := pol.Get(nodeID)
+		if got.PolicyFingerprint != wantP.GetPolicy().GetPolicyFingerprint() {
+			t.Errorf("%s: Policy view fingerprint = %q, want %q", stage, got.PolicyFingerprint, wantP.GetPolicy().GetPolicyFingerprint())
+		}
+		gotV, _ := vocab.Get(nodeID)
+		if gotV.Fingerprint != wantT.GetTemplates().GetTemplateSetFingerprint() {
+			t.Errorf("%s: template cache fingerprint = %q, want %q", stage, gotV.Fingerprint, wantT.GetTemplates().GetTemplateSetFingerprint())
+		}
+	}
+
+	openThenEnd(t, ts, nodeID, &relayv1.Hello{}, snapA, tmplA, snapB, tmplB)
+	check("first stream", snapA, tmplA)
+	openThenEnd(t, ts, nodeID, &relayv1.Hello{}, snapC, tmplC, snapD, tmplD)
+	check("reconnect", snapC, tmplC)
+}
+
+// A refused later snapshot is logged once per stream and kind, never once per
+// message, and the line names only the certificate-derived Node ID and a kind
+// from a closed set. Not parallel: it swaps the default slog logger.
+// Regresses #1329.
+func TestTunnelOpen_AnIgnoredLaterSnapshotIsWarnedOncePerStreamAndKind(t *testing.T) {
+	const nodeID = "cert-node-ignored-snapshot-log"
+	logs := &syncBuffer{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	snap := policySnap(strings.Repeat("a", 64), false)
+	tmpl := templateSnap(strings.Repeat("b", 64))
+	ts := &tunnelServer{reg: registry.NewInMemory()}
+	openThenEnd(t, ts, nodeID, &relayv1.Hello{}, snap, snap, snap, tmpl, tmpl, tmpl)
+	openThenEnd(t, ts, nodeID, &relayv1.Hello{}, snap, snap)
+
+	kinds := map[string]int{}
+	for _, line := range strings.Split(strings.TrimRight(logs.String(), "\n"), "\n") {
+		var entry struct {
+			Level  string `json:"level"`
+			Msg    string `json:"msg"`
+			NodeID string `json:"node_id"`
+			Kind   string `json:"kind"`
+		}
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			continue
+		}
+		if entry.Msg != "ignored a later snapshot on the same stream; a report is read once per connection" || entry.NodeID != nodeID {
+			continue
+		}
+		if entry.Level != "WARN" {
+			t.Errorf("level = %q, want WARN", entry.Level)
+		}
+		kinds[entry.Kind]++
+	}
+	if want := map[string]int{"policy": 2, "templates": 1}; !reflect.DeepEqual(kinds, want) {
+		t.Errorf("warnings by kind = %v, want %v", kinds, want)
 	}
 }
 
