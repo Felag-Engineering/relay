@@ -74,9 +74,9 @@ targets.
 
 ### One current stream
 
-- **NC-13** The Relay holds one current stream per Node for dispatch. A stream opened for a Node
-  ID replaces the existing one, and the replaced stream ends with an error naming a newer stream
-  as the cause.
+- **NC-13** The Relay holds one current stream per Node for dispatch. With execution on, a stream
+  opened for a Node ID replaces the existing one, and the replaced stream ends with an error
+  naming a newer stream as the cause.
 - **NC-14** Only the current stream receives Tasks.
 - **NC-15** Ending a replaced stream never marks the Node offline.
 - **NC-36** The Relay counts stream replacements per Node and, while it runs, writes at most one audit record per Node per 10 minutes, carrying the number of replacements since the previous record, so a single replacement is recorded and a flapping pair writes a bounded number of records (R54).
@@ -150,7 +150,8 @@ outcome is `execution.md`'s (invariant 4).
   Node ID (`enrollment.md`), brings the Node back.
 - **NC-32** A stream whose first message is not `Hello` is refused as an invalid argument.
 
-Stream replacement is not a refusal: the older stream ends because a newer one exists (NC-13).
+Stream replacement is not a refusal: with execution on, the older stream ends because a newer
+one exists (NC-13).
 
 ## Out of scope
 
