@@ -425,6 +425,18 @@ where
     }
 }
 
+/// The borrowed handles an Operation dispatch shares between vocabulary
+/// resolution and the Policy gate: the Native entries, the Template
+/// Operations loaded on this Node, and the Policy that decides. Production
+/// binds `entries` to `registry::REGISTRY`; the structural tests point it
+/// at an extended slice.
+#[derive(Clone, Copy)]
+struct DispatchContext<'a> {
+    entries: &'a [OpRegistration],
+    templates: &'a TemplateSet,
+    policy: &'a Policy,
+}
+
 /// Production Operation path: [`handle_operation_in`] bound to the single
 /// vocabulary registry ([`registry::REGISTRY`]) plus this Node's loaded
 /// Template Operations.
@@ -442,12 +454,14 @@ where
     Fut: Future<Output = TaskResult> + Send + 'static,
 {
     handle_operation_in(
-        &registry::REGISTRY,
-        templates,
+        DispatchContext {
+            entries: &registry::REGISTRY,
+            templates,
+            policy,
+        },
         task_id,
         op,
         timeout,
-        policy,
         run,
         cancel,
     )
@@ -478,14 +492,11 @@ fn resolve<'a>(
 /// slice (issue #289: the structural test proves a new Operation needs only a
 /// registration by pointing this exact function at an extended slice — there
 /// is no per-name match arm left to edit).
-#[allow(clippy::too_many_arguments)]
 async fn handle_operation_in<R, Fut>(
-    entries: &[OpRegistration],
-    templates: &TemplateSet,
+    ctx: DispatchContext<'_>,
     task_id: String,
     op: &Operation,
     timeout: Duration,
-    policy: &Policy,
     run: R,
     cancel: Option<oneshot::Receiver<()>>,
 ) -> TaskResult
@@ -498,11 +509,11 @@ where
     // Template Operations from the Node's loaded set (issue #291) — the same
     // `gate_and_invoke` core serves both with no per-name arm.
     gate_and_invoke(
-        resolve(entries, templates, &op.name),
+        resolve(ctx.entries, ctx.templates, &op.name),
         task_id,
         op,
         timeout,
-        policy,
+        ctx.policy,
         run,
         cancel,
     )
@@ -2681,12 +2692,14 @@ allowed_args = [["*"]]
         // End-to-end through the real Operation path (Policy gate included),
         // pointed at the extended registry — zero dispatch edits.
         let result = handle_operation_in(
-            &entries,
-            TemplateSet::empty_static(),
+            DispatchContext {
+                entries: &entries,
+                templates: TemplateSet::empty_static(),
+                policy: &policy,
+            },
             "t-echo".to_string(),
             &op,
             Duration::from_secs(5),
-            &policy,
             execute,
             None,
         )
@@ -2715,12 +2728,14 @@ allowed_args = [["only-this"]]
         )
         .expect("deny-side policy must parse");
         let denied = handle_operation_in(
-            &entries,
-            TemplateSet::empty_static(),
+            DispatchContext {
+                entries: &entries,
+                templates: TemplateSet::empty_static(),
+                policy: &deny_policy,
+            },
             "t-echo-denied".to_string(),
             &op,
             Duration::from_secs(5),
-            &deny_policy,
             execute,
             None,
         )
@@ -2743,12 +2758,14 @@ allowed_args = []
         )
         .expect("argless policy must parse");
         let unregistered = handle_operation_in(
-            &REGISTRY,
-            TemplateSet::empty_static(),
+            DispatchContext {
+                entries: &REGISTRY,
+                templates: TemplateSet::empty_static(),
+                policy: &allow_argless_policy,
+            },
             "t-echo-unregistered".to_string(),
             &op,
             Duration::from_secs(5),
-            &allow_argless_policy,
             execute,
             None,
         )
@@ -2851,12 +2868,14 @@ allowed_args = [["{path}"]]
 
         // Resolution is the whole wiring: no dispatch arm names the template.
         let result = handle_operation_in(
-            &REGISTRY,
-            &templates,
+            DispatchContext {
+                entries: &REGISTRY,
+                templates: &templates,
+                policy: &policy,
+            },
             "t-tmpl-loaded".to_string(),
             &op,
             Duration::from_secs(5),
-            &policy,
             fake_run.clone(),
             None,
         )
@@ -2876,12 +2895,14 @@ allowed_args = [["{path}"]]
         // The SAME name on a Node without the template is `unsupported` — not a
         // Policy deny, even though this Policy would allow it.
         let elsewhere = handle_operation_in(
-            &REGISTRY,
-            TemplateSet::empty_static(),
+            DispatchContext {
+                entries: &REGISTRY,
+                templates: TemplateSet::empty_static(),
+                policy: &policy,
+            },
             "t-tmpl-missing".to_string(),
             &op,
             Duration::from_secs(5),
-            &policy,
             fake_run,
             None,
         )
@@ -2951,12 +2972,14 @@ args = [["/etc/shadow"]]
 
         // The direct spelling is denied by the rule itself.
         let direct = handle_operation_in(
-            &REGISTRY,
-            &templates,
+            DispatchContext {
+                entries: &REGISTRY,
+                templates: &templates,
+                policy: &policy,
+            },
             "t-checksum-direct".to_string(),
             &checksum_of("/etc/shadow"),
             Duration::from_secs(5),
-            &policy,
             fake_run.clone(),
             None,
         )
@@ -2971,12 +2994,14 @@ args = [["/etc/shadow"]]
             "/etc/shadow/",
         ] {
             let result = handle_operation_in(
-                &REGISTRY,
-                &templates,
+                DispatchContext {
+                    entries: &REGISTRY,
+                    templates: &templates,
+                    policy: &policy,
+                },
                 format!("t-checksum-{spelling}"),
                 &checksum_of(spelling),
                 Duration::from_secs(5),
-                &policy,
                 fake_run.clone(),
                 None,
             )
@@ -3002,12 +3027,14 @@ args = [["/etc/shadow"]]
         // not a blanket refusal.
         let allowed = TempFile::new("checksum-ok", b"x");
         let ok = handle_operation_in(
-            &REGISTRY,
-            &templates,
+            DispatchContext {
+                entries: &REGISTRY,
+                templates: &templates,
+                policy: &policy,
+            },
             "t-checksum-ok".to_string(),
             &checksum_of(&canonical_path(&allowed)),
             Duration::from_secs(5),
-            &policy,
             fake_run,
             None,
         )
@@ -3068,12 +3095,14 @@ args = [["{denied_path}"]]
         };
 
         let alias = handle_operation_in(
-            &REGISTRY,
-            &templates,
+            DispatchContext {
+                entries: &REGISTRY,
+                templates: &templates,
+                policy: &policy,
+            },
             "t-checksum-alias".to_string(),
             &checksum_of(&format!("/proc/self/root{denied_path}")),
             Duration::from_secs(5),
-            &policy,
             fake_run.clone(),
             None,
         )
@@ -3092,12 +3121,14 @@ args = [["{denied_path}"]]
         // The same Policy still runs an allowed file.
         let allowed = TempFile::new("checksum-allowed", b"x");
         let ok = handle_operation_in(
-            &REGISTRY,
-            &templates,
+            DispatchContext {
+                entries: &REGISTRY,
+                templates: &templates,
+                policy: &policy,
+            },
             "t-checksum-allowed".to_string(),
             &checksum_of(&canonical_path(&allowed)),
             Duration::from_secs(5),
-            &policy,
             fake_run,
             None,
         )
@@ -3154,8 +3185,11 @@ allowed_args = [["*"]]
         // Apply path.
         let result =
             handle_operation_in(
-                &REGISTRY,
-                &templates,
+                DispatchContext {
+                    entries: &REGISTRY,
+                    templates: &templates,
+                    policy: &policy,
+                },
                 "t-noncanon".to_string(),
                 &{
                     let mut args = std::collections::HashMap::new();
@@ -3166,7 +3200,6 @@ allowed_args = [["*"]]
                     }
                 },
                 Duration::from_secs(5),
-                &policy,
                 |_req: ExecRequest| async move {
                     unreachable!("a denied path must never reach the runner")
                 },
