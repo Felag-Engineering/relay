@@ -2,6 +2,10 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/hex"
 	"errors"
 	"io"
 	"reflect"
@@ -16,7 +20,10 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/auditsink"
 	"github.com/Felag-Engineering/relay/relay/internal/registry"
 	relayv1 "github.com/Felag-Engineering/relay/relay/internal/relay/v1"
+	"github.com/Felag-Engineering/relay/relay/internal/transport"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/peer"
 )
 
 // capturedChange is one change the tunnel handed to a connectionObserver.
@@ -196,61 +203,122 @@ func TestTunnelOpen_DaemonVersionBelowTheMinimumStillConnects(t *testing.T) {
 	wantVersionChanges(t, rec, capturedChange{nodeID, "0.2.0", "0.0.1"})
 }
 
-// failAppend is an audit repository whose every Append fails; the recorder
-// reaches the repository through nothing else.
-type failAppend struct{ audit.Repository }
+// failAppendKinds is an audit repository whose every Append fails and which
+// keeps the Kind of each record it refused, so a test can tell a write that was
+// attempted and failed from one that was never attempted. The recorder reaches
+// the repository through nothing else.
+type failAppendKinds struct {
+	audit.Repository
+	mu    sync.Mutex
+	kinds []string
+}
 
-func (failAppend) Append(context.Context, audit.Record) error {
+func (f *failAppendKinds) Append(_ context.Context, r audit.Record) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.kinds = append(f.kinds, r.Kind)
 	return errors.New("audit store down")
 }
 
-// A write that FAILS returns at once; this covers a fast failure, not a store
-// that hangs (the recorder's own budget bounds that).
+func (f *failAppendKinds) refused() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.kinds)
+}
+
+// injectNodeAndCertInterceptor is injectNodeIDInterceptor plus a peer whose
+// verified chain holds one certificate with the given raw bytes. It stands in
+// for the verified leaf the mTLS listener supplies, so the tunnel derives a
+// certificate fingerprint without real TLS.
+func injectNodeAndCertInterceptor(nodeID string, leaf []byte) grpc.StreamServerInterceptor {
+	return func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+		ctx := transport.NewContextWithNodeID(ss.Context(), nodeID)
+		p := &peer.Peer{AuthInfo: credentials.TLSInfo{State: tls.ConnectionState{
+			VerifiedChains: [][]*x509.Certificate{{{Raw: leaf}}},
+		}}}
+		if orig, ok := peer.FromContext(ctx); ok {
+			p.Addr = orig.Addr
+		}
+		ctx = peer.NewContext(ctx, p)
+		return handler(srv, testStreamWithContext{ServerStream: ss, ctx: ctx})
+	}
+}
+
+// A change or replacement record whose write fails neither refuses nor delays
+// the connection: the version, certificate and replacement records all fail
+// here, and both streams get their Ping at once and keep accepting heartbeats.
+// It covers a fast failure, not a store that hangs (the recorder's own budget
+// bounds that). The Policy kind is
+// TestTunnelOpen_FailedPolicyRecordKeepsTheStreamUp.
+//
+// Proves NC-39.
 func TestTunnelOpen_FailedChangeRecordNeitherRefusesNorDelaysThePing(t *testing.T) {
 	const nodeID = "cert-node-failrec"
+	rawA, rawB := []byte("leaf-a"), []byte("leaf-b")
+	sumA := sha256.Sum256(rawA)
 	reg := registry.NewInMemory()
-	rec := auditsink.NewConnectionRecorder(auditsink.New(failAppend{}), nil)
-	openAudited(t, reg, rec, nodeID, &relayv1.Hello{DaemonVersion: "0.1.0"})
+	// A certless connect stores an empty fingerprint, after which no
+	// certificate change could follow, so the Node is seeded as one that has
+	// connected before with a known leaf.
+	if _, err := reg.Upsert(registry.Report{NodeID: nodeID, DaemonVersion: "0.1.0", CertFingerprint: hex.EncodeToString(sumA[:])}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := reg.MarkConnected(nodeID, time.Now()); err != nil {
+		t.Fatalf("seed marker: %v", err)
+	}
+	kinds := &failAppendKinds{}
+	rec := auditsink.NewConnectionRecorder(auditsink.New(kinds), nil)
 
 	// Dials by hand rather than through openWithHelloServer: the test needs the
-	// stream to send the Heartbeat.
-	srv := grpc.NewServer(grpc.StreamInterceptor(injectNodeIDInterceptor(nodeID)))
+	// streams to send the Heartbeat. Both streams share one server, and so one
+	// set of claims, or the second would not be a replacement.
+	srv := grpc.NewServer(grpc.StreamInterceptor(injectNodeAndCertInterceptor(nodeID, rawB)))
 	relayv1.RegisterTunnelServer(srv, &tunnelServer{reg: reg, changes: rec})
 	conn := newBufconnConn(t, srv)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	stream, err := relayv1.NewTunnelClient(conn).Open(ctx)
-	if err != nil {
-		t.Fatalf("open stream: %v", err)
-	}
-	start := time.Now()
-	if err := stream.Send(&relayv1.DaemonMessage{Body: &relayv1.DaemonMessage_Hello{
-		Hello: &relayv1.Hello{DaemonVersion: "0.2.0"},
-	}}); err != nil {
-		t.Fatalf("send hello: %v", err)
-	}
-	msg, err := stream.Recv()
-	if err != nil {
-		t.Fatalf("recv ping (connection refused?): %v", err)
-	}
-	if msg.GetPing() == nil {
-		t.Fatalf("expected Ping, got %T", msg.Body)
-	}
-	if d := time.Since(start); d > 2*time.Second {
-		t.Errorf("Ping took %v after a failed change record, want under 2s", d)
+
+	for _, name := range []string{"version and certificate change", "replacement"} {
+		stream, err := relayv1.NewTunnelClient(conn).Open(ctx)
+		if err != nil {
+			t.Fatalf("%s: open stream: %v", name, err)
+		}
+		start := time.Now()
+		if err := stream.Send(&relayv1.DaemonMessage{Body: &relayv1.DaemonMessage_Hello{
+			Hello: &relayv1.Hello{DaemonVersion: "0.2.0"},
+		}}); err != nil {
+			t.Fatalf("%s: send hello: %v", name, err)
+		}
+		msg, err := stream.Recv()
+		if err != nil {
+			t.Fatalf("%s: recv ping (connection refused?): %v", name, err)
+		}
+		if msg.GetPing() == nil {
+			t.Fatalf("%s: expected Ping, got %T", name, msg.Body)
+		}
+		if d := time.Since(start); d > 2*time.Second {
+			t.Errorf("%s: Ping took %v after a failed record, want under 2s", name, d)
+		}
+
+		// The stream is still open: a Heartbeat is accepted.
+		before, _ := reg.Get(nodeID)
+		if err := stream.Send(&relayv1.DaemonMessage{Body: &relayv1.DaemonMessage_Heartbeat{
+			Heartbeat: &relayv1.Heartbeat{UnixMillis: time.Now().UnixMilli()},
+		}}); err != nil {
+			t.Fatalf("%s: send heartbeat: %v", name, err)
+		}
+		waitUntil(t, name+": LastSeen to advance", 5*time.Second, func() bool {
+			n, _ := reg.Get(nodeID)
+			return n.LastSeen.After(before.LastSeen)
+		})
 	}
 
-	// The stream is still open: a Heartbeat is accepted.
-	before, _ := reg.Get(nodeID)
-	if err := stream.Send(&relayv1.DaemonMessage{Body: &relayv1.DaemonMessage_Heartbeat{
-		Heartbeat: &relayv1.Heartbeat{UnixMillis: time.Now().UnixMilli()},
-	}}); err != nil {
-		t.Fatalf("send heartbeat: %v", err)
+	got := kinds.refused()
+	for _, want := range []string{audit.KindNodeDaemonVersionChanged, audit.KindNodeCertChanged, audit.KindNodeStreamReplaced} {
+		if !slices.Contains(got, want) {
+			t.Errorf("no %s write was attempted; refused writes = %v", want, got)
+		}
 	}
-	waitUntil(t, "LastSeen to advance", 5*time.Second, func() bool {
-		n, _ := reg.Get(nodeID)
-		return n.LastSeen.After(before.LastSeen)
-	})
 }
 
 // failingUpsertRegistry is a registry whose Upsert fails.
@@ -505,12 +573,16 @@ func TestTunnelOpen_OtherFirstMessageResolvesThePolicyRecordWithoutTheSnapshot(t
 	wantPolicyChanges(t, rec, want)
 }
 
-// Proves NC-33.
+// A Policy record whose write fails leaves the stream up: the snapshot is
+// stored and a later heartbeat is accepted.
+//
+// Proves NC-39.
 func TestTunnelOpen_FailedPolicyRecordKeepsTheStreamUp(t *testing.T) {
 	const nodeID = "cert-node-pfail"
 	fpA, fpB := strings.Repeat("a", 64), strings.Repeat("b", 64)
 	reg := registry.NewInMemory()
-	rec := auditsink.NewConnectionRecorder(auditsink.New(failAppend{}), nil)
+	kinds := &failAppendKinds{}
+	rec := auditsink.NewConnectionRecorder(auditsink.New(kinds), nil)
 	connectOnce(t, reg, rec, nodeID, policyHello(fpA), policyMsg(false))
 
 	srv := grpc.NewServer(grpc.StreamInterceptor(injectNodeIDInterceptor(nodeID)))
@@ -535,6 +607,9 @@ func TestTunnelOpen_FailedPolicyRecordKeepsTheStreamUp(t *testing.T) {
 	}
 	waitUntil(t, "the Raw Exec report to be stored", 5*time.Second, func() bool {
 		return rawExecOf(reg, nodeID) == registry.RawExecReportedEnabled
+	})
+	waitUntil(t, "the Policy record write to be attempted", 5*time.Second, func() bool {
+		return slices.Contains(kinds.refused(), audit.KindNodePolicyChanged)
 	})
 	before, _ := reg.Get(nodeID)
 	if err := stream.Send(heartbeatMsg()); err != nil {

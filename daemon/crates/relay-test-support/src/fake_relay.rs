@@ -3,7 +3,9 @@
 //! Relay's node plane does, counts the `Enroll` calls it receives, and records the
 //! Enrollment Tokens and labels it saw. The fake Tunnel ([`start_fake_tunnel`]) records
 //! when each connection was accepted and each `Open` arrived, and the kinds of the first
-//! messages a daemon sends. It writes no file and spawns no process.
+//! messages a daemon sends; it can require a client certificate
+//! ([`start_fake_tunnel_requiring_client_cert`]) and then records the leaf each `Open`
+//! presented. It writes no file and spawns no process.
 //!
 //! Each [`pki`] call mints a fresh CA, so two fakes have distinct CAs.
 
@@ -29,6 +31,47 @@ pub struct Pki {
     ca_key: rcgen::KeyPair,
     leaf_pem: String,
     leaf_key_pem: String,
+}
+
+/// A client certificate a [`Pki`] signed, with its key and its DER.
+pub struct ClientCert {
+    pub cert_pem: String,
+    pub key_pem: String,
+    pub der: Vec<u8>,
+}
+
+impl Pki {
+    /// A client certificate this CA signed, valid now.
+    pub fn client_cert(&self) -> ClientCert {
+        self.issue_client(false)
+    }
+
+    /// A client certificate this CA signed whose validity ended in 2021.
+    pub fn expired_client_cert(&self) -> ClientCert {
+        self.issue_client(true)
+    }
+
+    fn issue_client(&self, expired: bool) -> ClientCert {
+        let key = rcgen::KeyPair::generate().expect("client key");
+        let mut params =
+            rcgen::CertificateParams::new(vec!["client".to_string()]).expect("client params");
+        params.extended_key_usages = vec![rcgen::ExtendedKeyUsagePurpose::ClientAuth];
+        if expired {
+            params.not_before = rcgen::date_time_ymd(2020, 1, 1);
+            params.not_after = rcgen::date_time_ymd(2021, 1, 1);
+        }
+        let cert = params
+            .signed_by(
+                &key,
+                &rcgen::Issuer::from_params(&self.ca_params, &self.ca_key),
+            )
+            .expect("client cert");
+        ClientCert {
+            cert_pem: cert.pem(),
+            key_pem: key.serialize_pem(),
+            der: cert.der().to_vec(),
+        }
+    }
 }
 
 /// Mints a CA and a leaf for `leaf_name`; an IP address string becomes an IP SAN,
@@ -254,6 +297,9 @@ pub struct TunnelSeen {
     pub first_messages: Mutex<Vec<Vec<&'static str>>>,
     /// The `raw_exec_enabled` of each `PolicySnapshot` among those messages.
     pub raw_exec_reported: Mutex<Vec<bool>>,
+    /// For each `Open` that reached the service, the DER of the leaf client
+    /// certificate the daemon presented; empty unless the fake asks for one.
+    pub client_certs: Mutex<Vec<Vec<u8>>>,
 }
 
 fn body_kind(body: &Option<daemon_message::Body>) -> &'static str {
@@ -288,6 +334,13 @@ impl tonic::server::StreamingService<DaemonMessage> for FakeTunnel {
                 .lock()
                 .unwrap()
                 .push(std::time::Instant::now());
+            if let Some(leaf) = req.peer_certs().and_then(|certs| certs.first().cloned()) {
+                this.seen
+                    .client_certs
+                    .lock()
+                    .unwrap()
+                    .push(leaf.as_ref().to_vec());
+            }
             if let TunnelAnswer::RefuseOpen = this.answer {
                 return Err(tonic::Status::unauthenticated(
                     "the fake Relay refuses Open",
@@ -348,6 +401,24 @@ pub async fn start_fake_tunnel(
     server: Option<&Pki>,
     answer: TunnelAnswer,
 ) -> (u16, Arc<TunnelSeen>) {
+    start_tunnel(server, answer, false).await
+}
+
+/// As [`start_fake_tunnel`] over TLS, but the handshake requires a client
+/// certificate that chains to `server`'s CA and is in date, and each `Open`
+/// records the leaf presented ([`TunnelSeen::client_certs`]).
+pub async fn start_fake_tunnel_requiring_client_cert(
+    server: &Pki,
+    answer: TunnelAnswer,
+) -> (u16, Arc<TunnelSeen>) {
+    start_tunnel(Some(server), answer, true).await
+}
+
+async fn start_tunnel(
+    server: Option<&Pki>,
+    answer: TunnelAnswer,
+    client_auth: bool,
+) -> (u16, Arc<TunnelSeen>) {
     let _ = rustls::crypto::ring::default_provider().install_default();
     let incoming = TcpIncoming::bind(([127, 0, 0, 1], 0).into()).expect("bind");
     let port = incoming.local_addr().expect("local_addr").port();
@@ -368,8 +439,11 @@ pub async fn start_fake_tunnel(
     let mut builder = Server::builder();
     if let Some(server) = server {
         let chain = format!("{}{}", server.leaf_pem, server.ca_pem);
-        let tls =
+        let mut tls =
             ServerTlsConfig::new().identity(TlsIdentity::from_pem(chain, &server.leaf_key_pem));
+        if client_auth {
+            tls = tls.client_ca_root(tonic::transport::Certificate::from_pem(&server.ca_pem));
+        }
         builder = builder.tls_config(tls).expect("server tls");
     }
     tokio::spawn(async move {

@@ -138,7 +138,7 @@ func TestConnectionReasons_MalformedValueRendersNone(t *testing.T) {
 	}
 }
 
-// Proves NC-36, NC-39.
+// Proves NC-39.
 func TestConnectionRecorder_FirstEventRecordedAtOnce(t *testing.T) {
 	kinds := []struct {
 		kind   string
@@ -225,7 +225,7 @@ func TestConnectionRecorder_NextRecordCarriesTheCountAndItsOwnValues(t *testing.
 	}
 }
 
-// Proves NC-36, NC-39.
+// Proves NC-39.
 func TestConnectionRecorder_KindsAreThrottledIndependently(t *testing.T) {
 	_, repo, _ := openSinkStore(t)
 	clk := newDialClock()
@@ -261,7 +261,7 @@ func TestConnectionRecorder_NodesAreThrottledIndependently(t *testing.T) {
 	}
 }
 
-// Proves NC-36.
+// Proves NC-39.
 func TestConnectionRecorder_WriteFailureLosesNoCount(t *testing.T) {
 	_, repo, _ := openSinkStore(t)
 	clk := newDialClock()
@@ -351,7 +351,7 @@ func TestConnectionRecorder_FailedWriteLogsOneWarningAndReturns(t *testing.T) {
 	}
 }
 
-// Proves NC-36, NC-39.
+// Proves NC-39.
 func TestConnectionRecorder_SweepDropsIdleEntriesAndKeepsPending(t *testing.T) {
 	t.Run("idle entries go, at most once per window", func(t *testing.T) {
 		_, repo, _ := openSinkStore(t)
@@ -417,7 +417,7 @@ func TestConnectionRecorder_SweepDropsIdleEntriesAndKeepsPending(t *testing.T) {
 	})
 }
 
-// Proves NC-36.
+// Proves NC-39.
 func TestConnectionRecorder_FailedEntrySurvivesTheSweep(t *testing.T) {
 	_, repo, _ := openSinkStore(t)
 	clk := newDialClock()
@@ -436,7 +436,7 @@ func TestConnectionRecorder_FailedEntrySurvivesTheSweep(t *testing.T) {
 	}
 }
 
-// Proves NC-36.
+// Proves NC-39.
 func TestConnectionRecorder_ConcurrentFirstEventsRecordOnce(t *testing.T) {
 	_, repo, _ := openSinkStore(t)
 	r := NewConnectionRecorder(New(repo), newDialClock().Now)
@@ -477,7 +477,7 @@ func TestConnectionRecorder_EmptyNodeIDIsIgnored(t *testing.T) {
 	}
 }
 
-// Proves NC-36.
+// Proves NC-39.
 func TestConnectionRecorder_ReplacementsInsideTheWindowAreCarriedByTheNextRecord(t *testing.T) {
 	_, repo, _ := openSinkStore(t)
 	clk := newDialClock()

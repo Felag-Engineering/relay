@@ -1705,7 +1705,6 @@ func TestRouter_SupersededRegistrationEndRunsNoOfflineHook(t *testing.T) {
 
 // A registration the Node's newer one replaced in the Router tells its waiters
 // the same: the Node is not offline.
-// Proves NC-13.
 func TestRouter_ReplacedRegistrationFailsItsWaitersWithErrStreamReplaced(t *testing.T) {
 	r := NewRouter(nil, nil)
 	send := &recordingSend{}

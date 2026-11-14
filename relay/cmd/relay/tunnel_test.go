@@ -2012,6 +2012,32 @@ func TestTunnelOpen_ALaterHelloOrPolicySnapshotOnTheSameStreamChangesNoRegistryF
 	}
 }
 
+// A node: label change on the Node reaches the registry with the Hello that
+// opens the next stream, the one a restarted daemon opens, and never on the
+// stream already open: a later Hello on it carrying the new label changes
+// nothing.
+//
+// Proves NC-20.
+func TestTunnelOpen_ANodeLabelChangeArrivesOnlyWithTheNextStreamsHello(t *testing.T) {
+	const nodeID = "node-label-next-stream"
+	reg := registry.NewInMemory()
+	ts := &tunnelServer{reg: reg}
+	withRole := func(role string) *relayv1.Hello {
+		return &relayv1.Hello{Labels: []*relayv1.Label{{Key: "node:role", Value: role}}}
+	}
+
+	laterHello := &relayv1.DaemonMessage{Body: &relayv1.DaemonMessage_Hello{Hello: withRole("db")}}
+	openThenEnd(t, ts, nodeID, withRole("web"), laterHello)
+	if n, _ := reg.Get(nodeID); !reflect.DeepEqual(n.NodeLabels, map[string]string{"role": "web"}) {
+		t.Errorf("NodeLabels = %v after a later Hello on the same stream, want role=web", n.NodeLabels)
+	}
+
+	openThenEnd(t, ts, nodeID, withRole("db"))
+	if n, _ := reg.Get(nodeID); !reflect.DeepEqual(n.NodeLabels, map[string]string{"role": "db"}) {
+		t.Errorf("NodeLabels = %v after the next stream's Hello, want role=db", n.NodeLabels)
+	}
+}
+
 // policySnap is a PolicySnapshot message with the fields the cache tests tell apart.
 func policySnap(fp string, rawExec bool, ops ...string) *relayv1.DaemonMessage {
 	return &relayv1.DaemonMessage{Body: &relayv1.DaemonMessage_Policy{Policy: &relayv1.PolicySnapshot{
