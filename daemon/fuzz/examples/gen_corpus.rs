@@ -8,8 +8,10 @@
 //! cargo run --example gen_corpus
 //! ```
 //!
-//! The two Policy targets (`fuzz_raw_exec_gate`, `fuzz_path_canonical`) are
-//! text-framed rather than prost-encoded; their seeds are byte-stable.
+//! The two Policy targets (`fuzz_raw_exec_gate`, `fuzz_path_canonical`) and the
+//! three parser targets (`fuzz_policy_compose`, `fuzz_template_compile`,
+//! `fuzz_operation_args`) are text-framed rather than prost-encoded; their seeds
+//! are byte-stable.
 //!
 //! All field values are fixed, so re-running is byte-stable except for one
 //! caveat: prost encodes `map` fields in HashMap iteration order, so the
@@ -28,6 +30,7 @@ use relay_daemon_fuzz::pb::{
     RawExec, RelayMessage, RenewResponse, RiskClass, TaskCancel, TaskRequest,
 };
 use relay_daemon_fuzz::policy_oracle::SEP;
+use relay_daemon_fuzz::template_oracle::{BODY_SEEDS, FILE_SEEDS};
 
 fn write_seed(dir: &Path, name: &str, bytes: &[u8]) {
     fs::create_dir_all(dir).expect("create corpus dir");
@@ -137,14 +140,119 @@ fn main() {
     write_seed(&dir, "renew_response", &renew.encode_to_vec());
 
     write_policy_seeds(&root);
+    write_parse_seeds(&root);
 }
 
-/// One `fuzz_raw_exec_gate` seed: the Policy selector byte, then the argv with
-/// its elements separated by `SEP`. An empty argv is the selector alone.
+/// `[sel]` followed by the elements joined with `SEP`: the framing of
+/// `fuzz_raw_exec_gate`, `fuzz_policy_compose` and `fuzz_operation_args`. No
+/// elements is the selector alone.
 fn argv_seed(sel: u8, argv: &[&str]) -> Vec<u8> {
     let mut out = vec![sel];
     out.extend_from_slice(argv.join(&SEP.to_string()).as_bytes());
     out
+}
+
+/// Seeds for the three parser targets. Byte-stable.
+fn write_parse_seeds(root: &Path) {
+    // --- fuzz_policy_compose ------------------------------------------------
+    // sel 1: the first field is the Policy file; sel 0: fragments only.
+    let default_policy = include_str!("../../policy.default.toml");
+    let example_policy = include_str!("../../policy.example.toml");
+    let deny_shadow = "[[deny]]\nname = \"file.read\"\nargs = [[\"/etc/shadow\"]]\n";
+    let rows: Vec<Vec<u8>> = vec![
+        argv_seed(1, &[default_policy]),
+        argv_seed(1, &[example_policy]),
+        argv_seed(1, &[example_policy, deny_shadow]),
+        argv_seed(
+            0,
+            &[
+                "[[operation]]\nname = \"service.restart\"\nallowed_args = [[\"nginx\"]]\n",
+                "[raw_exec]\nallow = ['^/usr/bin/uptime$']\n",
+            ],
+        ),
+        argv_seed(0, &[]),
+        argv_seed(1, &[""]),
+        // Invalid alone, valid once wrapped.
+        argv_seed(1, &["[raw_exec]\nallow = ['a)|(?:b']\n"]),
+        // The verbose trailing-comment case.
+        argv_seed(1, &["[raw_exec]\nallow = ['(?x)^/bin/true$ # c']\n"]),
+        // Unanchored.
+        argv_seed(1, &["[raw_exec]\nallow = ['/usr/bin/uptime']\n"]),
+        // An unknown key.
+        argv_seed(1, &["[[denny]]\nname = \"file.read\"\nargs = []\n"]),
+        // An unknown Operation, a fully shadowed allow, and deny no-ops.
+        argv_seed(
+            1,
+            &[concat!(
+                "[[operation]]\nname = \"no.such.op\"\nallowed_args = []\n\n",
+                "[[operation]]\nname = \"service.restart\"\nallowed_args = [[\"nginx\"]]\n\n",
+                "[[deny]]\nname = \"service.restart\"\nargs = []\n\n",
+                "[[deny]]\nname = \"file.read\"\nargs = [[\"*\"]]\n\n",
+                "[[deny]]\nname = \"file.read\"\nargs = [[]]\n",
+            )],
+        ),
+        // A valid file plus a fragment that is not TOML.
+        argv_seed(1, &[default_policy, "[[operation]\n"]),
+    ];
+    let dir = root.join("fuzz_policy_compose");
+    for (i, row) in rows.iter().enumerate() {
+        write_seed(&dir, &format!("policy_{i:02}"), row);
+    }
+
+    // --- fuzz_template_compile ----------------------------------------------
+    // Byte 0 bit 7: file mode (the rest is a template file); clear: body mode.
+    let mut rows: Vec<Vec<u8>> = Vec::new();
+    for file in [
+        include_str!("../../packaging/templates.d/relay-read/catalog.toml"),
+        include_str!("../../templates.example.toml"),
+    ]
+    .into_iter()
+    .chain(FILE_SEEDS.iter().copied())
+    {
+        rows.push(argv_seed(0x80, &[file]));
+    }
+    for (sel, body) in BODY_SEEDS {
+        rows.push(argv_seed(*sel, &[body]));
+    }
+    let dir = root.join("fuzz_template_compile");
+    for (i, row) in rows.iter().enumerate() {
+        write_seed(&dir, &format!("template_{i:02}"), row);
+    }
+
+    // --- fuzz_operation_args ------------------------------------------------
+    // Byte 0 picks the REGISTRY entry: 0 system.facts, 1 file.read,
+    // 2 service.restart, 3 pkg.install.
+    let rows: Vec<Vec<u8>> = vec![
+        argv_seed(2, &["nginx"]),
+        argv_seed(2, &["nginx.service"]),
+        argv_seed(2, &["foo@bar.service"]),
+        argv_seed(2, &["-h"]),
+        argv_seed(2, &["--version"]),
+        argv_seed(2, &[""]),
+        argv_seed(2, &["a b"]),
+        argv_seed(2, &["ngin\0x"]),
+        argv_seed(2, &["\u{e9}"]),
+        // An extra pair overriding the declared key.
+        argv_seed(2, &["nginx", "unit", "evil"]),
+        argv_seed(3, &["nginx"]),
+        argv_seed(3, &["nginx", "1.18.0-0ubuntu1"]),
+        argv_seed(3, &["nginx", "1:2.3~rc1"]),
+        argv_seed(3, &["foo-"]),
+        argv_seed(3, &["foo+"]),
+        argv_seed(3, &["-foo"]),
+        argv_seed(3, &["a=b"]),
+        argv_seed(3, &["nginx", "1.0-"]),
+        argv_seed(3, &["nginx", ""]),
+        argv_seed(3, &["nginx", "-1"]),
+        argv_seed(1, &["/etc/hostname"]),
+        argv_seed(1, &[""]),
+        argv_seed(0, &[]),
+        argv_seed(0, &["x", "y"]),
+    ];
+    let dir = root.join("fuzz_operation_args");
+    for (i, row) in rows.iter().enumerate() {
+        write_seed(&dir, &format!("args_{i:02}"), row);
+    }
 }
 
 /// Seeds for the two text-framed Policy targets (#897). Byte-stable.
