@@ -182,7 +182,15 @@ pub fn detect_package_manager() -> Option<PackageManager> {
     }
 }
 
-/// Validates `name`/`version` against `mgr`, builds the argv, and delegates
+/// The package `pkg.install` is asked for: a name and an optional version,
+/// validated together by [`install_argv`] before any argv exists (invariant 1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Package<'a> {
+    pub name: &'a str,
+    pub version: Option<&'a str>,
+}
+
+/// Validates `package` against `mgr`, builds the argv, and delegates
 /// execution to `run`. Injectable core: `mgr` and `run` are both parameters,
 /// so apt, dnf, yum, and the unsupported-distro path are all unit-testable
 /// without touching a real package manager.
@@ -195,12 +203,10 @@ pub fn detect_package_manager() -> Option<PackageManager> {
 /// process group on an in-flight cancel signal (ADR-0013). If `mgr` is `None`
 /// or the name/version fails validation, `cancel` is dropped (no process
 /// spawned) and `run` is **never called**.
-#[allow(clippy::too_many_arguments)]
 pub async fn pkg_install_with_manager<F, Fut>(
     task_id: String,
     mgr: Option<PackageManager>,
-    name: &str,
-    version: Option<&str>,
+    package: Package<'_>,
     timeout: Duration,
     max_output_bytes: usize,
     cancel: Option<oneshot::Receiver<()>>,
@@ -219,7 +225,7 @@ where
         );
     };
 
-    let argv = match install_argv(mgr, name, version) {
+    let argv = match install_argv(mgr, package.name, package.version) {
         Ok(v) => v,
         Err(e) => {
             // cancel drops naturally here — invalid name/version, no process spawned.
@@ -257,8 +263,7 @@ where
     pkg_install_with_manager(
         task_id,
         detect_package_manager(),
-        name,
-        version,
+        Package { name, version },
         timeout,
         max_output_bytes,
         cancel,
@@ -434,8 +439,10 @@ mod tests {
         let result = pkg_install_with_manager(
             "t1".to_string(),
             Some(PackageManager::Apt),
-            "nginx",
-            None,
+            Package {
+                name: "nginx",
+                version: None,
+            },
             Duration::from_secs(5),
             1024,
             None, // cancel: uncancellable in tests
@@ -481,8 +488,10 @@ mod tests {
         let result = pkg_install_with_manager(
             "t2".to_string(),
             Some(PackageManager::Apt),
-            "bad;name",
-            None,
+            Package {
+                name: "bad;name",
+                version: None,
+            },
             Duration::from_secs(5),
             1024,
             None, // cancel: uncancellable in tests
@@ -533,8 +542,10 @@ mod tests {
         let result = pkg_install_with_manager(
             "t3".to_string(),
             None, // no supported package manager detected
-            "nginx",
-            None,
+            Package {
+                name: "nginx",
+                version: None,
+            },
             Duration::from_secs(5),
             1024,
             None, // cancel: uncancellable in tests
