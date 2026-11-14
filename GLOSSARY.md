@@ -131,15 +131,16 @@ packages). They inform decisions and are never used for targeting, which is what
 _Avoid_: metadata, attributes, properties
 
 **Policy view**:
-The display-only copy of a Node's effective Policy that its relay-daemon last reported, with the
-Policy fingerprint and a Relay-stamped receipt time. A report, never a live query and never an input
-to a verdict (invariant 12); Template command bodies are not part of it (ADR-0021).
+The display-only copy of a Node's effective Policy that its relay-daemon reported at the start of
+its latest stream, with the Policy fingerprint and a Relay-stamped receipt time. A report, never a
+live query and never an input to a verdict (invariant 12); Template command bodies are not part of
+it (ADR-0021).
 _Avoid_: Policy snapshot (that is the wire message the view is built from), cached Policy
 
 **Policy fingerprint**:
-A hash of a Node's loaded Policy that the daemon reports (in `Hello` and every `PolicySnapshot`) and
-the Relay records: fleet-wide drift visibility without the Policy traveling. Report-only (ADR-0002,
-ADR-0006); a human may name one with a **Policy alias**.
+A hash of a Node's loaded Policy that the daemon reports (in `Hello` and the stream's
+`PolicySnapshot`) and the Relay records: fleet-wide drift visibility without the Policy traveling.
+Report-only (ADR-0002, ADR-0006); a human may name one with a **Policy alias**.
 _Avoid_: policy hash, checksum, policy version
 
 **Policy alias**:
@@ -157,8 +158,9 @@ _Avoid_: templates dir, template directory, the templates.d (as a noun)
 
 **Template-set fingerprint**:
 The Policy fingerprint's sibling for Template Operations: a hash of the Node's loaded template set,
-reported in `Hello` and every `TemplateSnapshot` (ADR-0021). Report-only. Empty means none installed;
-`unloadable` means the set failed to load, so the Node's template vocabulary is empty (fail closed).
+reported in `Hello` and the stream's `TemplateSnapshot` (ADR-0021). Report-only. Empty means none
+installed; `unloadable` means the set failed to load, so the Node's template vocabulary is empty
+(fail closed).
 _Avoid_: template hash, template version
 
 **`outdated`**:
