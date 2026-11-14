@@ -72,22 +72,13 @@
 
 use regex::Regex;
 use std::ops::Range;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::OnceLock;
 
-fn source_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            source_files(&path, out);
-        } else if path.extension().is_some_and(|e| e == "rs") {
-            out.push(path);
-        }
-    }
-}
+#[path = "common/source_walk.rs"]
+mod source_walk;
+
+use source_walk::{rust_files_in, workspace_src_roots};
 
 fn is_ident(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
@@ -364,28 +355,10 @@ fn unpaused_hits(file: &str, src: &str) -> Vec<String> {
 
 fn tree_files() -> Vec<(String, String)> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let mut files = Vec::new();
-    // The bin's src and tests, then every workspace member's src, found by listing
-    // `crates/` so a new member is scanned without editing this test (#889).
-    let mut roots = vec![root.join("src"), root.join("tests")];
-    let mut members: Vec<_> = std::fs::read_dir(root.join("crates"))
-        .expect("read crates dir")
-        .map(|e| e.expect("dir entry").path())
-        .filter(|p| p.is_dir())
-        .collect();
-    members.sort();
-    roots.extend(members.into_iter().map(|m| m.join("src")));
-    for dir in &roots {
-        let before = files.len();
-        source_files(dir, &mut files);
-        assert!(
-            files.len() > before,
-            "{} holds no .rs file; the scan is broken",
-            dir.display()
-        );
-    }
-    files.sort();
-    files
+    // The bin's src and tests, then every workspace member's src.
+    let mut roots = workspace_src_roots();
+    roots.insert(1, root.join("tests"));
+    rust_files_in(&roots)
         .into_iter()
         .filter(|p| p.file_name().is_some_and(|f| f != "virtual_clock_guard.rs"))
         .map(|p| {

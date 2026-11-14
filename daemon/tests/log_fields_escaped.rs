@@ -56,6 +56,11 @@ use std::path::Path;
 
 use regex::Regex;
 
+#[path = "common/source_walk.rs"]
+mod source_walk;
+
+use source_walk::{rust_files_in, workspace_src_roots};
+
 /// A reviewed local-only field: (file, relative to `daemon/`, field, normalised
 /// expression, message literal, count, why). NO wire-derived field belongs
 /// here; wrap it instead.
@@ -911,50 +916,22 @@ fn scan_source(rel: &str, src: &str) -> Scan {
     scan
 }
 
-/// Every workspace `src/` root: the bin's, plus each `crates/<member>/src`, found by
-/// listing the directory so a new member is walked without editing this test.
-fn src_roots() -> Vec<std::path::PathBuf> {
-    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let mut roots = vec![manifest.join("src")];
-    let mut members: Vec<_> = fs::read_dir(manifest.join("crates"))
-        .expect("read crates dir")
-        .map(|e| e.expect("dir entry").path())
-        .filter(|p| p.is_dir())
-        .collect();
-    members.sort();
-    roots.extend(members.into_iter().map(|m| m.join("src")));
-    roots
-}
-
 fn source_files() -> Vec<(String, String)> {
-    fn walk(dir: &Path, manifest: &Path, out: &mut Vec<(String, String)>) {
-        for entry in fs::read_dir(dir).expect("read src dir") {
-            let path = entry.expect("dir entry").path();
-            if path.is_dir() {
-                walk(&path, manifest, out);
-            } else if path.extension().is_some_and(|e| e == "rs") {
-                let rel = path
-                    .strip_prefix(manifest)
-                    .unwrap()
-                    .components()
-                    .map(|c| c.as_os_str().to_string_lossy().into_owned())
-                    .collect::<Vec<_>>()
-                    .join("/");
-                out.push((rel, fs::read_to_string(&path).expect("read source")));
-            }
-        }
-    }
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let mut out = Vec::new();
-    for root in src_roots() {
-        let before = out.len();
-        walk(&root, manifest, &mut out);
-        assert!(
-            out.len() > before,
-            "{} holds no .rs file; the walk is broken",
-            root.display()
-        );
-    }
+    let mut out: Vec<(String, String)> = rust_files_in(&workspace_src_roots())
+        .into_iter()
+        .map(|path| {
+            let rel = path
+                .strip_prefix(manifest)
+                .unwrap()
+                .components()
+                .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join("/");
+            let text = fs::read_to_string(&path).expect("read source");
+            (rel, text)
+        })
+        .collect();
     out.sort();
     out
 }

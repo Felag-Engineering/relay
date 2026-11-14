@@ -37,6 +37,11 @@ use maintainer_scripts::{
     regular_entries, script_commands, starts_a_unit, writers, writes_to,
 };
 
+#[path = "common/source_walk.rs"]
+mod source_walk;
+
+use source_walk::{files_under, rust_files_in, workspace_src_roots};
+
 /// `RELAY_*` name PREFIXES deliberately absent from the operator-facing sample.
 ///
 /// Prefixes rather than exact names, because both families below are
@@ -95,45 +100,6 @@ fn relay_names(text: &str) -> BTreeSet<String> {
     out
 }
 
-/// Every Rust source in the workspace: the bin's `src/` and each member's
-/// `crates/<member>/src/`, found by listing `crates/` so a new member is read
-/// without editing this test (#889).
-fn workspace_sources(root: &Path) -> Vec<PathBuf> {
-    let mut members: Vec<_> = std::fs::read_dir(root.join("crates"))
-        .expect("read crates dir")
-        .map(|e| e.expect("dir entry").path())
-        .filter(|p| p.is_dir())
-        .collect();
-    members.sort();
-    let mut roots = vec![root.join("src")];
-    roots.extend(members.into_iter().map(|m| m.join("src")));
-    let mut files = Vec::new();
-    for dir in &roots {
-        let before = files.len();
-        source_files(dir, &mut files);
-        assert!(
-            files.len() > before,
-            "{} holds no .rs file; the scan is broken",
-            dir.display()
-        );
-    }
-    files
-}
-
-fn source_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            source_files(&path, out);
-        } else if path.extension().is_some_and(|e| e == "rs") {
-            out.push(path);
-        }
-    }
-}
-
 // Proves DI-7.
 #[test]
 fn env_example_covers_the_config_surface() {
@@ -149,7 +115,7 @@ fn env_example_covers_the_config_surface() {
     });
     let documented = relay_names(&sample);
 
-    let files = workspace_sources(&root);
+    let files = rust_files_in(&workspace_src_roots());
     assert!(
         !files.is_empty(),
         "no Rust sources found — this test is scanning nothing"
@@ -196,8 +162,7 @@ fn env_example_covers_the_config_surface() {
 // Proves DI-7.
 #[test]
 fn exemptions_are_real() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let files = workspace_sources(&root);
+    let files = rust_files_in(&workspace_src_roots());
 
     let mut referenced = BTreeSet::new();
     for file in &files {
@@ -703,20 +668,6 @@ fn unit_keeps_the_policy_directory_read_only() {
 
 // ---- structural readers for maintainer scripts, manifests and baselines ----
 
-fn files_under(dir: &Path, out: &mut Vec<PathBuf>) {
-    for entry in std::fs::read_dir(dir)
-        .unwrap_or_else(|e| panic!("read {}: {e}", dir.display()))
-        .flatten()
-    {
-        let path = entry.path();
-        if path.is_dir() {
-            files_under(&path, out);
-        } else {
-            out.push(path);
-        }
-    }
-}
-
 // ---- the daemon package's install behaviour: unit, Policy, environment file ----
 
 /// The daemon package installs the binary and the hardened unit, and no maintainer script
@@ -759,8 +710,7 @@ fn the_daemon_package_installs_its_unit_never_starts_it_and_enables_it_only_on_a
         ["/usr/bin/x", "/etc/y"],
         "the baseline reader keeps regular files of both listing formats and nothing else"
     );
-    let mut shipped = Vec::new();
-    files_under(&packaging, &mut shipped);
+    let shipped = files_under(&packaging);
     assert!(shipped.len() > 10, "the packaging tree was not read");
     assert!(
         shipped
