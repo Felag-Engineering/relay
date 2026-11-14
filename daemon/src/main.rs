@@ -901,7 +901,10 @@ mod tests {
         Scheduler, Services, Shutdown, ShutdownContext, HEARTBEAT_INTERVAL,
         HEARTBEAT_JITTER_FRACTION,
     };
-    use crate::test_support::fake_relay::{pki, start_fake_tunnel, TunnelAnswer, TunnelSeen};
+    use crate::test_support::fake_relay::{
+        pki, start_fake_tunnel, start_fake_tunnel_requiring_client_cert, ClientCert, TunnelAnswer,
+        TunnelSeen,
+    };
     use crate::test_support::TempDir;
     use crate::{enroll, policy, templates, version};
     use std::path::Path;
@@ -1320,6 +1323,33 @@ mod tests {
         }
     }
 
+    /// `cert` as the identity a daemon holds, pinning `ca_bundle_pem`.
+    fn identity_from(cert: &ClientCert, ca_bundle_pem: &str) -> crate::identity::Identity {
+        crate::identity::Identity {
+            node_id: "test-node".to_string(),
+            key_pem: cert.key_pem.clone(),
+            cert_pem: cert.cert_pem.clone(),
+            ca_bundle_pem: ca_bundle_pem.to_string(),
+        }
+    }
+
+    /// Writes `identity` into `dir` as the daemon's state directory holds it,
+    /// each file by rename so a reader never sees half a file.
+    /// `relay-transport`'s `persist_identity` is not visible from here.
+    fn write_identity_files(dir: &Path, identity: &crate::identity::Identity) {
+        std::fs::create_dir_all(dir).expect("create the state directory");
+        for (name, body) in [
+            ("key.pem", &identity.key_pem),
+            ("cert.pem", &identity.cert_pem),
+            ("ca_bundle.pem", &identity.ca_bundle_pem),
+            ("node_id", &identity.node_id),
+        ] {
+            let tmp = dir.join(format!("{name}.tmp"));
+            std::fs::write(&tmp, body).expect("write the identity file");
+            std::fs::rename(&tmp, dir.join(name)).expect("rename the identity file into place");
+        }
+    }
+
     fn test_config(port: u16, state_dir: &Path) -> Config {
         let endpoint = format!("https://127.0.0.1:{port}");
         Config {
@@ -1404,6 +1434,120 @@ mod tests {
         assert_eq!(*seen.raw_exec_reported.lock().unwrap(), vec![true]);
     }
 
+    /// The daemon reads its identity from the state directory at each connect,
+    /// not once at start: the first connect presents the certificate on disk and
+    /// not the one it started with, and a certificate written there between two
+    /// connects is what the next connect presents.
+    ///
+    /// Proves NC-5.
+    #[tokio::test]
+    async fn reconnect_loop_presents_the_identity_in_the_state_directory_at_each_connect() {
+        let state = TempDir::new("nc5-reread");
+        let server = pki("127.0.0.1");
+        let startup = server.client_cert();
+        let first = server.client_cert();
+        let renewed = server.client_cert();
+        write_identity_files(state.path(), &identity_from(&first, &server.ca_pem));
+        let (port, seen) =
+            start_fake_tunnel_requiring_client_cert(&server, TunnelAnswer::PingThenEnd).await;
+        let config = test_config(port, state.path());
+
+        // Races the loop against the observer, as `run_until` does: the loop's
+        // future is not `Send`. Each connect ends with the fake's clean end and
+        // the backoff waits at least 0.5 s before the loop rereads, which is
+        // long after the observer's write.
+        let observer = async {
+            while seen.client_certs.lock().unwrap().is_empty() {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            write_identity_files(state.path(), &identity_from(&renewed, &server.ca_pem));
+            while !seen.client_certs.lock().unwrap().contains(&renewed.der) {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        };
+        tokio::select! {
+            res = reconnect_loop(
+                &config,
+                identity_from(&startup, &server.ca_pem),
+                test_services(state.path()),
+                test_ctx(),
+            ) => {
+                panic!("reconnect_loop returned ({}) although nothing stopped it", res.is_ok());
+            }
+            outcome = tokio::time::timeout(Duration::from_secs(30), observer) => {
+                outcome.expect("the renewed certificate was never presented");
+            }
+        }
+
+        let presented = seen.client_certs.lock().unwrap().clone();
+        assert_eq!(
+            presented[0], first.der,
+            "the first connect presented a certificate other than the one on disk"
+        );
+        let renewed_at = presented
+            .iter()
+            .position(|der| *der == renewed.der)
+            .expect("the renewed certificate was presented");
+        assert!(
+            presented[..renewed_at].iter().all(|der| *der == first.der),
+            "a certificate other than the one on disk was presented before the renewal"
+        );
+        assert!(
+            !presented.contains(&startup.der),
+            "the startup certificate was presented although the state directory held another"
+        );
+    }
+
+    /// A Relay that refuses the daemon's expired client certificate at the
+    /// handshake is retried on the backoff and no stream ever opens: the daemon
+    /// keeps retrying and cannot succeed. Four attempts are a sample; the loop
+    /// has no attempt limit (`backoff_never_runs_out`). The same fake first
+    /// admits an in-date certificate, so the refusal is the expiry and not a
+    /// fake that refuses every certificate.
+    ///
+    /// Proves NC-31.
+    #[tokio::test]
+    async fn reconnect_loop_keeps_retrying_a_relay_that_refuses_its_expired_certificate() {
+        let server = pki("127.0.0.1");
+        let (port, seen) =
+            start_fake_tunnel_requiring_client_cert(&server, TunnelAnswer::PingThenEnd).await;
+
+        // The first leg's spawned renewal task outlives its future; it is idle and harmless.
+        let in_date_state = TempDir::new("nc31-in-date");
+        run_until(
+            &test_config(port, in_date_state.path()),
+            identity_from(&server.client_cert(), &server.ca_pem),
+            in_date_state.path(),
+            &seen,
+            |s| !s.client_certs.lock().unwrap().is_empty(),
+        )
+        .await;
+        let opens_before = seen.opens.lock().unwrap().len();
+        let certs_before = seen.client_certs.lock().unwrap().len();
+        let accepts_before = seen.accepts.lock().unwrap().len();
+
+        let expired_state = TempDir::new("nc31-expired");
+        run_until(
+            &test_config(port, expired_state.path()),
+            identity_from(&server.expired_client_cert(), &server.ca_pem),
+            expired_state.path(),
+            &seen,
+            |s| s.accepts.lock().unwrap().len() >= accepts_before + 4,
+        )
+        .await;
+
+        assert_eq!(
+            seen.opens.lock().unwrap().len(),
+            opens_before,
+            "a stream was opened with an expired certificate"
+        );
+        assert_eq!(
+            seen.client_certs.lock().unwrap().len(),
+            certs_before,
+            "an expired certificate reached the service"
+        );
+    }
+
     /// A Relay that refuses every `Open` never resets the backoff: the waits
     /// between attempts keep growing, each at least half its step.
     ///
@@ -1469,7 +1613,7 @@ mod tests {
     /// loop has no attempt limit (`backoff_never_runs_out`), and the one fatal
     /// error is a non-https endpoint (`http_endpoint_is_rejected`).
     ///
-    /// Proves NC-16, NC-17, NC-30.
+    /// Proves NC-4, NC-16, NC-17, NC-30.
     #[tokio::test]
     async fn reconnect_loop_retries_a_relay_outside_the_pinned_ca_and_sends_it_nothing() {
         let state = TempDir::new("nc17-wrong-ca");

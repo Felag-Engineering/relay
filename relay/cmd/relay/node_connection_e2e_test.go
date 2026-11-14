@@ -248,3 +248,90 @@ func TestTunnelOpen_AFleetConnectingAtOnceIsAdmittedWhole(t *testing.T) {
 		}
 	}
 }
+
+// A fleet that a restarted Relay already holds in its persisted registry
+// reconnects at once and is admitted whole: nothing about the restart limits
+// admission. 32 Nodes is a sample, not a bound.
+// Proves NC-18.
+func TestTunnelOpen_AFleetReconnectingAtOnceAfterARelayRestartIsAdmittedWhole(t *testing.T) {
+	const fleet = 32
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	cfg := persistTestConfig(t)
+	// Generous enrollment limits: they bound Enroll, not the reconnect under
+	// test, and the 32 enrollments come from one loopback peer.
+	cfg.EnrollIPRate = 1000
+	cfg.EnrollIPBurst = 500
+	cfg.EnrollGlobalRate = 1000
+	cfg.EnrollGlobalBurst = 500
+
+	// connectFleet opens every Node's Tunnel at once and returns the funcs that
+	// end them.
+	connectFleet := func(f *relayFixture, certs []tls.Certificate, pool *x509.CertPool) []func() {
+		t.Helper()
+		var wg sync.WaitGroup
+		ends := make([]func(), fleet)
+		errs := make([]error, fleet)
+		for i := range certs {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				ends[i], errs[i] = openTunnel(ctx, f, certs[i], pool, &relayv1.Hello{})
+			}()
+		}
+		wg.Wait()
+		for i, err := range errs {
+			if err != nil {
+				t.Errorf("Node %d was not admitted: %v", i, err)
+			}
+		}
+		return ends
+	}
+	endAll := func(ends []func()) {
+		for _, end := range ends {
+			if end != nil {
+				end()
+			}
+		}
+	}
+
+	lis, deps, srv := bootServer(t, cfg)
+	f1 := &relayFixture{Deps: deps, Bufconn: lis}
+	ids := make([]string, fleet)
+	certs := make([]tls.Certificate, fleet)
+	var pool *x509.CertPool
+	for i := range ids {
+		ids[i], certs[i], pool = nodeConnectionEnroll(ctx, t, f1, nil)
+	}
+	endAll(connectFleet(f1, certs, pool))
+
+	// Every client is ended before the Relay stops, and the Relay stops before
+	// the store closes: a handler's teardown writes the registry. GracefulStop
+	// waits for the handlers; Stop would not.
+	srv.GracefulStop()
+	if err := deps.store.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	lis2, deps2, srv2 := bootServer(t, cfg)
+	// Cleanups run last to first: the clients end, then the Relay stops
+	// gracefully and waits for its handlers, then the store closes.
+	t.Cleanup(func() { deps2.store.Close() })
+	t.Cleanup(srv2.GracefulStop)
+	for i, id := range ids {
+		n, ok := deps2.registry.Get(id)
+		if !ok || n.FirstConnectedAt.IsZero() {
+			t.Fatalf("Node %d is not in the restarted Relay's registry with its first connect recorded (found %v)", i, ok)
+		}
+	}
+
+	f2 := &relayFixture{Deps: deps2, Bufconn: lis2}
+	ends := connectFleet(f2, certs, pool)
+	t.Cleanup(func() { endAll(ends) })
+	for i, id := range ids {
+		if got, _ := deps2.registry.Get(id); !got.Connected {
+			t.Errorf("Node %d reads not connected after its Tunnel was admitted", i)
+		}
+	}
+}
