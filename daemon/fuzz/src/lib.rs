@@ -26,6 +26,12 @@
 //! never the test-only `evaluate` shims; they spawn no process and touch no
 //! filesystem. Their shared helpers live in [`policy_oracle`].
 //!
+//! Three further targets fuzz the parsers a Node's own root-owned files reach
+//! (Policy compose and lint, Template file parsing and compile) and the Native
+//! argument validators against their advertised schema. None opens a file,
+//! spawns a process or reaches Template render. Their helpers live in
+//! [`policy_oracle`], [`template_oracle`] and [`arg_oracle`].
+//!
 //! Only failure modes are asserted (panic / crash / OOM / roundtrip
 //! inconsistency); a plain `Err` from `decode` is the correct outcome for
 //! malformed bytes and is never a finding.
@@ -34,7 +40,9 @@
 /// generated once from /proto, never hand-edited).
 pub use relay_proto as pb;
 
+pub mod arg_oracle;
 pub mod policy_oracle;
+pub mod template_oracle;
 
 use prost::Message;
 

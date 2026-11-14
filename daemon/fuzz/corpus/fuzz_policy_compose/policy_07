@@ -1,0 +1,2 @@
+[raw_exec]
+allow = ['(?x)^/bin/true$ # c']

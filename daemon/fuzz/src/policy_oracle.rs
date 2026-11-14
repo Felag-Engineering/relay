@@ -6,7 +6,7 @@
 
 use std::sync::OnceLock;
 
-use relay_policy::{from_toml_str, Policy};
+use relay_policy::{from_toml_str, Fragment, Policy};
 
 /// Separates the elements of an argv (or the positional arguments of an
 /// Operation) inside a fuzz input. U+001F is neither NUL nor `char::is_whitespace`,
@@ -18,6 +18,44 @@ pub const SEP: char = '\u{1f}';
 /// Split `s` into its [`SEP`]-separated fields.
 pub fn fields(s: &str) -> Vec<String> {
     s.split(SEP).map(str::to_string).collect()
+}
+
+/// The most Policy fragments `fuzz_policy_compose` composes in one input.
+pub const MAX_FRAGMENTS: usize = 8;
+
+/// Frame one `fuzz_policy_compose` input: bit 0 of `sel` says whether there is a
+/// Policy file, `rest` is the [`SEP`]-separated fields (none at all when empty).
+///
+/// With the bit set the Policy file is the first field, or the empty text when
+/// there are no fields; every other field is a fragment. A fragment at input
+/// index `i` of `n` is named `{n-1-i:02}.toml`, so the input order is the reverse
+/// of the composition order and `compose`'s own sort is exercised. The caller
+/// bounds the fragment count by [`MAX_FRAGMENTS`].
+pub fn policy_sources(sel: u8, rest: &str) -> (Option<String>, Vec<Fragment>) {
+    let mut parts = if rest.is_empty() {
+        Vec::new()
+    } else {
+        fields(rest)
+    };
+    let file = if sel & 1 == 1 {
+        Some(if parts.is_empty() {
+            String::new()
+        } else {
+            parts.remove(0)
+        })
+    } else {
+        None
+    };
+    let n = parts.len();
+    let fragments = parts
+        .into_iter()
+        .enumerate()
+        .map(|(i, text)| Fragment {
+            name: format!("{:02}.toml", n - 1 - i),
+            text,
+        })
+        .collect();
+    (file, fragments)
 }
 
 /// The Raw Exec Policies `fuzz_raw_exec_gate` runs under, picked by one input byte.
@@ -173,6 +211,47 @@ mod tests {
             fields("a b\u{1f}\u{0}"),
             vec!["a b".to_string(), "\0".to_string()]
         );
+    }
+
+    #[test]
+    fn policy_sources_frames_file_and_fragments() {
+        let sep = SEP;
+        let (file, frags) = policy_sources(1, &format!("a{sep}b{sep}c"));
+        assert_eq!(file.as_deref(), Some("a"));
+        let got: Vec<(&str, &str)> = frags
+            .iter()
+            .map(|f| (f.name.as_str(), f.text.as_str()))
+            .collect();
+        assert_eq!(got, vec![("01.toml", "b"), ("00.toml", "c")]);
+
+        let (file, frags) = policy_sources(1, "");
+        assert_eq!(file.as_deref(), Some(""));
+        assert!(frags.is_empty());
+
+        let (file, frags) = policy_sources(0, "");
+        assert_eq!(file, None);
+        assert!(frags.is_empty());
+
+        let (file, frags) = policy_sources(0, "x");
+        assert_eq!(file, None);
+        assert_eq!(frags.len(), 1);
+        assert_eq!(
+            (frags[0].name.as_str(), frags[0].text.as_str()),
+            ("00.toml", "x")
+        );
+    }
+
+    /// The positive control for the parity oracle: the shipped Policies load and
+    /// lint clean, so a parity failure is not just "everything is refused".
+    #[test]
+    fn shipped_policies_compose() {
+        for text in [
+            include_str!("../../policy.default.toml"),
+            include_str!("../../policy.example.toml"),
+        ] {
+            relay_policy::compose(text, &[]).expect("shipped policy composes");
+            assert!(!relay_policy::lint_composed(text, &[], &[], false).has_errors());
+        }
     }
 
     #[test]

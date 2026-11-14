@@ -233,9 +233,13 @@ jobs:
   # RenewResponse from the Enrollment service). Coverage-guided complement to
   # the stable-toolchain proptest suite from #218. Since #897 it also fuzzes two
   # Policy-engine checks through the real Policy::decide: the Raw Exec argv
-  # round-trip (ADR-0019) and the canonical-path precondition (ADR-0018). Five
-  # targets run (fuzz_relay_message_decode, fuzz_enroll_response_decode,
-  # fuzz_renew_response_decode, fuzz_raw_exec_gate, fuzz_path_canonical); the
+  # round-trip (ADR-0019) and the canonical-path precondition (ADR-0018). Three
+  # further targets open no file and spawn no process: Policy compose and lint
+  # and Template file parsing and compile (a Node's root-owned files), and the
+  # Native argument validators (a Task's arguments). Eight targets run
+  # (fuzz_relay_message_decode, fuzz_enroll_response_decode,
+  # fuzz_renew_response_decode, fuzz_raw_exec_gate, fuzz_path_canonical,
+  # fuzz_policy_compose, fuzz_template_compile, fuzz_operation_args); the
   # Makefile's FUZZ_DAEMON_TARGETS is authoritative. cargo-fuzz REQUIRES the
   # nightly Rust toolchain, which is exactly why this job lives here and never
   # in per-PR CI: ci.yml stays stable-only.
@@ -244,7 +248,7 @@ jobs:
     needs: fuzz-plan
     if: ${{ !cancelled() && needs.fuzz-plan.outputs.run != 'false' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 60 # five targets at FUZZ_TOTAL_TIME=300s (25 min), plus a nightly-toolchain build
+    timeout-minutes: 75 # eight targets at FUZZ_TOTAL_TIME=300s (40 min), plus a nightly-toolchain build
     # Least-privilege: like the Go fuzz job above, this only reads the repo and
     # runs the bounded fuzzers.
     permissions:

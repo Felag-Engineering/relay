@@ -12,6 +12,11 @@
 # reach: the Raw Exec argv gate (ADR-0019) and the canonical-path precondition
 # (ADR-0018), both through the real `Policy::decide`.
 #
+# The crate also fuzzes the parsers a Node's root-owned files reach (Policy
+# compose and lint, Template file parsing and compile) and the Native argument
+# validators a Task's arguments reach, against their advertised schema. None of
+# them opens a file or spawns a process, and none reaches Template render.
+#
 # Message types come from the daemon workspace's relay-proto crate, which
 # generates them once from /proto (the single source of truth, ADR-0007) — never
 # hand-copied and never hand-edited.
@@ -20,7 +25,7 @@ name = "relay-daemon-fuzz"
 version = "0.0.0"
 publish = false
 edition = "2021"
-description = "cargo-fuzz targets over the relay-daemon's prost wire-decode surface, the Raw Exec argv gate and the canonical-path precondition."
+description = "cargo-fuzz targets over the relay-daemon's prost wire-decode surface, the Raw Exec argv gate and the canonical-path precondition, Policy compose/lint, Template file parsing/compilation and the Native Operation argument validators."
 license = "BUSL-1.1"
 
 [package.metadata]
@@ -36,6 +41,16 @@ relay-proto = { path = "../crates/relay-proto" }
 # The Policy engine under test. No features: never test-util (its evaluate shims
 # are not the production gate) and never ban-probe.
 relay-policy = { path = "../crates/relay-policy" }
+# The Operation vocabulary, used for Template compile and the Native argument
+# validators. No features, so never test-util. relay-exec and tokio come in
+# transitively and the fuzz crate never names them, so the executor is
+# unreachable from here. Never add relay-transport or relay-test-support, which
+# both write files.
+relay-ops = { path = "../crates/relay-ops" }
+# They back the mirror of the loader's private `[[template]]` file struct in
+# src/template_oracle.rs; same specs as daemon/Cargo.toml's workspace dependencies.
+serde = { version = "1", features = ["derive"] }
+toml = { version = "1.1", default-features = false, features = ["parse", "serde"] }
 
 # Standalone workspace root. Keeps this nightly-only crate out of the parent
 # package's build graph so `make build`/`make test`/`make lint` stay stable-only.
@@ -75,6 +90,27 @@ bench = false
 [[bin]]
 name = "fuzz_path_canonical"
 path = "fuzz_targets/fuzz_path_canonical.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_policy_compose"
+path = "fuzz_targets/fuzz_policy_compose.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_template_compile"
+path = "fuzz_targets/fuzz_template_compile.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_operation_args"
+path = "fuzz_targets/fuzz_operation_args.rs"
 test = false
 doc = false
 bench = false

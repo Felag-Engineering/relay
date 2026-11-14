@@ -1,0 +1,19 @@
+[[operation]]
+name = "no.such.op"
+allowed_args = []
+
+[[operation]]
+name = "service.restart"
+allowed_args = [["nginx"]]
+
+[[deny]]
+name = "service.restart"
+args = []
+
+[[deny]]
+name = "file.read"
+args = [["*"]]
+
+[[deny]]
+name = "file.read"
+args = [[]]
