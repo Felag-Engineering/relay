@@ -10,45 +10,21 @@
 
 use regex::Regex;
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+
+#[path = "common/source_walk.rs"]
+mod source_walk;
+
+use source_walk::{daemon, production_src_roots, rust_files_in};
 
 const REASON: &str = "DI-15: Policy and Templates are loaded once, at start, and a runtime reload is \
                       never added. If this is a legitimate change to the start sequence, update the \
                       pinned set; if it is a second load path, it is the defect";
 
-fn daemon() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-}
-
-fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    for entry in std::fs::read_dir(dir).unwrap_or_else(|e| panic!("read {}: {e}", dir.display())) {
-        let path = entry.expect("dir entry").path();
-        if path.is_dir() {
-            rust_files(&path, out);
-        } else if path.extension().is_some_and(|e| e == "rs") {
-            out.push(path);
-        }
-    }
-}
-
 /// `daemon/src` and every crate's `src`, except the test-support crate, which only
 /// dev-dependencies reach.
 fn sources() -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    rust_files(&daemon().join("src"), &mut out);
-    let mut crates: Vec<_> = std::fs::read_dir(daemon().join("crates"))
-        .expect("read crates")
-        .map(|e| e.expect("crate entry").path())
-        .filter(|p| p.file_name().is_some_and(|n| n != "relay-test-support"))
-        .collect();
-    crates.sort();
-    for c in crates {
-        if c.join("src").is_dir() {
-            rust_files(&c.join("src"), &mut out);
-        }
-    }
-    out.sort();
-    out
+    rust_files_in(&production_src_roots())
 }
 
 /// The production lines of a file, or `None` for a file that is all test code. Removes the

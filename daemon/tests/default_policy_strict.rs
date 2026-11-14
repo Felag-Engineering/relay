@@ -10,25 +10,14 @@
 #![allow(clippy::disallowed_methods)]
 
 mod common;
+#[path = "common/source_walk.rs"]
+mod source_walk;
 
 use common::TempDir;
+use source_walk::files_under;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-
-fn files_under(dir: &Path, out: &mut Vec<PathBuf>) {
-    for entry in std::fs::read_dir(dir)
-        .unwrap_or_else(|e| panic!("read {}: {e}", dir.display()))
-        .flatten()
-    {
-        let path = entry.path();
-        if path.is_dir() {
-            files_under(&path, out);
-        } else {
-            out.push(path);
-        }
-    }
-}
 
 fn chmod(path: &Path, mode: u32) {
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
@@ -43,8 +32,7 @@ fn default_policy_passes_strict_with_catalog() {
     std::fs::create_dir_all(tmp.path()).expect("create scratch dir");
 
     let shipped_templates = manifest.join("packaging/templates.d");
-    let mut shipped = Vec::new();
-    files_under(&shipped_templates, &mut shipped);
+    let shipped = files_under(&shipped_templates);
     assert_eq!(
         shipped,
         [shipped_templates.join("relay-read/catalog.toml")],
