@@ -239,10 +239,7 @@ func TestNewDispatchStack_AProtocolViolationOnAReadClassTaskIsRecordedWithNoOutp
 	})
 	<-resultCh
 
-	records, err := st.Audit().ByNode(context.Background(), "node-1")
-	if err != nil {
-		t.Fatalf("ByNode: %v", err)
-	}
+	records := auditByNode(t, st.Audit(), "node-1")
 	var violationRows int
 	for _, rec := range records {
 		if rec.Kind != audit.KindProtocolViolation {
@@ -885,10 +882,7 @@ func TestDispatchWiring_AHaltedJobsUnsentTasksAreNeverSentAfterARestart(t *testi
 				task.NodeID, task.State, task.Outcome, task.DispatchedAt, task.Stderr)
 		}
 	}
-	records, err := st.Audit().ByJob(context.Background(), jobID)
-	if err != nil {
-		t.Fatalf("Audit().ByJob: %v", err)
-	}
+	records := auditByJob(t, st.Audit(), jobID)
 	halts := 0
 	for _, rec := range records {
 		if rec.Kind == audit.KindJobHalt {

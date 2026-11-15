@@ -255,17 +255,7 @@ func TestTunnelOpen_TwoStreamsOnOneCertificateWriteOneReplacedRowWithControlPlan
 // connAuditRecords returns the audit records of one kind for nodeID.
 func connAuditRecords(ctx context.Context, t *testing.T, f *relayFixture, nodeID, kind string) []audit.Record {
 	t.Helper()
-	all, err := f.Deps.audit.ByNode(ctx, nodeID)
-	if err != nil {
-		t.Fatalf("ByNode: %v", err)
-	}
-	var out []audit.Record
-	for _, r := range all {
-		if r.Kind == kind {
-			out = append(out, r)
-		}
-	}
-	return out
+	return recordsOfKind(auditByNode(t, f.Deps.audit, nodeID), kind)
 }
 
 // connAuditFingerprint is the certificate fingerprint the registry holds for nodeID.

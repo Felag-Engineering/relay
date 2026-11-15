@@ -26,17 +26,7 @@ var (
 // mintTokenRecords is the token_mint records on the trail.
 func mintTokenRecords(t *testing.T, f *relayFixture) []audit.Record {
 	t.Helper()
-	recs, err := f.Deps.audit.List(context.Background())
-	if err != nil {
-		t.Fatalf("audit List: %v", err)
-	}
-	var out []audit.Record
-	for _, r := range recs {
-		if r.Kind == audit.KindTokenMint {
-			out = append(out, r)
-		}
-	}
-	return out
+	return recordsOfKind(auditList(t, f.Deps.audit), audit.KindTokenMint)
 }
 
 // Proves EN-36, EN-47.
@@ -114,10 +104,7 @@ func TestConsoleEnrollmentMint_AnAdminMintsThroughTheRealCapabilityLayer(t *test
 	if len(recs) != 1 || recs[0].Reason != "token_id="+tokenID || recs[0].Attribution.Verified.AccountID != adminID {
 		t.Fatalf("token_mint records = %+v, want one for %s by the admin", recs, tokenID)
 	}
-	all, err := f.Deps.audit.List(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	all := auditList(t, f.Deps.audit)
 	for i, r := range all {
 		b, _ := json.Marshal(r)
 		if strings.Contains(string(b), joinString) || strings.Contains(string(b), js.EnrollmentToken()) {

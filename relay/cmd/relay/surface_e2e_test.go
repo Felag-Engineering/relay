@@ -240,7 +240,6 @@ func nodeIDForLabel(t *testing.T, deps *appDeps, key, value string) string {
 // each subtest's own comment for why its position in the sequence matters.
 func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 	deps, nodeAddr, controlBase, authed, plain, credential := startSurfaceHarness(t)
-	ctx := context.Background()
 
 	policyPath := relaytest.WriteTempFile(t, "policy-*.toml", relaytest.FixturePolicy)
 
@@ -706,10 +705,7 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 			t.Fatalf("node revoke status = %d, want %d", revokeResp.StatusCode, http.StatusNoContent)
 		}
 
-		records, err := deps.audit.List(ctx)
-		if err != nil {
-			t.Fatalf("deps.audit.List: %v", err)
-		}
+		records := auditList(t, deps.audit)
 		if len(records) == 0 {
 			t.Fatal("deps.audit.List: got 0 records")
 		}
@@ -764,10 +760,7 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 		if factsJobID == "" {
 			t.Fatal("factsJobID is empty (facts_fanout subtest did not run or record it)")
 		}
-		jobRecords, err := deps.audit.ByJob(ctx, factsJobID)
-		if err != nil {
-			t.Fatalf("deps.audit.ByJob(%q): %v", factsJobID, err)
-		}
+		jobRecords := auditByJob(t, deps.audit, factsJobID)
 		if len(jobRecords) == 0 {
 			t.Errorf("deps.audit.ByJob(%q): got 0 records, want at least 1 (every dispatch is audited, #102)", factsJobID)
 		}

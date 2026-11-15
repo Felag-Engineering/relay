@@ -237,10 +237,7 @@ func TestApprovalCallout_ParkDecideRun(t *testing.T) {
 
 	// 6. Audit answers "who asked / who approved / what ran" — the park, the
 	//    decision, and the dispatch are three records of one exchange.
-	records, err := f.Deps.audit.List(context.Background())
-	if err != nil {
-		t.Fatalf("audit List: %v", err)
-	}
+	records := auditList(t, f.Deps.audit)
 	var sawPark, sawDecision, sawDispatch bool
 	for _, r := range records {
 		switch r.Kind {

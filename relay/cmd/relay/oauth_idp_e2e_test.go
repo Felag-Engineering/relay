@@ -132,10 +132,7 @@ func TestE2EOAuth_SessionResolvesToTheAccount(t *testing.T) {
 		t.Fatalf("run_operation over the OAuth session returned IsError=true: %+v", res.Content)
 	}
 
-	records, err := f.Deps.audit.List(context.Background())
-	if err != nil {
-		t.Fatalf("audit.List: %v", err)
-	}
+	records := auditList(t, f.Deps.audit)
 	var found bool
 	for _, r := range records {
 		if r.Attribution.Verified.AccountName != "hana" {

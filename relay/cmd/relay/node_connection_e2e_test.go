@@ -135,20 +135,14 @@ func TestTunnelOpen_ChangedFactsAndNodeLabelsAreRecordedAndNeverAudited(t *testi
 	// connAuditSession returns only once the first stream has fully ended, so
 	// the reconnect below is a new connect and not a second live stream.
 	connAuditSession(ctx, t, f, cert, pool, hello("host-a", "web"))
-	before, err := f.Deps.audit.ByNode(ctx, nodeID)
-	if err != nil {
-		t.Fatalf("ByNode: %v", err)
-	}
+	before := auditByNode(t, f.Deps.audit, nodeID)
 
 	connAuditSession(ctx, t, f, cert, pool, hello("host-b", "db"))
 	n, _ := f.Deps.registry.Get(nodeID)
 	if n.Facts.Hostname != "host-b" || !reflect.DeepEqual(n.NodeLabels, map[string]string{"role": "db"}) {
 		t.Errorf("registry shows hostname %q, labels %v, want host-b and role=db", n.Facts.Hostname, n.NodeLabels)
 	}
-	after, err := f.Deps.audit.ByNode(ctx, nodeID)
-	if err != nil {
-		t.Fatalf("ByNode: %v", err)
-	}
+	after := auditByNode(t, f.Deps.audit, nodeID)
 	if len(after) != len(before) {
 		t.Errorf("the Node has %d audit records after changing Facts and a node: label, want the %d it had before", len(after), len(before))
 	}

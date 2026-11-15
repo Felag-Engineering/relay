@@ -89,10 +89,7 @@ const metaKeyReplayedFrom = "io.gleipnir/replayed-from"
 // auditLen returns the length of f's whole audit trail.
 func auditLen(t *testing.T, f *relayFixture) int {
 	t.Helper()
-	records, err := f.Deps.audit.List(context.Background())
-	if err != nil {
-		t.Fatalf("audit List: %v", err)
-	}
+	records := auditList(t, f.Deps.audit)
 	return len(records)
 }
 
@@ -715,10 +712,7 @@ func TestMCPElicitation_LegacyHeaderWithModernMetaDoesNotAsk(t *testing.T) {
 				if len(got.Approvals) != 0 {
 					t.Errorf("approvals = %+v, want none — the handler never ran", got.Approvals)
 				}
-				records, err := f.Deps.audit.List(context.Background())
-				if err != nil {
-					t.Fatalf("audit List: %v", err)
-				}
+				records := auditList(t, f.Deps.audit)
 				for _, r := range records {
 					if r.Kind == audit.KindApprovalRequested {
 						t.Errorf("found a KindApprovalRequested record — the handler must never have run: %+v", r)
@@ -795,10 +789,7 @@ func TestMCPElicitation_RedriveOfAPendingRequestAsksNobody(t *testing.T) {
 	res3 := relaytest.CallTool(t, freshSession, "run_operation", restartNginxArgs())
 	assertObservedPark(t, res3)
 
-	records, err := f.Deps.audit.ByApproval(context.Background(), rid)
-	if err != nil {
-		t.Fatalf("ByApproval(%s): %v", rid, err)
-	}
+	records := auditByApproval(t, f.Deps.audit, rid)
 	var requested, observed int
 	for _, r := range records {
 		switch r.Kind {
@@ -1069,10 +1060,7 @@ func TestMCPElicitation_DuplicateRetryReAttaches(t *testing.T) {
 	if readCount != 1 {
 		t.Errorf("KindRead records = %d, want exactly 1 (the audited re-attach)", readCount)
 	}
-	records, err := f.Deps.audit.List(context.Background())
-	if err != nil {
-		t.Fatalf("audit List: %v", err)
-	}
+	records := auditList(t, f.Deps.audit)
 	for _, r := range records {
 		if r.Kind != audit.KindRead {
 			continue

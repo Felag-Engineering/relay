@@ -9,7 +9,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -58,10 +57,7 @@ func tamperRequestState(state string) string {
 // f's trail holds.
 func auditCounts(t *testing.T, f *relayFixture) (dispatch, read int) {
 	t.Helper()
-	records, err := f.Deps.audit.List(context.Background())
-	if err != nil {
-		t.Fatalf("audit List: %v", err)
-	}
+	records := auditList(t, f.Deps.audit)
 	for _, r := range records {
 		switch r.Kind {
 		case audit.KindDispatch:
@@ -126,10 +122,7 @@ func TestAnsweredRetry_ApproveRunsTheJobOnce(t *testing.T) {
 		t.Errorf("KindDispatch records = %d, want exactly 1", dispatchCount)
 	}
 
-	records, err := f.Deps.audit.List(context.Background())
-	if err != nil {
-		t.Fatalf("audit List: %v", err)
-	}
+	records := auditList(t, f.Deps.audit)
 	var sawDecision bool
 	for _, r := range records {
 		switch r.Kind {
@@ -240,10 +233,7 @@ func TestAnsweredRetry_BoundJobReAttaches(t *testing.T) {
 		t.Errorf("KindRead records = %d, want exactly 1 (the re-attach, audited)", readCount)
 	}
 
-	records, err := f.Deps.audit.List(context.Background())
-	if err != nil {
-		t.Fatalf("audit List: %v", err)
-	}
+	records := auditList(t, f.Deps.audit)
 	for _, r := range records {
 		if r.Kind != audit.KindRead {
 			continue
@@ -285,10 +275,7 @@ func TestAnsweredRetry_DeclineIsTerminalAndDispatchesNothing(t *testing.T) {
 		t.Errorf("KindDispatch records = %d, want 0", dispatchCount)
 	}
 
-	records, err := f.Deps.audit.List(context.Background())
-	if err != nil {
-		t.Fatalf("audit List: %v", err)
-	}
+	records := auditList(t, f.Deps.audit)
 	var sawDeny bool
 	for _, r := range records {
 		if r.Kind == audit.KindApprovalDecided && r.ApprovalAnswer == audit.ApprovalAnswerDenied {

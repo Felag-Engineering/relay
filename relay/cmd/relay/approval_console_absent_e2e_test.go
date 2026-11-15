@@ -9,7 +9,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/url"
@@ -157,10 +156,7 @@ func TestApprovalCallout_TheConsoleHasNoApprovalSurface(t *testing.T) {
 	if got := getApproval(t, f, danaToken, parked.RequestID); got.State != "pending" || len(got.Decisions) != 0 {
 		t.Fatalf("after the Console POST the request is %q with %d decisions, want pending with none", got.State, len(got.Decisions))
 	}
-	records, err := f.Deps.audit.List(context.Background())
-	if err != nil {
-		t.Fatalf("audit List: %v", err)
-	}
+	records := auditList(t, f.Deps.audit)
 	for _, r := range records {
 		if r.Kind == audit.KindApprovalDecided || r.Kind == audit.KindStepUp {
 			t.Errorf("the retired Console path left a %s record", r.Kind)

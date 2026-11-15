@@ -286,10 +286,7 @@ func TestConsolePasswords_TemporaryPasswordForcedChangeAndSelfServiceChange(t *t
 	f := startRelay(t, WithControlPlane(), WithConfig(func(c *Config) { c.ConsoleEnabled = true }))
 	p := runPasswordFlow(t, f)
 
-	recs, err := f.Deps.store.Audit().List(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
+	recs := auditList(t, f.Deps.store.Audit())
 	byKind := map[string][]audit.Record{}
 	for _, r := range recs {
 		byKind[r.Kind] = append(byKind[r.Kind], r)
@@ -358,10 +355,7 @@ func TestConsolePasswords_NoResponseLogOrAuditRowCarriesAPasswordOrHash(t *testi
 		t.Fatal("the log buffer did not capture the composition root's logger; the log assertions below would prove nothing")
 	}
 
-	recs, err := f.Deps.store.Audit().List(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
+	recs := auditList(t, f.Deps.store.Audit())
 	haystacks := map[string]string{"log": logBuf.String()}
 	for i, r := range recs {
 		b, err := json.Marshal(r)
@@ -453,10 +447,7 @@ func TestControlAPI_CreatesAHumanAccountWithoutATemporaryPassword(t *testing.T) 
 	if _, err := f.Deps.store.Passwords().GetPassword(ctx, created.ID); !errors.Is(err, accounts.ErrNoPassword) {
 		t.Errorf("GetPassword = %v, want ErrNoPassword", err)
 	}
-	recs, err := f.Deps.store.Audit().List(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	recs := auditList(t, f.Deps.store.Audit())
 	for _, r := range recs {
 		if r.Kind == audit.KindPasswordTemporarySet || r.Kind == audit.KindPasswordChange {
 			t.Errorf("the Control API write recorded %s", r.Kind)

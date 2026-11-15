@@ -109,10 +109,7 @@ func TestSurfaceDeps_AuditSinkIsWired(t *testing.T) {
 		t.Fatalf("read status = %d, want 200", resp.StatusCode)
 	}
 
-	records, err := f.Deps.audit.ByJob(context.Background(), jobID)
-	if err != nil {
-		t.Fatalf("audit.ByJob: %v", err)
-	}
+	records := auditByJob(t, f.Deps.audit, jobID)
 	for _, rec := range records {
 		if rec.Kind == audit.KindRead {
 			return // the sink is wired and writing
