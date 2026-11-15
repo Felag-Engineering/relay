@@ -8,6 +8,7 @@ package main
 // Without the separate uid each test records a skip in make verify's skip ledger and skips.
 
 import (
+	"context"
 	"encoding/json"
 	"net"
 	"path/filepath"
@@ -184,7 +185,17 @@ func (r *reloadRelay) records(kind string) []audit.Record {
 		r.t.Fatalf("open the copied store: %v", err)
 	}
 	defer st.Close() //nolint:errcheck
-	return recordsOfKind(auditList(r.t, st.Audit()), kind)
+	all, err := st.Audit().List(context.Background())
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	var out []audit.Record
+	for _, rec := range all {
+		if rec.Kind == kind {
+			out = append(out, rec)
+		}
+	}
+	return out
 }
 
 // Proves RC-21.

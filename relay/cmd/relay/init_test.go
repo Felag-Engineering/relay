@@ -146,7 +146,10 @@ func TestInitFirstAdmin_CreatesOnceAndPrintsOnlyTheCredential(t *testing.T) {
 	if !hash.Hash.Verify(accounts.NewPassword(initTestPassword)) {
 		t.Error("the stored password does not verify")
 	}
-	recs := auditList(t, st.Audit())
+	recs, err := st.Audit().List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var kinds []string
 	for _, r := range recs {
 		kinds = append(kinds, r.Kind)
