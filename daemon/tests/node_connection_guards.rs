@@ -32,42 +32,10 @@ use std::path::{Path, PathBuf};
 use regex::Regex;
 use toml::Value;
 
-fn daemon() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-}
+#[path = "common/source_walk.rs"]
+mod source_walk;
 
-/// `src` and every `crates/*/src` except the dev-only test-support crate.
-fn source_roots() -> Vec<PathBuf> {
-    let mut roots = vec![daemon().join("src")];
-    let mut crates: Vec<PathBuf> = fs::read_dir(daemon().join("crates"))
-        .expect("read daemon/crates")
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.file_name().is_some_and(|n| n != "relay-test-support"))
-        .collect();
-    crates.sort();
-    roots.extend(
-        crates
-            .into_iter()
-            .map(|c| c.join("src"))
-            .filter(|s| s.is_dir()),
-    );
-    roots
-}
-
-fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            rust_files(&path, out);
-        } else if path.extension().is_some_and(|e| e == "rs") {
-            out.push(path);
-        }
-    }
-}
+use source_walk::{daemon, production_src_roots, rust_files_in};
 
 /// `src` with comments removed and string and character literal contents
 /// emptied, so a name inside a comment or a string is not read as code.
@@ -280,11 +248,7 @@ fn test_only_files(files: &[(PathBuf, String)]) -> BTreeSet<PathBuf> {
 
 /// The production code of every scanned file, keyed by path.
 fn scanned() -> (Vec<(PathBuf, String)>, BTreeSet<PathBuf>) {
-    let mut paths = Vec::new();
-    for root in source_roots() {
-        rust_files(&root, &mut paths);
-    }
-    paths.sort();
+    let paths = rust_files_in(&production_src_roots());
     let files: Vec<(PathBuf, String)> = paths
         .into_iter()
         .map(|p| {
