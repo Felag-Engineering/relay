@@ -292,10 +292,7 @@ func (r *initRelay) trail(t *testing.T) []audit.Record {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	recs, err := st.Audit().List(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
+	recs := auditList(t, st.Audit())
 	return recs
 }
 
@@ -406,13 +403,7 @@ func TestInit_RecoverReMintsAndAudits(t *testing.T) {
 	}
 	tokenID := strings.SplitN(strings.TrimPrefix(second, accounts.TokenPrefix), ".", 2)[0]
 
-	recs := r.trail(t)
-	var mints []audit.Record
-	for _, rec := range recs {
-		if rec.Kind == audit.KindAPITokenMint {
-			mints = append(mints, rec)
-		}
-	}
+	mints := recordsOfKind(r.trail(t), audit.KindAPITokenMint)
 	if len(mints) != 2 {
 		t.Fatalf("%d api_token_mint records, want 2 (first and recovered)", len(mints))
 	}

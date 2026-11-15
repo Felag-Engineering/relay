@@ -19,7 +19,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"os"
 	"testing"
@@ -42,8 +41,6 @@ func TestMCPExecution_RealDaemon_E2E(t *testing.T) {
 	if daemonBin == "" {
 		relaytest.SkipMissingBin(t, "RELAY_DAEMON_BIN not set; skipping real-daemon e2e (run via make test-integration)")
 	}
-
-	ctx := context.Background()
 
 	// The whole point of this test is that newServer's OWN wiring dispatches:
 	// no injected test taskSink, so deps.tunnel.sink and deps.dispatch must
@@ -111,10 +108,7 @@ func TestMCPExecution_RealDaemon_E2E(t *testing.T) {
 	if out.JobID == "" {
 		t.Fatal("run_operation: JobID is empty")
 	}
-	records, err := deps.audit.ByJob(ctx, out.JobID)
-	if err != nil {
-		t.Fatalf("deps.audit.ByJob(%q): %v", out.JobID, err)
-	}
+	records := auditByJob(t, deps.audit, out.JobID)
 	if len(records) == 0 {
 		t.Errorf("deps.audit.ByJob(%q): got 0 records, want at least 1 (every dispatch is audited, #102)", out.JobID)
 	}

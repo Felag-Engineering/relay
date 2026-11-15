@@ -134,10 +134,7 @@ func TestElicit_AskableParkFromMRTRClientGetsAQuestion(t *testing.T) {
 
 	// No Job, no Tasks: a question replaces pending_approval outright, and
 	// the capability layer's own park creates neither (AP-2 preserved).
-	records, err := f.Deps.audit.List(context.Background())
-	if err != nil {
-		t.Fatalf("audit List: %v", err)
-	}
+	records := auditList(t, f.Deps.audit)
 	for _, r := range records {
 		if r.Kind == audit.KindDispatch {
 			t.Errorf("found an audit.KindDispatch record (JobID=%q) — nothing should have dispatched", r.JobID)

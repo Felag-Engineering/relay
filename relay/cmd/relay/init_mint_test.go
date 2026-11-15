@@ -50,17 +50,7 @@ func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("broken p
 
 func tokenMintRecords(t *testing.T, st *store.Store) []audit.Record {
 	t.Helper()
-	recs, err := st.Audit().List(context.Background())
-	if err != nil {
-		t.Fatalf("audit List: %v", err)
-	}
-	var out []audit.Record
-	for _, r := range recs {
-		if r.Kind == audit.KindTokenMint {
-			out = append(out, r)
-		}
-	}
-	return out
+	return recordsOfKind(auditList(t, st.Audit()), audit.KindTokenMint)
 }
 
 // formOver returns an init form that answers from input over the real capability mint.
@@ -189,10 +179,7 @@ func TestInitMintForm_ThreeNodesJoinAndAFourthIsRefused(t *testing.T) {
 		t.Fatalf("token_mint records = %+v, want one by alice", recs)
 	}
 
-	all, err := f.Deps.store.Audit().List(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	all := auditList(t, f.Deps.store.Audit())
 	secrets := []string{joinString, js.EnrollmentToken()}
 	for i, r := range all {
 		b, _ := json.Marshal(r)

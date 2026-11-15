@@ -169,10 +169,7 @@ func TestControlAPI_MintEnrollmentToken_ReturnsJoinString(t *testing.T) {
 		t.Fatal("Enroll: node_id is empty")
 	}
 
-	records, err := f.Deps.audit.List(ctx)
-	if err != nil {
-		t.Fatalf("audit List: %v", err)
-	}
+	records := auditList(t, f.Deps.audit)
 	secret := minted.Token[strings.Index(minted.Token, ".")+1:]
 	haystacks := map[string]string{"log": logBuf.String()}
 	for i, r := range records {
@@ -410,10 +407,7 @@ func TestControlAPI_FreezeEngageRelease(t *testing.T) {
 		t.Fatalf("capability.Run after release: err = %v, want nil (dispatch unblocked for an admin Principal)", runErr)
 	}
 
-	records, err := deps.audit.List(ctx)
-	if err != nil {
-		t.Fatalf("deps.audit.List: %v", err)
-	}
+	records := auditList(t, deps.audit)
 	var sawEngage, sawRelease bool
 	for _, r := range records {
 		switch r.Kind {
@@ -587,8 +581,6 @@ func TestControlAPI_ExecutionRoutesAreWired(t *testing.T) {
 // — for both execution routes — and the audit trail carries the refusal,
 // never a job-level dispatch row.
 func TestControlAPI_ZeroMatchPreflightReportsWhatDispatchRefuses(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
 
 	_, deps, base, client, credential := startControlAPIServer(t)
 
@@ -647,10 +639,7 @@ func TestControlAPI_ZeroMatchPreflightReportsWhatDispatchRefuses(t *testing.T) {
 		}
 	}
 
-	records, err := deps.audit.List(ctx)
-	if err != nil {
-		t.Fatalf("deps.audit.List: %v", err)
-	}
+	records := auditList(t, deps.audit)
 	var refusals []audit.Record
 	for _, r := range records {
 		if r.Selector != "node:role=nonexistent" {
@@ -838,10 +827,7 @@ func TestControlAPI_JobRoutes(t *testing.T) {
 	t.Run("the read is audited", func(t *testing.T) {
 		// ADR-0025: reading a Job returns captured Task output, so the access
 		// must leave a trail. This also proves apiSurface.Mount wired Reads.
-		records, err := deps.audit.ByJob(context.Background(), jobID)
-		if err != nil {
-			t.Fatalf("audit.ByJob: %v", err)
-		}
+		records := auditByJob(t, deps.audit, jobID)
 		var reads int
 		for _, rec := range records {
 			if rec.Kind == audit.KindRead {
@@ -1260,8 +1246,6 @@ func TestControlAPI_HaltRendersIdenticallyOnBothSurfaces(t *testing.T) {
 // (invariant 10) (#1274).
 func TestControlAPI_EmptySelectorIsRefusedOnDispatchAndPlan(t *testing.T) {
 	f := startRelay(t, WithControlPlane())
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
 
 	routes := map[string]map[string]any{
 		"/api/v1/operations": {"operation": "system.facts"},
@@ -1312,10 +1296,7 @@ func TestControlAPI_EmptySelectorIsRefusedOnDispatchAndPlan(t *testing.T) {
 		}
 	}
 
-	records, err := f.Deps.audit.List(ctx)
-	if err != nil {
-		t.Fatalf("audit.List: %v", err)
-	}
+	records := auditList(t, f.Deps.audit)
 	refusals := 0
 	for _, r := range records {
 		switch r.Kind {

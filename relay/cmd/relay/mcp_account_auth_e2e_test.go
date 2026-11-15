@@ -157,10 +157,7 @@ func TestMCPAccountAuth_RoleLadder_E2E(t *testing.T) {
 	// Acceptance: "audit attributes every tool call's dispatch to the Account."
 	// The operator's Operation is attributed to the operator; its refused Raw
 	// Exec is recorded as a refusal against the same Account.
-	records, err := f.deps.audit.List(context.Background())
-	if err != nil {
-		t.Fatalf("audit.List: %v", err)
-	}
+	records := auditList(t, f.deps.audit)
 	wantAttribution := operatorAcct.Name + ":" + string(accounts.RoleOperator)
 	var sawOperatorDispatch, sawOperatorRefusal bool
 	for _, r := range records {

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -16,17 +15,7 @@ import (
 // policyAliasRecords is the policy_alias records on the trail, oldest first.
 func policyAliasRecords(t *testing.T, f *relayFixture) []audit.Record {
 	t.Helper()
-	recs, err := f.Deps.store.Audit().List(context.Background())
-	if err != nil {
-		t.Fatalf("audit List: %v", err)
-	}
-	var out []audit.Record
-	for _, r := range recs {
-		if r.Kind == audit.KindPolicyAlias {
-			out = append(out, r)
-		}
-	}
-	return out
+	return recordsOfKind(auditList(t, f.Deps.store.Audit()), audit.KindPolicyAlias)
 }
 
 // aliasReason is the Reason the capability layer records for a change.

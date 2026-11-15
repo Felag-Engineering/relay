@@ -129,17 +129,7 @@ func TestRevokedNode_DialAuditedThenThrottled(t *testing.T) {
 	}
 	records := func() []audit.Record {
 		t.Helper()
-		all, err := deps.audit.ByNode(ctx, nodeID)
-		if err != nil {
-			t.Fatalf("ByNode: %v", err)
-		}
-		var out []audit.Record
-		for _, r := range all {
-			if r.Kind == audit.KindRevokedNodeDial {
-				out = append(out, r)
-			}
-		}
-		return out
+		return recordsOfKind(auditByNode(t, deps.audit, nodeID), audit.KindRevokedNodeDial)
 	}
 
 	redial(5)

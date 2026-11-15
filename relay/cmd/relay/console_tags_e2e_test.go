@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -27,10 +26,7 @@ func consoleNodeIDs(body string) []string {
 // the tag key.
 func tagWriteRecords(t *testing.T, f *relayFixture, nodeID, key string) []audit.Record {
 	t.Helper()
-	recs, err := f.Deps.store.Audit().ByNode(context.Background(), nodeID)
-	if err != nil {
-		t.Fatalf("ByNode(%s): %v", nodeID, err)
-	}
+	recs := auditByNode(t, f.Deps.store.Audit(), nodeID)
 	var out []audit.Record
 	for _, r := range recs {
 		if r.Kind == audit.KindTagWrite && strings.HasPrefix(r.Reason, "tag:"+key+" ") {
@@ -191,10 +187,7 @@ func TestConsoleTags_AHumanOperatorTagsANodeAndASelectionThroughTheRealCapabilit
 // Account accountID.
 func operatorRefusals(t *testing.T, f *relayFixture, accountID string) int {
 	t.Helper()
-	recs, err := f.Deps.store.Audit().List(context.Background())
-	if err != nil {
-		t.Fatalf("audit List: %v", err)
-	}
+	recs := auditList(t, f.Deps.store.Audit())
 	n := 0
 	for _, r := range recs {
 		if r.Kind == audit.KindRefusal && r.Attribution.Verified.AccountID == accountID {

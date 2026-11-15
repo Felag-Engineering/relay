@@ -124,17 +124,7 @@ func mustParse(t *testing.T, body string) startupConfig {
 // records returns the trail's records of the given kind.
 func (f *reloadFixture) records(kind string) []audit.Record {
 	f.t.Helper()
-	all, err := f.deps.audit.List(context.Background())
-	if err != nil {
-		f.t.Fatalf("List: %v", err)
-	}
-	var out []audit.Record
-	for _, r := range all {
-		if r.Kind == kind {
-			out = append(out, r)
-		}
-	}
-	return out
+	return recordsOfKind(auditList(f.t, f.deps.audit), kind)
 }
 
 func TestReloader_SuccessSwapsSnapshotGateAndLog(t *testing.T) {

@@ -103,16 +103,7 @@ func TestTags_HumanOperatorWritesOverTheControlAPIAndASelectorResolvesIt(t *test
 	}
 
 	// One tag_write record for the Node, naming the Account and the change.
-	recs, err := f.Deps.store.Audit().ByNode(context.Background(), "node-tag-a")
-	if err != nil {
-		t.Fatalf("ByNode: %v", err)
-	}
-	var writes []audit.Record
-	for _, r := range recs {
-		if r.Kind == audit.KindTagWrite {
-			writes = append(writes, r)
-		}
-	}
+	writes := recordsOfKind(auditByNode(t, f.Deps.store.Audit(), "node-tag-a"), audit.KindTagWrite)
 	if len(writes) != 1 {
 		t.Fatalf("tag_write records for node-tag-a = %d, want exactly 1 (refused writes record refusals, not tag writes)", len(writes))
 	}
@@ -183,16 +174,7 @@ func TestControlAPI_InitialTagsAreOrdinaryTags(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetByName: %v", err)
 	}
-	recs, err := f.Deps.store.Audit().ByNode(ctx, nodeID)
-	if err != nil {
-		t.Fatalf("ByNode: %v", err)
-	}
-	var writes []audit.Record
-	for _, r := range recs {
-		if r.Kind == audit.KindTagWrite {
-			writes = append(writes, r)
-		}
-	}
+	writes := recordsOfKind(auditByNode(t, f.Deps.store.Audit(), nodeID), audit.KindTagWrite)
 	if len(writes) != 1 {
 		t.Fatalf("tag_write records = %d, want exactly 1", len(writes))
 	}

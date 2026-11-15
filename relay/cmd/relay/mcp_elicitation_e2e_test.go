@@ -255,33 +255,14 @@ func allJobs(t *testing.T, f *relayFixture) []jobs.JobSummary {
 // decisionRecordsFor returns requestID's KindApprovalDecided audit records.
 func decisionRecordsFor(t *testing.T, f *relayFixture, requestID string) []audit.Record {
 	t.Helper()
-	records, err := f.Deps.audit.ByApproval(context.Background(), requestID)
-	if err != nil {
-		t.Fatalf("ByApproval(%s): %v", requestID, err)
-	}
-	var decisions []audit.Record
-	for _, r := range records {
-		if r.Kind == audit.KindApprovalDecided {
-			decisions = append(decisions, r)
-		}
-	}
-	return decisions
+	return recordsOfKind(auditByApproval(t, f.Deps.audit, requestID), audit.KindApprovalDecided)
 }
 
 // parkRecordFor returns requestID's single KindApprovalRequested audit
 // record, failing the test on zero or more than one.
 func parkRecordFor(t *testing.T, f *relayFixture, requestID string) audit.Record {
 	t.Helper()
-	records, err := f.Deps.audit.ByApproval(context.Background(), requestID)
-	if err != nil {
-		t.Fatalf("ByApproval(%s): %v", requestID, err)
-	}
-	var parks []audit.Record
-	for _, r := range records {
-		if r.Kind == audit.KindApprovalRequested {
-			parks = append(parks, r)
-		}
-	}
+	parks := recordsOfKind(auditByApproval(t, f.Deps.audit, requestID), audit.KindApprovalRequested)
 	if len(parks) != 1 {
 		t.Fatalf("parkRecordFor(%s): %d KindApprovalRequested records, want exactly 1: %+v", requestID, len(parks), parks)
 	}

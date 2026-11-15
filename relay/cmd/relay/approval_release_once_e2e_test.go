@@ -11,7 +11,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"testing"
@@ -148,10 +147,7 @@ func TestApprovalRelease_ReDriveOnAnySurfaceReAttaches(t *testing.T) {
 	if got := allJobs(t, f); len(got) != 1 {
 		t.Fatalf("allJobs = %d, want exactly 1 — a released approval must never mint a second Job", len(got))
 	}
-	records, err := f.Deps.audit.List(context.Background())
-	if err != nil {
-		t.Fatalf("audit List: %v", err)
-	}
+	records := auditList(t, f.Deps.audit)
 	dispatchCount, reattachReads := countAuditKinds(records)
 	if dispatchCount != 1 {
 		t.Errorf("KindDispatch records = %d, want 1", dispatchCount)
@@ -232,10 +228,7 @@ func TestApprovalRelease_DifferentAccountReAttachesAndRunsNothing(t *testing.T) 
 	if got := allJobs(t, f); len(got) != 1 {
 		t.Fatalf("allJobs = %d, want exactly 1 — the bystander's re-drive must not dispatch", len(got))
 	}
-	records, err := f.Deps.audit.List(context.Background())
-	if err != nil {
-		t.Fatalf("audit List: %v", err)
-	}
+	records := auditList(t, f.Deps.audit)
 	_, reattachReads := countAuditKinds(records)
 	if len(reattachReads) != 1 {
 		t.Fatalf("approval_reattach KindRead records = %d, want 1", len(reattachReads))
