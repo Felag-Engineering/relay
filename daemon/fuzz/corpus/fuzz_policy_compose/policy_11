@@ -1,0 +1,252 @@
+# Relay — shipped default Node Policy (ADR-0022)
+#
+# POSTURE:
+#   - `read`-class Operations are pre-allowed out of the box, so a freshly
+#     enrolled Node is fully interrogable with zero Policy authoring.
+#   - A confidentiality deny-list overrides the read pre-allowance
+#     (deny-beats-allow): `read` means "cannot change Node state", NOT "safe
+#     for the AI to see" — a read result flows to the model provider, so
+#     reading is exfiltration by construction (ADR-0021 data-egress
+#     governance).
+#   - `mutate` Operations and Raw Exec are opt-in: no allow rules here, so
+#     deny-by-default applies until you add them (ADR-0002).
+#
+# This file is YOURS the moment it is installed: locally-rooted and
+# remotely-immutable (ADR-0002) — the Relay can query it but never change it
+# over the wire. Narrow it freely; the annotated syntax reference is
+# policy.example.toml, and docs/operations/policy-as-code.md covers authoring
+# and distribution. The egress-hardening move is replacing file.read's "*"
+# with an explicit path allow-list.
+#
+# ENGINE SEMANTICS (unchanged by this file): deny-by-default,
+# deny-beats-allow, argument-level granularity, path arguments matched in
+# canonical form with a resolved-target re-check (ADR-0018).
+#
+# FILE PLACEMENT:
+#   /etc/relay-daemon/policy.toml   (root-owned, not group/world-writable —
+#   the daemon's fail-closed loader refuses it otherwise)
+
+# ---------------------------------------------------------------------------
+# Read class — pre-allowed (ADR-0022)
+# ---------------------------------------------------------------------------
+
+# Facts self-report: OS, kernel, hostname, IP, packages. No arguments.
+[[operation]]
+name = "system.facts"
+allowed_args = []
+
+# Read any canonical path, EXCEPT the confidentiality deny-list below
+# (deny-beats-allow makes the deny-list authoritative over this wildcard).
+[[operation]]
+name = "file.read"
+allowed_args = [["*"]]
+
+# --- The shipped read catalog (ADR-0053) --------------------------------------
+# These names are Template Operations, not Native Operations: the relay-daemon
+# package installs them with the daemon, at
+# /etc/relay-daemon/templates.d/relay-read/. On a Node without them, dispatch
+# reports `unsupported` and these rules are simply inert — a Policy rule never
+# creates vocabulary, it only permits it.
+#
+# `policy check --templates /etc/relay-daemon/templates.d` resolves these
+# names; without that flag the linter warns that it cannot confirm them.
+
+# No arguments: the whole process table, filesystem capacity, listening
+# sockets, and the package inventory.
+[[operation]]
+name = "proc.list"
+allowed_args = []
+
+[[operation]]
+name = "disk.usage"
+allowed_args = []
+
+[[operation]]
+name = "net.listening"
+allowed_args = []
+
+[[operation]]
+name = "pkg.inventory"
+allowed_args = []
+
+# One unit name each ("*" is the per-position any-value wildcard). NARROW
+# THESE FIRST: a journal carries whatever a service logs, so log.tail is the
+# catalog's widest egress surface — replacing "*" with your actual unit list
+# is the single highest-value edit in this file.
+[[operation]]
+name = "service.status"
+allowed_args = [["*"]]
+
+# To turn log.tail off, deny it in a Policy fragment;
+# docs/operations/template-packs.md shows the fragment.
+[[operation]]
+name = "log.tail"
+allowed_args = [["*"]]
+
+# One canonical path. A digest is a content oracle — it confirms a guessed
+# file byte-for-byte — so the confidentiality deny-list below covers
+# file.checksum exactly as it covers file.read.
+[[operation]]
+name = "file.checksum"
+allowed_args = [["*"]]
+
+# ---------------------------------------------------------------------------
+# Confidentiality deny-list (ADR-0022, applying ADR-0021's data-egress
+# governance)
+#
+# Exact canonical paths (ADR-0018): lexical evasions (/etc/../etc/shadow,
+# //etc/shadow, ...) are denied as non-canonical form, and the daemon
+# re-checks the resolved target it actually opened (file.read, and
+# file.checksum's path slot before the Template runs), so symlink and
+# /proc/self/root/... aliases to these paths are denied too.
+#
+# There is no subtree/wildcard deny (recorded residual, ADR-0022): this list
+# cannot cover /etc/ssl/private/*, per-pid /proc/<pid>/* aliases, or other
+# unenumerable secrets. If your Node holds key material at other paths, add
+# them here — or narrow file.read's allow to an explicit path list.
+# ---------------------------------------------------------------------------
+
+# Local credential databases (password/group hashes + shadow-utility backups).
+[[deny]]
+name = "file.read"
+args = [["/etc/shadow", "/etc/shadow-", "/etc/gshadow", "/etc/gshadow-"]]
+
+# Host key material: SSH host private keys and the Kerberos keytab.
+[[deny]]
+name = "file.read"
+args = [[
+    "/etc/ssh/ssh_host_rsa_key",
+    "/etc/ssh/ssh_host_ecdsa_key",
+    "/etc/ssh/ssh_host_ed25519_key",
+    "/etc/ssh/ssh_host_dsa_key",
+    "/etc/krb5.keytab",
+]]
+
+# Root's default SSH private keys.
+[[deny]]
+name = "file.read"
+args = [[
+    "/root/.ssh/id_rsa",
+    "/root/.ssh/id_ecdsa",
+    "/root/.ssh/id_ed25519",
+    "/root/.ssh/id_dsa",
+]]
+
+# Distribution-default TLS private keys, at the fixed paths their packages
+# create: Debian and Ubuntu's ssl-cert snakeoil key, and the RHEL family's
+# mod_ssl localhost key. Per-site keys (/etc/letsencrypt/live/<name>/, other
+# /etc/ssl/private/ files) have no fixed path and are not covered: the
+# subtree residual above.
+[[deny]]
+name = "file.read"
+args = [[
+    "/etc/ssl/private/ssl-cert-snakeoil.key",
+    "/etc/pki/tls/private/localhost.key",
+]]
+
+# The daemon's own files kept from the wire: the environment file (it holds no
+# secret, and is kept as defence in depth), the Node's identity private key, and
+# the temporary file the daemon writes a new identity key to before renaming it
+# into place (at enrollment and at each Certificate renewal). Its Policy, CA
+# bundle, identity certificate, binary, unit and Template files hold no secret —
+# most are public or already in the Relay's hands — and are not denied
+# (ADR-0022).
+[[deny]]
+name = "file.read"
+args = [[
+    "/etc/relay-daemon/relay-daemon.env",
+    "/var/lib/relay-daemon/key.pem",
+    "/var/lib/relay-daemon/key.pem.tmp",
+]]
+
+# Template files under /etc/relay-daemon/templates.d/ are readable under
+# file.read's wildcard. A Template body discloses vocabulary, never a secret,
+# and the wire can never change it: recorded as residual R37 in
+# docs/security/threat-model.md. Narrowing file.read's wildcard to an explicit
+# path list closes it.
+
+# Kernel/process memory and environment oracles: kernel memory images, and
+# the daemon's own memory/environment (the environment carries the Enrollment
+# Token on first boot).
+[[deny]]
+name = "file.read"
+args = [[
+    "/proc/kcore",
+    "/dev/mem",
+    "/dev/kmem",
+    "/proc/self/mem",
+    "/proc/self/environ",
+]]
+
+# --- The same confidentiality list, applied to file.checksum ---------------
+# A digest confirms a guessed file byte-for-byte, so every path denied to
+# file.read is denied to the catalog's checksum template too. Kept as an
+# explicit mirror rather than a shared list because Policy rules are per
+# Operation name by design (ADR-0002): one name, one rule, visible in review.
+#
+# The dispatch gate holds a template's `path` slot to the same ADR-0018
+# canonical-form precondition as file.read's, so these exact-path denies also
+# refuse /etc/../etc/shadow and //etc/shadow. Before the template runs, the
+# daemon also re-checks the target the path resolves to, so a symlink or a
+# /proc/self/root/... alias to a denied path is refused as it is for
+# file.read. Residual: sha256sum then reopens the resolved path by name, so
+# whoever can rewrite a directory on that path can race a symlink in between.
+
+[[deny]]
+name = "file.checksum"
+args = [["/etc/shadow", "/etc/shadow-", "/etc/gshadow", "/etc/gshadow-"]]
+
+[[deny]]
+name = "file.checksum"
+args = [[
+    "/etc/ssh/ssh_host_rsa_key",
+    "/etc/ssh/ssh_host_ecdsa_key",
+    "/etc/ssh/ssh_host_ed25519_key",
+    "/etc/ssh/ssh_host_dsa_key",
+    "/etc/krb5.keytab",
+]]
+
+[[deny]]
+name = "file.checksum"
+args = [[
+    "/root/.ssh/id_rsa",
+    "/root/.ssh/id_ecdsa",
+    "/root/.ssh/id_ed25519",
+    "/root/.ssh/id_dsa",
+]]
+
+[[deny]]
+name = "file.checksum"
+args = [[
+    "/etc/ssl/private/ssl-cert-snakeoil.key",
+    "/etc/pki/tls/private/localhost.key",
+]]
+
+[[deny]]
+name = "file.checksum"
+args = [[
+    "/etc/relay-daemon/relay-daemon.env",
+    "/var/lib/relay-daemon/key.pem",
+    "/var/lib/relay-daemon/key.pem.tmp",
+]]
+
+[[deny]]
+name = "file.checksum"
+args = [[
+    "/proc/kcore",
+    "/dev/mem",
+    "/dev/kmem",
+    "/proc/self/mem",
+    "/proc/self/environ",
+]]
+
+# ---------------------------------------------------------------------------
+# Mutate class + Raw Exec — opt-in (nothing shipped)
+#
+# No allow rules for service.restart or pkg.install, and no [raw_exec]
+# allow patterns: deny-by-default refuses every state change and every
+# arbitrary command until you deliberately allow it. See policy.example.toml
+# for the syntax and the standing Raw Exec guidance (tight, fully-anchored
+# allow list; deny list only as a backstop).
+# ---------------------------------------------------------------------------
+[[operation]

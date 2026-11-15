@@ -1,0 +1,4 @@
+€[[templates]]
+name = "x.y"
+risk_class = "read"
+body = "uptime"

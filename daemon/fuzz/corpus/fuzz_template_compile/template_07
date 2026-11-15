@@ -1,0 +1,9 @@
+€[[template]]
+name = "svc.act"
+risk_class = "mutate"
+body = "systemctl {{ e }} nginx"
+
+[[template.slots]]
+name = "e"
+type = "enum"
+values = ["start", "stop"]

