@@ -37,8 +37,7 @@ server, by rules kept there (its Policy), after everything here has passed.
   the zero-match refusal, the Template refusals (EX-51, EX-61), the blast-radius cap, the
   approval gate, dispatch, audit. A frozen Relay or an unauthorized caller therefore learns
   nothing from a key lookup, a match count or a Template's slots.
-- **EX-4** Each stage can only refuse, park or pass the call on; none widens what a later stage
-  allows.
+- **EX-4** Each stage can only refuse, park or pass the call on; none widens a later stage.
 - **EX-5** Selector resolution resolves against the registry across the four label namespaces,
   and evaluates `state:` terms at resolution time (`selectors-and-labels.md`).
 - **EX-6** For a Template Operation, matched Nodes that do not report the Template are excluded
@@ -59,8 +58,10 @@ server, by rules kept there (its Policy), after everything here has passed.
 - **EX-68** A dispatch that runs its Job to the end before returning reports a failed outcome
   write to the caller beside the results. One that returns its Job ID once the Tasks are stored,
   whether or not it then waits, only records a failed write in the Relay's error log (R57).
-- **EX-12** The execution path never evaluates Policy (invariant 12). What a Node runs is decided
-  by its own daemon after every stage here has passed.
+- **EX-12** The execution path never evaluates Policy; a Node's own daemon decides what it runs.
+- **EX-69** An adapter refuses a request it cannot decode, such as one missing a required field
+  or naming a Selector that does not parse, before the pipeline runs. Whether a decoded request
+  may run is decided only in the capability layer (invariant 10).
 
 ### The blast-radius cap
 
@@ -179,7 +180,7 @@ server, by rules kept there (its Policy), after everything here has passed.
 ## Refusals
 
 A refusal in the capability layer stops the whole dispatch: no Job, no Task, and an audited
-reason. EX-63 and EX-65 are refused earlier, by the adapter, and leave no audit record. A refusal
+reason. A request an adapter refuses before the pipeline runs leaves no audit record. A refusal
 differs from an outcome, where a Job ran and a Node failed; a cancel refusal leaves the Job running.
 
 - **EX-48** A frozen Relay refuses every new dispatch of every risk class, citing ADR-0013 and
@@ -216,7 +217,7 @@ differs from an outcome, where a Job ran and a Node failed; a cancel refusal lea
 | EX-59 | A dispatch asking for a Task timeout above 300 seconds is refused in the capability layer, at the stage of EX-61, naming the ceiling. | v0.2.2 |
 | EX-60 | The `list_operations` description tells the caller that arguments and Raw Exec argv are audited verbatim and must never carry a secret. | v0.2.2 |
 | EX-64 | A Native call with an unknown or missing argument name is refused as malformed in the capability layer, at the stage of EX-61, and the refusal is audited. Replaces EX-63 when promoted. | v0.2.2 |
-| EX-66 | A dispatch whose outcome write fails after it has returned its Job ID records the failure on the Job, and `get_job` and the Jobs route show it. Replaces EX-68 when promoted. | v0.2.2 |
+| EX-66 | A dispatch whose outcome write fails after it has returned its Job ID records the failure on the Job where the store can still write it, and `get_job` and the Jobs route show it. Replaces EX-68 when promoted. | v0.2.2 |
 | EX-67 | A Raw Exec call with an empty argv is refused as malformed in the capability layer, at the stage of EX-61, and the refusal is audited. Replaces EX-65 when promoted. | v0.2.2 |
 
 ## Out of scope
@@ -247,7 +248,7 @@ differs from an outcome, where a Job ran and a Node failed; a cancel refusal lea
 | Claim | Proven by | Seam |
 |---|---|---|
 
-Unproven: EX-1, EX-2, EX-3, EX-4, EX-5, EX-6, EX-7, EX-8, EX-9, EX-10, EX-11, EX-12, EX-13, EX-14, EX-15, EX-16, EX-17, EX-18, EX-19, EX-20, EX-21, EX-22, EX-23, EX-24, EX-25, EX-26, EX-27, EX-28, EX-29, EX-30, EX-31, EX-32, EX-33, EX-34, EX-35, EX-36, EX-37, EX-38, EX-39, EX-40, EX-41, EX-42, EX-43, EX-44, EX-45, EX-46, EX-47, EX-48, EX-49, EX-50, EX-51, EX-52, EX-53, EX-54, EX-55, EX-56, EX-61, EX-62, EX-63, EX-65, EX-68.
+Unproven: EX-1, EX-2, EX-3, EX-4, EX-5, EX-6, EX-7, EX-8, EX-9, EX-10, EX-11, EX-12, EX-13, EX-14, EX-15, EX-16, EX-17, EX-18, EX-19, EX-20, EX-21, EX-22, EX-23, EX-24, EX-25, EX-26, EX-27, EX-28, EX-29, EX-30, EX-31, EX-32, EX-33, EX-34, EX-35, EX-36, EX-37, EX-38, EX-39, EX-40, EX-41, EX-42, EX-43, EX-44, EX-45, EX-46, EX-47, EX-48, EX-49, EX-50, EX-51, EX-52, EX-53, EX-54, EX-55, EX-56, EX-61, EX-62, EX-63, EX-65, EX-68, EX-69.
 <!-- proof:end -->
 
 ## Retired
