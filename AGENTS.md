@@ -131,7 +131,7 @@ issue's definition of done, and that rule is the only thing keeping the table ho
 | # | The clause | What is actually true today | Tracked |
 |---|---|---|---|
 | 7 | Legacy `relay:` scope labels | `tag:` labels are stored on the Node record and written only through the capability layer's tag write, by a human Account at `operator` or above, on the Control API and the Console; `tag:` Selector terms resolve on every surface. A token's labels are written as initial tags, and on upgrade earlier scope labels are copied to tags (ADR-0050). What is not yet true, on Relays installed before that change only: the earlier `relay:` scope labels stay beside their tag copies, so `relay:` still holds keys no Relay action defines, and Nodes enrolled before `relay:node-id` existed lack it. Quarantine, the one later action that would write `relay:` labels, is cut from the MVP (`roadmap: relay/quarantine`). Behaviour detail in `docs/specs/selectors-and-labels.md`. | #1201 |
-| 10 | The layer decides what may be done, never an adapter | A Native Operation call with an unknown or missing argument name is refused by the MCP and Control API adapters before the capability layer runs, so that refusal is decided per interface and not audited. A Template call's argument names are checked in the layer and audited. Behaviour detail in `docs/specs/execution.md`. | #1346 |
+| 10 | The layer decides what may be done, never an adapter | Two refusals are made by the MCP and Control API adapters before the capability layer runs (EX-63, EX-65), so they are decided per interface and not audited. A Template call's argument names are checked in the layer and audited. Behaviour detail in `docs/specs/execution.md`. | #1346 |
 
 ### Writing or amending an invariant
 

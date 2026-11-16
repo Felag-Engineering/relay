@@ -1,6 +1,6 @@
 # Execution
 
-**Status:** designed, not built, as of `2026-11-15`.
+**Status:** designed, not built, as of `2026-11-16`.
 **Claim prefix:** `EX`
 **Governed by:** ADR-0054, ADR-0001, ADR-0011, ADR-0012, ADR-0013, ADR-0014, ADR-0021, ADR-0025,
 ADR-0027, ADR-0042, ADR-0047, ADR-0049, ADR-0052; invariants 1, 4, 5, 10, 11, 12, 13, 14.
@@ -24,9 +24,6 @@ server, by rules kept there (its Policy), after everything here has passed.
 | **Admin Console** | Starts no dispatch (ADR-0052); it shows Jobs (`audit-and-read-lane.md`) and may cancel one under EX-37. |
 | **Node plane** | Each Task travels down its Node's stream (`node-connection.md`). |
 
-Raw Exec is not a separate execution path: it is this pipeline carrying an argv, and a path of
-its own would be the parallel control path invariants 1 and 10 forbid.
-
 ## Behaviour
 
 ### One pipeline
@@ -39,8 +36,7 @@ its own would be the parallel control path invariants 1 and 10 forbid.
   Selector resolution, Template resolution (EX-6, EX-15), authorization, the idempotency lookup,
   the zero-match refusal, the Template refusals (EX-51, EX-61), the blast-radius cap, the
   approval gate, dispatch, audit. A frozen Relay or an unauthorized caller therefore learns
-  nothing from a key lookup, a match count or a Template's slots. A Native call's argument names
-  are checked before the first stage (EX-63).
+  nothing from a key lookup, a match count or a Template's slots.
 - **EX-4** Each stage can only refuse, park or pass the call on; none widens what a later stage
   allows.
 - **EX-5** Selector resolution resolves against the registry across the four label namespaces,
@@ -50,15 +46,19 @@ its own would be the parallel control path invariants 1 and 10 forbid.
   Task.
 - **EX-7** Caller-asserted attribution is removed from the context before the authorization
   decision, so authorization never reads a value the caller supplied about itself.
-- **EX-8** Raw Exec takes the mutate risk class whatever the adapter passes.
+- **EX-8** Raw Exec is this pipeline carrying an argv, never a path of its own, and takes the
+  mutate risk class whatever the adapter passes.
 - **EX-9** On MCP, a dispatch may carry an idempotency key. A repeat of the key by the same
   Account within 24 hours returns the existing Job and dispatches nothing; another Account's use
   of the same key is a separate request, and after 24 hours the key dispatches afresh. The
   window is a constant, and a repeat is audited as a read of the Job.
 - **EX-10** The approval gate runs after the cap and before any Task exists; what a park leaves
   and how it is audited are `approval.md`'s.
-- **EX-11** Every dispatch is audited, including one whose dispatcher errored partway; a failed
-  audit write is returned beside the results, never dropped.
+- **EX-11** Every dispatch, including one whose dispatcher errored partway, has its outcome
+  written to the audit trail.
+- **EX-68** A dispatch that runs its Job to the end before returning reports a failed outcome
+  write to the caller beside the results. One that returns its Job ID once the Tasks are stored,
+  whether or not it then waits, only records a failed write in the Relay's error log (R57).
 - **EX-12** The execution path never evaluates Policy (invariant 12). What a Node runs is decided
   by its own daemon after every stage here has passed.
 
@@ -74,8 +74,6 @@ its own would be the parallel control path invariants 1 and 10 forbid.
   the cap check is clamped to the default, never treated as unlimited.
 
 ### The three execution tiers
-
-Each tier holds invariant 1 its own way (ADR-0001, ADR-0021).
 
 - **EX-17** No Native Operation (`operations-and-templates.md`) runs a shell: any process one
   starts has an argv whose shape the daemon's own code fixes, each argument value its own
@@ -116,7 +114,9 @@ Each tier holds invariant 1 its own way (ADR-0001, ADR-0021).
 ### At most once
 
 - **EX-29** Every Task of a Job is written to the store as `Pending`, under its own unique ID,
-  before any of them is dispatched.
+  in one transaction with an audit record of the dispatch's intent, before any Task is
+  dispatched. That record names the caller, the Selector, the Operation with its arguments and
+  the number of Nodes; if the transaction fails, nothing is dispatched.
 - **EX-30** A Task is marked `Dispatched` in the store before it is sent, so a send error leaves
   it in flight, never resolved.
 - **EX-31** On restart the Relay re-sends each Task `Dispatched` without a result, for its
@@ -178,9 +178,9 @@ Each tier holds invariant 1 its own way (ADR-0001, ADR-0021).
 
 ## Refusals
 
-A dispatch refusal stops the whole dispatch: no Job, no Task, and an audited reason, except
-EX-63's. It differs from an outcome, where a Job ran and a Node failed. A cancel refusal leaves
-the Job running.
+A refusal in the capability layer stops the whole dispatch: no Job, no Task, and an audited
+reason. EX-63 and EX-65 are refused earlier, by the adapter, and leave no audit record. A refusal
+differs from an outcome, where a Job ran and a Node failed; a cancel refusal leaves the Job running.
 
 - **EX-48** A frozen Relay refuses every new dispatch of every risk class, citing ADR-0013 and
   saying it lasts until an admin releases the Freeze. Failing closed on an unreadable Freeze
@@ -193,7 +193,9 @@ the Job running.
   disagreement naming two Nodes that disagree; one whose argument names do not match the slots is
   refused as malformed. Both are audited.
 - **EX-63** A Native call with an unknown or missing argument name is refused by the MCP or
-  Control API adapter before the pipeline runs, and is not audited.
+  Control API adapter as an invalid request, before the pipeline runs, and is not audited.
+- **EX-65** A Raw Exec call with an empty argv is refused by the MCP or Control API adapter as an
+  invalid request, before the pipeline runs, and is not audited.
 - **EX-52** A Principal whose role does not permit the Action is refused
   (`accounts-and-access.md`); Raw Exec needs `admin`.
 - **EX-53** An idempotency key reused by the same Account within its window with different
@@ -213,21 +215,21 @@ the Job running.
 | EX-58 | A Control API dispatch accepts an `Idempotency-Key` header under the rule of EX-9 and EX-53. | v0.2.2 |
 | EX-59 | A dispatch asking for a Task timeout above 300 seconds is refused in the capability layer, at the stage of EX-61, naming the ceiling. | v0.2.2 |
 | EX-60 | The `list_operations` description tells the caller that arguments and Raw Exec argv are audited verbatim and must never carry a secret. | v0.2.2 |
-| EX-64 | A Native call with an unknown or missing argument name is refused as malformed in the capability layer, at the stage of EX-61, and the refusal is audited. Replaces EX-63 when promoted, which also drops EX-3's last sentence and the Refusals exception. | v0.2.2 |
+| EX-64 | A Native call with an unknown or missing argument name is refused as malformed in the capability layer, at the stage of EX-61, and the refusal is audited. Replaces EX-63 when promoted. | v0.2.2 |
+| EX-66 | A dispatch whose outcome write fails after it has returned its Job ID records the failure on the Job, and `get_job` and the Jobs route show it. Replaces EX-68 when promoted. | v0.2.2 |
+| EX-67 | A Raw Exec call with an empty argv is refused as malformed in the capability layer, at the stage of EX-61, and the refusal is audited. Replaces EX-65 when promoted. | v0.2.2 |
 
 ## Out of scope
 
 - **Policy, including Raw Exec's gate on the Node**: `policy.md`.
-- **The Operation vocabulary, the Template file and its slot types**:
-  `operations-and-templates.md`, with `/proto` as the source of truth.
+- **The Operation vocabulary, the Template file and its slot types**: `operations-and-templates.md`.
 - **Policy preflight, including `unknown(offline)`**: `policy-preflight.md`.
 - **Sequencing several dispatches**: the harness's job (ADR-0049).
 - **Approval decisions**: `approval.md`; **engaging and releasing the Freeze**: `freeze.md`.
 - **Label namespaces and the Selector grammar**: `selectors-and-labels.md`.
 - **The daemon's dedup markers**: `daemon-installation.md`.
-- **Querying Jobs, Tasks and the audit trail, and stripping read output on query**:
-  `audit-and-read-lane.md`.
-- **Clearing read output from Task rows after a fixed time**: #1345.
+- **Querying Jobs, Tasks and the audit trail, and what a query strips**: `audit-and-read-lane.md`;
+  clearing read output from Task rows after a fixed time, #1345.
 - **A per-Operation timeout, a configurable in-flight limit, failure tolerance and retries**:
   `roadmap: relay/failure-policy-and-retries`. A retry would be a new Task with a new ID.
 - **An acknowledgement deadline and an `unacknowledged` outcome**:
@@ -245,7 +247,7 @@ the Job running.
 | Claim | Proven by | Seam |
 |---|---|---|
 
-Unproven: EX-1, EX-2, EX-3, EX-4, EX-5, EX-6, EX-7, EX-8, EX-9, EX-10, EX-11, EX-12, EX-13, EX-14, EX-15, EX-16, EX-17, EX-18, EX-19, EX-20, EX-21, EX-22, EX-23, EX-24, EX-25, EX-26, EX-27, EX-28, EX-29, EX-30, EX-31, EX-32, EX-33, EX-34, EX-35, EX-36, EX-37, EX-38, EX-39, EX-40, EX-41, EX-42, EX-43, EX-44, EX-45, EX-46, EX-47, EX-48, EX-49, EX-50, EX-51, EX-52, EX-53, EX-54, EX-55, EX-56, EX-61, EX-62, EX-63.
+Unproven: EX-1, EX-2, EX-3, EX-4, EX-5, EX-6, EX-7, EX-8, EX-9, EX-10, EX-11, EX-12, EX-13, EX-14, EX-15, EX-16, EX-17, EX-18, EX-19, EX-20, EX-21, EX-22, EX-23, EX-24, EX-25, EX-26, EX-27, EX-28, EX-29, EX-30, EX-31, EX-32, EX-33, EX-34, EX-35, EX-36, EX-37, EX-38, EX-39, EX-40, EX-41, EX-42, EX-43, EX-44, EX-45, EX-46, EX-47, EX-48, EX-49, EX-50, EX-51, EX-52, EX-53, EX-54, EX-55, EX-56, EX-61, EX-62, EX-63, EX-65, EX-68.
 <!-- proof:end -->
 
 ## Retired
