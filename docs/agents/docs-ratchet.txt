@@ -14,7 +14,6 @@
 docs/adr/0001-structured-operations-with-regex-gated-raw-exec.md decision
 docs/adr/0002-node-side-policy-is-locally-rooted-and-remotely-immutable.md decision
 docs/adr/0003-mcp-meta-tool-surface-with-selector-fan-out.md decision
-docs/adr/0004-async-job-execution-model.md decision
 docs/adr/0005-grpc-bidi-over-mtls-transport.md decision
 docs/adr/0006-node-enrollment-identity-and-label-authority.md budget amendments decision
 docs/adr/0007-polyglot-rust-daemon-go-relay.md decision

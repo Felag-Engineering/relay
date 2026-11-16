@@ -41,8 +41,8 @@ share it. Which Templates and which slot values a Node allows is `policy.md`.
 - Arguments are matched by name. A call naming an argument the Operation does not have, omitting
   a required one, or carrying a value not well-formed for its type is **malformed**: rejected
   before Policy is consulted, with its own outcome, for Native and Template Operations alike.
-- An Operation may declare a timeout; otherwise the daemon-wide default applies. A caller may ask
-  for a shorter timeout and never a longer one.
+- No Operation declares a timeout: every Task has the one daemon-wide default and ceiling
+  (`execution.md`, ADR-0054).
 - Output is bounded by the daemon-wide output cap.
 
 ### The Native vocabulary
@@ -62,7 +62,7 @@ from those validators, so what a caller is told and what the daemon enforces can
 ### The Template language
 
 - A Template is defined in a root-owned file in the Node's template root (ADR-0021), with a
-  name, a `description`, a risk class, a body, optional timeout, and slots, each with a type, a
+  name, a `description`, a risk class, a body, and slots, each with a type, a
   one-line description and an optional `allow` list. A Template without a description, or a
   slot without one, fails to load.
 - A Template name may not shadow a Native Operation's name.
@@ -174,7 +174,7 @@ from those validators, so what a caller is told and what the daemon enforces can
   *(Amended 2026-10-02, ADR-0042: a Template Operation's class is Node-reported, and a dispatch
   takes the most restrictive class the Nodes it reaches report.)* Binds through the
   most-restrictive rule and the daemon's class check.
-- **Invariant 5 / ADR-0004** — the blast cap is enforced on the Relay before dispatch, over the
+- **Invariant 5 / ADR-0054** — the blast cap is enforced on the Relay before dispatch, over the
   Nodes remaining after exclusion.
 - **Invariant 8 / ADR-0007** — `/proto` is the single source of truth for the vocabulary.
 - **Invariant 7** — Node-reported facts are forgeable; a Template's reported class is treated as

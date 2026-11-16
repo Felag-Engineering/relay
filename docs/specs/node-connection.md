@@ -2,7 +2,7 @@
 
 **Status:** current as of `2026-11-13`.
 **Claim prefix:** `NC`
-**Governed by:** ADR-0004, ADR-0005, ADR-0006, ADR-0014, ADR-0017, ADR-0031; invariants 4, 6, 7,
+**Governed by:** ADR-0005, ADR-0006, ADR-0014, ADR-0017, ADR-0031, ADR-0054; invariants 4, 6, 7,
 8, 11, 14.
 
 ## Purpose

@@ -104,6 +104,12 @@ The execution of one Operation or Raw Exec on one Node, within a Job's Stage. It
 for at-most-once execution (invariant 4) and reports its own outcome. Not an **MCP task handle**.
 _Avoid_: command, unit, step; "task" unqualified in any context where MCP is also in play
 
+**Idempotency key**:
+A caller-chosen key on a dispatch that makes a repeat of the same request return the existing
+Job instead of a second one (`execution.md`, ADR-0054). It guards a re-sent request one level
+above Task-ID dedup.
+_Avoid_: dedup key (dedup is the daemon's, by Task ID)
+
 **Selector**:
 An expression over Node Labels that picks a set of Nodes (e.g. `role=web, env=prod`); a single Node
 is a Selector that matches one. `state:` terms are derived at resolution time (ADR-0034); every other
@@ -220,7 +226,7 @@ MVP (`roadmap: relay/quarantine`); the `state:quarantined` marker is Relay-deriv
 _Avoid_: isolate, cordon, drain (Kubernetes senses), blacklist
 
 **Freeze**:
-The Relay-wide emergency halt of all new Task dispatch; in-flight Tasks run on and Policy preflights
+The Relay-wide emergency stop of all new Task dispatch; in-flight Tasks run on and Policy preflights
 stay answerable, and it persists across restarts (ADR-0013). Engaged by a *human* `operator`+
 Account, never a machine one, or by root on the Relay host; released by `admin` with an audited reason.
 _Avoid_: pause, maintenance mode, lockdown, kill switch
@@ -230,6 +236,12 @@ Ending one in-flight Task by its ID (`TaskCancel`): the daemon terminates its pr
 reports `OUTCOME_CANCELLED`. Best-effort: a finished Task reports its real outcome and the ID stays
 deduped, so at-most-once holds. Narrower than a Freeze (ADR-0013).
 _Avoid_: abort, kill, stop, interrupt
+
+**Halt**:
+A `mutate` Job's refusal to send any further Task after its own first `failure` or `timeout`
+(`execution.md`, ADR-0054). One Job only, decided by its own outcomes. Narrower than a Freeze,
+and not a Cancellation.
+_Avoid_: stop on failure, abort, fail-fast (that is an offline Node's `unreachable`)
 
 **Plan**:
 Gleipnir's word for a series of tool calls, with branches, that Gleipnir submits to its **Harness**

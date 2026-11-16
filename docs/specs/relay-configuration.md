@@ -3,7 +3,7 @@
 **Status:** designed, not built, as of `2026-11-05`.
 **Claim prefix:** `RC`
 **Governed by:** ADR-0043, ADR-0010, ADR-0033, ADR-0030, ADR-0047, ADR-0052, ADR-0027, ADR-0024,
-ADR-0023, ADR-0014, ADR-0004, ADR-0012, ADR-0009, ADR-0021; invariants 5, 10, 11, 14.
+ADR-0023, ADR-0014, ADR-0054, ADR-0012, ADR-0009, ADR-0021; invariants 5, 10, 11, 14.
 
 ## Purpose
 
@@ -68,8 +68,7 @@ a reload or restart. The Relay installs from an OS package or as a container ima
   `enrollment.md` sets.
 - **RC-39** `state:cert-expiring` uses a built-in fraction: it holds for a Node whose certificate
   has less than a quarter of its lifetime left (`selectors-and-labels.md`).
-- **RC-40** The dispatch concurrency is built in at 16. A `mutate` Job is sent 16 Tasks at a time,
-  which bounds how much of it is already sent when it stops on a failure (`execution.md`).
+- **RC-40** The dispatch concurrency is built in, not configured (`execution.md`).
 - **RC-41** The approval webhook URL and its secret are each read only from a file the
   configuration names; neither may be written inline. The webhook's request timeout is built in.
 - **RC-42** The Relay's logs are always JSON. The log level stays a setting (RC-22).
@@ -147,7 +146,7 @@ a reload or restart. The Relay installs from an OS package or as a container ima
 - **The founding admin Account, Token minting, step-up and OAuth session semantics:**
   `accounts-and-access.md`. This spec owns only where their bounds are set.
 - **Enrollment Tokens, join strings and what the rate limits refuse:** `enrollment.md`.
-- **What the blast caps, approval gates, stop on failure and Freeze do:** `execution.md`,
+- **What the blast caps, approval gates, the halt and Freeze do:** `execution.md`,
   `approval.md`, `freeze.md`.
 - **Configuring the relay-daemon on a Node,** which is flags and environment from the
   customer's config management: `daemon-installation.md`.

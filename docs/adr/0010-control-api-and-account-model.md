@@ -1,7 +1,8 @@
 # Control API: a REST control-plane surface with a unified Account model
 
 **Status:** Accepted; amended by ADR-0033 and ADR-0043. Its 2026-09-15 amendment's store-backed,
-Console-edited gate rules are superseded by ADR-0047: gate rules stay in the configuration file.
+Console-edited gate rules are superseded by ADR-0047, and its blast caps by ADR-0054: both stay in
+the configuration file.
 
 ADR-0052 (2026-10-23) removes `console_execution` from the security floor: the Console runs no
 command.
