@@ -59,9 +59,9 @@ server, by rules kept there (its Policy), after everything here has passed.
   write to the caller beside the results. One that returns its Job ID once the Tasks are stored,
   whether or not it then waits, only records a failed write in the Relay's error log (R57).
 - **EX-12** The execution path never evaluates Policy; a Node's own daemon decides what it runs.
-- **EX-69** An adapter refuses a request it cannot decode, such as one missing a required field
-  or naming a Selector that does not parse, before the pipeline runs. Whether a decoded request
-  may run is decided only in the capability layer (invariant 10).
+- **EX-69** Before the pipeline runs, an adapter refuses a request it cannot decode or whose
+  fields break their declared bounds: a missing required field, a Selector that does not parse,
+  a value out of range or too long. How long a call waits is the adapter's too.
 
 ### The blast-radius cap
 
