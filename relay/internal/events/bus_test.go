@@ -1,6 +1,7 @@
 package events
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -463,5 +464,127 @@ func TestBus_RetentionWindowReportsThisBusesBound(t *testing.T) {
 	}
 	if got := NewBus(WithRetention(10, time.Minute)).RetentionWindow(); got != time.Minute {
 		t.Errorf("RetentionWindow() = %s, want the configured 1m", got)
+	}
+}
+
+// TestBus_ResumeGap_IsTheSoleEventAndCarriesItsFields pins every resume gap
+// Subscribe can hand back: the reason, the Last-Event-ID it was asked for, the
+// Bus clock's time, no ID or Seq of its own, and nothing delivered after it.
+func TestBus_ResumeGap_IsTheSoleEventAndCarriesItsFields(t *testing.T) {
+	at := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	clock := WithClock(func() time.Time { return at })
+
+	cases := []struct {
+		name string
+		bus  *Bus
+		// lastEventID builds the resume point from the first published ID.
+		lastEventID func(firstID string) string
+		published   int
+		want        GapReason
+	}{
+		{
+			name:        "foreign epoch",
+			bus:         NewBus(clock),
+			lastEventID: func(string) string { return "deadbeef-1" },
+			published:   1,
+			want:        GapEpochChanged,
+		},
+		{
+			name:        "no separator",
+			bus:         NewBus(clock),
+			lastEventID: func(string) string { return "garbage" },
+			published:   1,
+			want:        GapEpochChanged,
+		},
+		{
+			name: "this epoch, unparsable seq",
+			bus:  NewBus(clock),
+			lastEventID: func(firstID string) string {
+				epoch, _, _ := strings.Cut(firstID, "-")
+				return epoch + "-x"
+			},
+			published: 1,
+			want:      GapEpochChanged,
+		},
+		{
+			name:        "evicted",
+			bus:         NewBus(clock, WithRetention(3, time.Hour)),
+			lastEventID: func(firstID string) string { return firstID },
+			published:   10,
+			want:        GapEvicted,
+		},
+		{
+			name:        "replay overflow",
+			bus:         NewBus(clock),
+			lastEventID: func(firstID string) string { return firstID },
+			published:   subscriberBuffer + 2,
+			want:        GapReplayOverflow,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var firstID string
+			for i := 1; i <= tc.published; i++ {
+				id := publishAndCapture(t, tc.bus, i)
+				if i == 1 {
+					firstID = id
+				}
+			}
+			requested := tc.lastEventID(firstID)
+
+			sub := tc.bus.Subscribe([]Kind{KindJob}, requested)
+			defer sub.Close()
+
+			select {
+			case ev := <-sub.C():
+				if ev.Kind != KindGap || ev.Gap == nil {
+					t.Fatalf("want a gap, got %+v", ev)
+				}
+				if ev.Gap.Reason != tc.want || ev.Gap.RequestedID != requested {
+					t.Fatalf("gap = %+v, want reason %q for %q", ev.Gap, tc.want, requested)
+				}
+				if !ev.At.Equal(at) || ev.ID != "" || ev.Seq != 0 {
+					t.Fatalf("gap At/ID/Seq = %v/%q/%d, want %v/\"\"/0", ev.At, ev.ID, ev.Seq, at)
+				}
+			default:
+				t.Fatal("no gap was delivered at Subscribe time")
+			}
+
+			select {
+			case ev := <-sub.C():
+				t.Fatalf("gap must be the sole event: %+v", ev)
+			default:
+			}
+		})
+	}
+}
+
+// TestBus_ResumeAtNewestID_ReplaysNothingAndGoesLive pins the boundary of the
+// replay window: resuming from the newest ID is inside every ring, so there is
+// no gap and nothing to replay, and the next publish arrives live.
+func TestBus_ResumeAtNewestID_ReplaysNothingAndGoesLive(t *testing.T) {
+	b := NewBus(WithRetention(3, time.Hour))
+	var lastID string
+	for i := 1; i <= 10; i++ {
+		lastID = publishAndCapture(t, b, i)
+	}
+
+	sub := b.Subscribe([]Kind{KindJob}, lastID)
+	defer sub.Close()
+
+	select {
+	case ev := <-sub.C():
+		t.Fatalf("resume at the newest ID must replay nothing: %+v", ev)
+	default:
+	}
+
+	b.PublishJob(JobEvent{Transition: JobCompleted})
+	select {
+	case ev := <-sub.C():
+		if ev.Kind != KindJob {
+			t.Fatalf("want the live Job event, got %+v", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for the live event")
 	}
 }
