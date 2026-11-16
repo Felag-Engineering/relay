@@ -212,11 +212,12 @@ func (s *Execution) clock() time.Time { return s.approvals.clock() }
 // Run is the pipeline every surface must call to act on Nodes: check the
 // Freeze, refuse an empty Selector, resolve the Selector, resolve a Template
 // Operation's class and fan-out (ADR-0042, computing only), authorize the
-// Principal, refuse a Selector that matched no Nodes, refuse an unknown or
-// malformed Template call, check the blast-radius cap, consult the approval
-// gate, dispatch, then audit — in that order. The Freeze gate, the
-// empty-Selector refusal, authorize, the no-Nodes-matched check, the Template
-// refusal and the cap check each short-circuit the remaining stages on error
+// Principal, refuse a Selector that matched no Nodes, refuse a malformed call
+// (callshape.go) or an unknown or malformed Template call, check the
+// blast-radius cap, consult the approval gate, dispatch, then audit — in that
+// order. The Freeze gate, the empty-Selector refusal, authorize, the
+// no-Nodes-matched check, the malformed-call and Template refusals and the cap
+// check each short-circuit the remaining stages on error
 // (no dispatch — nothing was executed), but each refusal is itself audited
 // (recordRefusal) — refusals are the most interesting audit events. Once
 // dispatch is attempted, the audit record is always written, even if the
@@ -283,8 +284,8 @@ type reattachment struct {
 
 // prepareDispatch is Run's pipeline up to, and not including, the dispatcher:
 // Freeze, the empty-Selector refusal, Selector resolution, authorization, the
-// no-Nodes-matched and Template refusals, the blast cap, the approval gate and
-// the Job-ID claims. key is an idempotency key and is only ever non-empty from
+// no-Nodes-matched, malformed-call and Template refusals, the blast cap, the
+// approval gate and the Job-ID claims. key is an idempotency key and is only ever non-empty from
 // Start; "" is exactly Run.
 func (s *Execution) prepareDispatch(ctx context.Context, p Principal, sel Selector, act jobs.Action, key string) (prep, error) {
 	reqAct := act
@@ -309,8 +310,9 @@ func (s *Execution) prepareDispatch(ctx context.Context, p Principal, sel Select
 	// Every Action's class is fixed here (invariant 13): a Native Operation's
 	// from opvocab, Raw Exec's as mutate, and a Template Operation's — with its
 	// fan-out — over the matched Nodes' own reports (ADR-0042, template.go).
-	// resolveAction only COMPUTES: its refusal, including an Action that
-	// arrived with a class preset, is acted on below, after authorization, so a
+	// resolveAction only COMPUTES: its refusals, the call-shape one included
+	// and an Action that arrived with a class preset, are acted on below, after
+	// authorization, so a
 	// caller who may not ask learns nothing about which Nodes carry which
 	// Templates.
 	ra := s.resolveAction(act, matched)
@@ -362,6 +364,13 @@ func (s *Execution) prepareDispatch(ctx context.Context, p Principal, sel Select
 	//       guardrails — it reports."
 	if len(matched) == 0 {
 		return prep{}, s.recordRefusal(ctx, p, sel, act, RefusalNoNodesMatched, &NoNodesMatchedError{Selector: sel.String()})
+	}
+
+	// The EX-61 stage. A call-shape refusal needs no Node, but on a real
+	// dispatch it is acted on here, after no_nodes_matched (EX-3) and before the
+	// Node-dependent Template refusals.
+	if ra.callRefusal != nil {
+		return prep{}, s.recordRefusal(ctx, p, sel, act, ra.callRefusalKind, ra.callRefusal)
 	}
 
 	// A Template no matched Node reports, a malformed Template call, or an

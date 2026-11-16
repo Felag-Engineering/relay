@@ -240,7 +240,7 @@ var apNow = time.Date(2026, 8, 14, 9, 0, 0, 0, time.UTC)
 func mutateAct() jobs.Action {
 	return jobs.Action{
 		Kind: jobs.ActionOperation, OperationName: "service.restart",
-		OperationArgs: map[string]string{"service": "nginx"},
+		OperationArgs: map[string]string{"unit": "nginx"},
 	}
 }
 
@@ -1592,7 +1592,7 @@ func TestRun_EveryGatedDispatchParksOnItsOwn(t *testing.T) {
 
 	disp.called = false
 	other := mutateAct()
-	other.OperationArgs = map[string]string{"service": "redis"}
+	other.OperationArgs = map[string]string{"unit": "redis"}
 	var parkedB *ParkedError
 	if _, err := s.Run(context.Background(), p, fleetSel, other); !errors.As(err, &parkedB) {
 		t.Fatalf("plan B: err = %v, want its own park", err)

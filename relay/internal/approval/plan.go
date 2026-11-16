@@ -53,9 +53,10 @@ import (
 // Operations are constrained to opvocab's declared argument names
 // (opvocab.ValidateArgNames), which cannot carry the "="/":" needed to forge
 // the split, but a Template Operation's argument keys are exactly the ones
-// opvocab has never declared. The two ValidateArgNames call sites
-// (mcp/tools_execution.go, api/execution.go) are a validator on two surfaces,
-// not a property of the hash.
+// opvocab has never declared. A Native call's names are checked at one site,
+// the capability layer's call-shape check (capability/callshape.go). It refuses
+// a malformed call at a stage before the approval gate computes this hash, so
+// the check is a validator ahead of the hash, not a property of it.
 //
 // Changing this encoding changes every Plan's hash, including every value
 // already stored in approval_requests.plan_hash. A stale row can never equal a

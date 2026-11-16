@@ -24,6 +24,8 @@
 //   - A Selector matching no Nodes is REPORTED (PlanResult.NoNodesMatched),
 //     never refused, while Run refuses the same condition as
 //     no_nodes_matched (ADR-0011).
+//   - A malformed call (a Native Operation's argument names, an empty Raw
+//     Exec argv) is REFUSED whatever matched, like an empty Selector.
 package capability
 
 import (
@@ -170,6 +172,8 @@ func ruleReference(v jobs.Verdict) NodeVerdict {
 //  2. authorize p against act/sel — GATES (returns an error, audited as a
 //     refusal): a caller not permitted to ASK must not learn per-Node
 //     deciding rules (invariant 3).
+//     2a. refuse a malformed call (callshape.go) — refused, not reported,
+//     whatever matched and before any Node is queried (PF-13).
 //  3. note whether the Selector matched no Nodes — advisory only, reported
 //     as NoNodesMatched; Run refuses the same condition as no_nodes_matched,
 //     after authorization, so a Policy preflight and a real run agree.
@@ -203,12 +207,19 @@ func (s *Execution) Plan(ctx context.Context, p Principal, sel Selector, act job
 		return PlanResult{}, s.recordRefusal(ctx, p, sel, act, RefusalUnauthorized, err)
 	}
 
+	// A call that cannot be asked at all is refused whatever matched and before
+	// any Node is queried (PF-13), unlike a guardrail, which a preflight reports.
+	if ra.callRefusal != nil {
+		return PlanResult{}, s.recordRefusal(ctx, p, sel, act, ra.callRefusalKind, ra.callRefusal)
+	}
+
 	noMatch := len(matched) == 0
 
-	// An unknown or malformed Template call is not a guardrail to report but a
-	// request that cannot be asked at all, so a preflight refuses it exactly
-	// as a run would. With no Node matched there is nothing to resolve
-	// against, and NoNodesMatched below says so instead.
+	// An unknown Template, a Template slot disagreement or Template slot names,
+	// and a preset class are not guardrails to report but requests that cannot
+	// be asked at all, so a preflight refuses them exactly as a run would. With
+	// no Node matched there is nothing to resolve against, and NoNodesMatched
+	// below says so instead.
 	if !noMatch && ra.refusal != nil {
 		return PlanResult{}, s.recordRefusal(ctx, p, sel, act, ra.refusalKind, ra.refusal)
 	}

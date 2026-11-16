@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -191,62 +192,40 @@ type stubOpsLister struct{}
 
 func (stubOpsLister) Operations() []opvocab.Descriptor { return opvocab.Operations() }
 
-// --- #345: argument-name validation in buildOperationAction --------------
+// --- Native argument names are the capability layer's, not this adapter's ---
 //
-// The defect these guard: an unknown or misspelled arg name was passed
-// straight through as an opaque map. A misspelled REQUIRED arg then defaulted
-// to empty and the daemon's rejection surfaced as outcome=denied_by_policy —
-// which the tool description tells the AI-agent to answer with describe_node +
-// narrow + retry, a loop a malformed call can never exit. These prove the
-// malformed call now fails fast, before dispatch, with a legible error.
+// The #345 trap (a misspelled required name defaulting to empty and coming
+// back as denied_by_policy) is closed by the capability layer's call-shape
+// check (EX-64), which refuses and audits it. This adapter forwards names
+// untouched (invariant 10).
 
-// TestBuildOperationAction_MisspelledRequiredArgIsRejected is the exact trap
-// from #345: `service.restart {"unitt":"nginx"}`. The misspelled name must be
-// rejected here — NOT dropped, dispatched, and returned as denied_by_policy.
-func TestBuildOperationAction_MisspelledRequiredArgIsRejected(t *testing.T) {
-	_, err := buildOperationAction(stubOpsLister{}, "service.restart", map[string]string{"unitt": "nginx"}, 0)
-	if err == nil {
-		t.Fatal("buildOperationAction(service.restart, {unitt}) = nil error, want an unknown-argument rejection")
+// TestBuildOperationAction_ForwardsNativeArgumentNamesUnchecked: the four
+// malformed shapes (#345) build an Action with no error, the args unchanged
+// and no class. The layer decides (invariant 10).
+func TestBuildOperationAction_ForwardsNativeArgumentNamesUnchecked(t *testing.T) {
+	cases := []struct {
+		name string
+		op   string
+		args map[string]string
+	}{
+		{"misspelled required name", "service.restart", map[string]string{"unitt": "nginx"}},
+		{"extra unknown name", "file.read", map[string]string{"path": "/etc/os-release", "bogus": "x"}},
+		{"any name on a zero-arg Operation", "system.facts", map[string]string{"x": "y"}},
+		{"missing required name", "service.restart", map[string]string{}},
 	}
-	msg := err.Error()
-	for _, want := range []string{"unitt", "unit", "list_operations"} {
-		if !strings.Contains(msg, want) {
-			t.Errorf("error %q must mention %q so the AI-agent can correct the misspelling", msg, want)
-		}
-	}
-}
-
-// TestBuildOperationAction_UnknownArgOnAValidCallIsRejected covers the
-// silent-drop half: an otherwise-valid call carrying an extra unknown name
-// used to succeed with the extra arg dropped. It must now be rejected.
-func TestBuildOperationAction_UnknownArgOnAValidCallIsRejected(t *testing.T) {
-	_, err := buildOperationAction(stubOpsLister{}, "file.read", map[string]string{"path": "/etc/os-release", "bogus": "x"}, 0)
-	if err == nil {
-		t.Fatal("buildOperationAction(file.read, {path, bogus}) = nil error, want the unknown 'bogus' rejected, not silently dropped")
-	}
-	if !strings.Contains(err.Error(), "bogus") {
-		t.Errorf("error %q must name the unknown argument 'bogus'", err.Error())
-	}
-}
-
-// TestBuildOperationAction_ZeroArgOperationRejectsAnyArg: system.facts takes
-// no arguments, so any provided name is unknown.
-func TestBuildOperationAction_ZeroArgOperationRejectsAnyArg(t *testing.T) {
-	if _, err := buildOperationAction(stubOpsLister{}, "system.facts", map[string]string{"x": "y"}, 0); err == nil {
-		t.Fatal("buildOperationAction(system.facts, {x}) = nil error, want any argument rejected for a zero-arg Operation")
-	}
-}
-
-// TestBuildOperationAction_MissingRequiredArgIsRejected: an omitted required
-// arg (as opposed to a misspelled one) must also fail fast with the required
-// name, rather than defaulting empty into a denied_by_policy.
-func TestBuildOperationAction_MissingRequiredArgIsRejected(t *testing.T) {
-	_, err := buildOperationAction(stubOpsLister{}, "service.restart", map[string]string{}, 0)
-	if err == nil {
-		t.Fatal("buildOperationAction(service.restart, {}) = nil error, want a missing-required-argument rejection")
-	}
-	if !strings.Contains(err.Error(), "unit") {
-		t.Errorf("error %q must name the missing required argument 'unit'", err.Error())
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			act, err := buildOperationAction(c.op, c.args, 0)
+			if err != nil {
+				t.Fatalf("buildOperationAction(%s, %v) = %v, want no error: the capability layer checks argument names", c.op, c.args, err)
+			}
+			if act.OperationName != c.op || !reflect.DeepEqual(act.OperationArgs, c.args) {
+				t.Errorf("Action = %+v, want %s with args %v forwarded unchanged", act, c.op, c.args)
+			}
+			if act.RiskClass != jobs.RiskClassUnspecified {
+				t.Errorf("RiskClass = %v, want unspecified: the adapter sets no class", act.RiskClass)
+			}
+		})
 	}
 }
 
@@ -266,7 +245,7 @@ func TestBuildOperationAction_ValidArgsSucceed(t *testing.T) {
 		{"pkg.install", map[string]string{"name": "nginx", "version": "1.24.0"}},
 	}
 	for _, c := range cases {
-		act, err := buildOperationAction(stubOpsLister{}, c.name, c.args, 0)
+		act, err := buildOperationAction(c.name, c.args, 0)
 		if err != nil {
 			t.Errorf("buildOperationAction(%s, %v) = error %v, want success", c.name, c.args, err)
 			continue
@@ -420,7 +399,7 @@ func TestPendingApproval_CarriesNoWayToApprove(t *testing.T) {
 // neither classifies nor rejects it, so an argument name no Native declares
 // is not refused here.
 func TestBuildOperationAction_TemplateNameCarriesNoClass(t *testing.T) {
-	act, err := buildOperationAction(stubOpsLister{}, "svc.status", map[string]string{"unit": "nginx"}, 0)
+	act, err := buildOperationAction("svc.status", map[string]string{"unit": "nginx"}, 0)
 	if err != nil {
 		t.Fatalf("buildOperationAction(svc.status) = %v, want a Template Action for the capability layer", err)
 	}

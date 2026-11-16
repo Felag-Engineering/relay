@@ -156,6 +156,7 @@ func TestRoleFloorCannotRefuseAnAskablePark(t *testing.T) {
 		switch k {
 		case jobs.ActionOperation:
 			act.OperationName = "service.restart"
+			act.OperationArgs = map[string]string{"unit": "nginx"}
 			name = "operation"
 		case jobs.ActionRawExec:
 			act.RawExecArgv = []string{"uptime"}

@@ -497,8 +497,8 @@ func TestRunOperation_TemplateNameReachesTheCapabilityLayerWithNoClass(t *testin
 
 // TestRunOperation_TemplateRefusalsAreBadRequests: the capability layer's
 // unknown-operation and malformed-call refusals (ADR-0042) are malformed
-// input, rendered as the same 400 this adapter gives an unknown Native
-// argument — never a 500, and never a Policy verdict (#345).
+// input, rendered as a 400 — never a 500, and never a Policy verdict (#345).
+// A Native call's malformed argument names (EX-64) render the same way.
 func TestRunOperation_TemplateRefusalsAreBadRequests(t *testing.T) {
 	for _, tt := range []struct {
 		name    string
@@ -507,6 +507,7 @@ func TestRunOperation_TemplateRefusalsAreBadRequests(t *testing.T) {
 	}{
 		{"unknown operation", &capability.UnknownOperationError{Operation: "nope.notreal", Matched: 2}, "unknown operation"},
 		{"malformed call", &capability.MalformedCallError{Operation: "log.tail", Reason: "unknown argument(s) [unitt]"}, "unitt"},
+		{"malformed Native call", &capability.MalformedCallError{Operation: "service.restart", Reason: "unknown argument(s) [unitt]"}, "unitt"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			exec := &fakeExecutor{runErr: tt.err}
@@ -522,27 +523,47 @@ func TestRunOperation_TemplateRefusalsAreBadRequests(t *testing.T) {
 	}
 }
 
+// TestRunOperation_ArgumentNamesReachTheCapabilityLayer: this adapter decides
+// nothing about a Native call's argument names (invariant 10). Each of
+// the three shapes a Native call can be malformed in reaches the capability
+// layer exactly once, with the arguments unchanged and no class, and the layer
+// refuses and audits it (EX-64).
+//
+// Proves EX-64.
+func TestRunOperation_ArgumentNamesReachTheCapabilityLayer(t *testing.T) {
+	bodies := []runOperationRequest{
+		{Selector: "node:role=web", Operation: "service.restart", Args: map[string]string{"unitt": "nginx"}},
+		{Selector: "node:role=web", Operation: "file.read", Args: map[string]string{"path": "/etc/os-release", "bogus": "x"}},
+		{Selector: "node:role=web", Operation: "service.restart"},
+	}
+	for _, body := range bodies {
+		t.Run(body.Operation, func(t *testing.T) {
+			exec := &fakeExecutor{}
+			h := newExecFixture(t, accounts.RoleAdmin, exec, fakeJobs{})
+
+			do(t, h, http.MethodPost, "/api/v1/operations", body)
+
+			calls := exec.runCalls()
+			if len(calls) != 1 {
+				t.Fatalf("Run called %d times, want 1: the adapter must not refuse argument names", len(calls))
+			}
+			act := calls[0].Action
+			if !reflect.DeepEqual(act.OperationArgs, body.Args) {
+				t.Errorf("OperationArgs = %v, want %v unchanged", act.OperationArgs, body.Args)
+			}
+			if act.RiskClass != jobs.RiskClassUnspecified {
+				t.Errorf("RiskClass = %v, want unspecified: only the capability layer decides a class", act.RiskClass)
+			}
+		})
+	}
+}
+
 func TestRunOperation_MalformedInputIsRejectedBeforeDispatch(t *testing.T) {
 	tests := []struct {
 		name    string
 		body    runOperationRequest
 		wantSub string
 	}{
-		{
-			name:    "misspelled required argument (#345)",
-			body:    runOperationRequest{Operation: "service.restart", Args: map[string]string{"unitt": "nginx"}},
-			wantSub: "unitt",
-		},
-		{
-			name:    "unknown extra argument on an otherwise valid call",
-			body:    runOperationRequest{Operation: "file.read", Args: map[string]string{"path": "/etc/os-release", "bogus": "x"}},
-			wantSub: "bogus",
-		},
-		{
-			name:    "missing required argument",
-			body:    runOperationRequest{Operation: "service.restart"},
-			wantSub: "unit",
-		},
 		{
 			name:    "negative timeout",
 			body:    runOperationRequest{Operation: "system.facts", TimeoutSeconds: -1},
@@ -581,19 +602,47 @@ func TestRunOperation_MalformedInputIsRejectedBeforeDispatch(t *testing.T) {
 	}
 }
 
-// raw_exec's argv is mandatory and is never split client-side (ADR-0001):
-// an empty argv is a 400 before any dispatch.
-func TestRawExec_EmptyArgvIsRejected(t *testing.T) {
-	exec := &fakeExecutor{}
-	h := newExecFixture(t, accounts.RoleAdmin, exec, fakeJobs{})
+// TestRawExec_EmptyArgvReachesTheCapabilityLayer: raw_exec's argv is never
+// split client-side (ADR-0001) and this adapter does not refuse an empty one:
+// an omitted argv and an empty array each reach the capability layer once,
+// which refuses and audits it (EX-67). That refusal renders as a 400.
+//
+// Proves EX-67.
+func TestRawExec_EmptyArgvReachesTheCapabilityLayer(t *testing.T) {
+	// map[string]any, so the empty array is not marshalled as null.
+	bodies := map[string]map[string]any{
+		"omitted": {"selector": "node:role=web"},
+		"empty":   {"selector": "node:role=web", "argv": []string{}},
+	}
+	for name, body := range bodies {
+		t.Run(name, func(t *testing.T) {
+			exec := &fakeExecutor{}
+			h := newExecFixture(t, accounts.RoleAdmin, exec, fakeJobs{})
 
-	rec := do(t, h, http.MethodPost, "/api/v1/raw-exec", rawExecRequest{Argv: nil})
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400; body %s", rec.Code, rec.Body.String())
+			do(t, h, http.MethodPost, "/api/v1/raw-exec", body)
+
+			calls := exec.runCalls()
+			if len(calls) != 1 {
+				t.Fatalf("Run called %d times, want 1: the adapter must not refuse an empty argv", len(calls))
+			}
+			if len(calls[0].Action.RawExecArgv) != 0 {
+				t.Errorf("RawExecArgv = %v, want it empty and unchanged", calls[0].Action.RawExecArgv)
+			}
+		})
 	}
-	if got := len(exec.runCalls()); got != 0 {
-		t.Errorf("Run called %d times for an empty argv, want 0", got)
-	}
+
+	t.Run("the layer's refusal is a 400", func(t *testing.T) {
+		exec := &fakeExecutor{runErr: &capability.MalformedCallError{Operation: "Raw Exec", Reason: "argv is empty"}}
+		h := newExecFixture(t, accounts.RoleAdmin, exec, fakeJobs{})
+
+		rec := do(t, h, http.MethodPost, "/api/v1/raw-exec", map[string]any{"selector": "node:role=web"})
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400; body %s", rec.Code, rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), "invalid operation request") {
+			t.Errorf("body %s must carry the title %q", rec.Body.String(), "invalid operation request")
+		}
+	})
 }
 
 // -----------------------------------------------------------------------

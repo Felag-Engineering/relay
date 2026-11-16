@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"time"
 
 	schema "github.com/google/jsonschema-go/jsonschema"
@@ -13,7 +14,6 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/capability"
 	"github.com/Felag-Engineering/relay/relay/internal/controlplane"
 	"github.com/Felag-Engineering/relay/relay/internal/jobs"
-	"github.com/Felag-Engineering/relay/relay/internal/opvocab"
 )
 
 // This is an EXEC file (listed in no_dispatch_test.go's execFiles): unlike
@@ -208,7 +208,8 @@ func renderRunError(err error) error {
 	if errors.As(err, &emptyErr) {
 		return err
 	}
-	// Template refusals (ADR-0042) already say what to do next.
+	// Template refusals (ADR-0042) and call-shape refusals (EX-61, EX-64,
+	// EX-67) already say what to do next.
 	var unknownErr *capability.UnknownOperationError
 	var malformedErr *capability.MalformedCallError
 	if errors.As(err, &unknownErr) || errors.As(err, &malformedErr) {
@@ -228,52 +229,16 @@ func renderRunError(err error) error {
 	return fmt.Errorf("mcp: dispatch failed: %w", err)
 }
 
-// buildOperationAction looks up a Native name in ops' vocabulary, validates
-// the argument NAMES against that Operation's published arg_constraints, and
-// builds the resulting jobs.Action. It sets no risk class: the capability
-// layer derives it (ADR-0012, invariant 13). Any other name is a Template
-// Operation (see the last paragraph).
-//
-// The name checks are a thin **legibility pre-check** before ever reaching Run,
-// never a second Policy decision (ADR-0002/0011, invariant 12): the daemon's
-// live Policy engine and its validate_* functions remain the real gate on
-// argument VALUES. What this catches is the failure mode where a malformed call
-// is indistinguishable from a forbidden one:
-//
-//   - an unknown ARGUMENT name (e.g. a misspelled "unitt") — otherwise silently
-//     dropped, leaving the required arg empty so the daemon reports
-//     denied_by_policy, which sends the AI-agent into describe_node/narrow/retry
-//     loops it can never exit because the request was malformed, not forbidden;
-//   - a missing REQUIRED argument — otherwise the same empty-value denial.
-//
-// The argument-name half lives in [opvocab.ValidateArgNames], beside the
-// ArgConstraints convention it reads, so this surface and the Control API's
-// execution routes share ONE definition: a misspelled argument is a
-// malformed call on both, never a per-Node denial (ADR-0042).
-//
-// A name outside the Native vocabulary is a Template Operation (ADR-0021),
-// and this adapter decides NOTHING about it (ADR-0042, invariant 10): it
-// builds the Action with no risk class and no argument check, and the
-// capability layer resolves the class over the matched Nodes' own reports,
-// checks the argument names against their slots, and refuses a name no
-// matched Node reports as an unknown operation.
-func buildOperationAction(ops OperationLister, name string, args map[string]string, timeoutSeconds int32) (jobs.Action, error) {
+// buildOperationAction builds the jobs.Action for a run_operation call. It
+// decides nothing about a Native or Template call's arguments or class: the
+// capability layer checks a Native Operation's argument names (EX-64), a
+// Template's slots (EX-61) and fixes every class (invariants 10 and 13), so a
+// malformed call is refused and audited there, never here. It sets no risk
+// class and never reads argument values (ADR-0011, invariant 12).
+func buildOperationAction(name string, args map[string]string, timeoutSeconds int32) (jobs.Action, error) {
 	timeoutSeconds, err := controlplane.ResolveTimeoutSeconds(timeoutSeconds)
 	if err != nil {
 		return jobs.Action{}, err
-	}
-	for _, d := range ops.Operations() {
-		if d.Name == name {
-			if err := opvocab.ValidateArgNames(d, args); err != nil {
-				return jobs.Action{}, err
-			}
-			return jobs.Action{
-				Kind:           jobs.ActionOperation,
-				OperationName:  name,
-				OperationArgs:  args,
-				TimeoutSeconds: timeoutSeconds,
-			}, nil
-		}
 	}
 	if name == "" {
 		return jobs.Action{}, fmt.Errorf("operation is required (see list_operations)")
@@ -308,7 +273,7 @@ type runOperationInput struct {
 // client-side splitting, no string-command field (ADR-0001, invariant 1).
 type rawExecInput struct {
 	Selector string   `json:"selector,omitempty" jsonschema:"Selector filter, e.g. 'node:role=web, relay:quarantine=on, tag:team=payments, state:offline'. Every term must carry a node:, relay:, tag: or state: prefix. state: is a closed, Relay-derived vocabulary (ADR-0034): the boolean markers state:offline, state:outdated, state:template-unloadable, state:cert-expiring, and the facts state:daemon-version=, state:policy-fingerprint=, state:template-fingerprint=. Required: an empty, whitespace-only or omitted Selector is refused, with or without plan, and is never read as every Node. To reach the whole fleet, name it deliberately: node:os=linux, the label every relay-daemon declares by default."`
-	Argv     []string `json:"argv" jsonschema:"Argv to execute verbatim on each matched Node — no shell, no client-side splitting (ADR-0001). The daemon's Policy regex decides per Node whether it is allowed."`
+	Argv     []string `json:"argv" jsonschema:"Argv to execute verbatim on each matched Node — no shell, no client-side splitting (ADR-0001). Must be non-empty: an empty or omitted argv is refused as a malformed call, and the refusal is audited. The daemon's Policy regex decides per Node whether it is allowed."`
 	// TimeoutSeconds: see runOperationInput's field doc.
 	TimeoutSeconds int32 `json:"timeout_seconds,omitempty" jsonschema:"Optional per-Task timeout in seconds. 0 or omitted uses the daemon/engine default; max 86400 (24h)."`
 	// Plan: see runOperationInput's field doc. raw_exec's Plan still probes
@@ -320,23 +285,19 @@ type rawExecInput struct {
 	IdempotencyKey string `json:"idempotency_key,omitempty" jsonschema:"Optional, at most 128 printable ASCII bytes. A repeat of the same key by the same Account within 24h returns the existing Job and dispatches nothing; the same key with different arguments is refused. Send a fresh key per intended run, and re-send it unchanged when re-issuing after a lost response. Ignored with plan=true: a preflight claims no key."`
 }
 
-// tightenExecInputSchema infers In's schema, then makes it stricter than the
-// reflect defaults on the two fields the reflected schema gets wrong for this
-// RCE surface: argv (required, so drop the spurious "null" variant a
-// []string picks up) and timeout_seconds (advertise the real
-// [0, controlplane.MaxTimeoutSeconds] bound instead of int32 min/max). Pure tightening:
-// the handler still unmarshals into In and controlplane.ResolveTimeoutSeconds stays as
-// defense-in-depth. Invariant 10: this only narrows advertised inputs, it
-// does not add a control path.
+// tightenExecInputSchema infers In's schema, then advertises the bounds this
+// adapter itself decides: wait_seconds (EX-69) and the timeout range. The
+// go-sdk validates input against this schema before the handler runs, so a
+// bound enforced here is an unaudited refusal by the adapter. argv presence
+// and the idempotency key's length are therefore the layer's (EX-67; the key
+// store's IdempotencyKeyError), and the schema leaves both open. Invariant 10:
+// this only narrows advertised inputs, it does not add a control path.
 func tightenExecInputSchema[In any]() *schema.Schema {
 	s, err := schema.For[In](nil)
 	if err != nil {
 		panic(fmt.Sprintf("mcp: infer input schema: %v", err))
 	}
-	if p := s.Properties["argv"]; p != nil {
-		p.Type = "array" // was Types:["null","array"]
-		p.Types = nil
-	}
+	s.Required = slices.DeleteFunc(s.Required, func(n string) bool { return n == "argv" })
 	if p := s.Properties["timeout_seconds"]; p != nil {
 		p.Minimum = schema.Ptr(float64(0))
 		p.Maximum = schema.Ptr(float64(controlplane.MaxTimeoutSeconds)) // 86400
@@ -344,9 +305,6 @@ func tightenExecInputSchema[In any]() *schema.Schema {
 	if p := s.Properties["wait_seconds"]; p != nil {
 		p.Minimum = schema.Ptr(float64(0))
 		p.Maximum = schema.Ptr(float64(controlplane.MaxWaitSeconds))
-	}
-	if p := s.Properties["idempotency_key"]; p != nil {
-		p.MaxLength = schema.Ptr(capability.MaxIdempotencyKeyBytes)
 	}
 	return s
 }
@@ -636,7 +594,7 @@ func answerThenDispatch(
 // the re-attached Job's captured output may belong to another Account's
 // dispatch, exactly get_job's case); answerer and now are acceptElicitedAnswer's
 // own parameters, threaded straight through from mcp.New's cfg.
-func registerExecutionTools(srv *sdkmcp.Server, exec Executor, results JobResultReader, ops OperationLister, ask *questioner, reads ReadAuditor, answerer ApprovalAnswerer, now func() time.Time) {
+func registerExecutionTools(srv *sdkmcp.Server, exec Executor, results JobResultReader, ask *questioner, reads ReadAuditor, answerer ApprovalAnswerer, now func() time.Time) {
 	sdkmcp.AddTool(srv, &sdkmcp.Tool{
 		Name: "run_operation", // keep in sync with toolRunOperation (PF-1, see the const doc above)
 		Description: "The default way to act on Nodes. Run a structured Operation (ADR-0001's typed, " +
@@ -661,7 +619,7 @@ func registerExecutionTools(srv *sdkmcp.Server, exec Executor, results JobResult
 			return nil, RunOrPlanOutput{}, fmt.Errorf("invalid selector: %w", err)
 		}
 
-		act, err := buildOperationAction(ops, in.Operation, in.Args, in.TimeoutSeconds)
+		act, err := buildOperationAction(in.Operation, in.Args, in.TimeoutSeconds)
 		if err != nil {
 			return nil, RunOrPlanOutput{}, err
 		}
@@ -725,10 +683,6 @@ func registerExecutionTools(srv *sdkmcp.Server, exec Executor, results JobResult
 		p, err := requirePrincipal(ctx)
 		if err != nil {
 			return nil, RunOrPlanOutput{}, err
-		}
-
-		if len(in.Argv) == 0 {
-			return nil, RunOrPlanOutput{}, fmt.Errorf("argv must not be empty")
 		}
 
 		sel, err := capability.ParseSelector(in.Selector)

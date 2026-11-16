@@ -9,9 +9,9 @@
 // the Selector is resolved, and a Node is exactly the party whose compromise
 // the rest of the system is built to survive. resolveAction is the one place
 // that decides a class for any Action, and it is reached only from
-// Execution.Run and Execution.Plan — never from an adapter, which builds an Action
-// with no class at all (invariants 10 and 13). An Action that arrives with a
-// class is refused.
+// prepareDispatch (Run and Start) and Execution.Plan — never from an adapter,
+// which builds an Action with no class at all (invariants 10 and 13). An Action
+// that arrives with a class is refused.
 //
 // The rules, each from ADR-0042:
 //
@@ -98,6 +98,12 @@ type resolvedAction struct {
 	excluded    []excludedNode
 	refusal     error
 	refusalKind RefusalKind
+
+	// callRefusal is a refusal computed from the Action alone (callshape.go;
+	// EX-64, EX-67). refusal holds the Node-dependent Template refusals and a
+	// preset class. Each caller acts on callRefusal first.
+	callRefusal     error
+	callRefusalKind RefusalKind
 }
 
 // isTemplateAction reports whether act names an Operation outside the frozen
@@ -113,9 +119,21 @@ func isTemplateAction(act jobs.Action) bool {
 }
 
 // resolveAction decides an Action's class and, for a Template, its dispatch
-// over matched; see this file's header for the rules. It never refuses on its own: a refusal is
-// returned as data for the caller to act on after authorization.
+// over matched; see this file's header for the rules. It also computes the
+// call-shape refusal (callshape.go) for every kind. It never refuses on its
+// own: a refusal is returned as data for the caller to act on after
+// authorization.
 func (s *Execution) resolveAction(act jobs.Action, matched []registry.Node) resolvedAction {
+	kind, callErr := checkCallShape(act)
+	ra := s.resolveClassAndFanOut(act, matched)
+	ra.callRefusalKind, ra.callRefusal = kind, callErr
+	return ra
+}
+
+// resolveClassAndFanOut decides the class and, for a Template, the fan-out,
+// and produces the Node-dependent refusal (an unknown or malformed Template
+// call, or a class the caller preset).
+func (s *Execution) resolveClassAndFanOut(act jobs.Action, matched []registry.Node) resolvedAction {
 	if !isTemplateAction(act) {
 		out := resolvedAction{act: act, nodes: matched}
 		// Written even on the refusal path, so a refused Action never carries
@@ -312,10 +330,12 @@ func (e *UnknownOperationError) Error() string {
 	return b.String()
 }
 
-// MalformedCallError is the refusal for a Template call whose argument names
-// do not match the Template's slots, or whose matched Nodes disagree about
-// what those slots are (ADR-0042). Malformed, never a Policy verdict: the
-// call is refused before any Node is asked.
+// MalformedCallError is the refusal for a Native call whose argument names do
+// not match opvocab's declaration (EX-64), a Raw Exec call with an empty argv
+// (EX-67), and a Template call whose argument names do not match the
+// Template's slots or whose matched Nodes disagree about what those slots are
+// (EX-61, ADR-0042). Malformed, never a Policy verdict: the call is refused
+// before any Node is asked.
 type MalformedCallError struct {
 	Operation string
 	Reason    string

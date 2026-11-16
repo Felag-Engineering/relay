@@ -294,7 +294,7 @@ func New(lane ReadLane, ops OperationLister, exec Executor, results JobResultRea
 
 	registerNodeTools(srv, lane)
 	registerOperationTools(srv, ops, lane)
-	registerExecutionTools(srv, exec, results, ops, ask, reads, cfg.approvals, cfg.now)
+	registerExecutionTools(srv, exec, results, ask, reads, cfg.approvals, cfg.now)
 	registerJobTools(srv, exec, results, reads)
 
 	// Stateless + JSON responses (MCP spec 2026-07-28): the SDK accepts
