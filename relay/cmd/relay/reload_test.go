@@ -391,9 +391,10 @@ func TestReloader_PanicDoesNotExit(t *testing.T) {
 
 	f.r.open = good
 	hup <- os.Interrupt
-	waitFor(t, func() bool { return len(f.records(audit.KindConfigReload)) == 1 })
-	if got := f.deps.live.OperatorSettings().MutateBlastCap; got != 7 {
-		t.Errorf("MutateBlastCap = %d after the reload that followed a panic, want 7", got)
+	// The record is written before the swap, so wait for the swapped value.
+	waitFor(t, func() bool { return f.deps.live.OperatorSettings().MutateBlastCap == 7 })
+	if n := len(f.records(audit.KindConfigReload)); n != 1 {
+		t.Errorf("config_reload records = %d after the reload that followed a panic, want 1", n)
 	}
 	cancel()
 	<-done
