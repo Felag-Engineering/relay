@@ -312,3 +312,30 @@ func TestMCP_ExplanationAbsentWhenNotRefused(t *testing.T) {
 		t.Errorf("node %s (failure) refusal_explanation = %q, want empty", ts.nodeB, got)
 	}
 }
+
+// Proves EX-60.
+// The audit trail keeps arguments verbatim, so the description must tell the
+// caller to keep secrets out of them.
+func TestMCP_ListOperationsSaysArgumentsAreAuditedVerbatim(t *testing.T) {
+	ts := newTestServer(t)
+	session := ts.connect(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	res, err := session.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+
+	const auditedVerbatimSentence = "Arguments and Raw Exec argv are audited verbatim, so they must never carry a secret."
+	for _, tool := range res.Tools {
+		if tool.Name != "list_operations" {
+			continue
+		}
+		if !strings.Contains(tool.Description, auditedVerbatimSentence) {
+			t.Errorf("list_operations Description lacks %q; got:\n%s", auditedVerbatimSentence, tool.Description)
+		}
+		return
+	}
+	t.Fatal("list_operations tool not registered")
+}

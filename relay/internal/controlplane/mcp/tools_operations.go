@@ -137,7 +137,8 @@ func registerOperationTools(srv *sdkmcp.Server, ops OperationLister, lane ReadLa
 			"do not report it are left out and come back `unsupported` (nothing runs, Policy is never " +
 			"consulted — neither a failure nor a denial), its risk class is `read` only if every remaining " +
 			"Node reports `read`, and a name no matched Node reports is refused as an unknown operation. " +
-			"Raw Exec is a separate tool (raw_exec), not an Operation, and is always mutate.",
+			"Raw Exec is a separate tool (raw_exec), not an Operation, and is always mutate. " +
+			"Arguments and Raw Exec argv are audited verbatim, so they must never carry a secret.",
 	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in listOperationsInput) (*sdkmcp.CallToolResult, ListOperationsOutput, error) {
 		vocab, err := lane.ListOperations(ctx, in.NodeID)
 		if err != nil {
