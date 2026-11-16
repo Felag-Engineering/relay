@@ -52,8 +52,8 @@ it needs an ADR, not a quiet workaround.
    may **never** modify it over the wire. The daemon enforces; the Relay only reads. (ADR-0002)
 3. **Deny-by-default, deny-beats-allow,** with argument-level granularity. (ADR-0002)
 4. **At-most-once Task execution.** Tasks carry unique IDs; the daemon dedups across reconnects.
-   Never make execution at-least-once. (ADR-0004)
-5. **Blast-radius cap is enforced on the Relay before dispatch.** (ADR-0004)
+   Never make execution at-least-once. (ADR-0054)
+5. **Blast-radius cap is enforced on the Relay before dispatch.** (ADR-0054)
 6. **mTLS everywhere; the daemon refuses an untrusted Relay.** Node identity is its client cert.
    (ADR-0005, 0006)
 7. **Labels are namespaced, and each namespace has exactly one writer.** Four namespaces, each
@@ -98,7 +98,7 @@ it needs an ADR, not a quiet workaround.
     rules, the minimum daemon version, rate and capacity limits) may be a runtime object,
     changed only by a human Account with step-up re-authentication, and audited. Secrets never
     pass through the environment or the command line; the Relay can read them and cannot
-    rewrite them, except key material it generates itself. (ADR-0004, ADR-0010, ADR-0012,
+    rewrite them, except key material it generates itself. (ADR-0010, ADR-0012, ADR-0054,
     ADR-0027, ADR-0033, ADR-0043, ADR-0052)
 12. **Policy is evaluated only by the daemon's live engine**, including hypotheticals
     (`PolicyQuery`, the Policy preflight). Never reimplement Policy evaluation on the Relay side.
@@ -131,6 +131,7 @@ issue's definition of done, and that rule is the only thing keeping the table ho
 | # | The clause | What is actually true today | Tracked |
 |---|---|---|---|
 | 7 | Legacy `relay:` scope labels | `tag:` labels are stored on the Node record and written only through the capability layer's tag write, by a human Account at `operator` or above, on the Control API and the Console; `tag:` Selector terms resolve on every surface. A token's labels are written as initial tags, and on upgrade earlier scope labels are copied to tags (ADR-0050). What is not yet true, on Relays installed before that change only: the earlier `relay:` scope labels stay beside their tag copies, so `relay:` still holds keys no Relay action defines, and Nodes enrolled before `relay:node-id` existed lack it. Quarantine, the one later action that would write `relay:` labels, is cut from the MVP (`roadmap: relay/quarantine`). Behaviour detail in `docs/specs/selectors-and-labels.md`. | #1201 |
+| 10 | The layer decides what may be done, never an adapter | A Native Operation call with an unknown or missing argument name is refused by the MCP and Control API adapters before the capability layer runs, so that refusal is decided per interface and not audited. A Template call's argument names are checked in the layer and audited. Behaviour detail in `docs/specs/execution.md`. | #1346 |
 
 ### Writing or amending an invariant
 

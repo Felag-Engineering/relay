@@ -65,7 +65,7 @@ From `daemon/packaging/relay-daemon.service`:
 - **`StateDirectory=relay-daemon`, `StateDirectoryMode=0700`**: the one writable path. It holds
   the persisted identity (`key.pem`, `cert.pem`, `ca_bundle.pem`, `node_id`) and the
   at-most-once dedup store: `<state_dir>/seen-tasks/`, a directory (mode 0700) of one empty
-  marker file (mode 0600) per seen `task_id`. It is not a database (ADR-0004).
+  marker file (mode 0600) per seen `task_id`. It is not a database (`docs/specs/daemon-installation.md`).
 - **`PrivateDevices`, `ProtectKernelTunables`, `ProtectKernelModules`, `ProtectKernelLogs`,
   `ProtectControlGroups`, `ProtectClock`, `ProtectHostname`, `RestrictRealtime`,
   `RestrictNamespaces`, `LockPersonality`**: no Operation touches devices, kernel

@@ -1,6 +1,7 @@
 # Operations declare a risk class (read | mutate); the blast-radius cap splits by class
 
-**Status:** Accepted; amended by ADR-0010 and ADR-0042.
+**Status:** Accepted; amended by ADR-0010 and ADR-0042. Its 2026-09-15 amendment's store-backed,
+Console-edited blast caps are superseded by ADR-0054: the caps stay in the configuration file.
 
 Every Operation in the vocabulary declares a **risk class** in `/proto` alongside its
 definition: **`read`** (cannot change Node state) or **`mutate`** (can). The Relay's

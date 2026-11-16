@@ -33,7 +33,7 @@ pipeline.
 4. **Config management installs the newer daemon package** across the fleet and restarts the
    unit. The daemon's graceful shutdown drains in-flight Tasks (bounded by
    `RELAY_SHUTDOWN_GRACE_SECS`, default 30 s) and the at-most-once dedup store survives the
-   restart (ADR-0004), so a restart mid-Job never re-executes a Task.
+   restart (`docs/specs/daemon-installation.md`), so a restart mid-Job never re-executes a Task.
 5. **The operator raises `reach.min_daemon_version`** in the Relay's `relay.toml` once the
    rollout should be complete, applies it with a SIGHUP, and watches the registry.
 

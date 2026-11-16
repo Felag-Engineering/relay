@@ -155,7 +155,7 @@ so what may be done, by whom, and how it is recorded is decided once.
 - **Selector fan-out.** The AI-agent targets Nodes by label Selector; one call fans out across
   the fleet under a hard blast-radius cap.
   ([ADR-0003](docs/adr/0003-mcp-meta-tool-surface-with-selector-fan-out.md),
-  [ADR-0004](docs/adr/0004-async-job-execution-model.md))
+  [ADR-0054](docs/adr/0054-job-execution-at-most-once-bounded-fan-out-halt-on-failure.md))
 - **Outbound-only, mutually authenticated.** Daemons need no inbound ports; identity is an
   mTLS client cert issued at enrollment.
   ([ADR-0005](docs/adr/0005-grpc-bidi-over-mtls-transport.md),

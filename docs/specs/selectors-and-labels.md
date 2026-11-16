@@ -236,7 +236,7 @@ which is a disclosed residual (threat-model register R13) with operator-facing r
 - **Invariant 7** (ADR-0006, ADR-0020, ADR-0034, ADR-0050) — the whole of it. Its `tag:` clause,
   as ADR-0050 rewords it, names a human Account of `operator` or above, on the Console and the
   Control API. This spec holds the invariant's per-namespace mechanism.
-- **Invariant 5** (ADR-0004) — the cap is checked against the *resolved* count.
+- **Invariant 5** (ADR-0054) — the cap is checked against the *resolved* count.
 - **Invariant 10** — one parser and one resolver in the capability layer; no surface evaluates a
   Selector itself.
 - **ADR-0050 — tags are the operator's labels.** Who writes a tag and where, initial tags from
