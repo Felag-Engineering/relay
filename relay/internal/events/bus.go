@@ -226,7 +226,7 @@ func (b *Bus) publish(kind Kind, ev Event) {
 // When gapped, the single KindGap event is the only thing delivered — no
 // replay follows it. This holds unconditionally, including when the
 // backlog a valid resume point would replay is itself larger than a single
-// Subscription's channel: see the GapReplayOverflow branch below. A
+// Subscription's channel: see resumePlan's GapReplayOverflow case. A
 // doomed partial delivery — the first subscriberBuffer events landing in
 // the channel, looking perfectly ordered and gap-free, with the rest (and
 // the gap notice that should follow them) silently dropped because the
@@ -245,32 +245,8 @@ func (b *Bus) Subscribe(kinds []Kind, lastEventID string) *Subscription {
 		kinds: kindSet,
 		ch:    make(chan Event, subscriberBuffer),
 	}
-
-	switch gap, seq, replay := b.resumePlan(kindSet, lastEventID); {
-	case gap != nil:
-		gap.At = now
-		sub.trySend(*gap)
-	case replay:
-		events := b.replayBacklog(kindSet, seq)
-		if len(events) > subscriberBuffer {
-			// The backlog exists and is fully retained — this is not
-			// GapEvicted, nothing was evicted — but it cannot fit through
-			// one bounded channel at Subscribe time. Deliver a single gap
-			// as the SOLE event, exactly like every other gap reason,
-			// rather than a trySend loop that would silently truncate at
-			// event 256 and leave the rest (including any gap notice)
-			// stuck behind a full, unread channel.
-			gap := gapEvent(GapReplayOverflow, lastEventID)
-			gap.At = now
-			sub.trySend(gap)
-		} else {
-			for _, ev := range events {
-				sub.trySend(ev)
-			}
-		}
-	default:
-		// A fresh session (lastEventID == ""): no replay, no gap — live
-		// only.
+	for _, ev := range b.resumePlan(kindSet, lastEventID, now) {
+		sub.trySend(ev)
 	}
 
 	b.subs[sub] = struct{}{}
@@ -379,45 +355,57 @@ func (b *Bus) RetentionWindow() time.Duration {
 	return b.maxAge
 }
 
-// resumePlan implements Subscribe's gap decision. Exactly one of its three
-// outcomes holds:
+// resumePlan implements Subscribe's gap decision and returns what a new
+// Subscription is handed before it goes live, which is exactly one of:
 //
-//   - gap != nil: lastEventID names a foreign epoch or an evicted point —
-//     the caller must deliver ONLY this gap notice (its At is unset;
-//     Subscribe fills it in) and replay nothing.
-//   - replay == true: lastEventID resolved to seq inside every subscribed
-//     ring's retained window — the caller replays events with Seq > seq.
-//   - neither (gap == nil, replay == false): lastEventID == "", a fresh
-//     session — no replay, no gap, live only.
+//   - nothing: lastEventID == "", a fresh session; live only.
+//   - one gap event, stamped now: lastEventID names a foreign epoch, an
+//     evicted point, or a backlog larger than subscriberBuffer. Nothing is
+//     replayed after it.
+//   - the replay: every retained event with Seq above lastEventID's, in
+//     ascending Seq order, which fits through the fresh channel by
+//     construction.
 //
 // Called with b.mu already held.
-func (b *Bus) resumePlan(kinds map[Kind]bool, lastEventID string) (gap *Event, seq uint64, replay bool) {
+func (b *Bus) resumePlan(kinds map[Kind]bool, lastEventID string, now time.Time) []Event {
 	if lastEventID == "" {
-		return nil, 0, false
+		return nil
+	}
+	gap := func(reason GapReason) []Event {
+		ev := gapEvent(reason, lastEventID)
+		ev.At = now
+		return []Event{ev}
 	}
 
 	epoch, seqStr, cut := strings.Cut(lastEventID, "-")
-	parsedSeq, err := strconv.ParseUint(seqStr, 10, 64)
+	seq, err := strconv.ParseUint(seqStr, 10, 64)
 	if !cut || err != nil || epoch != b.epoch {
-		ev := gapEvent(GapEpochChanged, lastEventID)
-		return &ev, 0, false
+		return gap(GapEpochChanged)
 	}
 
 	// Replay covers events with Seq > seq — the ring already retaining
 	// exactly Seq is fine; only a Seq strictly below the ring's eviction
 	// mark is a real gap.
 	for k := range kinds {
-		if r, exists := b.rings[k]; exists && r.evictedThrough > parsedSeq {
-			ev := gapEvent(GapEvicted, lastEventID)
-			return &ev, 0, false
+		if r, exists := b.rings[k]; exists && r.evictedThrough > seq {
+			return gap(GapEvicted)
 		}
 	}
 
-	return nil, parsedSeq, true
+	// The backlog is fully retained — nothing was evicted — but it cannot fit
+	// through one bounded channel at Subscribe time. A trySend loop would
+	// silently truncate at subscriberBuffer and leave the rest, and any gap
+	// notice, stuck behind a full, unread channel, so this is a gap like the
+	// others.
+	events := b.replayBacklog(kinds, seq)
+	if len(events) > subscriberBuffer {
+		return gap(GapReplayOverflow)
+	}
+	return events
 }
 
 // gapEvent builds a KindGap Event. Unexported and reachable only from
-// Subscribe's gapFor and from Subscription.trySend's slow-consumer branch —
+// resumePlan and from Subscription.trySend's slow-consumer branch —
 // there is no exported constructor and no Publish method for it (see the
 // Kind doc comment and TestExactlyFourPublishMethods).
 func gapEvent(reason GapReason, requestedID string) Event {
