@@ -388,18 +388,7 @@ func dispatch(ctx context.Context, exec Executor, results JobResultReader, p cap
 	if sj.JobID == "" {
 		return RunOrPlanOutput{Results: []PerNodeResult{}}, nil, nil
 	}
-	// wait_seconds is presentation only: it decides how long this call holds
-	// before reading the Job back, never what was dispatched. A lapsed wait, a
-	// dropped caller and a re-attach all leave the Job exactly as it was.
-	if o.wait > 0 && !sj.Reattached && sj.Done != nil {
-		t := time.NewTimer(o.wait)
-		select {
-		case <-sj.Done:
-		case <-t.C:
-		case <-ctx.Done():
-		}
-		t.Stop()
-	}
+	controlplane.AwaitStartedJob(ctx, sj, o.wait)
 	out, err := renderJob(ctx, results, sj.JobID)
 	if err != nil {
 		return RunOrPlanOutput{}, nil, err
