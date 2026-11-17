@@ -166,10 +166,13 @@ gen-apiclient:
 # operation the generator silently skipped. Both halves are needed.
 #
 # `gen-apiclient` removes any previous output first, so a stale file cannot
-# stand in for a generation that failed.
+# stand in for a generation that failed. The check removes it again when it
+# ends, pass or fail: a generated file left in the tree is linted by the next
+# `lint-relay` as if it were source.
 apiclient-check: gen-apiclient
 	cd relay && go build -tags apiclient ./internal/apiclient/ \
-		&& go test -tags apiclient ./internal/apiclient/ -count=1
+		&& go test -tags apiclient ./internal/apiclient/ -count=1; \
+		rc=$$?; rm -f $(CURDIR)/relay/internal/apiclient/client.gen.go; exit $$rc
 
 # OpenAPI contract gate (ci.yml: the relay job's OpenAPI steps). Validates docs/api/openapi.yaml as a
 # real OpenAPI 3.1 document and checks it against the route table the server
