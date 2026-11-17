@@ -96,43 +96,18 @@ func TestFleetE2E_Invariant4_ARelayRestartNeverRunsATaskTwice(t *testing.T) {
 	// reconnect racing the daemon's own backoff (base 1s/cap 30s) plus
 	// fr.restart's up-to-3 relaunch attempts, so poll with a more generous,
 	// still event-based ceiling dedicated to this wait.
-	deadline := time.Now().Add(60 * time.Second)
-	for {
+	reconnected := func() bool {
 		resp := fr.harness.call(t, map[string]any{"op": "get_node", "node_id": nodeID})
-		if connected, _ := resp["connected"].(bool); connected {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("get_node(%s).connected did not become true before deadline (daemon never reconnected on its own)", nodeID)
-		}
-		time.Sleep(200 * time.Millisecond)
+		connected, _ := resp["connected"].(bool)
+		return connected
+	}
+	if !pollUntil(60*time.Second, 200*time.Millisecond, reconnected) {
+		t.Fatalf("get_node(%s).connected did not become true before deadline (daemon never reconnected on its own)", nodeID)
 	}
 
 	// Poll query_job until the reconciled Task reaches resolved.
-	var task map[string]any
-	deadline = time.Now().Add(60 * time.Second)
-	for {
-		jobResp := fr.harness.call(t, map[string]any{"op": "query_job", "job_id": jobID})
-		tasks := toMapSlice(jobResp["tasks"])
-		if len(tasks) == 1 && tasks[0]["state"] == "resolved" {
-			task = tasks[0]
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("query_job(%s): Task did not reach resolved before deadline; last tasks = %v", jobID, tasks)
-		}
-		time.Sleep(200 * time.Millisecond)
-	}
-
-	if task["outcome"] != "OUTCOME_SUCCESS" {
-		t.Errorf("reconciled Task outcome = %v, want OUTCOME_SUCCESS (the daemon's benign dedup result)", task["outcome"])
-	}
-	stderr, _ := task["stderr"].(string)
-	const dedupSignal = "already processed"
-	if !strings.Contains(stderr, dedupSignal) {
-		t.Errorf("reconciled Task stderr = %q, want it to contain %q (daemon dedup signal — proof the Task was NOT re-run)",
-			stderr, dedupSignal)
-	}
+	task := waitForTaskResolved(t, fr.harness, jobID, 60*time.Second, 200*time.Millisecond)
+	assertDedupReplayResult(t, task)
 
 	// Node-side exactly-once: the marker script's echo only ever ran once,
 	// even though the Relay resent the in-flight Task on reconnect.

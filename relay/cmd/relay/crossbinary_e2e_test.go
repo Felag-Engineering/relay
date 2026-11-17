@@ -154,18 +154,33 @@ func startRelaySubprocessWithHostname(t *testing.T, layout *relaytest.RelayLayou
 	return nil, ""
 }
 
+// pollUntil calls done every interval until it returns true, and reports
+// false once timeout has passed without that. done always runs at least once,
+// and the call that gives up is the first one made after the deadline. It
+// never fails the test itself, so each caller's failure message can name the
+// state its last call observed.
+func pollUntil(timeout, interval time.Duration, done func() bool) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		if done() {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(interval)
+	}
+}
+
 // waitForSocket polls until path exists or deadline expires.
 func waitForSocket(t *testing.T, path string, deadline time.Duration) {
 	t.Helper()
-	end := time.Now().Add(deadline)
-	for {
-		if _, err := os.Stat(path); err == nil {
-			return
-		}
-		if time.Now().After(end) {
-			t.Fatalf("devharness socket %q did not appear within %v", path, deadline)
-		}
-		time.Sleep(20 * time.Millisecond)
+	exists := func() bool {
+		_, err := os.Stat(path)
+		return err == nil
+	}
+	if !pollUntil(deadline, 20*time.Millisecond, exists) {
+		t.Fatalf("devharness socket %q did not appear within %v", path, deadline)
 	}
 }
 
@@ -181,16 +196,49 @@ type harnessClient struct {
 
 func dialHarness(t *testing.T, sockPath string) *harnessClient {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		conn, err := net.Dial("unix", sockPath)
-		if err == nil {
-			return &harnessClient{conn: conn, r: bufio.NewReader(conn)}
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("dial devharness socket %q: %v", sockPath, err)
-		}
-		time.Sleep(20 * time.Millisecond)
+	var (
+		conn net.Conn
+		err  error
+	)
+	dialed := func() bool {
+		conn, err = net.Dial("unix", sockPath)
+		return err == nil
+	}
+	if !pollUntil(10*time.Second, 20*time.Millisecond, dialed) {
+		t.Fatalf("dial devharness socket %q: %v", sockPath, err)
+	}
+	return &harnessClient{conn: conn, r: bufio.NewReader(conn)}
+}
+
+// waitForTaskResolved polls query_job until jobID has exactly one Task and it
+// is resolved, and returns that Task.
+func waitForTaskResolved(t *testing.T, harness *harnessClient, jobID string, timeout, interval time.Duration) map[string]any {
+	t.Helper()
+	var tasks []map[string]any
+	resolved := func() bool {
+		jobResp := harness.call(t, map[string]any{"op": "query_job", "job_id": jobID})
+		tasks = toMapSlice(jobResp["tasks"])
+		return len(tasks) == 1 && tasks[0]["state"] == "resolved"
+	}
+	if !pollUntil(timeout, interval, resolved) {
+		t.Fatalf("query_job(%s): Task did not reach resolved before deadline; last tasks = %v", jobID, tasks)
+	}
+	return tasks[0]
+}
+
+// assertDedupReplayResult checks that a Task resent after a Relay crash was
+// answered by the daemon's dedup record rather than run again: a success
+// outcome whose stderr carries the daemon's already-processed signal.
+func assertDedupReplayResult(t *testing.T, task map[string]any) {
+	t.Helper()
+	if task["outcome"] != "OUTCOME_SUCCESS" {
+		t.Errorf("reconciled Task outcome = %v, want OUTCOME_SUCCESS (the daemon's benign dedup result)", task["outcome"])
+	}
+	stderr, _ := task["stderr"].(string)
+	const dedupSignal = "already processed"
+	if !strings.Contains(stderr, dedupSignal) {
+		t.Errorf("reconciled Task stderr = %q, want it to contain %q (daemon dedup signal — proof the Task was NOT re-run)",
+			stderr, dedupSignal)
 	}
 }
 

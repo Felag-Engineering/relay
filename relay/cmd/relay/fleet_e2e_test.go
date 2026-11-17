@@ -129,55 +129,51 @@ func startDaemonSubprocess(t *testing.T, daemonBin, joinString, stateDir, policy
 	})
 }
 
+// harnessPollInterval is how often the fleet suite's waitFor helpers re-ask the
+// devharness socket.
+const harnessPollInterval = 50 * time.Millisecond
+
 // waitForConnected polls list_connected until at least n Nodes are present,
 // returning their node_ids.
 func waitForConnected(t *testing.T, harness *harnessClient, n int) []string {
 	t.Helper()
-	deadline := time.Now().Add(30 * time.Second)
-	for {
+	var nodeIDs []string
+	enough := func() bool {
 		resp := harness.call(t, map[string]any{"op": "list_connected"})
-		nodeIDs := toStringSlice(resp["node_ids"])
-		if len(nodeIDs) >= n {
-			return nodeIDs
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("list_connected: got %d node(s) %v, want >= %d before deadline", len(nodeIDs), nodeIDs, n)
-		}
-		time.Sleep(50 * time.Millisecond)
+		nodeIDs = toStringSlice(resp["node_ids"])
+		return len(nodeIDs) >= n
 	}
+	if !pollUntil(30*time.Second, harnessPollInterval, enough) {
+		t.Fatalf("list_connected: got %d node(s) %v, want >= %d before deadline", len(nodeIDs), nodeIDs, n)
+	}
+	return nodeIDs
 }
 
 // waitForNodeConnected polls get_node(nodeID).connected until it equals want.
 func waitForNodeConnected(t *testing.T, harness *harnessClient, nodeID string, want bool) {
 	t.Helper()
-	deadline := time.Now().Add(15 * time.Second)
-	for {
+	var connected bool
+	matches := func() bool {
 		resp := harness.call(t, map[string]any{"op": "get_node", "node_id": nodeID})
-		connected, _ := resp["connected"].(bool)
-		if connected == want {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("get_node(%s).connected = %v, want %v before deadline", nodeID, connected, want)
-		}
-		time.Sleep(50 * time.Millisecond)
+		connected, _ = resp["connected"].(bool)
+		return connected == want
+	}
+	if !pollUntil(15*time.Second, harnessPollInterval, matches) {
+		t.Fatalf("get_node(%s).connected = %v, want %v before deadline", nodeID, connected, want)
 	}
 }
 
 // waitForFrozen polls get_freeze until it equals want.
 func waitForFrozen(t *testing.T, harness *harnessClient, want bool) {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for {
+	var frozen bool
+	matches := func() bool {
 		resp := harness.call(t, map[string]any{"op": "get_freeze"})
-		frozen, _ := resp["frozen"].(bool)
-		if frozen == want {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("get_freeze = %v, want %v before deadline", frozen, want)
-		}
-		time.Sleep(50 * time.Millisecond)
+		frozen, _ = resp["frozen"].(bool)
+		return frozen == want
+	}
+	if !pollUntil(10*time.Second, harnessPollInterval, matches) {
+		t.Fatalf("get_freeze = %v, want %v before deadline", frozen, want)
 	}
 }
 
@@ -190,41 +186,40 @@ func waitForFrozen(t *testing.T, harness *harnessClient, want bool) {
 // Job across a Relay restart (crash-mid-Job).
 func waitForInFlightJobID(t *testing.T, harness *harnessClient) string {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for {
+	var jobID string
+	found := func() bool {
 		resp := harness.call(t, map[string]any{"op": "list_inflight"})
 		for _, tk := range toMapSlice(resp["tasks"]) {
-			if jobID, _ := tk["job_id"].(string); jobID != "" {
-				return jobID
+			if id, _ := tk["job_id"].(string); id != "" {
+				jobID = id
+				return true
 			}
 		}
-		if time.Now().After(deadline) {
-			t.Fatal("list_inflight: no in-flight task appeared before deadline")
-		}
-		time.Sleep(50 * time.Millisecond)
+		return false
 	}
+	if !pollUntil(10*time.Second, harnessPollInterval, found) {
+		t.Fatal("list_inflight: no in-flight task appeared before deadline")
+	}
+	return jobID
 }
 
 // waitForInFlightTasks polls list_inflight until jobID has n Tasks in flight
 // (Dispatched, no Result yet), or fails at a 10s deadline.
 func waitForInFlightTasks(t *testing.T, harness *harnessClient, jobID string, n int) {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for {
+	var count int
+	enough := func() bool {
 		resp := harness.call(t, map[string]any{"op": "list_inflight"})
-		count := 0
+		count = 0
 		for _, tk := range toMapSlice(resp["tasks"]) {
 			if id, _ := tk["job_id"].(string); id == jobID {
 				count++
 			}
 		}
-		if count >= n {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("list_inflight: job %s has %d in-flight tasks, want %d before deadline", jobID, count, n)
-		}
-		time.Sleep(50 * time.Millisecond)
+		return count >= n
+	}
+	if !pollUntil(10*time.Second, harnessPollInterval, enough) {
+		t.Fatalf("list_inflight: job %s has %d in-flight tasks, want %d before deadline", jobID, count, n)
 	}
 }
 
@@ -698,30 +693,8 @@ func TestFleetE2E_Invariant4_ARelayAndDaemonRestartNeverRunsATaskTwice(t *testin
 	daemon.Relaunch()
 
 	// Poll query_job until the Task reaches Resolved.
-	var task map[string]any
-	deadline := time.Now().Add(30 * time.Second)
-	for {
-		jobResp := fr.harness.call(t, map[string]any{"op": "query_job", "job_id": jobID})
-		tasks := toMapSlice(jobResp["tasks"])
-		if len(tasks) == 1 && tasks[0]["state"] == "resolved" {
-			task = tasks[0]
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("query_job(%s): Task did not reach resolved before deadline; last tasks = %v", jobID, tasks)
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-
-	if task["outcome"] != "OUTCOME_SUCCESS" {
-		t.Errorf("reconciled Task outcome = %v, want OUTCOME_SUCCESS (the daemon's benign dedup result)", task["outcome"])
-	}
-	stderr, _ := task["stderr"].(string)
-	const dedupSignal = "already processed"
-	if !strings.Contains(stderr, dedupSignal) {
-		t.Errorf("reconciled Task stderr = %q, want it to contain %q (daemon dedup signal — proof the Task was NOT re-run)",
-			stderr, dedupSignal)
-	}
+	task := waitForTaskResolved(t, fr.harness, jobID, 30*time.Second, 100*time.Millisecond)
+	assertDedupReplayResult(t, task)
 
 	// The Relay was killed with -9 between dispatch and the outcome append:
 	// the intent row (committed with the Task) survived, and no outcome row
