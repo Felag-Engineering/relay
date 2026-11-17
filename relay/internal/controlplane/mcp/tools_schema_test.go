@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -14,13 +15,13 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/nodestate"
 )
 
-// TestMCP_ExecutionToolsInputSchemaConstraints is the schema half of the
-// #120 legibility floor (#189): raw_exec/run_operation's advertised
-// InputSchema must be STRICTER than the reflect-inferred defaults on the two
-// fields the reflector gets wrong for this RCE surface — raw_exec.argv must
-// never advertise a "null" variant (argv is required) and timeout_seconds
-// must advertise the real [0, 86400] bound (ADR-0012's documented default),
-// not the int32 min/max a bare int32 field infers to. InputSchema arrives
+// TestMCP_ExecutionToolsInputSchemaConstraints pins what raw_exec and
+// run_operation's advertised InputSchema bounds. The go-sdk validates input
+// against this schema before the handler runs, so a bound here is an unaudited
+// refusal by the adapter. The schema therefore bounds only what the adapter
+// decides: wait_seconds (EX-69) and the advertised timeout. argv presence and
+// the idempotency key's length are the layer's (EX-67; the key store's
+// IdempotencyKeyError), so the schema leaves both open. InputSchema arrives
 // over the transport as map[string]any (json.RawMessage decoded generically
 // by the SDK), so it is re-marshalled into a *jsonschema.Schema here for a
 // clean assertion rather than poking at the map directly.
@@ -49,11 +50,16 @@ func TestMCP_ExecutionToolsInputSchemaConstraints(t *testing.T) {
 	if !ok {
 		t.Fatalf("raw_exec InputSchema has no %q property", "argv")
 	}
-	if argv.Type != "array" {
-		t.Errorf("raw_exec argv Type = %q, want %q", argv.Type, "array")
+	if slices.Contains(rawExec.Required, "argv") {
+		t.Errorf("raw_exec Required = %v, want argv absent: an omitted argv is the layer's refusal, audited", rawExec.Required)
 	}
-	if len(argv.Types) != 0 {
-		t.Errorf("raw_exec argv Types = %v, want none (no null variant — argv is required)", argv.Types)
+	for _, want := range []string{"null", "array"} {
+		if !slices.Contains(argv.Types, want) {
+			t.Errorf("raw_exec argv Types = %v, want %q admitted so an omitted or null argv reaches the layer", argv.Types, want)
+		}
+	}
+	if !strings.Contains(argv.Description, "non-empty") {
+		t.Errorf("raw_exec argv Description = %q, want it to say argv must be non-empty", argv.Description)
 	}
 
 	for _, toolName := range []string{"raw_exec", "run_operation"} {
@@ -87,8 +93,11 @@ func TestMCP_ExecutionToolsInputSchemaConstraints(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s InputSchema has no %q property", toolName, "idempotency_key")
 		}
-		if key.MaxLength == nil || *key.MaxLength != 128 {
-			t.Errorf("%s idempotency_key MaxLength = %v, want 128", toolName, key.MaxLength)
+		if key.MaxLength != nil {
+			t.Errorf("%s idempotency_key MaxLength = %v, want none: a key over the bound is the layer's audited refusal", toolName, *key.MaxLength)
+		}
+		if !strings.Contains(key.Description, "128") {
+			t.Errorf("%s idempotency_key Description = %q, want it to state the 128-byte bound", toolName, key.Description)
 		}
 	}
 }

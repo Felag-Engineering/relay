@@ -110,9 +110,12 @@ paths:
         preflight (`plan: true`), with an empty Selector is refused with `400`
         before anything resolves; name `node:os=linux` to reach the whole fleet.
 
-        Argument NAMES are validated against the Operation's published
-        constraints before dispatch, so a misspelled argument is a `400` rather
-        than a Policy denial. See `GET /api/v1/operations`… (vocabulary
+        The capability layer checks argument names and refuses a misspelled,
+        unknown or missing-required name with `400` (title
+        `invalid operation request`), audited as a refusal and never a Policy
+        denial. It does so after authorization (an unauthorized caller gets
+        `403`) and, on a dispatch, after a zero-match Selector's `422`. With
+        `plan: true` the check runs whatever matched. See `GET /api/v1/operations`… (vocabulary
         discovery is an MCP surface today; the argument names and constraints
         are the same on both).
       requestBody:
@@ -165,6 +168,10 @@ paths:
         `would_be_rejected.reason: no_nodes_matched`. A dispatch, or a Policy
         preflight (`plan: true`), with an empty Selector is refused with `400`
         before anything resolves; name `node:os=linux` to reach the whole fleet.
+
+        An empty or omitted `argv` is refused with `400` (title
+        `invalid operation request`), audited, after authorization (an operator
+        gets `403`) and, on a dispatch, after a zero-match `422`.
       requestBody:
         required: true
         content:
@@ -975,7 +982,8 @@ components:
       description: |
         Malformed request — a body not declared `Content-Type: application/json`,
         bad JSON, an unknown field, an invalid Selector, an empty Selector on a
-        dispatch or Policy preflight, or an invalid Operation argument name.
+        dispatch or Policy preflight, an invalid Operation argument name, or an
+        empty Raw Exec argv.
       content:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }
@@ -1281,10 +1289,11 @@ components:
           type: object
           additionalProperties: { type: string }
           description: |
-            Named Operation arguments. Names are validated against the
-            Operation's published constraints before dispatch; an unknown or
-            missing-required name is a `400`, never a Policy denial. Values are
-            the daemon's to accept or refuse.
+            Named Operation arguments. The capability layer checks the names
+            against the Operation's published constraints; an unknown or
+            missing-required name is a `400` (title `invalid operation
+            request`), audited as a refusal and never a Policy denial. Values
+            are the daemon's to accept or refuse.
           examples: [{ unit: "nginx" }]
         timeout_seconds:
           type: integer
@@ -1309,7 +1318,8 @@ components:
           items: { type: string }
           description: |
             Executed verbatim on each matched Node — no shell, no client-side
-            splitting (ADR-0001).
+            splitting (ADR-0001). Must be non-empty; an empty argv is a `400`
+            with title `invalid operation request`.
           examples: [["/usr/bin/systemctl", "status", "nginx"]]
         timeout_seconds:
           type: integer

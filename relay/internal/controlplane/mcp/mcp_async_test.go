@@ -299,8 +299,11 @@ func TestMCP_RunOperation_IdempotencyKeyRefusals(t *testing.T) {
 		res, err := session.CallTool(ctx, &sdkmcp.CallToolParams{Name: "run_operation", Arguments: map[string]any{
 			"selector": capability.WholeFleetSelector, "operation": "system.facts", "idempotency_key": strings.Repeat("k", 129),
 		}})
-		if err == nil && !res.IsError {
-			t.Fatal("a 129-byte key was accepted; the schema must refuse it")
+		if err != nil || !res.IsError || !strings.Contains(toolErrorText(t, res), "invalid idempotency key") {
+			t.Fatalf("a 129-byte key: want the layer's invalid-idempotency-key tool error, got err=%v res=%+v", err, res)
+		}
+		if n := countAudit(t, ts, audit.KindRefusal); n != 1 {
+			t.Errorf("refusal records = %d, want 1: the layer audits the refusal", n)
 		}
 		if n := countAudit(t, ts, audit.KindDispatchIntent); n != 0 {
 			t.Errorf("dispatch_intent records = %d, want 0", n)

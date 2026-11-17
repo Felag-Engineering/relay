@@ -548,12 +548,15 @@ func TestControlAPI_ExecutionRoutesAreWired(t *testing.T) {
 	t.Run("a malformed operation is a 400, never a Policy verdict", func(t *testing.T) {
 		// #345's trap, asserted end-to-end on this surface: a misspelled
 		// argument name must be refused as malformed input before it can reach
-		// a Node and come back as denied_by_policy.
+		// a Node and come back as denied_by_policy. No Node is enrolled here, so
+		// a real dispatch would get no_nodes_matched first (EX-3); a preflight
+		// refuses a malformed call whatever matched (PF-13).
 		resp := controlAPIRequest(t, client, http.MethodPost, base+"/api/v1/operations",
 			credential, map[string]any{
 				"selector":  e2eFleetSelector,
 				"operation": "service.restart",
 				"args":      map[string]string{"unitt": "nginx"},
+				"plan":      true,
 			})
 		defer resp.Body.Close()
 

@@ -52,7 +52,7 @@ func TestCapability_ReadsReachSettingsPerRequest(t *testing.T) {
 			authz: &spyAuthorizer{}, audit: &spyAuditSink{}, freeze: &fakeFreezeStore{},
 			jobsRepo: jobsRepo, tasksRepo: tasksRepo, conduit: conduit})
 		sel := Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "web"}}}
-		act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "service.restart"}
+		act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "service.restart", OperationArgs: map[string]string{"unit": "nginx"}}
 
 		var capErr *CapExceededError
 		if _, err := svc.Run(context.Background(), alice, sel, act); !errors.As(err, &capErr) || capErr.Cap != 3 {

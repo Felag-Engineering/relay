@@ -160,6 +160,9 @@ func TestRunBlastCapRejectsOversizedSelector(t *testing.T) {
 
 			sel := Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "web"}}}
 			act := jobs.Action{Kind: jobs.ActionOperation, OperationName: tt.operation}
+			if tt.operation == "service.restart" {
+				act.OperationArgs = map[string]string{"unit": "nginx"}
+			}
 			_, err := svc.Run(context.Background(), Principal{Account: "alice"}, sel, act)
 
 			if err == nil {

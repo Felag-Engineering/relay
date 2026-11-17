@@ -165,6 +165,28 @@ type spyAuditSink struct {
 	accountAdminCalls []accountAdminCall
 }
 
+func (a *spyAuditSink) kinds() []AuditKind {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	out := make([]AuditKind, 0, len(a.entries))
+	for _, e := range a.entries {
+		out = append(out, e.Kind)
+	}
+	return out
+}
+
+func (a *spyAuditSink) refusalReasons() []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	var out []string
+	for _, e := range a.entries {
+		if e.Kind == AuditKindRefusal {
+			out = append(out, e.Reason)
+		}
+	}
+	return out
+}
+
 // accountAdminCall records one RecordAccountAdmin invocation's arguments
 // (#653).
 type accountAdminCall struct {
@@ -477,7 +499,7 @@ func TestRunThreadsPrincipalToAudit(t *testing.T) {
 
 	principal := Principal{Account: "alice", Role: "operator"}
 	sel := Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "web"}}}
-	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "service.restart"}
+	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "service.restart", OperationArgs: map[string]string{"unit": "nginx"}}
 
 	results, err := svc.Run(context.Background(), principal, sel, act)
 	if err != nil {
@@ -544,7 +566,7 @@ func TestRunAuditsPartialResultsOnDispatchError(t *testing.T) {
 
 	principal := Principal{Account: "alice"}
 	sel := Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "web"}}}
-	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "service.restart"}
+	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "service.restart", OperationArgs: map[string]string{"unit": "nginx"}}
 
 	results, err := svc.Run(context.Background(), principal, sel, act)
 	if err == nil {

@@ -120,9 +120,8 @@ func Operations() []Descriptor {
 }
 
 // Lookup returns the Descriptor for name, or ok=false when name is not in the
-// native vocabulary. It is the shared name resolution both control surfaces
-// use before building an Action, so "unknown operation" reads identically on
-// MCP and the Control API.
+// native vocabulary. It is the capability layer's resolution of a Native name:
+// class, call shape and Template detection.
 //
 // Native vocabulary only (frozen at four, ADR-0021): a Template Operation is
 // per-Node and is NOT resolvable here — a surface that supports templates must
@@ -140,14 +139,14 @@ func Lookup(name string) (Descriptor, bool) {
 // ArgConstraints: every provided name must be one d declares, and every
 // declared required name must be provided.
 //
-// It exists here — beside the ArgConstraints convention it reads — because
-// **every** control surface needs it and a per-surface copy would drift
-// (ADR-0042). Without it, an unknown arg name is silently dropped and a
+// It lives beside the ArgConstraints convention it reads, and its only callers
+// are in the capability layer (the Native call-shape check and Template
+// resolution). An adapter never calls it (invariant 10, enforced by a forbidigo
+// pattern). Without the check, an unknown arg name is silently dropped and a
 // misspelled REQUIRED name defaults to empty, so the daemon's refusal surfaces
 // as `denied_by_policy` rather than a validation error — sending the AI-agent into a
 // describe_node/narrow/retry loop it could never exit, because the request was
-// malformed rather than forbidden. A second surface re-implementing this would
-// reopen the same trap on its own schedule.
+// malformed rather than forbidden.
 //
 // **Names only — never values.** This is a fail-fast legibility pre-check, not
 // a second Policy decision (ADR-0002/0011, invariant 12): argument *values* are

@@ -10,7 +10,6 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/capability"
 	"github.com/Felag-Engineering/relay/relay/internal/controlplane"
 	"github.com/Felag-Engineering/relay/relay/internal/jobs"
-	"github.com/Felag-Engineering/relay/relay/internal/opvocab"
 )
 
 // execution.go is the Control API's execution slice (ADR-0010): the REST
@@ -257,11 +256,9 @@ func handleRunOperation(d Deps) http.HandlerFunc {
 
 		act, err := buildOperationAction(req.Operation, req.Args, req.TimeoutSeconds)
 		if err != nil {
-			// Unknown operation name, unknown/missing argument name, or an
-			// out-of-range timeout: all malformed input, never a Policy verdict.
-			// Rendering these as 400 rather than letting them reach dispatch is
-			// what keeps a misspelled argument from coming back as
-			// denied_by_policy.
+			// An empty operation name or an out-of-range timeout: malformed
+			// input, never a Policy verdict. Argument names are the capability
+			// layer's, which refuses and audits them.
 			writeProblem(w, http.StatusBadRequest, "invalid operation request", err.Error())
 			return
 		}
@@ -278,6 +275,10 @@ func handleRunOperation(d Deps) http.HandlerFunc {
 // every surface (see this file's header). An operator's call therefore reaches
 // the capability layer and comes back as a 403 refusal, audited as a refusal
 // like any other — which is the behaviour the acceptance criterion pins.
+//
+// An empty or omitted argv is not refused here either: it reaches the
+// capability layer, which refuses it as a malformed call and audits it (EX-67),
+// and writeExecError renders that as 400 "invalid operation request".
 func handleRawExec(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		p, ok := principal(w, r)
@@ -289,12 +290,6 @@ func handleRawExec(d Deps) http.HandlerFunc {
 		if !readJSONBody(w, r, &req) {
 			return
 		}
-		if len(req.Argv) == 0 {
-			writeProblem(w, http.StatusBadRequest, "argv required",
-				"raw_exec requires a non-empty argv; it is executed verbatim, never through a shell (ADR-0001)")
-			return
-		}
-
 		sel, err := capability.ParseSelector(req.Selector)
 		if err != nil {
 			writeProblem(w, http.StatusBadRequest, "invalid selector", err.Error())
@@ -392,44 +387,19 @@ func dispatchOrPlan(w http.ResponseWriter, r *http.Request, d Deps, p capability
 // Action construction
 // ---------------------------------------------------------------------------
 
-// buildOperationAction resolves a Native name in the Operation vocabulary,
-// validates the argument NAMES, and builds the jobs.Action. This adapter
-// decides no risk class for any Operation (ADR-0012, invariant 13): the
-// capability layer derives it. Any other name is a Template Operation and is
-// forwarded with no argument check: the capability layer decides that too
-// (ADR-0042, invariant 10).
-//
-// Both checks are fail-fast legibility pre-checks, never a second Policy
-// decision (ADR-0002/0011, invariant 12): the daemon's live engine remains the
-// gate on argument VALUES. The name validation is [opvocab.ValidateArgNames] —
-// the same function the MCP surface calls — so a misspelled argument cannot
-// come back as denied_by_policy on one surface and a clean 400 on the other.
+// buildOperationAction builds the jobs.Action for an operation request. This
+// adapter decides nothing about argument names or class: the capability layer
+// refuses a malformed call (EX-64, EX-61) and fixes every risk class
+// (ADR-0012, invariants 10 and 13), so no class is set here. It never reads
+// argument values (ADR-0011, invariant 12).
 func buildOperationAction(name string, args map[string]string, timeoutSeconds int32) (jobs.Action, error) {
 	timeout, err := controlplane.ResolveTimeoutSeconds(timeoutSeconds)
 	if err != nil {
 		return jobs.Action{}, err
 	}
-
-	d, ok := opvocab.Lookup(name)
-	if !ok {
-		// Not Native, so a Template Operation (ADR-0021). This adapter decides
-		// nothing about it (ADR-0042, invariant 10): no risk class, no
-		// argument check — the capability layer resolves both over the
-		// matched Nodes' own reports, and refuses a name none of them reports.
-		if name == "" {
-			return jobs.Action{}, fmt.Errorf("operation is required")
-		}
-		return jobs.Action{
-			Kind:           jobs.ActionOperation,
-			OperationName:  name,
-			OperationArgs:  args,
-			TimeoutSeconds: timeout,
-		}, nil
+	if name == "" {
+		return jobs.Action{}, fmt.Errorf("operation is required")
 	}
-	if err := opvocab.ValidateArgNames(d, args); err != nil {
-		return jobs.Action{}, err
-	}
-
 	return jobs.Action{
 		Kind:           jobs.ActionOperation,
 		OperationName:  name,
@@ -459,6 +429,9 @@ func buildOperationAction(name string, args map[string]string, timeoutSeconds in
 //     title as an unparseable Selector; nothing resolved and no Job exists.
 //   - Unauthorized    → 403 Forbidden: the role ladder refused (authz.RoleGate)
 //     — an operator reaching for Raw Exec lands here.
+//   - Malformed call or unknown operation → 400 Bad Request, title "invalid
+//     operation request": a refusal the capability layer decided after
+//     authorization, never a Policy verdict.
 //   - anything else   → 500.
 //
 // Detail carries the error's own text: these are rule statements (which role
@@ -487,10 +460,11 @@ func writeExecError(w http.ResponseWriter, err error) {
 		writeProblem(w, http.StatusUnprocessableEntity, "no nodes matched", err.Error())
 		return
 	}
-	// A Template no matched Node reports, or a Template call whose argument
-	// names do not fit its slots (ADR-0042): malformed input, refused by the
-	// capability layer after authorization, never a Policy verdict — the same
-	// 400 an unknown Native argument gets at this adapter.
+	// A Template no matched Node reports, or a malformed call: a Native call
+	// whose argument names do not match (EX-64), a Raw Exec call with an empty
+	// argv (EX-67) or a Template call that does not fit its slots (EX-61).
+	// Malformed input, refused by the capability layer after authorization,
+	// never a Policy verdict.
 	var unknownErr *capability.UnknownOperationError
 	var malformedErr *capability.MalformedCallError
 	if errors.As(err, &unknownErr) || errors.As(err, &malformedErr) {

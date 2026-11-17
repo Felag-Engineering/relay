@@ -194,10 +194,10 @@ differs from an outcome, where a Job ran and a Node failed; a cancel refusal lea
 - **EX-61** A Template call whose reporting Nodes disagree on its slots is refused as a vocabulary
   disagreement naming two Nodes that disagree; one whose argument names do not match the slots is
   refused as malformed. Both are audited.
-- **EX-63** A Native call with an unknown or missing argument name is refused by the MCP or
-  Control API adapter as an invalid request, before the pipeline runs, and is not audited.
-- **EX-65** A Raw Exec call with an empty argv is refused by the MCP or Control API adapter as an
-  invalid request, before the pipeline runs, and is not audited.
+- **EX-64** A Native call with an unknown or missing argument name is refused as malformed in the
+  capability layer, at the stage of EX-61, and the refusal is audited.
+- **EX-67** A Raw Exec call with an empty argv is refused as malformed in the capability layer, at
+  the stage of EX-61, and the refusal is audited.
 - **EX-52** A Principal whose role does not permit the Action is refused
   (`accounts-and-access.md`); Raw Exec needs `admin`.
 - **EX-53** An idempotency key reused by the same Account within its window with different
@@ -216,9 +216,7 @@ differs from an outcome, where a Job ran and a Node failed; a cancel refusal lea
 | EX-57 | A Control API dispatch returns its Job ID once the Tasks are stored, after an optional bounded wait, and the caller reads the rest from the Jobs route. Replaces EX-36 when promoted. | v0.2.2 |
 | EX-58 | A Control API dispatch accepts an `Idempotency-Key` header under the rule of EX-9 and EX-53. | v0.2.2 |
 | EX-59 | A dispatch asking for a Task timeout above 300 seconds is refused in the capability layer, at the stage of EX-61, naming the ceiling. | v0.2.2 |
-| EX-64 | A Native call with an unknown or missing argument name is refused as malformed in the capability layer, at the stage of EX-61, and the refusal is audited. Replaces EX-63 when promoted. | v0.2.2 |
 | EX-66 | A dispatch whose outcome write fails after it has returned its Job ID records the failure on the Job where the store can still write it, and `get_job` and the Jobs route show it. Replaces EX-68 when promoted. | v0.2.2 |
-| EX-67 | A Raw Exec call with an empty argv is refused as malformed in the capability layer, at the stage of EX-61, and the refusal is audited. Replaces EX-65 when promoted. | v0.2.2 |
 
 ## Out of scope
 
@@ -247,11 +245,17 @@ differs from an outcome, where a Job ran and a Node failed; a cancel refusal lea
 <!-- proof:begin -->
 | Claim | Proven by | Seam |
 |---|---|---|
+| EX-3 | `TestStart_MalformedCallMatchingNoNodeIsRefusedAsNoNodesMatched` | capability |
+| EX-52 | `TestCallShape_EmptyArgvFromAnOperatorIsUnauthorized` | capability |
 | EX-60 | `TestMCP_ListOperationsSaysArgumentsAreAuditedVerbatim` | MCP |
+| EX-64 | `TestCallShape_MalformedNativeCallFromUnauthorizedCallerIsUnauthorized`, `TestCallShape_MalformedNativeCallIsRefusedAuditedWithNoJob`, `TestControlAPI_CallShapeRefusalRendersIdenticallyOnBothSurfaces`, `TestPlan_UndeclaredNativeArgumentIsRefusedBeforeAnyNodeIsQueried`, `TestRunOperation_ArgumentNamesReachTheCapabilityLayer`, `TestRunOperation_TemplateRefusalsAreBadRequests`, `TestStart_MalformedCallMatchingNoNodeIsRefusedAsNoNodesMatched` | API, Relay, capability |
+| EX-67 | `TestCallShape_EmptyArgvFromAnOperatorIsUnauthorized`, `TestCallShape_EmptyRawExecArgvIsRefusedAuditedWithNoJob`, `TestControlAPI_CallShapeRefusalRendersIdenticallyOnBothSurfaces`, `TestMCP_ExecutionToolsInputSchemaConstraints`, `TestMCP_RawExec_EmptyArgvIsRefusedByTheLayer`, `TestRawExec_EmptyArgvReachesTheCapabilityLayer`, `TestStart_MalformedCallMatchingNoNodeIsRefusedAsNoNodesMatched` | API, MCP, Relay, capability |
+| EX-69 | `TestMCP_ExecutionToolsInputSchemaConstraints` | MCP |
 
-Unproven: EX-1, EX-2, EX-3, EX-4, EX-5, EX-6, EX-7, EX-8, EX-9, EX-10, EX-11, EX-12, EX-13, EX-14, EX-15, EX-16, EX-17, EX-18, EX-19, EX-20, EX-21, EX-22, EX-23, EX-24, EX-25, EX-26, EX-27, EX-28, EX-29, EX-30, EX-31, EX-32, EX-33, EX-34, EX-35, EX-36, EX-37, EX-38, EX-39, EX-40, EX-41, EX-42, EX-43, EX-44, EX-45, EX-46, EX-47, EX-48, EX-49, EX-50, EX-51, EX-52, EX-53, EX-54, EX-55, EX-56, EX-61, EX-62, EX-63, EX-65, EX-68, EX-69.
+Unproven: EX-1, EX-2, EX-4, EX-5, EX-6, EX-7, EX-8, EX-9, EX-10, EX-11, EX-12, EX-13, EX-14, EX-15, EX-16, EX-17, EX-18, EX-19, EX-20, EX-21, EX-22, EX-23, EX-24, EX-25, EX-26, EX-27, EX-28, EX-29, EX-30, EX-31, EX-32, EX-33, EX-34, EX-35, EX-36, EX-37, EX-38, EX-39, EX-40, EX-41, EX-42, EX-43, EX-44, EX-45, EX-46, EX-47, EX-48, EX-49, EX-50, EX-51, EX-53, EX-54, EX-55, EX-56, EX-61, EX-62, EX-68.
 <!-- proof:end -->
 
 ## Retired
 
-None.
+- **EX-63** — `2026-11-16` — a Native bad argument name refused by an adapter; replaced by EX-64.
+- **EX-65** — `2026-11-16` — a Raw Exec empty argv refused by an adapter; replaced by EX-67.

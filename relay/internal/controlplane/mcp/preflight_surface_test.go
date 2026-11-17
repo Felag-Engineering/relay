@@ -327,9 +327,9 @@ func TestApproveRequestIsNotRegistered(t *testing.T) {
 
 // TestBuildOperationAction_IllFormedArgValueIsNotRefused is the surface-side
 // link of PF-13's value half: "an ill-formed argument value is NOT refused
-// by the Relay" — the mirror of TestBuildOperationAction_UnknownArgOnAValidCallIsRejected,
-// which proves the name half. opvocab.ValidateArgNames (the only Relay-side
-// argument check both surfaces call) checks unknown/missing NAMES and
+// by the Relay" — the mirror of TestPlan_UndeclaredNativeArgumentIsRefusedBeforeAnyNodeIsQueried,
+// which proves the name half. The capability layer's call-shape check (the
+// only Relay-side argument check) checks unknown/missing NAMES and
 // inspects no value at all, so a well-named, ill-formed value must sail
 // through unchanged — it is the daemon's business, never the Relay's
 // (invariant 12, ADR-0011).
@@ -358,7 +358,7 @@ func TestBuildOperationAction_IllFormedArgValueIsNotRefused(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			act, err := buildOperationAction(stubOpsLister{}, tc.operation, tc.args, 0)
+			act, err := buildOperationAction(tc.operation, tc.args, 0)
 			if err != nil {
 				t.Fatalf("buildOperationAction(%s, %v) = %v, want no error — an ill-formed VALUE is the daemon's business, not the Relay's (PF-13, invariant 12)", tc.operation, tc.args, err)
 			}

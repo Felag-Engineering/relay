@@ -382,14 +382,14 @@ func TestToolCallMiddleware_HandlerError_StillPublishesOneEvent(t *testing.T) {
 	ts, _ := newObservedServer(t, "node-1", "", obs)
 	session := ts.connect(t)
 
-	// Empty argv is raw_exec's own input-validation failure
-	// ("argv must not be empty") — a tool-level error, not a transport one.
+	// A Selector with no namespace prefix fails ParseSelector in the handler
+	// — a tool-level error, not a transport one.
 	res := callTool(t, session, "raw_exec", map[string]any{
-		"selector": "node:role=web",
-		"argv":     []any{},
+		"selector": "role=web",
+		"argv":     []any{"/usr/bin/true"},
 	})
 	if !res.IsError {
-		t.Fatal("expected raw_exec with empty argv to fail")
+		t.Fatal("expected raw_exec with an invalid Selector to fail")
 	}
 
 	events := obs.snapshot()

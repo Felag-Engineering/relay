@@ -804,4 +804,64 @@ func TestMCP_EmptySelectorIsRefusedOnEveryExecutionTool(t *testing.T) {
 	}
 }
 
+// TestMCP_RawExec_EmptyArgvIsRefusedByTheLayer proves an omitted, null and
+// empty argv each reach the capability layer, which refuses the call as
+// malformed and audits it, with and without plan: no Task sent, no Node
+// queried, one refusal record and no dispatch or park (EX-67).
+//
+// Proves EX-67.
+func TestMCP_RawExec_EmptyArgvIsRefusedByTheLayer(t *testing.T) {
+	argvs := map[string]func(map[string]any){
+		"omitted": func(map[string]any) {},
+		"null":    func(a map[string]any) { a["argv"] = nil },
+		"empty":   func(a map[string]any) { a["argv"] = []string{} },
+	}
+	for name, setArgv := range argvs {
+		for _, plan := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/plan=%v", name, plan), func(t *testing.T) {
+				ts := newTestServer(t)
+				ts.conduit.connect(ts.nodeA, ts.nodeB)
+				session := ts.connect(t)
+
+				args := map[string]any{"selector": capability.WholeFleetSelector, "plan": plan}
+				setArgv(args)
+				res := callTool(t, session, "raw_exec", args)
+
+				if !res.IsError {
+					t.Fatal("IsError = false, want a tool error")
+				}
+				text := toolErrorText(t, res)
+				if !strings.Contains(text, "malformed call") || !strings.Contains(text, "argv") {
+					t.Errorf("error = %q, want a malformed-call refusal naming argv", text)
+				}
+				for _, id := range []string{ts.nodeA, ts.nodeB} {
+					if n := ts.conduit.dispatchCount(id); n != 0 {
+						t.Errorf("%s was sent %d Tasks, want 0", id, n)
+					}
+				}
+				if q := ts.conduit.queriedNodes(); len(q) != 0 {
+					t.Errorf("Nodes queried = %v, want none", q)
+				}
+
+				records, err := ts.store.Audit().List(context.Background())
+				if err != nil {
+					t.Fatalf("Audit().List: %v", err)
+				}
+				refusals := 0
+				for _, rec := range records {
+					switch rec.Kind {
+					case audit.KindRefusal:
+						refusals++
+					case audit.KindDispatch, audit.KindDispatchIntent, audit.KindApprovalRequested:
+						t.Errorf("found a %s record for an empty argv: %+v", rec.Kind, rec)
+					}
+				}
+				if refusals != 1 {
+					t.Errorf("refusal records = %d, want exactly 1 among %+v", refusals, records)
+				}
+			})
+		}
+	}
+}
+
 func ptr[T any](v T) *T { return &v }

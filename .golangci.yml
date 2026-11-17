@@ -120,6 +120,12 @@ linters:
         - pattern: ^audit\.TagWriteAppender$
           pkg: ^github\.com/Felag-Engineering/relay/relay/internal/audit$
           msg: "adapter boundary (invariant 10): never name the audit repository's tag write; a tag is written only through the capability layer"
+        # Invariant 10: a Native call's argument names are checked only in the
+        # capability layer, where a refusal is audited (EX-64). An adapter that
+        # called the check would be a second, unaudited decision site.
+        - pattern: ^opvocab\.ValidateArgNames$
+          pkg: ^github\.com/Felag-Engineering/relay/relay/internal/opvocab$
+          msg: "adapter boundary (invariant 10): argument names are checked only in the capability layer, where the refusal is audited (EX-64)"
 
     depguard:
       rules:
