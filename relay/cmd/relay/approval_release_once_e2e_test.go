@@ -94,8 +94,9 @@ func TestApprovalRelease_ReDriveOnAnySurfaceReAttaches(t *testing.T) {
 	}
 
 	// 3. The requester re-drives via the Control API: this is the ACTUAL
-	//    dispatch, claiming the release and minting Job J.
-	firstRun := restartMutate(t, f, requester)
+	//    dispatch, claiming the release and minting Job J. It waits, so the
+	//    dispatch record exists when it returns.
+	firstRun := restartMutateWaiting(t, f, requester, 30)
 	defer firstRun.Body.Close()
 	if firstRun.StatusCode != http.StatusOK {
 		t.Fatalf("first re-drive status = %d, want 200", firstRun.StatusCode)
@@ -118,13 +119,14 @@ func TestApprovalRelease_ReDriveOnAnySurfaceReAttaches(t *testing.T) {
 		t.Fatalf("second re-drive status = %d, want 200", secondRun.StatusCode)
 	}
 	var ran2 struct {
-		JobID string `json:"job_id"`
+		JobID      string `json:"job_id"`
+		Reattached bool   `json:"reattached"`
 	}
 	if err := json.NewDecoder(secondRun.Body).Decode(&ran2); err != nil {
 		t.Fatalf("decode second re-drive: %v", err)
 	}
-	if ran2.JobID != jobJ {
-		t.Fatalf("second re-drive job_id = %q, want the released %q", ran2.JobID, jobJ)
+	if ran2.JobID != jobJ || !ran2.Reattached {
+		t.Fatalf("second re-drive = %+v, want the released %q, re-attached", ran2, jobJ)
 	}
 
 	// 4b. A third re-drive over MCP run_operation, with the IDENTICAL
@@ -191,7 +193,7 @@ func TestApprovalRelease_DifferentAccountReAttachesAndRunsNothing(t *testing.T) 
 		t.Fatalf("decision status = %d, want 200", decideResp.StatusCode)
 	}
 
-	firstRun := restartMutate(t, f, requester)
+	firstRun := restartMutateWaiting(t, f, requester, 30)
 	defer firstRun.Body.Close()
 	if firstRun.StatusCode != http.StatusOK {
 		t.Fatalf("first re-drive status = %d, want 200", firstRun.StatusCode)
@@ -216,13 +218,14 @@ func TestApprovalRelease_DifferentAccountReAttachesAndRunsNothing(t *testing.T) 
 		t.Fatalf("bystander re-drive status = %d, want 200", bystanderRun.StatusCode)
 	}
 	var ran2 struct {
-		JobID string `json:"job_id"`
+		JobID      string `json:"job_id"`
+		Reattached bool   `json:"reattached"`
 	}
 	if err := json.NewDecoder(bystanderRun.Body).Decode(&ran2); err != nil {
 		t.Fatalf("decode bystander re-drive: %v", err)
 	}
-	if ran2.JobID != jobJ {
-		t.Fatalf("bystander re-drive job_id = %q, want the released %q", ran2.JobID, jobJ)
+	if ran2.JobID != jobJ || !ran2.Reattached {
+		t.Fatalf("bystander re-drive = %+v, want the released %q, re-attached", ran2, jobJ)
 	}
 
 	if got := allJobs(t, f); len(got) != 1 {

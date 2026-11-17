@@ -77,21 +77,21 @@ func TestRefusalLegibilityE2E_NodePolicyDenyExplainsItself(t *testing.T) {
 		t.Errorf("MCP refusal_explanation = %q, want capability.PolicyDenyExplanation", mr.RefusalExplanation)
 	}
 
-	// wait_seconds is an MCP-only field; the Control API body does not take it.
-	apiArgs := map[string]any{}
-	for k, v := range deniedOperationArgs {
-		if k != "wait_seconds" {
-			apiArgs[k] = v
-		}
-	}
 	resp := controlAPIRequest(t, f.clientFor(f.relay.Credential), http.MethodPost,
-		f.relay.ControlBase+"/api/v1/operations", f.relay.Credential, apiArgs)
+		f.relay.ControlBase+"/api/v1/operations", f.relay.Credential, deniedOperationArgs)
 	defer resp.Body.Close() //nolint:errcheck
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("API status = %d, want 200", resp.StatusCode)
+	}
 	var apiOut struct {
-		Results []mcp.PerNodeResult `json:"results"`
+		JobStatus string              `json:"job_status"`
+		Results   []mcp.PerNodeResult `json:"results"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&apiOut); err != nil {
 		t.Fatalf("decode API body: %v", err)
+	}
+	if apiOut.JobStatus != "complete" {
+		t.Fatalf("API job_status = %q, want complete (the call waited for the Node's refusal)", apiOut.JobStatus)
 	}
 	if len(apiOut.Results) != 1 {
 		t.Fatalf("API: got %d results, want 1: %+v", len(apiOut.Results), apiOut.Results)

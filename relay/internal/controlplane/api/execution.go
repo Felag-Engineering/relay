@@ -16,7 +16,7 @@ import (
 // twin of the MCP execution tools, over the SAME capability layer.
 //
 // Every route here is a thin adapter — decode → parse Selector → build the
-// Action → dispatch (or Plan) through the injected Executor → render. It
+// Action → Start (or Plan) through the injected Executor → wait → render. It
 // evaluates no Policy, checks no blast cap, and makes no authorization
 // decision of its own; each of those is the capability layer's, so both
 // surfaces inherit one answer (invariant 10). The structural half of that
@@ -35,18 +35,19 @@ import (
 // of the ladder.
 
 // Executor is the narrow capability-layer entry point the execution routes
-// dispatch through — capability.Execution.Run/Plan's exact shape, declared
-// locally so this package never names *capability.Execution itself (mirroring
-// mcp.Executor, and TokenMinter/Freezer's style here). *capability.Execution
-// satisfies it structurally; the composition root passes it in.
+// dispatch through — capability.Execution's Start, Plan and CancelJob exact
+// shape, declared locally so this package never names *capability.Execution
+// itself (mirroring mcp.Executor, and TokenMinter/Freezer's style here).
+// *capability.Execution satisfies it structurally; the composition root passes
+// it in.
 //
-// CancelJob arrived with the Job routes (jobs.go) and completes the
-// mirror of capability.Execution's execution methods. It stays on this one
-// interface rather than a separate JobCanceller because the composition root
-// passes the one *capability.Execution for all three — one capability layer,
-// one seam (invariant 10).
+// Start returns once the Job's Tasks are persisted; this adapter chooses only
+// how long to wait for the Job afterwards (wait_seconds). CancelJob stays on
+// this one interface rather than a separate JobCanceller because the
+// composition root passes the one *capability.Execution for all three — one
+// capability layer, one seam (invariant 10).
 type Executor interface {
-	Run(ctx context.Context, p capability.Principal, sel capability.Selector, act jobs.Action) ([]capability.NodeResult, error)
+	Start(ctx context.Context, p capability.Principal, sel capability.Selector, act jobs.Action, o capability.StartOptions) (capability.StartedJob, error)
 	Plan(ctx context.Context, p capability.Principal, sel capability.Selector, act jobs.Action) (capability.PlanResult, error)
 	CancelJob(ctx context.Context, p capability.Principal, jobID string) error
 }
@@ -72,7 +73,11 @@ type runOperationRequest struct {
 	Operation      string            `json:"operation"`
 	Args           map[string]string `json:"args"`
 	TimeoutSeconds int32             `json:"timeout_seconds"`
-	Plan           bool              `json:"plan"`
+	// WaitSeconds is how long a real dispatch holds for its Job, checked by
+	// controlplane.ResolveWaitSeconds. Presentation only: it never reaches
+	// the capability layer (EX-69), and plan ignores it.
+	WaitSeconds int32 `json:"wait_seconds"`
+	Plan        bool  `json:"plan"`
 }
 
 // rawExecRequest is POST /api/v1/raw-exec's body: argv ONLY — no shell, no
@@ -83,7 +88,11 @@ type rawExecRequest struct {
 	Selector       string   `json:"selector"`
 	Argv           []string `json:"argv"`
 	TimeoutSeconds int32    `json:"timeout_seconds"`
-	Plan           bool     `json:"plan"`
+	// WaitSeconds is how long a real dispatch holds for its Job, checked by
+	// controlplane.ResolveWaitSeconds. Presentation only: it never reaches
+	// the capability layer (EX-69), and plan ignores it.
+	WaitSeconds int32 `json:"wait_seconds"`
+	Plan        bool  `json:"plan"`
 }
 
 // ---------------------------------------------------------------------------
@@ -192,17 +201,25 @@ type pendingApprovalResponse struct {
 // statusPendingApproval is pendingApprovalResponse.Status's only value.
 const statusPendingApproval = "pending_approval"
 
-// executionResponse is a real (plan=false) dispatch response.
+// executionResponse is a real (plan=false) dispatch response: the Job once its
+// Tasks are stored (EX-57).
 //
 // JobID carries omitempty deliberately: it is present only when a
-// Job was actually created, so an ABSENT job_id always means nothing was
-// dispatched, never a failed-but-created Job. A zero-match dispatch is a 422
-// no_nodes_matched refusal, so every 200 dispatch carries a job_id. Results
-// is always rendered as an array, never null.
+// Job was actually created or re-attached, so an ABSENT job_id always means
+// nothing was dispatched, never a failed-but-created Job. A zero-match
+// dispatch is a 422 no_nodes_matched refusal, so every 200 dispatch carries a
+// job_id. JobStatus is controlplane.RenderJob's ("running" or "complete") and
+// is absent exactly when job_id is. Reattached is true when this call
+// dispatched nothing and returned the Job an earlier call created (the same
+// Idempotency-Key, or an approval already released, AP-77). The status is 200
+// whether the Job is running or complete; 202 is pendingApprovalResponse
+// alone. Results is always rendered as an array, never null.
 type executionResponse struct {
-	JobID   string          `json:"job_id,omitempty"`
-	Results []perNodeResult `json:"results"`
-	Halt    *haltResponse   `json:"halt,omitempty"`
+	JobID      string          `json:"job_id,omitempty"`
+	JobStatus  string          `json:"job_status,omitempty"`
+	Results    []perNodeResult `json:"results"`
+	Halt       *haltResponse   `json:"halt,omitempty"`
+	Reattached bool            `json:"reattached,omitempty"`
 }
 
 // haltResponse is why a mutate Job stopped sending after its first failure or
@@ -263,7 +280,7 @@ func handleRunOperation(d Deps) http.HandlerFunc {
 			return
 		}
 
-		dispatchOrPlan(w, r, d, p, sel, act, req.Plan)
+		dispatchOrPlan(w, r, d, p, sel, act, req.Plan, req.WaitSeconds)
 	}
 }
 
@@ -310,15 +327,41 @@ func handleRawExec(d Deps) http.HandlerFunc {
 			TimeoutSeconds: timeout,
 		}
 
-		dispatchOrPlan(w, r, d, p, sel, act, req.Plan)
+		dispatchOrPlan(w, r, d, p, sel, act, req.Plan, req.WaitSeconds)
 	}
 }
 
+// idempotencyKeyHeader carries a dispatch's idempotency key (EX-58).
+const idempotencyKeyHeader = "Idempotency-Key"
+
+// idempotencyKey reads the dispatch's idempotency key. No header is no key; a
+// single non-empty value is passed verbatim, because the key's format and what
+// a repeat means are the capability layer's (invariant 10). More than one
+// value, or a single empty one, is refused as a 400: the header is declared
+// non-empty and unique, and an adapter refuses a request whose fields break
+// their declared bounds (EX-69). Passing the empty value on would dispatch
+// with no retry binding while the caller believes it has one.
+func idempotencyKey(w http.ResponseWriter, r *http.Request) (string, bool) {
+	vals := r.Header.Values(idempotencyKeyHeader)
+	switch {
+	case len(vals) == 0:
+		return "", true
+	case len(vals) == 1 && vals[0] != "":
+		return vals[0], true
+	}
+	writeProblem(w, http.StatusBadRequest, "invalid Idempotency-Key header",
+		"send exactly one non-empty Idempotency-Key header, or none; this call dispatched nothing")
+	return "", false
+}
+
 // dispatchOrPlan is the one branch both execution routes share: plan=true
-// queries verdicts and executes nothing; plan=false dispatches and renders the
-// resulting Job. Keeping it single-sourced means the two routes cannot drift
-// in how they treat the plan flag or render a refusal.
-func dispatchOrPlan(w http.ResponseWriter, r *http.Request, d Deps, p capability.Principal, sel capability.Selector, act jobs.Action, plan bool) {
+// queries verdicts and executes nothing; plan=false starts the dispatch and
+// renders its Job. A real dispatch returns once the Tasks are stored, after
+// the optional wait; a lapse or a dropped caller leaves the Job running
+// (Start's fan-out is detached, invariant 4). Keeping it single-sourced means
+// the two routes cannot drift in how they treat the plan flag or render a
+// refusal.
+func dispatchOrPlan(w http.ResponseWriter, r *http.Request, d Deps, p capability.Principal, sel capability.Selector, act jobs.Action, plan bool, waitSeconds int32) {
 	ctx := r.Context()
 
 	// Defensive 500 on an unwired execution dependency, mirroring principal()'s
@@ -333,6 +376,8 @@ func dispatchOrPlan(w http.ResponseWriter, r *http.Request, d Deps, p capability
 		return
 	}
 
+	// A preflight claims no key and holds for nothing (PF-8), so neither the
+	// header nor wait_seconds is read here.
 	if plan {
 		pr, err := d.Exec.Plan(ctx, p, sel, act)
 		if err != nil {
@@ -343,7 +388,17 @@ func dispatchOrPlan(w http.ResponseWriter, r *http.Request, d Deps, p capability
 		return
 	}
 
-	nodeResults, err := d.Exec.Run(ctx, p, sel, act)
+	wait, err := controlplane.ResolveWaitSeconds(waitSeconds)
+	if err != nil {
+		writeProblem(w, http.StatusBadRequest, "invalid wait_seconds", err.Error())
+		return
+	}
+	key, ok := idempotencyKey(w, r)
+	if !ok {
+		return
+	}
+
+	sj, err := d.Exec.Start(ctx, p, sel, act, capability.StartOptions{IdempotencyKey: key})
 	if err != nil {
 		// A park is checked BEFORE writeExecError, because it is the one
 		// non-nil error here that is not a refusal — see
@@ -365,21 +420,23 @@ func dispatchOrPlan(w http.ResponseWriter, r *http.Request, d Deps, p capability
 		return
 	}
 	// *capability.Execution can never reach this branch: a zero-match Selector
-	// is refused as no_nodes_matched before Run returns. It exists only so an
-	// out-of-contract Executor can't index an empty slice below.
-	if len(nodeResults) == 0 {
+	// is refused as no_nodes_matched before Start returns. It exists only so an
+	// out-of-contract Executor, which created no Job, has nothing to read back.
+	if sj.JobID == "" {
 		writeJSON(w, http.StatusOK, executionResponse{Results: []perNodeResult{}})
 		return
 	}
 
-	out, err := renderJob(ctx, d.Jobs, nodeResults[0].JobID)
+	controlplane.AwaitStartedJob(ctx, sj, wait)
+	out, err := renderJob(ctx, d.Jobs, sj.JobID)
 	if err != nil {
-		// The Job already exists — either this call dispatched it, or it
-		// re-attached to one an approval had already released (AP-77) —
-		// only the read-back failed.
-		writeProblem(w, http.StatusInternalServerError, "read job results failed", err.Error())
+		// The Job exists (this call stored it, or re-attached to one); only
+		// the read-back failed.
+		writeProblem(w, http.StatusInternalServerError, "read job results failed",
+			fmt.Sprintf("Job %s exists, but reading it back failed: %v; read it with GET /api/v1/jobs/%s", sj.JobID, err, sj.JobID))
 		return
 	}
+	out.Reattached = sj.Reattached
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -427,6 +484,13 @@ func buildOperationAction(name string, args map[string]string, timeoutSeconds in
 //     cap's 422; detail carries no_nodes_matched and the canonical Selector.
 //   - Empty Selector  → 400 Bad Request: malformed input, the same class and
 //     title as an unparseable Selector; nothing resolved and no Job exists.
+//   - Idempotency key → 422 when the same key arrived with different
+//     arguments (EX-53); 400 when the key is malformed; 409 when an earlier
+//     call under the key is still pending, was released or was abandoned,
+//     told apart from each other and from the Freeze by title; 503 when this
+//     Relay cannot honour a key. The text is the capability layer's, says
+//     whether a new key is safe, and is identical to MCP's (its "Poll
+//     get_job" means GET /api/v1/jobs/{id}).
 //   - Unauthorized    → 403 Forbidden: the role ladder refused (authz.RoleGate)
 //     — an operator reaching for Raw Exec lands here.
 //   - Malformed call or unknown operation → 400 Bad Request, title "invalid
@@ -471,6 +535,37 @@ func writeExecError(w http.ResponseWriter, err error) {
 		writeProblem(w, http.StatusBadRequest, "invalid operation request", err.Error())
 		return
 	}
+	// The idempotency outcomes carry err itself, so a joined audit-write
+	// failure stays visible, as for no_nodes_matched above.
+	var conflictErr *capability.IdempotencyConflictError
+	if errors.As(err, &conflictErr) {
+		writeProblem(w, http.StatusUnprocessableEntity, "idempotency key conflict", err.Error())
+		return
+	}
+	var keyErr *capability.IdempotencyKeyError
+	if errors.As(err, &keyErr) {
+		writeProblem(w, http.StatusBadRequest, "invalid idempotency key", err.Error())
+		return
+	}
+	var pendingErr *capability.IdempotencyPendingError
+	if errors.As(err, &pendingErr) {
+		writeProblem(w, http.StatusConflict, "idempotency key pending", err.Error())
+		return
+	}
+	var releasedErr *capability.IdempotencyReleasedError
+	if errors.As(err, &releasedErr) {
+		writeProblem(w, http.StatusConflict, "idempotency key released", err.Error())
+		return
+	}
+	var abandonedErr *capability.IdempotencyAbandonedError
+	if errors.As(err, &abandonedErr) {
+		writeProblem(w, http.StatusConflict, "idempotency key abandoned", err.Error())
+		return
+	}
+	if errors.Is(err, capability.ErrIdempotencyUnavailable) {
+		writeProblem(w, http.StatusServiceUnavailable, "idempotency unavailable", err.Error())
+		return
+	}
 	if errors.Is(err, authz.ErrUnauthorized) {
 		writeProblem(w, http.StatusForbidden, "forbidden", err.Error())
 		return
@@ -499,9 +594,10 @@ func renderJob(ctx context.Context, results JobResultReader, jobID string) (exec
 		return executionResponse{}, err
 	}
 	return executionResponse{
-		JobID:   jobID,
-		Results: controlplane.MapSlice(rendered.Results, perNodeResultFromRendered),
-		Halt:    haltResponseFrom(rendered.Halt),
+		JobID:     jobID,
+		JobStatus: rendered.Status,
+		Results:   controlplane.MapSlice(rendered.Results, perNodeResultFromRendered),
+		Halt:      haltResponseFrom(rendered.Halt),
 	}, nil
 }
 

@@ -37,10 +37,11 @@ func ResolveTimeoutSeconds(timeoutSeconds int32) (int32, error) {
 	return timeoutSeconds, nil
 }
 
-// MaxWaitSeconds bounds wait_seconds on the MCP execution tools: ADR-0004's
-// "short wait budget" for a call that blocks until its Job finishes. It equals
-// the daemon's per-Task hard wall clock, so a single-wave Job always fits;
-// beyond it, a caller polls get_job. A long hold is the lost-response window
+// MaxWaitSeconds bounds wait_seconds on every execution surface (the MCP
+// execution tools and the Control API dispatch routes): ADR-0004's "short
+// wait budget" for a call that blocks until its Job finishes. It equals the
+// daemon's per-Task hard wall clock, so a single-wave Job always fits; beyond
+// it, a caller polls the Job. A long hold is the lost-response window
 // idempotency keys exist to make safe.
 const MaxWaitSeconds = 300
 
@@ -62,7 +63,7 @@ func ResolveWaitSeconds(s int32) (time.Duration, error) {
 // (an adapter or fake that hands back a Job with no completion signal). The
 // wait is presentation only: how long a call holds belongs to the adapter
 // (EX-69) and decides nothing about what was dispatched. A lapse or a dropped
-// caller leaves the Job running exactly as it was (EX-35). Every execution
+// caller leaves the Job running exactly as it was (EX-35, EX-57). Every execution
 // surface that holds for a Job does so through this one function, so they
 // cannot drift.
 func AwaitStartedJob(ctx context.Context, sj capability.StartedJob, wait time.Duration) {

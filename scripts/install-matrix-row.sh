@@ -336,6 +336,32 @@ relay_api() {
   return 0
 }
 
+# relay_dispatch <path> <json body>: POSTs a dispatch with wait_seconds, then, while the Job it
+# returned is still running, polls GET /api/v1/jobs/{id} until job_status is complete, at most 30
+# polls 1s apart. A dispatch returns once its Tasks are stored, so a Node that is slow to answer
+# leaves a running Job to read, never a reason to dispatch again. A failed poll never replaces
+# the last good 200 answer: polling goes on within the bound, and API_STATUS and API_BODY end as
+# that answer. Otherwise they are the last answer; a 202 park or a refusal stays as it came.
+# wait_seconds stays below relay_api's 60s curl limit.
+relay_dispatch() {
+  local path=$1 body=$2 job_id good i
+  body=$(printf '%s' "$body" | jq -c --argjson w 30 '. + {wait_seconds: $w}')
+  relay_api POST "$path" "$body"
+  if [ "$API_STATUS" != 200 ]; then return 0; fi
+  job_id=$(printf '%s' "$API_BODY" | jq -r '.job_id // empty')
+  if [ -z "$job_id" ]; then return 0; fi
+  good=$API_BODY
+  for ((i = 0; i < 30; i++)); do
+    if [ "$(printf '%s' "$good" | jq -r '.job_status // empty')" != running ]; then break; fi
+    sleep 1
+    relay_api GET "/api/v1/jobs/$job_id"
+    if [ "$API_STATUS" = 200 ]; then good=$API_BODY; fi
+  done
+  API_STATUS=200
+  API_BODY=$good
+  return 0
+}
+
 # --- phases -----------------------------------------------------------------------------
 
 rpm_signatures_ok() {
@@ -549,16 +575,23 @@ no_join_string_on_disk() {
 }
 
 # facts_dispatch_succeeds: a system.facts dispatch to the enrolled Node returns 200 and a
-# successful Task. The Node needs a moment to come online, so a refusal is retried; a 202 is a
-# failure, never a retry.
+# complete Job whose Tasks all succeeded. A Job still running after relay_dispatch's polls is a
+# failure and ends the loop: a second dispatch would run system.facts again beside the first. A
+# call that created no Job is retried, and so is a complete Job whose Tasks did not all succeed
+# (the Node not yet online): that Job has ended, so a new dispatch runs nothing beside it. A 202
+# is a failure, never a retry.
 facts_dispatch_succeeds() {
   local i
   for ((i = 0; i < 30; i++)); do
-    relay_api POST /api/v1/operations '{"selector":"tag:env=matrix","operation":"system.facts"}'
+    relay_dispatch /api/v1/operations '{"selector":"tag:env=matrix","operation":"system.facts"}'
     case "$API_STATUS" in
       200)
-        if printf '%s' "$API_BODY" | jq -e '(.results | length) > 0 and all(.results[]; .outcome == "success")' >/dev/null; then
+        if printf '%s' "$API_BODY" | jq -e '.job_status == "complete" and (.results | length) > 0 and all(.results[]; .outcome == "success")' >/dev/null; then
           return 0
+        fi
+        if [ "$(printf '%s' "$API_BODY" | jq -r '.job_status // empty')" = running ]; then
+          echo "the Job was still running after the polls; not dispatching again"
+          return 1
         fi
         ;;
       202)

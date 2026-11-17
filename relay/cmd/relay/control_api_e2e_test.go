@@ -782,7 +782,10 @@ func seedRefusalJob(t *testing.T, deps *appDeps) string {
 // TestControlAPI_JobRoutes drives #357's acceptance through the real
 // composition root: a dispatched Job is re-readable by id with truthful
 // per-Node outcomes, an unknown id is a legible 404, and cancel reaches the
-// capability layer.
+// capability layer. The Jobs route reports job_status, the poller's stop
+// condition.
+//
+// Proves EX-57.
 func TestControlAPI_JobRoutes(t *testing.T) {
 	_, deps, base, client, credential := startControlAPIServer(t)
 	jobID := seedJob(t, deps)
@@ -794,14 +797,18 @@ func TestControlAPI_JobRoutes(t *testing.T) {
 			t.Fatalf("status = %d, want 200", resp.StatusCode)
 		}
 		var body struct {
-			JobID   string            `json:"job_id"`
-			Results []json.RawMessage `json:"results"`
+			JobID     string            `json:"job_id"`
+			JobStatus string            `json:"job_status"`
+			Results   []json.RawMessage `json:"results"`
 		}
 		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 			t.Fatalf("decode: %v", err)
 		}
 		if body.JobID != jobID || len(body.Results) != 2 {
 			t.Fatalf("job_id=%q with %d results, want %q with 2", body.JobID, len(body.Results), jobID)
+		}
+		if body.JobStatus != "complete" {
+			t.Errorf("job_status = %q, want complete (every seeded Task is resolved)", body.JobStatus)
 		}
 		// The did-it-run distinction survives the round trip: the Task that
 		// ran carries exit_code, the one that never ran does not.
@@ -880,7 +887,8 @@ func TestControlAPI_JobResultsMatchMCP(t *testing.T) {
 		t.Fatalf("API status = %d, want 200", resp.StatusCode)
 	}
 	var apiBody struct {
-		Results []mcp.PerNodeResult `json:"results"`
+		JobStatus string              `json:"job_status"`
+		Results   []mcp.PerNodeResult `json:"results"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&apiBody); err != nil {
 		t.Fatalf("decode API body: %v", err)
@@ -897,6 +905,9 @@ func TestControlAPI_JobResultsMatchMCP(t *testing.T) {
 		t.Fatalf("decode MCP output: %v", err)
 	}
 
+	if apiBody.JobStatus != mcpOut.JobStatus || apiBody.JobStatus != "complete" {
+		t.Errorf("job_status: API %q, MCP %q, want complete on both", apiBody.JobStatus, mcpOut.JobStatus)
+	}
 	if len(apiBody.Results) != len(mcpOut.Results) {
 		t.Fatalf("API returned %d per-Node results, MCP returned %d — the same Job must read the same through either door",
 			len(apiBody.Results), len(mcpOut.Results))
@@ -939,7 +950,8 @@ func TestControlAPI_RefusalRendersIdenticallyOnBothSurfaces(t *testing.T) {
 		t.Fatalf("API status = %d, want 200", resp.StatusCode)
 	}
 	var apiBody struct {
-		Results []mcp.PerNodeResult `json:"results"`
+		JobStatus string              `json:"job_status"`
+		Results   []mcp.PerNodeResult `json:"results"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&apiBody); err != nil {
 		t.Fatalf("decode API body: %v", err)
@@ -955,6 +967,9 @@ func TestControlAPI_RefusalRendersIdenticallyOnBothSurfaces(t *testing.T) {
 		t.Fatalf("decode MCP output: %v", err)
 	}
 
+	if apiBody.JobStatus != mcpOut.JobStatus || apiBody.JobStatus != "complete" {
+		t.Errorf("job_status: API %q, MCP %q, want complete on both", apiBody.JobStatus, mcpOut.JobStatus)
+	}
 	if len(apiBody.Results) != len(mcpOut.Results) {
 		t.Fatalf("API returned %d per-Node results, MCP returned %d", len(apiBody.Results), len(mcpOut.Results))
 	}
@@ -984,6 +999,57 @@ func TestControlAPI_RefusalRendersIdenticallyOnBothSurfaces(t *testing.T) {
 	}
 	if got := apiByNode["node-outdated"].RefusalExplanation; got != jobs.VersionRefusedMessage {
 		t.Errorf("node-outdated refusal_explanation = %q, want jobs.VersionRefusedMessage", got)
+	}
+}
+
+// An idempotency key reused with different arguments reads word for word the
+// same on both surfaces: the Control API's 422 detail is the text MCP's tool
+// error carries, and the refused call creates no second Job. Both calls are
+// the founding admin, so they share one key space.
+//
+// Proves EX-58, EX-53.
+func TestControlAPI_IdempotencyConflictRendersIdenticallyOnBothSurfaces(t *testing.T) {
+	f := startRelay(t, WithControlPlane())
+	if _, err := f.Deps.registry.Upsert(linuxNode("node-e2e-1")); err != nil {
+		t.Fatalf("seed registry: %v", err)
+	}
+	session := relaytest.Connect(t, f.ControlBase, f.Client())
+
+	first := relaytest.CallTool(t, session, "run_operation", map[string]any{
+		"selector": e2eFleetSelector, "operation": "system.facts", "idempotency_key": "k-parity", "wait_seconds": 60,
+	})
+	if first.IsError {
+		t.Fatalf("first run_operation: IsError=true; content = %+v", first.Content)
+	}
+
+	resp := postDispatch(context.Background(), t, f.ClientFor(""), f.ControlBase+"/api/v1/operations", f.Credential,
+		map[string]any{"selector": e2eFleetSelector, "operation": "system.facts", "timeout_seconds": 5}, "k-parity")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("API status = %d, want 422", resp.StatusCode)
+	}
+	var problem struct {
+		Title  string `json:"title"`
+		Detail string `json:"detail"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&problem); err != nil {
+		t.Fatalf("decode problem: %v", err)
+	}
+	if problem.Title != "idempotency key conflict" {
+		t.Errorf("title = %q, want \"idempotency key conflict\"", problem.Title)
+	}
+
+	res := relaytest.CallTool(t, session, "run_operation", map[string]any{
+		"selector": e2eFleetSelector, "operation": "system.facts", "idempotency_key": "k-parity", "timeout_seconds": 5,
+	})
+	if !res.IsError {
+		t.Fatal("MCP run_operation with the same key and different arguments: IsError=false, want the conflict refusal")
+	}
+	if mcpText := relaytest.ToolErrorText(t, res); mcpText != problem.Detail {
+		t.Errorf("conflict text differs between surfaces: API %q, MCP %q", problem.Detail, mcpText)
+	}
+	if n := len(allJobs(t, f)); n != 1 {
+		t.Fatalf("Jobs = %d, want exactly 1", n)
 	}
 }
 
@@ -1202,8 +1268,9 @@ func TestControlAPI_HaltRendersIdenticallyOnBothSurfaces(t *testing.T) {
 		t.Fatalf("API status = %d, want 200", resp.StatusCode)
 	}
 	var apiBody struct {
-		Results []mcp.PerNodeResult `json:"results"`
-		Halt    map[string]any      `json:"halt"`
+		JobStatus string              `json:"job_status"`
+		Results   []mcp.PerNodeResult `json:"results"`
+		Halt      map[string]any      `json:"halt"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&apiBody); err != nil {
 		t.Fatalf("decode API body: %v", err)
@@ -1215,13 +1282,17 @@ func TestControlAPI_HaltRendersIdenticallyOnBothSurfaces(t *testing.T) {
 		t.Fatalf("get_job returned IsError; content = %+v", res.Content)
 	}
 	var mcpBody struct {
-		Results []mcp.PerNodeResult `json:"results"`
-		Halt    map[string]any      `json:"halt"`
+		JobStatus string              `json:"job_status"`
+		Results   []mcp.PerNodeResult `json:"results"`
+		Halt      map[string]any      `json:"halt"`
 	}
 	if err := json.Unmarshal([]byte(mcpToolText(t, res)), &mcpBody); err != nil {
 		t.Fatalf("decode MCP output: %v", err)
 	}
 
+	if apiBody.JobStatus != mcpBody.JobStatus || apiBody.JobStatus != "complete" {
+		t.Errorf("job_status: API %q, MCP %q, want complete on both", apiBody.JobStatus, mcpBody.JobStatus)
+	}
 	if apiBody.Halt == nil || !reflect.DeepEqual(apiBody.Halt, mcpBody.Halt) {
 		t.Errorf("halt differs between surfaces: API %#v, MCP %#v", apiBody.Halt, mcpBody.Halt)
 	}

@@ -171,11 +171,70 @@ vm_api() {
   if [ -z "$API_STATUS" ]; then API_STATUS=000; fi
 }
 
+# vm_dispatch <path> <json body>: POSTs a dispatch with wait_seconds, then, while the Job it
+# returned is still running, polls GET /api/v1/jobs/{id} until job_status is complete, at most 60
+# polls 1s apart. A dispatch returns once its Tasks are stored. A failed poll never replaces the
+# last good 200 answer: polling goes on within the bound, and API_STATUS and API_BODY end as that
+# answer. Otherwise they are the last answer; a 202 park or a refusal stays as it came.
+# wait_seconds stays below vm_api's 120s curl limit.
+vm_dispatch() {
+  local path=$1 body=$2 job_id good i
+  body="$(printf '%s' "$body" | jq -c --argjson w 60 '. + {wait_seconds: $w}')"
+  vm_api POST "$path" "$body"
+  if [ "$API_STATUS" != 200 ]; then return 0; fi
+  job_id="$(printf '%s' "$API_BODY" | jq -r '.job_id // ""' || true)"
+  if [ -z "$job_id" ]; then return 0; fi
+  good=$API_BODY
+  for ((i = 0; i < 60; i++)); do
+    if [ "$(printf '%s' "$good" | jq -r '.job_status // ""' || true)" != running ]; then break; fi
+    sleep 1
+    vm_api GET "/api/v1/jobs/$job_id"
+    if [ "$API_STATUS" = 200 ]; then good=$API_BODY; fi
+  done
+  API_STATUS=200
+  API_BODY=$good
+  return 0
+}
+
 op_rows=()
 LAST_STDOUT=""
 
 # dispatch <label> <success|failure> <path> <json body> [stderr regex]: on a read, 200 records
-# the Task outcome and any other status fails, a 202 included. When EXPECT_GATED=yes (set by
+# the Task outcome once the Job is complete (a Job still running when the wait and the polls end
+# is a failure, noted as "running" in the row) and any other status fails, a 202 included. When
+# EXPECT_GATED=yes (set by dispatch_gated for the mutate and Raw Exec dispatches) the packaged
+# gate must park it: a first 200 FAILS (it ran without parking), and a 202 is answered with an
+# approval as the founding admin (require 200) and the call re-driven (require 200, the row
+# marked approved) before the outcome is recorded. `failure` means the Task outcome is exactly
+# "failure", not merely "not success": a denied_by_policy, timeout or unreachable result says the
+# Operation never ran, so it proves nothing about the sandbox. The optional regex (jq,
+# case-insensitive) must also match the first result's stderr.
+dispatch() {
+  local path=$1 body=$2 job_id good i
+  body="$(printf '%s' "$body" | jq -c --argjson w 60 '. + {wait_seconds: $w}')"
+  vm_api POST "$path" "$body"
+  if [ "$API_STATUS" != 200 ]; then return 0; fi
+  job_id="$(printf '%s' "$API_BODY" | jq -r '.job_id // ""' || true)"
+  if [ -z "$job_id" ]; then return 0; fi
+  good=$API_BODY
+  for ((i = 0; i < 60; i++)); do
+    if [ "$(printf '%s' "$good" | jq -r '.job_status // ""' || true)" != running ]; then break; fi
+    sleep 1
+    vm_api GET "/api/v1/jobs/$job_id"
+    if [ "$API_STATUS" = 200 ]; then good=$API_BODY; fi
+  done
+  API_STATUS=200
+  API_BODY=$good
+  return 0
+}
+
+op_rows=()
+LAST_STDOUT=""
+
+# dispatch <label> <success|failure> <path> <json body> [stderr regex]: on a read, 200 records
+# the Task outcome once the Job is complete (a Job still running when the wait and the polls end
+# is a failure, noted as "running" in the row) and any other status fails, a 202 included.
+# When EXPECT_GATED=yes (set by
 # dispatch_gated for the mutate and Raw Exec dispatches) the packaged gate must park it: a first
 # 200 FAILS (it ran without parking), and a 202 is answered with an approval as the founding
 # admin (require 200) and the call re-driven (require 200, the row marked approved) before the
@@ -186,7 +245,7 @@ LAST_STDOUT=""
 dispatch() {
   local label=$1 expect=$2 path=$3 body=$4 stderr_re=${5:-} outcomes detail="" ok=no approved=""
   LAST_STDOUT=""
-  vm_api POST "$path" "$body"
+  vm_dispatch "$path" "$body"
   case "$API_STATUS" in
     200)
       if [ "${EXPECT_GATED:-no}" = yes ]; then
@@ -217,7 +276,7 @@ dispatch() {
         op_rows+=("| $label | $expect | approval refused: HTTP $API_STATUS | FAIL |")
         return 0
       fi
-      vm_api POST "$path" "$body"
+      vm_dispatch "$path" "$body"
       if [ "$API_STATUS" != 200 ]; then
         fail "$label: the re-driven call returned HTTP $API_STATUS after approval"
         op_rows+=("| $label | $expect | re-drive after approval: HTTP $API_STATUS | FAIL |")
@@ -234,19 +293,22 @@ dispatch() {
   outcomes="$(printf '%s' "$API_BODY" | jq -r '[.results[].outcome] | join(",")' || true)"
   LAST_STDOUT="$(printf '%s' "$API_BODY" | jq -r '.results[0].stdout // ""' || true)"
   if [ "$expect" = success ]; then
-    if printf '%s' "$API_BODY" | jq -e '(.results | length) > 0 and all(.results[]; .outcome == "success")' >/dev/null; then
+    if printf '%s' "$API_BODY" | jq -e '.job_status == "complete" and (.results | length) > 0 and all(.results[]; .outcome == "success")' >/dev/null; then
       ok=yes
     fi
   else
     # Recorded verbatim for the human: the outcome and the first of stderr.
     detail="$(printf '%s' "$API_BODY" | jq -r '.results[0].stderr // "" | .[0:300] | gsub("[|\n\r]"; " ")' || true)"
-    if printf '%s' "$API_BODY" | jq -e '(.results | length) > 0 and all(.results[]; .outcome == "failure")' >/dev/null; then
+    if printf '%s' "$API_BODY" | jq -e '.job_status == "complete" and (.results | length) > 0 and all(.results[]; .outcome == "failure")' >/dev/null; then
       ok=yes
     fi
     if [ "$ok" = yes ] && [ -n "$stderr_re" ] \
       && ! printf '%s' "$API_BODY" | jq -e --arg re "$stderr_re" 'all(.results[]; (.stderr // "") | test($re; "i"))' >/dev/null; then
       ok=no
     fi
+  fi
+  if [ "$(printf '%s' "$API_BODY" | jq -r '.job_status // ""' || true)" = running ]; then
+    detail="job_status running: the Job never completed. $detail"
   fi
   if [ "$ok" = yes ]; then
     op_rows+=("| $label | $expect | $outcomes$approved $detail | ok |")
@@ -262,13 +324,20 @@ dispatch_gated() { EXPECT_GATED=yes dispatch "$@"; }
 op() { printf '{"selector":"%s","operation":"%s"}' "$SELECTOR" "$1"; }
 op_args() { printf '{"selector":"%s","operation":"%s","args":%s}' "$SELECTOR" "$1" "$2"; }
 
+# wait_facts [tries]: dispatches system.facts until a complete Job whose Tasks all succeeded. A Job
+# still running after vm_dispatch's polls ends the loop as a failure: a second dispatch would run
+# system.facts again beside the first. A call that created no Job is retried, and so is a complete
+# Job whose Tasks did not all succeed (the Node not yet online): that Job has ended.
 wait_facts() {
   local i
   for ((i = 0; i < ${1:-60}; i++)); do
-    vm_api POST /api/v1/operations "$(op system.facts)"
+    vm_dispatch /api/v1/operations "$(op system.facts)"
     if [ "$API_STATUS" = 200 ] \
-      && printf '%s' "$API_BODY" | jq -e '(.results | length) > 0 and all(.results[]; .outcome == "success")' >/dev/null; then
+      && printf '%s' "$API_BODY" | jq -e '.job_status == "complete" and (.results | length) > 0 and all(.results[]; .outcome == "success")' >/dev/null; then
       return 0
+    fi
+    if [ "$API_STATUS" = 200 ] && [ "$(printf '%s' "$API_BODY" | jq -r '.job_status // ""' || true)" = running ]; then
+      return 1
     fi
     sleep 1
   done

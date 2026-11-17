@@ -118,6 +118,18 @@ paths:
         `plan: true` the check runs whatever matched. See `GET /api/v1/operations`… (vocabulary
         discovery is an MCP surface today; the argument names and constraints
         are the same on both).
+
+        A real dispatch returns once every matched Node's Task is stored, with
+        `job_status: running`; it does not wait for the Nodes. Poll
+        `GET /api/v1/jobs/{id}` until `job_status` is `complete`, or pass
+        `wait_seconds` (up to 300) to hold for the Job. A lapsed wait or a
+        dropped connection never cancels the Job. An error text that says
+        "Poll get_job" or "poll get_job" means `GET /api/v1/jobs/{id}`. If the
+        Job was stored but reading it back failed, the `500` detail names the
+        Job id. Send an `Idempotency-Key` so a response lost in transit can be
+        retried without a second dispatch.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
         content:
@@ -126,9 +138,7 @@ paths:
               $ref: '#/components/schemas/RunOperationRequest'
       responses:
         "200":
-          description: |
-            The dispatch completed (every matched Node's Task reached a terminal
-            outcome), or — with `plan: true` — the plan was computed.
+          description: "The dispatch's Job, running or complete; with `plan: true`, the plan."
           content:
             application/json:
               schema:
@@ -139,9 +149,10 @@ paths:
         "400": { $ref: '#/components/responses/BadRequest' }
         "401": { $ref: '#/components/responses/Unauthorized' }
         "403": { $ref: '#/components/responses/Forbidden' }
-        "409": { $ref: '#/components/responses/Frozen' }
+        "409": { $ref: '#/components/responses/DispatchConflict' }
         "422": { $ref: '#/components/responses/GuardrailRejected' }
         "500": { $ref: '#/components/responses/InternalError' }
+        "503": { $ref: '#/components/responses/IdempotencyUnavailable' }
 
   /api/v1/raw-exec:
     post:
@@ -172,6 +183,18 @@ paths:
         An empty or omitted `argv` is refused with `400` (title
         `invalid operation request`), audited, after authorization (an operator
         gets `403`) and, on a dispatch, after a zero-match `422`.
+
+        A real dispatch returns once every matched Node's Task is stored, with
+        `job_status: running`; it does not wait for the Nodes. Poll
+        `GET /api/v1/jobs/{id}` until `job_status` is `complete`, or pass
+        `wait_seconds` (up to 300) to hold for the Job. A lapsed wait or a
+        dropped connection never cancels the Job. An error text that says
+        "Poll get_job" or "poll get_job" means `GET /api/v1/jobs/{id}`. If the
+        Job was stored but reading it back failed, the `500` detail names the
+        Job id. Send an `Idempotency-Key` so a response lost in transit can be
+        retried without a second dispatch.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
         content:
@@ -180,7 +203,7 @@ paths:
               $ref: '#/components/schemas/RawExecRequest'
       responses:
         "200":
-          description: The dispatch completed, or the plan was computed.
+          description: "The dispatch's Job, running or complete; with `plan: true`, the plan."
           content:
             application/json:
               schema:
@@ -197,9 +220,10 @@ paths:
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
-        "409": { $ref: '#/components/responses/Frozen' }
+        "409": { $ref: '#/components/responses/DispatchConflict' }
         "422": { $ref: '#/components/responses/GuardrailRejected' }
         "500": { $ref: '#/components/responses/InternalError' }
+        "503": { $ref: '#/components/responses/IdempotencyUnavailable' }
 
   # ---------------------------------------------------------------------------
   # Jobs
@@ -212,8 +236,8 @@ paths:
       operationId: getJob
       summary: Re-read a Job's per-Node results
       description: |
-        Returns the Job and every Task's outcome. Use it to poll a Job started
-        earlier, or to re-read one after cancelling it.
+        Returns the Job and every Task's outcome. Use it to poll a Job a dispatch
+        returned, or to re-read one after cancelling it.
 
         **This read is audited** (ADR-0025). It returns captured Task output, so
         a caller can read back command output somebody else produced; the access
@@ -976,14 +1000,36 @@ components:
       required: true
       description: The approval request id, as returned in `request_id` when a dispatch parks.
       schema: { type: string }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: |
+        Makes a dispatch safe to retry. A repeat by the same Account within 24h
+        returns the existing Job and dispatches nothing (`reattached: true`; it
+        never waits); the same key with different arguments is a `422`;
+        another Account's use of the same key is a separate request. Send a
+        fresh key per intended dispatch, and re-send it unchanged after a lost
+        response. Send at most one header: more than one is a `400`, and so is
+        an empty value. Ignored with `plan: true`. The bounds are the
+        capability layer's, which refuses a malformed key with `400` (title
+        `invalid idempotency key`); the server does not enforce this schema.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+        pattern: '^[!-~]+$'
 
   responses:
     BadRequest:
       description: |
         Malformed request — a body not declared `Content-Type: application/json`,
         bad JSON, an unknown field, an invalid Selector, an empty Selector on a
-        dispatch or Policy preflight, an invalid Operation argument name, or an
-        empty Raw Exec argv.
+        dispatch or Policy preflight, an invalid Operation argument name, an
+        empty Raw Exec argv, `wait_seconds` outside 0-300 (title
+        `invalid wait_seconds`), more than one `Idempotency-Key` header or an
+        empty one (title `invalid Idempotency-Key header`), or a malformed
+        idempotency key (title `invalid idempotency key`).
       content:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }
@@ -1002,17 +1048,27 @@ components:
       content:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }
-    Frozen:
+    DispatchConflict:
       description: |
-        The Relay-wide Freeze is engaged, so all new dispatch is refused
-        (ADR-0013). A Policy preflight still answers while frozen.
+        A `409` on a dispatch, told apart by `title`:
+
+        - `title: "relay is frozen"` — the Relay-wide Freeze is engaged, so all
+          new dispatch is refused (ADR-0013). A Policy preflight still answers
+          while frozen.
+        - `title: "idempotency key pending"` — an earlier call with this key
+          may still run. Never use a new key; re-send the same one or poll the
+          Job.
+        - `title: "idempotency key released"` — the earlier call failed before
+          dispatching anything. Re-issue the call unchanged with the same key.
+        - `title: "idempotency key abandoned"` — no Job was created under this
+          key. This is the only case where a new key is safe.
       content:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }
     GuardrailRejected:
       description: |
-        A `422` guardrail refusal on an otherwise well-formed, authorized
-        request. There is no machine-readable problem `type`, so a client
+        A `422` refusal on an otherwise well-formed, authorized request. There
+        is no machine-readable problem `type`, so a client
         branches on `title` alone, which is stable; `detail` is
         human-readable and is not a contract.
 
@@ -1029,6 +1085,17 @@ components:
           before anything ran. Narrow the Selector or split the work into
           batches. The cap is Relay configuration and cannot be raised
           through this API (invariant 11).
+        - `title: "idempotency key conflict"` — the same Account sent the
+          same `Idempotency-Key` within 24h with different arguments. Nothing
+          was dispatched; use a new key.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    IdempotencyUnavailable:
+      description: |
+        `503`, title `idempotency unavailable`: this Relay cannot honour an
+        idempotency key here, and nothing was dispatched. Send without a key
+        only if a repeat is acceptable.
       content:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }
@@ -1301,6 +1368,16 @@ components:
           minimum: 0
           maximum: 86400
           description: Per-Task timeout. 0 or omitted uses the daemon/engine default.
+        wait_seconds:
+          type: integer
+          format: int32
+          minimum: 0
+          maximum: 300
+          description: |
+            0 or omitted returns as soon as every Task is stored; 1-300 waits up
+            to that long for every Task to finish. A lapsed wait returns the
+            running Job and never cancels it; a re-attached call does not wait.
+            Ignored with `plan: true`.
         plan:
           type: boolean
           description: Preview per-Node verdicts without executing (ADR-0011).
@@ -1326,6 +1403,16 @@ components:
           format: int32
           minimum: 0
           maximum: 86400
+        wait_seconds:
+          type: integer
+          format: int32
+          minimum: 0
+          maximum: 300
+          description: |
+            0 or omitted returns as soon as every Task is stored; 1-300 waits up
+            to that long for every Task to finish. A lapsed wait returns the
+            running Job and never cancels it; a re-attached call does not wait.
+            Ignored with `plan: true`.
         plan:
           type: boolean
 
@@ -1394,10 +1481,24 @@ components:
         job_id:
           type: string
           description: |
-            **Present on every completed dispatch.** A plan (`PlanResponse`)
-            carries none. A Selector matching no Nodes never produces this
-            response: it is refused with `422` `no nodes matched` and
-            creates no Job.
+            Present whenever a Job was created or re-attached. A plan
+            (`PlanResponse`) carries none. A Selector matching no Nodes never
+            produces this response: it is refused with `422` `no nodes matched`
+            and creates no Job.
+        job_status:
+          type: string
+          enum: [running, complete]
+          description: |
+            `running` while any Task is unresolved (its outcome reads
+            `unspecified`), `complete` once every Task has a terminal outcome;
+            absent exactly when `job_id` is. Both are a `200`: a `202` is only
+            `pending_approval`.
+        reattached:
+          type: boolean
+          description: |
+            True when this call dispatched nothing and returned the Job an
+            earlier call created (the same `Idempotency-Key`, or an approval
+            already released). Absent otherwise.
         results:
           type: array
           items: { $ref: '#/components/schemas/PerNodeResult' }
@@ -1523,9 +1624,16 @@ components:
 
     JobResponse:
       type: object
-      required: [job_id, results]
+      required: [job_id, job_status, results]
       properties:
         job_id: { type: string }
+        job_status:
+          type: string
+          enum: [running, complete]
+          description: |
+            `running` while any Task is unresolved (its outcome reads
+            `unspecified`), `complete` once every Task has a terminal outcome.
+            Poll until `complete`.
         created_at: { type: string, format: date-time }
         results:
           type: array
