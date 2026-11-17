@@ -104,3 +104,81 @@ func TestControlAPI_CallShapeRefusalRendersIdenticallyOnBothSurfaces(t *testing.
 		t.Errorf("refusal records = %d, want %d: one per call on each surface", refusals, want)
 	}
 }
+
+// TestControlAPI_TimeoutAboveTheCeilingRendersIdenticallyOnBothSurfaces sends a
+// timeout_seconds of 301 through run_operation and raw_exec on both surfaces.
+// Each is a 400 "invalid timeout_seconds" on the Control API and a tool error on
+// MCP carrying the same text, and every call leaves exactly one refusal record
+// and no dispatch.
+//
+// Proves EX-59.
+func TestControlAPI_TimeoutAboveTheCeilingRendersIdenticallyOnBothSurfaces(t *testing.T) {
+	f := startRelay(t, WithControlPlane())
+	// A Node must match, so the dispatch reaches the stage the call-shape
+	// refusal is acted on (after no_nodes_matched).
+	if _, err := f.Deps.registry.Upsert(linuxNode("node-timeout-1")); err != nil {
+		t.Fatalf("seed registry: %v", err)
+	}
+	client := f.Client()
+	session := relaytest.Connect(t, f.ControlBase, client)
+
+	cases := []struct {
+		name  string
+		route string
+		tool  string
+		body  map[string]any
+	}{
+		{
+			name: "run_operation", route: "/api/v1/operations", tool: "run_operation",
+			body: map[string]any{"selector": e2eFleetSelector, "operation": "system.facts", "timeout_seconds": 301},
+		},
+		{
+			name: "raw_exec", route: "/api/v1/raw-exec", tool: "raw_exec",
+			body: map[string]any{"selector": e2eFleetSelector, "argv": []string{"/usr/bin/true"}, "timeout_seconds": 301},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := controlAPIRequest(t, client, http.MethodPost, f.ControlBase+tc.route, f.Credential, tc.body)
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Fatalf("Control API status = %d, want 400", resp.StatusCode)
+			}
+			var problem struct {
+				Title  string `json:"title"`
+				Detail string `json:"detail"`
+			}
+			if err := json.NewDecoder(resp.Body).Decode(&problem); err != nil {
+				t.Fatalf("decode problem: %v", err)
+			}
+			if problem.Title != "invalid timeout_seconds" {
+				t.Errorf("title = %q, want %q", problem.Title, "invalid timeout_seconds")
+			}
+			if !strings.Contains(problem.Detail, "300") || !strings.Contains(problem.Detail, "Nothing was dispatched") {
+				t.Errorf("detail = %q, want the ceiling named and that nothing was dispatched", problem.Detail)
+			}
+
+			res := relaytest.CallTool(t, session, tc.tool, tc.body)
+			if !res.IsError {
+				t.Fatalf("MCP %s: IsError = false, want a tool error", tc.tool)
+			}
+			if got := mcpToolText(t, res); got != problem.Detail {
+				t.Errorf("MCP text = %q, want the Control API detail %q", got, problem.Detail)
+			}
+		})
+	}
+
+	refusals := 0
+	for _, rec := range auditList(t, f.Deps.audit) {
+		switch rec.Kind {
+		case audit.KindRefusal:
+			refusals++
+		case audit.KindDispatch, audit.KindDispatchIntent:
+			t.Errorf("found a %s record for a refused timeout: %+v", rec.Kind, rec)
+		}
+	}
+	if want := 2 * len(cases); refusals != want {
+		t.Errorf("refusal records = %d, want %d: one per call on each surface", refusals, want)
+	}
+}

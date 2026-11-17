@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -570,16 +571,6 @@ func TestRunOperation_MalformedInputIsRejectedBeforeDispatch(t *testing.T) {
 		wantSub string
 	}{
 		{
-			name:    "negative timeout",
-			body:    runOperationRequest{Operation: "system.facts", TimeoutSeconds: -1},
-			wantSub: "timeout_seconds",
-		},
-		{
-			name:    "timeout past the 24h bound",
-			body:    runOperationRequest{Operation: "system.facts", TimeoutSeconds: controlplane.MaxTimeoutSeconds + 1},
-			wantSub: "timeout_seconds",
-		},
-		{
 			name:    "selector term without a namespace prefix",
 			body:    runOperationRequest{Selector: "role=web", Operation: "system.facts"},
 			wantSub: "selector",
@@ -648,6 +639,85 @@ func TestRawExec_EmptyArgvReachesTheCapabilityLayer(t *testing.T) {
 			t.Errorf("body %s must carry the title %q", rec.Body.String(), "invalid operation request")
 		}
 	})
+}
+
+// timeoutRoutes are the two dispatch routes with a body carrying timeout.
+var timeoutRoutes = []struct {
+	name, path string
+	body       func(timeout int32, plan bool) map[string]any
+}{
+	{"run_operation", "/api/v1/operations", func(timeout int32, plan bool) map[string]any {
+		return map[string]any{"selector": "node:role=web", "operation": "system.facts", "timeout_seconds": timeout, "plan": plan}
+	}},
+	{"raw_exec", "/api/v1/raw-exec", func(timeout int32, plan bool) map[string]any {
+		return map[string]any{"selector": "node:role=web", "argv": []string{"/usr/bin/true"}, "timeout_seconds": timeout, "plan": plan}
+	}},
+}
+
+// TestDispatch_TimeoutSecondsReachesTheCapabilityLayer: neither route decides
+// the Task timeout. A value outside 0-300 reaches Start or Plan unchanged, where
+// the layer refuses and audits it.
+//
+// Proves EX-59.
+func TestDispatch_TimeoutSecondsReachesTheCapabilityLayer(t *testing.T) {
+	for _, route := range timeoutRoutes {
+		for _, asked := range []int32{-1, 301} {
+			for _, plan := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/%d/plan=%t", route.name, asked, plan), func(t *testing.T) {
+					exec := &fakeExecutor{}
+					h := newExecFixture(t, accounts.RoleAdmin, exec, fakeJobs{})
+
+					do(t, h, http.MethodPost, route.path, route.body(asked, plan))
+
+					calls := exec.startCalls()
+					if plan {
+						calls = exec.planCalls()
+					}
+					if len(calls) != 1 {
+						t.Fatalf("capability calls = %d, want 1: the adapter must not refuse the timeout", len(calls))
+					}
+					if got := calls[0].Action.TimeoutSeconds; got != asked {
+						t.Errorf("TimeoutSeconds = %d, want %d unchanged", got, asked)
+					}
+				})
+			}
+		}
+	}
+}
+
+// TestExecutionRefusals_ATimeoutOutsideTheCeilingIsInvalidTimeoutSeconds: the
+// layer's timeout refusal renders as a 400 titled "invalid timeout_seconds"
+// carrying its own text, on both routes, with and without plan.
+//
+// Proves EX-59.
+func TestExecutionRefusals_ATimeoutOutsideTheCeilingIsInvalidTimeoutSeconds(t *testing.T) {
+	refusal := &capability.TimeoutError{Asked: 301}
+	for _, route := range timeoutRoutes {
+		for _, plan := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/plan=%t", route.name, plan), func(t *testing.T) {
+				exec := &fakeExecutor{startErr: refusal, planErr: refusal}
+				h := newExecFixture(t, accounts.RoleAdmin, exec, fakeJobs{})
+
+				rec := do(t, h, http.MethodPost, route.path, route.body(301, plan))
+				if rec.Code != http.StatusBadRequest {
+					t.Fatalf("status = %d, want 400; body %s", rec.Code, rec.Body.String())
+				}
+				if ct := rec.Header().Get("Content-Type"); ct != "application/problem+json" {
+					t.Errorf("Content-Type = %q, want application/problem+json", ct)
+				}
+				var p struct {
+					Title  string `json:"title"`
+					Detail string `json:"detail"`
+				}
+				if err := json.Unmarshal(rec.Body.Bytes(), &p); err != nil {
+					t.Fatalf("decode problem: %v; body %s", err, rec.Body.String())
+				}
+				if p.Title != "invalid timeout_seconds" || p.Detail != refusal.Error() {
+					t.Errorf("problem = %+v, want title %q and detail %q", p, "invalid timeout_seconds", refusal.Error())
+				}
+			})
+		}
+	}
 }
 
 // -----------------------------------------------------------------------

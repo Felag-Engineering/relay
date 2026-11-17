@@ -3,6 +3,7 @@ package mcp_test
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"regexp"
 	"slices"
 	"strings"
@@ -19,12 +20,15 @@ import (
 // run_operation's advertised InputSchema bounds. The go-sdk validates input
 // against this schema before the handler runs, so a bound here is an unaudited
 // refusal by the adapter. The schema therefore bounds only what the adapter
-// decides: wait_seconds (EX-69) and the advertised timeout. argv presence and
-// the idempotency key's length are the layer's (EX-67; the key store's
-// IdempotencyKeyError), so the schema leaves both open. InputSchema arrives
-// over the transport as map[string]any (json.RawMessage decoded generically
-// by the SDK), so it is re-marshalled into a *jsonschema.Schema here for a
-// clean assertion rather than poking at the map directly.
+// decides: wait_seconds (EX-69). argv presence, the idempotency key's length and
+// the timeout ceiling are the layer's (EX-67; the key store's
+// IdempotencyKeyError; EX-59), so the schema leaves each open and only
+// describes the timeout. InputSchema arrives over the transport as
+// map[string]any (json.RawMessage decoded generically by the SDK), so it is
+// re-marshalled into a *jsonschema.Schema here for a clean assertion rather
+// than poking at the map directly.
+//
+// Proves EX-59, EX-67, EX-69.
 func TestMCP_ExecutionToolsInputSchemaConstraints(t *testing.T) {
 	ts := newTestServer(t)
 	session := ts.connect(t)
@@ -71,11 +75,16 @@ func TestMCP_ExecutionToolsInputSchemaConstraints(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s InputSchema has no %q property", toolName, "timeout_seconds")
 		}
-		if timeout.Minimum == nil || *timeout.Minimum != 0 {
-			t.Errorf("%s timeout_seconds Minimum = %v, want 0", toolName, timeout.Minimum)
+		if timeout.Maximum != nil && *timeout.Maximum < math.MaxInt32 {
+			t.Errorf("%s timeout_seconds Maximum = %v, want none below MaxInt32: a timeout past the ceiling is the layer's audited refusal", toolName, *timeout.Maximum)
 		}
-		if timeout.Maximum == nil || *timeout.Maximum != 86400 {
-			t.Errorf("%s timeout_seconds Maximum = %v, want 86400", toolName, timeout.Maximum)
+		if timeout.Minimum != nil && *timeout.Minimum > math.MinInt32 {
+			t.Errorf("%s timeout_seconds Minimum = %v, want none above MinInt32: a negative timeout is the layer's audited refusal", toolName, *timeout.Minimum)
+		}
+		for _, want := range []string{"300", "daemon default of 30"} {
+			if !strings.Contains(timeout.Description, want) {
+				t.Errorf("%s timeout_seconds Description = %q, want it to contain %q", toolName, timeout.Description, want)
+			}
 		}
 
 		wait, ok := s.Properties["wait_seconds"]

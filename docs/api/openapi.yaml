@@ -119,6 +119,11 @@ paths:
         discovery is an MCP surface today; the argument names and constraints
         are the same on both).
 
+        A `timeout_seconds` below 0 or above 300 is refused with `400` (title
+        `invalid timeout_seconds`), audited, after authorization and, on a
+        dispatch, after a zero-match `422`; with `plan: true` it is refused
+        whatever matched.
+
         A real dispatch returns once every matched Node's Task is stored, with
         `job_status: running`; it does not wait for the Nodes. Poll
         `GET /api/v1/jobs/{id}` until `job_status` is `complete`, or pass
@@ -183,6 +188,11 @@ paths:
         An empty or omitted `argv` is refused with `400` (title
         `invalid operation request`), audited, after authorization (an operator
         gets `403`) and, on a dispatch, after a zero-match `422`.
+
+        A `timeout_seconds` below 0 or above 300 is refused with `400` (title
+        `invalid timeout_seconds`), audited, after authorization and, on a
+        dispatch, after a zero-match `422`; with `plan: true` it is refused
+        whatever matched.
 
         A real dispatch returns once every matched Node's Task is stored, with
         `job_status: running`; it does not wait for the Nodes. Poll
@@ -1366,8 +1376,12 @@ components:
           type: integer
           format: int32
           minimum: 0
-          maximum: 86400
-          description: Per-Task timeout. 0 or omitted uses the daemon/engine default.
+          maximum: 300
+          description: >-
+            Per-Task timeout in seconds. 0 or omitted takes the daemon default
+            of 30; the ceiling is 300. Outside 0-300 is a `400` with title
+            `invalid timeout_seconds`, audited as a refusal; nothing is
+            dispatched and the Relay never clamps it.
         wait_seconds:
           type: integer
           format: int32
@@ -1403,7 +1417,8 @@ components:
           type: integer
           format: int32
           minimum: 0
-          maximum: 86400
+          maximum: 300
+          description: See RunOperationRequest.timeout_seconds.
         wait_seconds:
           type: integer
           format: int32

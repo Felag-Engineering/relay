@@ -327,10 +327,10 @@ const (
 // Action is the work a Task performs on its Node: either a structured,
 // typed Operation (name + validated args, never a shell) or Raw Exec
 // (arbitrary argv, gated by Policy regex). Mirrors the TaskRequest oneof.
-// TimeoutSeconds is the per-Task timeout the dispatching surface asked for
-// (0 = daemon/engine default); the Job engine copies it onto each Task it
-// creates (capability/execution.go) — the daemon is the sole enforcer, this
-// is only how the value reaches it (v0.0.6 [5/8], owner DECISION 3).
+// TimeoutSeconds is the per-Task timeout the caller asked for (0 = the
+// daemon's default); the capability layer refuses one outside its ceiling
+// (EX-59), the Job engine copies it onto each Task, and the daemon applies it
+// (EX-24).
 type Action struct {
 	Kind           ActionKind
 	OperationName  string

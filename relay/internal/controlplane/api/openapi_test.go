@@ -317,6 +317,22 @@ func TestOpenAPISpec_DispatchSelectorIsRequired(t *testing.T) {
 	}
 }
 
+// TestOpenAPISpec_TimeoutSecondsCeilingIsTheLayersConstant: the document
+// publishes the capability layer's ceiling for timeout_seconds. The server does
+// not enforce the document; the layer refuses a value outside it.
+func TestOpenAPISpec_TimeoutSecondsCeilingIsTheLayersConstant(t *testing.T) {
+	doc := loadSpec(t)
+	for _, name := range []string{"RunOperationRequest", "RawExecRequest"} {
+		timeout := doc.Components.Schemas[name].Value.Properties["timeout_seconds"]
+		if timeout == nil {
+			t.Fatalf("%s has no timeout_seconds", name)
+		}
+		if timeout.Value.Min == nil || *timeout.Value.Min != 0 || timeout.Value.Max == nil || *timeout.Value.Max != capability.MaxTaskTimeoutSeconds {
+			t.Errorf("%s.timeout_seconds bounds = [%v, %v], want [0, %d]", name, timeout.Value.Min, timeout.Value.Max, capability.MaxTaskTimeoutSeconds)
+		}
+	}
+}
+
 // The document says what a dispatch hands back and how it is retried: an
 // Idempotency-Key header on both dispatch operations, every response a retry
 // can meet, wait_seconds bounded as the Relay bounds it, and job_status on
