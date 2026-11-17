@@ -1377,7 +1377,8 @@ components:
             0 or omitted returns as soon as every Task is stored; 1-300 waits up
             to that long for every Task to finish. A lapsed wait returns the
             running Job and never cancels it; a re-attached call does not wait.
-            Ignored with `plan: true`.
+            With `plan: true` it is still checked, and refused outside 0-300,
+            but nothing waits.
         plan:
           type: boolean
           description: Preview per-Node verdicts without executing (ADR-0011).
@@ -1412,7 +1413,8 @@ components:
             0 or omitted returns as soon as every Task is stored; 1-300 waits up
             to that long for every Task to finish. A lapsed wait returns the
             running Job and never cancels it; a re-attached call does not wait.
-            Ignored with `plan: true`.
+            With `plan: true` it is still checked, and refused outside 0-300,
+            but nothing waits.
         plan:
           type: boolean
 

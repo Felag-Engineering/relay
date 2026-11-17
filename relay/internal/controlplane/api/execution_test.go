@@ -1362,16 +1362,16 @@ func TestDispatch_MoreThanOneIdempotencyKeyIsABadRequest(t *testing.T) {
 	}
 }
 
-// A preflight claims no key and holds for nothing: plan ignores the header
-// and wait_seconds, even ones a real dispatch would refuse.
+// A preflight claims no key and holds for nothing: plan ignores the header,
+// even one a real dispatch would refuse.
 //
 // Proves EX-58, PF-8.
-func TestPlanMode_IgnoresTheIdempotencyKeyAndTheWait(t *testing.T) {
+func TestPlanMode_IgnoresTheIdempotencyKey(t *testing.T) {
 	for _, rt := range dispatchRoutes {
 		exec := &fakeExecutor{planResult: capability.PlanResult{Matched: 1}}
 		h := newExecFixture(t, accounts.RoleAdmin, exec, fakeJobs{})
 
-		rec := doWithHeaders(t, h, http.MethodPost, rt.path, rt.body(controlplane.MaxWaitSeconds+1, true),
+		rec := doWithHeaders(t, h, http.MethodPost, rt.path, rt.body(controlplane.MaxWaitSeconds, true),
 			http.Header{"Idempotency-Key": {"k-1", "k-2"}})
 		if rec.Code != http.StatusOK {
 			t.Fatalf("%s: status = %d, want 200; body %s", rt.path, rec.Code, rec.Body.String())
@@ -1381,6 +1381,30 @@ func TestPlanMode_IgnoresTheIdempotencyKeyAndTheWait(t *testing.T) {
 		}
 		if got := len(exec.startCalls()); got != 0 {
 			t.Errorf("%s: Start called %d times, want 0", rt.path, got)
+		}
+	}
+}
+
+// A preflight refuses wait_seconds outside 0 to 300 as a real dispatch does,
+// matching MCP's input schema, and queries nothing.
+//
+// Proves EX-69.
+func TestPlanMode_WaitSecondsOutsideItsRangeIsABadRequest(t *testing.T) {
+	for _, rt := range dispatchRoutes {
+		for _, wait := range []int32{-1, controlplane.MaxWaitSeconds + 1} {
+			exec := &fakeExecutor{planResult: capability.PlanResult{Matched: 1}}
+			h := newExecFixture(t, accounts.RoleAdmin, exec, fakeJobs{})
+
+			rec := do(t, h, http.MethodPost, rt.path, rt.body(wait, true))
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("%s plan wait_seconds %d: status = %d, want 400; body %s", rt.path, wait, rec.Code, rec.Body.String())
+			}
+			if title := decodeProblemTitle(t, rec.Body.Bytes()); title != "invalid wait_seconds" {
+				t.Errorf("%s plan wait_seconds %d: title = %q, want \"invalid wait_seconds\"", rt.path, wait, title)
+			}
+			if got := len(exec.planCalls()); got != 0 {
+				t.Errorf("%s plan wait_seconds %d: Plan called %d times, want 0", rt.path, wait, got)
+			}
 		}
 	}
 }

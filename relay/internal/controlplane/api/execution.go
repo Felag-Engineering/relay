@@ -75,7 +75,7 @@ type runOperationRequest struct {
 	TimeoutSeconds int32             `json:"timeout_seconds"`
 	// WaitSeconds is how long a real dispatch holds for its Job, checked by
 	// controlplane.ResolveWaitSeconds. Presentation only: it never reaches
-	// the capability layer (EX-69), and plan ignores it.
+	// the capability layer, and a preflight checks it but holds for nothing.
 	WaitSeconds int32 `json:"wait_seconds"`
 	Plan        bool  `json:"plan"`
 }
@@ -90,7 +90,7 @@ type rawExecRequest struct {
 	TimeoutSeconds int32    `json:"timeout_seconds"`
 	// WaitSeconds is how long a real dispatch holds for its Job, checked by
 	// controlplane.ResolveWaitSeconds. Presentation only: it never reaches
-	// the capability layer (EX-69), and plan ignores it.
+	// the capability layer, and a preflight checks it but holds for nothing.
 	WaitSeconds int32 `json:"wait_seconds"`
 	Plan        bool  `json:"plan"`
 }
@@ -376,8 +376,15 @@ func dispatchOrPlan(w http.ResponseWriter, r *http.Request, d Deps, p capability
 		return
 	}
 
-	// A preflight claims no key and holds for nothing (PF-8), so neither the
-	// header nor wait_seconds is read here.
+	// wait_seconds is checked before the plan branch so that a value out of
+	// its range is refused on both paths, as MCP's input schema refuses it
+	// (EX-69). A preflight still holds for nothing and claims no key (PF-8).
+	wait, err := controlplane.ResolveWaitSeconds(waitSeconds)
+	if err != nil {
+		writeProblem(w, http.StatusBadRequest, "invalid wait_seconds", err.Error())
+		return
+	}
+
 	if plan {
 		pr, err := d.Exec.Plan(ctx, p, sel, act)
 		if err != nil {
@@ -388,11 +395,6 @@ func dispatchOrPlan(w http.ResponseWriter, r *http.Request, d Deps, p capability
 		return
 	}
 
-	wait, err := controlplane.ResolveWaitSeconds(waitSeconds)
-	if err != nil {
-		writeProblem(w, http.StatusBadRequest, "invalid wait_seconds", err.Error())
-		return
-	}
 	key, ok := idempotencyKey(w, r)
 	if !ok {
 		return
