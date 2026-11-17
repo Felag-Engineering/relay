@@ -67,12 +67,22 @@ type RenderedHalt struct {
 	Reason   string
 }
 
+// RenderedOutcomeAuditFailure says a Job's outcome audit write failed (EX-66), before a
+// surface tags it. Reason is jobs.OutcomeAuditFailureReason, never the store's error.
+type RenderedOutcomeAuditFailure struct {
+	At     string
+	Reason string
+}
+
 // RenderedJob is a rendered Job: its Tasks sorted by NodeID, its status, and
 // its halt (nil unless the capability layer halted it).
 type RenderedJob struct {
 	Results []RenderedTaskResult
 	Status  string
 	Halt    *RenderedHalt
+	// OutcomeAuditFailure is nil unless the Relay recorded that writing the Job's
+	// outcome to the audit trail failed.
+	OutcomeAuditFailure *RenderedOutcomeAuditFailure
 }
 
 // RenderedVerdict is one Node's Plan verdict, before a surface tags it.
@@ -167,11 +177,11 @@ const (
 	JobStatusComplete = "complete"
 )
 
-// RenderJob re-reads jobID and renders every one of its Tasks, sorted by NodeID
-// for a stable response, with the Job's status (JobStatusRunning if any Task is
-// not yet Resolved, else JobStatusComplete) and its halt, if the capability
-// layer halted it. It is the shared path for a dispatch's own result and a
-// later polling re-read of the same Job, on both surfaces.
+// RenderJob re-reads jobID and renders every one of its Tasks, sorted by NodeID for a stable
+// response, with the Job's status (JobStatusRunning if any Task is not yet Resolved, else
+// JobStatusComplete), its halt, if the capability layer halted it, and its outcome audit
+// failure, if one is recorded. It is the shared path for a dispatch's own result and a later
+// polling re-read of the same Job, on both surfaces.
 func RenderJob(ctx context.Context, results JobResultReader, jobID string) (RenderedJob, error) {
 	job, err := results.GetJob(ctx, jobID)
 	if err != nil {
@@ -199,6 +209,12 @@ func RenderJob(ctx context.Context, results JobResultReader, jobID string) (Rend
 			Outcome:  jobs.OutcomeName(job.Halt.Outcome),
 			Resolved: job.Halt.Resolved,
 			Reason:   job.Halt.Reason(),
+		}
+	}
+	if !job.OutcomeAuditFailedAt.IsZero() {
+		out.OutcomeAuditFailure = &RenderedOutcomeAuditFailure{
+			At:     RFC3339(job.OutcomeAuditFailedAt),
+			Reason: jobs.OutcomeAuditFailureReason,
 		}
 	}
 	return out, nil

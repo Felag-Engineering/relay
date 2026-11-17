@@ -213,13 +213,34 @@ const statusPendingApproval = "pending_approval"
 // dispatched nothing and returned the Job an earlier call created (the same
 // Idempotency-Key, or an approval already released, AP-77). The status is 200
 // whether the Job is running or complete; 202 is pendingApprovalResponse
-// alone. Results is always rendered as an array, never null.
+// alone. Results is always rendered as an array, never null. OutcomeAuditFailure
+// is present only when writing the Job's outcome to the audit trail failed (EX-66).
 type executionResponse struct {
 	JobID      string          `json:"job_id,omitempty"`
 	JobStatus  string          `json:"job_status,omitempty"`
 	Results    []perNodeResult `json:"results"`
 	Halt       *haltResponse   `json:"halt,omitempty"`
 	Reattached bool            `json:"reattached,omitempty"`
+
+	OutcomeAuditFailure *outcomeAuditFailureResponse `json:"outcome_audit_failure,omitempty"`
+}
+
+// outcomeAuditFailureResponse is the field-for-field image of
+// controlplane.RenderedOutcomeAuditFailure.
+type outcomeAuditFailureResponse struct {
+	At     string `json:"at"`
+	Reason string `json:"reason"`
+}
+
+// outcomeAuditFailureResponseFrom is the struct conversion
+// outcomeAuditFailureResponse exists for: a rendered failure, or nil for a Job
+// with none recorded.
+func outcomeAuditFailureResponseFrom(f *controlplane.RenderedOutcomeAuditFailure) *outcomeAuditFailureResponse {
+	if f == nil {
+		return nil
+	}
+	out := outcomeAuditFailureResponse(*f)
+	return &out
 }
 
 // haltResponse is why a mutate Job stopped sending after its first failure or
@@ -600,6 +621,8 @@ func renderJob(ctx context.Context, results JobResultReader, jobID string) (exec
 		JobStatus: rendered.Status,
 		Results:   controlplane.MapSlice(rendered.Results, perNodeResultFromRendered),
 		Halt:      haltResponseFrom(rendered.Halt),
+
+		OutcomeAuditFailure: outcomeAuditFailureResponseFrom(rendered.OutcomeAuditFailure),
 	}, nil
 }
 

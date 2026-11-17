@@ -60,6 +60,8 @@ type jobResponse struct {
 	CreatedAt string          `json:"created_at,omitempty"`
 	Results   []perNodeResult `json:"results"`
 	Halt      *haltResponse   `json:"halt,omitempty"`
+
+	OutcomeAuditFailure *outcomeAuditFailureResponse `json:"outcome_audit_failure,omitempty"`
 }
 
 // cancelJobResponse acknowledges a cancel, carrying the id back so a caller
@@ -111,7 +113,7 @@ func handleGetJob(d Deps) http.HandlerFunc {
 			return
 		}
 
-		resp := jobResponse{JobID: out.JobID, JobStatus: out.JobStatus, Results: out.Results, Halt: out.Halt}
+		resp := jobResponse{JobID: out.JobID, JobStatus: out.JobStatus, Results: out.Results, Halt: out.Halt, OutcomeAuditFailure: out.OutcomeAuditFailure}
 		if job, err := d.Jobs.GetJob(r.Context(), jobID); err == nil {
 			resp.CreatedAt = controlplane.RFC3339(job.CreatedAt)
 		}

@@ -409,3 +409,25 @@ func enumStrings(enum []any) []string {
 	}
 	return out
 }
+
+// The document says a Job whose outcome audit write failed shows it, on both the
+// dispatch and the Jobs response.
+//
+// Proves EX-66.
+func TestOpenAPISpec_JobsDocumentTheOutcomeAuditFailure(t *testing.T) {
+	doc := loadSpec(t)
+	for _, name := range []string{"ExecutionResponse", "JobResponse"} {
+		if doc.Components.Schemas[name].Value.Properties["outcome_audit_failure"] == nil {
+			t.Errorf("%s has no outcome_audit_failure", name)
+		}
+	}
+	failure := doc.Components.Schemas["JobOutcomeAuditFailure"]
+	if failure == nil {
+		t.Fatal("components.schemas has no JobOutcomeAuditFailure")
+	}
+	for _, want := range []string{"at", "reason"} {
+		if !slices.Contains(failure.Value.Required, want) {
+			t.Errorf("JobOutcomeAuditFailure.required lacks %q", want)
+		}
+	}
+}

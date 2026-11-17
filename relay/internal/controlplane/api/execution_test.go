@@ -1523,3 +1523,16 @@ func TestExecutionRefusals_IdempotencyOutcomesRenderTheirStatus(t *testing.T) {
 		})
 	}
 }
+
+func TestDispatch_ResponseCarriesTheOutcomeAuditFailure(t *testing.T) {
+	exec := &fakeExecutor{started: capability.StartedJob{JobID: "job-1"}}
+	h := newExecFixture(t, accounts.RoleAdmin, exec, failedOutcomeFakeJobs())
+
+	rec := do(t, h, http.MethodPost, "/api/v1/raw-exec", rawExecRequest{Argv: []string{"/bin/true"}})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body %s", rec.Code, rec.Body.String())
+	}
+	if got := decodeOutcomeAuditFailure(t, rec.Body.Bytes()); !reflect.DeepEqual(got, wantOutcomeAuditFailure) {
+		t.Errorf("outcome_audit_failure = %#v, want %#v", got, wantOutcomeAuditFailure)
+	}
+}

@@ -562,7 +562,8 @@ func (s *Execution) reattach(ctx context.Context, p Principal, sel Selector, nod
 }
 
 // account is Run's post-dispatch half: it counts the outcomes and writes
-// the KindDispatch audit record. It is shared by Run and Start. alwaysLog logs
+// the KindDispatch audit record, and records a failed outcome write on the Job
+// (EX-66). It is shared by Run and Start. alwaysLog logs
 // an audit-write failure even off the reserved path, for Start's background
 // accounting, whose caller is gone.
 func (s *Execution) account(ctx context.Context, p Principal, sel Selector, pr prep, res dispatchResult, dispatchErr error, alwaysLog bool) ([]NodeResult, error) {
@@ -654,6 +655,12 @@ func (s *Execution) account(ctx context.Context, p Principal, sel Selector, pr p
 					"job_id", res.jobID, "node_id", res.halt.NodeID, "approval_id", ap.requestID, "error", haltAuditErr)
 			}
 		}
+	}
+
+	// A failed outcome write is recorded on the Job so get_job and the Jobs route
+	// show it (EX-66). ctx, not acctCtx: the helper detaches and bounds it itself.
+	if auditErr != nil || haltAuditErr != nil {
+		s.recordOutcomeAuditFailure(ctx, res.jobID, errors.Join(auditErr, haltAuditErr))
 	}
 
 	if err := errors.Join(dispatchErr, auditErr, haltAuditErr); err != nil {

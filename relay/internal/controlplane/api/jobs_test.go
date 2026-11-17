@@ -453,3 +453,55 @@ func TestGetJob_ReportsJobStatus(t *testing.T) {
 		})
 	}
 }
+
+func decodeOutcomeAuditFailure(t *testing.T, body []byte) map[string]any {
+	t.Helper()
+	var m map[string]any
+	if err := json.Unmarshal(body, &m); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	f, ok := m["outcome_audit_failure"]
+	if !ok {
+		return nil
+	}
+	obj, ok := f.(map[string]any)
+	if !ok {
+		t.Fatalf("outcome_audit_failure = %#v, want an object", f)
+	}
+	return obj
+}
+
+func failedOutcomeFakeJobs() fakeJobs {
+	return fakeJobs{
+		job:   jobs.Job{ID: "job-1", OutcomeAuditFailedAt: time.Date(2026, 11, 17, 12, 30, 0, 0, time.UTC)},
+		tasks: []jobs.Task{{NodeID: "node-1", State: jobs.DispatchStateResolved, Outcome: jobs.OutcomeSuccess}},
+	}
+}
+
+var wantOutcomeAuditFailure = map[string]any{"at": "2026-11-17T12:30:00Z", "reason": jobs.OutcomeAuditFailureReason}
+
+// Proves EX-66.
+func TestGetJob_ReportsTheOutcomeAuditFailure(t *testing.T) {
+	h := newJobFixture(t, accounts.RoleViewer, &fakeExecutor{}, failedOutcomeFakeJobs(), &fakeReadAuditor{})
+
+	rec := do(t, h, http.MethodGet, "/api/v1/jobs/job-1", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body %s", rec.Code, rec.Body.String())
+	}
+	if got := decodeOutcomeAuditFailure(t, rec.Body.Bytes()); !reflect.DeepEqual(got, wantOutcomeAuditFailure) {
+		t.Errorf("outcome_audit_failure = %#v, want %#v", got, wantOutcomeAuditFailure)
+	}
+}
+
+func TestGetJob_NoOutcomeAuditFailureKeyWhenNoneWasRecorded(t *testing.T) {
+	jr := fakeJobs{job: jobs.Job{ID: "job-1"}, tasks: []jobs.Task{{NodeID: "n1", Outcome: jobs.OutcomeSuccess}}}
+	h := newJobFixture(t, accounts.RoleViewer, &fakeExecutor{}, jr, &fakeReadAuditor{})
+
+	rec := do(t, h, http.MethodGet, "/api/v1/jobs/job-1", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body %s", rec.Code, rec.Body.String())
+	}
+	if got := decodeOutcomeAuditFailure(t, rec.Body.Bytes()); got != nil {
+		t.Errorf("outcome_audit_failure = %#v, want the key absent", got)
+	}
+}

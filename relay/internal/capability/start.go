@@ -95,7 +95,8 @@ type StartedJob struct {
 	Reattached bool
 
 	// Done closes after the Job's fan-out and its KindDispatch audit and metrics
-	// accounting finish. It is already closed when Reattached is set or nothing
+	// accounting, including recording a failed outcome write on the Job (EX-66),
+	// finish. It is already closed when Reattached is set or nothing
 	// ran in the background.
 	Done <-chan struct{}
 }

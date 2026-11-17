@@ -168,6 +168,8 @@ func renderJob(ctx context.Context, results JobResultReader, jobID string) (Exec
 		JobStatus: rendered.Status,
 		Results:   controlplane.MapSlice(rendered.Results, perNodeResultFromRendered),
 		Halt:      haltOutput(rendered.Halt),
+
+		OutcomeAuditFailure: outcomeAuditFailureOutput(rendered.OutcomeAuditFailure),
 	}, nil
 }
 
@@ -178,6 +180,16 @@ func haltOutput(h *controlplane.RenderedHalt) *HaltOutput {
 		return nil
 	}
 	out := HaltOutput(*h)
+	return &out
+}
+
+// outcomeAuditFailureOutput is the struct conversion OutcomeAuditFailureOutput
+// exists for: a rendered failure, or nil for a Job with none recorded.
+func outcomeAuditFailureOutput(f *controlplane.RenderedOutcomeAuditFailure) *OutcomeAuditFailureOutput {
+	if f == nil {
+		return nil
+	}
+	out := OutcomeAuditFailureOutput(*f)
 	return &out
 }
 
@@ -347,7 +359,7 @@ func dispatch(ctx context.Context, exec Executor, results JobResultReader, p cap
 	if err != nil {
 		return RunOrPlanOutput{}, nil, err
 	}
-	return RunOrPlanOutput{JobID: out.JobID, Results: out.Results, JobStatus: out.JobStatus, Halt: out.Halt, Reattached: sj.Reattached}, nil, nil
+	return RunOrPlanOutput{JobID: out.JobID, Results: out.Results, JobStatus: out.JobStatus, Halt: out.Halt, OutcomeAuditFailure: out.OutcomeAuditFailure, Reattached: sj.Reattached}, nil, nil
 }
 
 // dispatchOpts are the two presentation inputs of a real (non-plan) call: how
@@ -541,7 +553,7 @@ func answerThenDispatch(
 		if err != nil {
 			return nil, RunOrPlanOutput{}, r.reattachError(err)
 		}
-		out := RunOrPlanOutput{JobID: job.JobID, Results: job.Results, JobStatus: job.JobStatus, Halt: job.Halt}
+		out := RunOrPlanOutput{JobID: job.JobID, Results: job.Results, JobStatus: job.JobStatus, Halt: job.Halt, OutcomeAuditFailure: job.OutcomeAuditFailure}
 		out.Decision = r.decisionOutput(out)
 		return nil, out, nil
 
