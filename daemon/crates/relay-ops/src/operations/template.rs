@@ -2183,6 +2183,7 @@ mod proptests {
         // script is a golden literal, no sentinel byte of any value reaches
         // argv[0..4], argv[2] is the same for two different value vectors, and
         // argv[4..] is the positional vector verbatim.
+        // Proves EX-18.
         #[test]
         fn parsed_text_is_invariant_across_values(
             seeds in proptest::collection::vec((path_value(), path_value()), 12),

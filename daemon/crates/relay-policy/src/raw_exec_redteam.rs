@@ -298,7 +298,7 @@ fn redteam_cases() -> Vec<Case> {
                 policy_toml: "[raw_exec]\nallow = [\"^/bin/echo .+$\"]\n",
                 argv: &["/bin/echo", "$IFS"],
                 expect: Expect::Allow,
-                note: "argv-is-data pin: $IFS (like $HOME, backticks) is a literal argv token to the gate; there is no shell, so no variable expansion or word-splitting ever happens (ADR-0001). The gate sees the literal string \"$IFS\"; the executor passes it literally too, re-pinned end-to-end by raw_exec.rs::argv_is_data_not_shell_expanded",
+                note: "argv-is-data pin: $IFS (like $HOME, backticks) is a literal argv token to the gate; there is no shell, so no variable expansion or word-splitting ever happens (ADR-0001). The gate sees the literal string \"$IFS\"; the executor passes it literally too, re-pinned end-to-end by raw_exec.rs::invariant_1_raw_exec_reaches_the_executor_as_its_argv_with_no_shell",
             },
             // --- Axis 7: argv canonicalization before the deny pass (#227 / ADR-0019) ---
             //

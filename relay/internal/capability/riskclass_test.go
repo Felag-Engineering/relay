@@ -10,9 +10,9 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/registry"
 )
 
-// These tests are the proof of invariant 13 for Native and Raw Exec Actions
-// (#878, ADR-0012): only the capability layer decides the class, an adapter
-// that presets one is refused, and Raw Exec is always mutate.
+// These tests hold invariant 13 for Native and Raw Exec Actions (ADR-0012):
+// only the capability layer decides the class, an adapter that presets one is
+// refused, and Raw Exec is always mutate.
 
 func twoNodes() []registry.Node {
 	return []registry.Node{{NodeID: "node-0"}, {NodeID: "node-1"}}
@@ -72,7 +72,11 @@ func TestResolveAction_NativeWithNoClassResolvesToItsOpvocabClass(t *testing.T) 
 	}
 }
 
-func TestResolveAction_RawExecIsMutateWhateverTheAdapterPassed(t *testing.T) {
+// TestInvariant13_RawExecIsMutateWhateverTheAdapterPasses holds
+// invariant 13: a risk class is contract no caller can set or loosen, and it chooses the cap.
+// Raw Exec resolves to mutate for every preset, and a preset other than unspecified is refused.
+// Proves EX-8.
+func TestInvariant13_RawExecIsMutateWhateverTheAdapterPasses(t *testing.T) {
 	s := buildRaw(t, seams{nodeVocab: staticVocab{}})
 	for _, preset := range []jobs.RiskClass{jobs.RiskClassUnspecified, jobs.RiskClassRead, jobs.RiskClassMutate} {
 		act := jobs.Action{Kind: jobs.ActionRawExec, RawExecArgv: []string{"/bin/cat", "/etc/hostname"}, RiskClass: preset}
@@ -89,7 +93,10 @@ func TestResolveAction_RawExecIsMutateWhateverTheAdapterPassed(t *testing.T) {
 	}
 }
 
-func TestRun_NativePresetClassIsRefusedAndAuditedBeforeAnyJob(t *testing.T) {
+// TestInvariant13_ANativeClassACallerSetsIsRefusedBeforeAnyJob holds
+// invariant 13: a risk class is contract no caller can set or loosen, and it chooses the cap.
+// A Native Action that arrives with any class is refused, audited, and never reaches the cap.
+func TestInvariant13_ANativeClassACallerSetsIsRefusedBeforeAnyJob(t *testing.T) {
 	reg := seedOneNode(t)
 	authz := &spyAuthorizer{}
 	capChecker := &spyCapChecker{}
@@ -120,7 +127,11 @@ func TestRun_NativePresetClassIsRefusedAndAuditedBeforeAnyJob(t *testing.T) {
 	}
 }
 
-func TestRun_RawExecTakesTheMutateCap(t *testing.T) {
+// TestInvariant13_RawExecTakesTheMutateCap holds
+// invariant 13: a risk class is contract no caller can set or loosen, and it chooses the cap.
+// Raw Exec always takes the mutate cap, never the read cap.
+// Proves EX-8.
+func TestInvariant13_RawExecTakesTheMutateCap(t *testing.T) {
 	reg := seedOneNode(t)
 	capChecker := &spyCapChecker{}
 	svc := buildRaw(t, seams{reg: reg, authz: &spyAuthorizer{}, cap: capChecker, disp: &spyDispatcher{jobID: "job-1"},

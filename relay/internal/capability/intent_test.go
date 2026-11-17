@@ -12,10 +12,12 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/registry"
 )
 
-// TestEngineRecordsIntentWithTasksBeforeAnyDispatch: the intent and every
-// Task are recorded before the first Task is sent, and the intent carries what
-// the dispatch was (#887).
-func TestEngineRecordsIntentWithTasksBeforeAnyDispatch(t *testing.T) {
+// TestInvariant4_EveryTaskIsStoredPendingWithItsIntentBeforeAnyIsSent holds
+// invariant 4: a Task ID seen once is never executed twice.
+// Every Task is handed to the intent write as Pending, under its own ID, and
+// all are stored before the first send; the intent carries what the dispatch was.
+// Proves EX-29.
+func TestInvariant4_EveryTaskIsStoredPendingWithItsIntentBeforeAnyIsSent(t *testing.T) {
 	jobsRepo, tasksRepo := testEngineStore(t)
 	var log []string
 	conduit := newFakeConduit(&log)
@@ -59,6 +61,21 @@ func TestEngineRecordsIntentWithTasksBeforeAnyDispatch(t *testing.T) {
 		t.Errorf("intent entry carries %d Results, want none", len(got.Results))
 	}
 
+	stored := intents.recordedTasks()
+	if len(stored) != 2 {
+		t.Fatalf("RecordIntent was handed %d Tasks, want 2", len(stored))
+	}
+	seen := map[string]bool{}
+	for _, task := range stored {
+		if task.State != jobs.DispatchStatePending {
+			t.Errorf("Task %q handed to the intent write as %v, want Pending", task.ID, task.State)
+		}
+		if task.ID == "" || seen[task.ID] {
+			t.Errorf("Task ID %q is empty or repeated", task.ID)
+		}
+		seen[task.ID] = true
+	}
+
 	firstDispatch, creates := -1, 0
 	for i, l := range log {
 		if strings.HasPrefix(l, "create:") {
@@ -76,9 +93,11 @@ func TestEngineRecordsIntentWithTasksBeforeAnyDispatch(t *testing.T) {
 	}
 }
 
-// TestEngineIntentFailureDispatchesNothing is invariant 4: when the intent and
-// Tasks cannot be committed there is no Task to send, and nothing is sent.
-func TestEngineIntentFailureDispatchesNothing(t *testing.T) {
+// TestInvariant4_AFailedIntentWriteSendsNothing holds invariant 4: a Task ID
+// seen once is never executed twice.
+// When the intent and its Tasks cannot be written there is no Task, and nothing is sent.
+// Proves EX-29.
+func TestInvariant4_AFailedIntentWriteSendsNothing(t *testing.T) {
 	jobsRepo, tasksRepo := testEngineStore(t)
 	var log []string
 	conduit := newFakeConduit(&log)
@@ -155,12 +174,14 @@ type nonAtomicIntents struct {
 
 	mu      sync.Mutex
 	entries []AuditEntry
+	tasks   []jobs.Task
 	err     error
 }
 
 func (n *nonAtomicIntents) RecordIntent(ctx context.Context, e AuditEntry, tasks []jobs.Task) error {
 	n.mu.Lock()
 	n.entries = append(n.entries, e)
+	n.tasks = append(n.tasks, tasks...)
 	err := n.err
 	n.mu.Unlock()
 	if err != nil {
@@ -178,6 +199,12 @@ func (n *nonAtomicIntents) recorded() []AuditEntry {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	return append([]AuditEntry(nil), n.entries...)
+}
+
+func (n *nonAtomicIntents) recordedTasks() []jobs.Task {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return append([]jobs.Task(nil), n.tasks...)
 }
 
 // intentSpySink is a spy AuditSink that also records dispatch intent, so a test

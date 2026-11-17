@@ -3,7 +3,7 @@
 // Package main: reconnect_dedup_e2e_test.go is the v0.0.7 #190 acceptance
 // test — the milestone's headline: "killing and restarting the Relay:
 // daemons reconnect, dedup holds, no Task double-runs." It complements
-// TestFleetE2E_CrashMidJobNeverDoubleRuns (fleet_e2e_test.go): that test
+// TestFleetE2E_Invariant4_ARelayAndDaemonRestartNeverRunsATaskTwice (fleet_e2e_test.go): that test
 // proves dedup survives a daemon Relaunch after a crash-mid-Job; this one
 // proves the daemon's own in-process reconnect loop (#176) — the daemon is
 // launched ONCE and never killed or relaunched, only the Relay is — still
@@ -23,14 +23,15 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/relaytest"
 )
 
-// TestFleetE2E_RelayRestartDaemonReconnects_DedupHolds dispatches a slow,
-// side-effecting Raw Exec, kills the Relay while the Task is durably
-// in-flight, restarts the Relay on the SAME store/addr/CA, and confirms the
-// daemon reconnects entirely on its own (no Relaunch) and the reconciled
-// resend resolves via the daemon's dedup path rather than a second real
-// execution.
-// Proves NC-17.
-func TestFleetE2E_RelayRestartDaemonReconnects_DedupHolds(t *testing.T) {
+// TestFleetE2E_Invariant4_ARelayRestartNeverRunsATaskTwice holds
+// invariant 4: a Task ID seen once is never executed twice.
+// It dispatches a slow, side-effecting Raw Exec, kills the Relay while the Task
+// is durably in-flight, restarts the Relay on the SAME store/addr/CA, and
+// confirms the daemon reconnects entirely on its own (no Relaunch) and the
+// reconciled resend resolves via the daemon's dedup path rather than a second
+// real execution.
+// Proves NC-17, EX-31, DI-16.
+func TestFleetE2E_Invariant4_ARelayRestartNeverRunsATaskTwice(t *testing.T) {
 	relayBin, daemonBin := skipUnlessFleetBins(t)
 
 	fr := startFleetRelay(t, relayBin, "")
@@ -65,7 +66,7 @@ func TestFleetE2E_RelayRestartDaemonReconnects_DedupHolds(t *testing.T) {
 
 	// Fire the slow Job on a SECOND connection so the blocking run_job call
 	// doesn't stall the main goroutine; the response is never read (mirrors
-	// TestFleetE2E_CrashMidJobNeverDoubleRuns).
+	// TestFleetE2E_Invariant4_ARelayAndDaemonRestartNeverRunsATaskTwice).
 	h2 := dialHarness(t, fr.sockPath)
 	go func() {
 		_, _ = h2.send(map[string]any{
@@ -78,7 +79,7 @@ func TestFleetE2E_RelayRestartDaemonReconnects_DedupHolds(t *testing.T) {
 	jobID := waitForInFlightJobID(t, fr.harness)
 
 	// Kill the Relay the instant the Task is known in flight — no
-	// time.Sleep here (unlike TestFleetE2E_CrashMidJobNeverDoubleRuns):
+	// time.Sleep here (unlike TestFleetE2E_Invariant4_ARelayAndDaemonRestartNeverRunsATaskTwice):
 	// list_inflight already only surfaces a Task once MarkDispatched is
 	// durably committed, so there is nothing further to wait for before a
 	// truthful crash, and the no-sleeps-as-synchronization DoD is satisfied

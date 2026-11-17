@@ -417,10 +417,13 @@ func TestReconciler_ReReadFailureWithholdsAndReportsError(t *testing.T) {
 	}
 }
 
-// TestReconciler_ResendResolvesInFlightTask is the core restart-recovery
-// path: an in-flight Task for nodeID is resent, its benign-or-real Result is
-// Resolved, and it no longer appears in InFlight().
-func TestReconciler_ResendResolvesInFlightTask(t *testing.T) {
+// TestInvariant4_ARestartResendsAnInFlightTaskUnderItsOwnIDForItsResult holds
+// invariant 4: a Task ID seen once is never executed twice.
+// On reconnect after a restart, a Dispatched Task with no result is re-sent under the same
+// Task ID, so the daemon's dedup answers it instead of running it again; its benign-or-real
+// Result is Resolved and it no longer appears in InFlight().
+// Proves EX-31.
+func TestInvariant4_ARestartResendsAnInFlightTaskUnderItsOwnIDForItsResult(t *testing.T) {
 	task := jobs.Task{ID: "task-1", NodeID: "node-1", State: jobs.DispatchStateDispatched}
 	tasks := newFakeTaskRepository(task)
 	router := NewRouter(nil, nil)

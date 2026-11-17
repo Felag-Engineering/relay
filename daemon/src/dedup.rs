@@ -618,10 +618,12 @@ mod tests {
         );
     }
 
-    /// Sending the same task_id twice runs exec only on the first call.
-    /// [AC: re-sent seen id not executed again]
+    /// Invariant 4: a Task ID seen once is never executed twice.
+    /// The daemon shares one DedupStore across every reconnect, so this is the store half of
+    /// the reconnect property: a Task ID the store has recorded runs once.
+    // Proves DI-16.
     #[tokio::test]
-    async fn same_id_twice_runs_once() {
+    async fn invariant_4_a_task_id_seen_twice_by_one_dedup_store_runs_once() {
         let state_dir = TempDir::new("same-id-twice");
         let store = DedupStore::open(state_dir.path()).expect("open");
 
@@ -702,11 +704,11 @@ mod tests {
         );
     }
 
-    /// Dedup survives a daemon restart: a brand-new DedupStore opened from the same
-    /// state dir loads the persisted markers and refuses to re-run the Task.
-    /// [AC: dedup across restart via persisted ids]
+    /// Invariant 4: a Task ID seen once is never executed twice.
+    /// A new DedupStore opened on the same state dir reloads the marker and refuses the re-run.
+    // Proves DI-16.
     #[tokio::test]
-    async fn dedup_survives_restart() {
+    async fn invariant_4_a_task_id_seen_before_a_daemon_restart_never_runs_again() {
         let state_dir = TempDir::new("restart");
 
         let counter = Arc::new(AtomicUsize::new(0));
