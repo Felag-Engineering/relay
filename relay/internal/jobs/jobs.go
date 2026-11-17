@@ -122,6 +122,14 @@ const VersionRefusedMessage = "capability: dispatch refused: this Node's relay-d
 	"the Relay's configured minimum (ADR-0014); the Task was never sent. Upgrade the daemon on this Node " +
 	"through your config-management / IaC pipeline — the Relay never pushes binaries."
 
+// OutcomeAuditFailureReason is the Relay-authored text every surface shows for a Job
+// carrying OutcomeAuditFailedAt (EX-66). It is fixed and never carries the store's error
+// text, which may hold internals.
+const OutcomeAuditFailureReason = "outcome not audited: this Job's Tasks ran, but writing " +
+	"its outcome to the audit trail failed. The trail holds who asked for what, against " +
+	"which Selector, but not these per-Node outcomes or this Job's halt; the results here " +
+	"are read from the Job itself. The cause is in the Relay's error log."
+
 // NodeOfflineMessage is the Relay-authored reason recorded as the Stderr of a
 // Task that was in flight to a Node when the Node went offline. The Task WAS
 // dispatched and may have run, so the text claims no more than the Relay
@@ -369,6 +377,9 @@ type Job struct {
 	Requester Requester
 	// Halt is why the Job stopped sending; the zero value means it never halted.
 	Halt Halt
+	// OutcomeAuditFailedAt is when the Relay recorded that writing this Job's outcome to the
+	// audit trail failed (EX-66); the zero value means no such failure is recorded.
+	OutcomeAuditFailedAt time.Time
 }
 
 // Halt is why a mutate Job stopped sending (execution.md, Halting a failing
@@ -544,6 +555,11 @@ type JobRepository interface {
 	// Outcome is not failure or timeout, or whose Resolved is true while the
 	// store does not hold that Task Resolved with Outcome.
 	RecordHalt(ctx context.Context, jobID string, h Halt) error
+
+	// RecordOutcomeAuditFailure records at on jobID as the time its outcome audit write
+	// failed. The first write wins: a later call on a Job that already carries one changes
+	// nothing and returns nil. It returns ErrJobNotFound for an unknown Job.
+	RecordOutcomeAuditFailure(ctx context.Context, jobID string, at time.Time) error
 
 	// Stages returns all Stages for jobID (at most one, in v1), ordered by Index.
 	Stages(ctx context.Context, jobID string) ([]Stage, error)

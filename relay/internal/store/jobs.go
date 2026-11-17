@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/Felag-Engineering/relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/relay/relay/internal/jobs"
@@ -73,15 +74,15 @@ func (j *sqliteJobs) AddStage(ctx context.Context, stage jobs.Stage) error {
 func (j *sqliteJobs) GetJob(ctx context.Context, id string) (jobs.Job, error) {
 	var createdAt string
 	var requesterID, requesterName, requesterKind sql.NullString
-	var haltTaskID, haltNodeID, haltedAt sql.NullString
+	var haltTaskID, haltNodeID, haltedAt, auditFailedAt sql.NullString
 	var haltOutcome sql.NullInt64
 	var haltResolved int64
 	err := j.db.QueryRowContext(ctx,
 		`SELECT created_at, requester_account_id, requester_account_name, requester_kind,
-			halt_task_id, halt_node_id, halt_outcome, halt_resolved, halted_at
+			halt_task_id, halt_node_id, halt_outcome, halt_resolved, halted_at, outcome_audit_failed_at
 		FROM jobs WHERE job_id = ?`, id).
 		Scan(&createdAt, &requesterID, &requesterName, &requesterKind,
-			&haltTaskID, &haltNodeID, &haltOutcome, &haltResolved, &haltedAt)
+			&haltTaskID, &haltNodeID, &haltOutcome, &haltResolved, &haltedAt, &auditFailedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return jobs.Job{}, jobs.ErrJobNotFound
 	}
@@ -113,6 +114,13 @@ func (j *sqliteJobs) GetJob(ctx context.Context, id string) (jobs.Job, error) {
 			Resolved: haltResolved != 0,
 			At:       at,
 		}
+	}
+	if auditFailedAt.Valid {
+		at, err := parseTime(auditFailedAt)
+		if err != nil {
+			return jobs.Job{}, fmt.Errorf("parse outcome_audit_failed_at for job %q: %w", id, err)
+		}
+		job.OutcomeAuditFailedAt = at
 	}
 	return job, nil
 }
@@ -167,6 +175,34 @@ func (j *sqliteJobs) RecordHalt(ctx context.Context, jobID string, h jobs.Halt) 
 	}
 	return fmt.Errorf("store: task %q on node %q is not a Task of job %q holding the halt's recorded outcome",
 		h.TaskID, h.NodeID, jobID)
+}
+
+// RecordOutcomeAuditFailure records at on jobID once: the WHERE clause makes the
+// first write win, and a later call on a Job already carrying one returns nil.
+// It returns jobs.ErrJobNotFound for an unknown Job.
+func (j *sqliteJobs) RecordOutcomeAuditFailure(ctx context.Context, jobID string, at time.Time) error {
+	res, err := j.db.ExecContext(ctx,
+		`UPDATE jobs SET outcome_audit_failed_at = ? WHERE job_id = ? AND outcome_audit_failed_at IS NULL`,
+		formatTime(roundTripTime(at)), jobID)
+	if err != nil {
+		return fmt.Errorf("record outcome audit failure of job %q: %w", jobID, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("record outcome audit failure of job %q: rows affected: %w", jobID, err)
+	}
+	if n > 0 {
+		return nil
+	}
+	var one int
+	err = j.db.QueryRowContext(ctx, `SELECT 1 FROM jobs WHERE job_id = ?`, jobID).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return jobs.ErrJobNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("record outcome audit failure of job %q: %w", jobID, err)
+	}
+	return nil
 }
 
 // Stages returns all Stages for jobID, ordered by Index (at most one, in v1).

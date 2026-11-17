@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 )
@@ -77,5 +78,33 @@ func TestRenderJob_NoHaltWhenTheJobDidNotHalt(t *testing.T) {
 	}
 	if got.Halt != nil || got.Status != JobStatusRunning {
 		t.Errorf("RenderJob = halt %+v status %q, want no halt and a running Job", got.Halt, got.Status)
+	}
+}
+
+// Proves EX-66.
+func TestRenderJob_CarriesTheOutcomeAuditFailureWithTheFixedReason(t *testing.T) {
+	at := time.Date(2026, 11, 17, 12, 30, 0, 0, time.UTC)
+	reader := fakeJobResults{
+		job:   jobs.Job{ID: "job-1", OutcomeAuditFailedAt: at},
+		tasks: []jobs.Task{{ID: "task-1", NodeID: "node-1", State: jobs.DispatchStateResolved, Outcome: jobs.OutcomeSuccess}},
+	}
+	got, err := RenderJob(context.Background(), reader, "job-1")
+	if err != nil {
+		t.Fatalf("RenderJob: %v", err)
+	}
+	want := &RenderedOutcomeAuditFailure{At: "2026-11-17T12:30:00Z", Reason: jobs.OutcomeAuditFailureReason}
+	if !reflect.DeepEqual(got.OutcomeAuditFailure, want) {
+		t.Errorf("OutcomeAuditFailure = %+v, want %+v", got.OutcomeAuditFailure, want)
+	}
+}
+
+func TestRenderJob_NoOutcomeAuditFailureWhenNoneWasRecorded(t *testing.T) {
+	reader := fakeJobResults{job: jobs.Job{ID: "job-1"}}
+	got, err := RenderJob(context.Background(), reader, "job-1")
+	if err != nil {
+		t.Fatalf("RenderJob: %v", err)
+	}
+	if got.OutcomeAuditFailure != nil {
+		t.Errorf("OutcomeAuditFailure = %+v, want nil", got.OutcomeAuditFailure)
 	}
 }

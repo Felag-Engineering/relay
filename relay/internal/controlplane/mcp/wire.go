@@ -279,10 +279,11 @@ type PerNodeResult struct {
 // per-Node results. run_operation/raw_exec render the superset
 // RunOrPlanOutput instead — see its JobID presence rules.
 type ExecutionOutput struct {
-	JobID     string          `json:"job_id"`
-	JobStatus string          `json:"job_status" jsonschema:"running while any Task is unresolved (its outcome reads unspecified); complete once every Task has a terminal outcome. Poll get_job with job_id until complete."`
-	Results   []PerNodeResult `json:"results"`
-	Halt      *HaltOutput     `json:"halt,omitempty" jsonschema:"present only when a mutate Job halted on its first failure or timeout; Tasks not yet sent resolve cancelled with this reason, Tasks already in flight report their own outcomes; a read Job never halts."`
+	JobID               string                     `json:"job_id"`
+	JobStatus           string                     `json:"job_status" jsonschema:"running while any Task is unresolved (its outcome reads unspecified); complete once every Task has a terminal outcome. Poll get_job with job_id until complete."`
+	Results             []PerNodeResult            `json:"results"`
+	Halt                *HaltOutput                `json:"halt,omitempty" jsonschema:"present only when a mutate Job halted on its first failure or timeout; Tasks not yet sent resolve cancelled with this reason, Tasks already in flight report their own outcomes; a read Job never halts."`
+	OutcomeAuditFailure *OutcomeAuditFailureOutput `json:"outcome_audit_failure,omitempty" jsonschema:"present only when writing this Job's outcome to the audit trail failed after its Tasks ran; the trail holds the dispatch's intent but not these outcomes. Absence does not prove the outcome was audited: it can appear shortly after job_status is complete, and is never recorded if the Relay exits before the outcome write."`
 }
 
 // HaltOutput is why a mutate Job stopped sending after its first failure or
@@ -294,6 +295,13 @@ type HaltOutput struct {
 	Outcome  string `json:"outcome" jsonschema:"failure or timeout"`
 	Resolved bool   `json:"resolved" jsonschema:"true when that outcome is the Task's recorded result; false when the engine reported this outcome with no recorded result; the Task's real outcome may still arrive"`
 	Reason   string `json:"reason" jsonschema:"Relay-authored; also the stderr of every Task the halt left unsent"`
+}
+
+// OutcomeAuditFailureOutput is the field-for-field image of
+// controlplane.RenderedOutcomeAuditFailure.
+type OutcomeAuditFailureOutput struct {
+	At     string `json:"at" jsonschema:"when the Relay recorded the failure (RFC 3339, UTC)"`
+	Reason string `json:"reason" jsonschema:"Relay-authored and fixed; the cause is in the Relay's error log"`
 }
 
 // PerNodeVerdict is one matched Node's Plan-mode result (ADR-0011):
@@ -370,6 +378,10 @@ type RunOrPlanOutput struct {
 
 	// Halt is present only when the Job halted; see ExecutionOutput.Halt.
 	Halt *HaltOutput `json:"halt,omitempty" jsonschema:"present only when a mutate Job halted on its first failure or timeout; Tasks not yet sent resolve cancelled with this reason, Tasks already in flight report their own outcomes; a read Job never halts."`
+
+	// OutcomeAuditFailure is present only when the outcome write failed; see
+	// ExecutionOutput.OutcomeAuditFailure.
+	OutcomeAuditFailure *OutcomeAuditFailureOutput `json:"outcome_audit_failure,omitempty" jsonschema:"present only when writing this Job's outcome to the audit trail failed after its Tasks ran; the trail holds the dispatch's intent but not these outcomes. Absence does not prove the outcome was audited: it can appear shortly after job_status is complete, and is never recorded if the Relay exits before the outcome write."`
 
 	// PendingApproval is set when the dispatch PARKED for human approval
 	// (ADR-0027) instead of running. When it is present, job_id is absent and

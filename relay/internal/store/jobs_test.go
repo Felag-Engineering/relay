@@ -427,3 +427,60 @@ func TestRecordHalt_RefusesAResolvedHaltTheTaskDoesNotHold(t *testing.T) {
 		})
 	}
 }
+
+func TestGetJob_NoOutcomeAuditFailureByDefault(t *testing.T) {
+	st, _ := openTestStore(t)
+	seedJobAndStage(t, st, "job-a", "stage-a")
+	job, err := st.Jobs().GetJob(context.Background(), "job-a")
+	if err != nil {
+		t.Fatalf("GetJob: %v", err)
+	}
+	if !job.OutcomeAuditFailedAt.IsZero() {
+		t.Errorf("OutcomeAuditFailedAt = %v, want zero", job.OutcomeAuditFailedAt)
+	}
+}
+
+func TestRecordOutcomeAuditFailure_ReadBackByGetJob(t *testing.T) {
+	st, _ := openTestStore(t)
+	ctx := context.Background()
+	seedJobAndStage(t, st, "job-a", "stage-a")
+	at := time.Date(2026, 11, 17, 12, 0, 0, 123, time.UTC)
+	if err := st.Jobs().RecordOutcomeAuditFailure(ctx, "job-a", at); err != nil {
+		t.Fatalf("RecordOutcomeAuditFailure: %v", err)
+	}
+	job, err := st.Jobs().GetJob(ctx, "job-a")
+	if err != nil {
+		t.Fatalf("GetJob: %v", err)
+	}
+	if !job.OutcomeAuditFailedAt.Equal(at) {
+		t.Errorf("OutcomeAuditFailedAt = %v, want %v", job.OutcomeAuditFailedAt, at)
+	}
+}
+
+func TestRecordOutcomeAuditFailure_FirstWriteWins(t *testing.T) {
+	st, _ := openTestStore(t)
+	ctx := context.Background()
+	seedJobAndStage(t, st, "job-a", "stage-a")
+	first := time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC)
+	if err := st.Jobs().RecordOutcomeAuditFailure(ctx, "job-a", first); err != nil {
+		t.Fatalf("first RecordOutcomeAuditFailure: %v", err)
+	}
+	if err := st.Jobs().RecordOutcomeAuditFailure(ctx, "job-a", first.Add(time.Hour)); err != nil {
+		t.Fatalf("second RecordOutcomeAuditFailure: %v, want nil", err)
+	}
+	job, err := st.Jobs().GetJob(ctx, "job-a")
+	if err != nil {
+		t.Fatalf("GetJob: %v", err)
+	}
+	if !job.OutcomeAuditFailedAt.Equal(first) {
+		t.Errorf("OutcomeAuditFailedAt = %v, want the first write %v", job.OutcomeAuditFailedAt, first)
+	}
+}
+
+func TestRecordOutcomeAuditFailure_UnknownJobIsNotFound(t *testing.T) {
+	st, _ := openTestStore(t)
+	err := st.Jobs().RecordOutcomeAuditFailure(context.Background(), "no-such-job", time.Now().UTC())
+	if !errors.Is(err, jobs.ErrJobNotFound) {
+		t.Errorf("error = %v, want jobs.ErrJobNotFound", err)
+	}
+}

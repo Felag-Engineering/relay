@@ -1528,6 +1528,15 @@ components:
             never halts. Tasks not yet sent resolve `cancelled` with `reason`
             as their `stderr`; Tasks already in flight report their own
             outcomes.
+        outcome_audit_failure:
+          $ref: '#/components/schemas/JobOutcomeAuditFailure'
+          description: |
+            Present only when writing this Job's outcome to the audit trail
+            failed after its Tasks ran (EX-66). The trail holds the dispatch's
+            intent but not these outcomes. Absence does not prove the outcome
+            was audited: the field can appear shortly after `job_status` is
+            complete, and is never recorded if the Relay exits before the
+            outcome write.
 
     JobHalt:
       type: object
@@ -1548,6 +1557,17 @@ components:
         reason:
           type: string
           description: Relay-authored. Also the `stderr` of every Task the halt left unsent.
+
+    JobOutcomeAuditFailure:
+      type: object
+      required: [at, reason]
+      properties:
+        at:
+          type: string
+          format: date-time
+        reason:
+          type: string
+          description: Relay-authored and fixed; never the store's error. The cause is in the Relay's error log.
 
     PerNodeVerdict:
       type: object
@@ -1663,6 +1683,15 @@ components:
             never halts. Tasks not yet sent resolve `cancelled` with `reason`
             as their `stderr`; Tasks already in flight report their own
             outcomes.
+        outcome_audit_failure:
+          $ref: '#/components/schemas/JobOutcomeAuditFailure'
+          description: |
+            Present only when writing this Job's outcome to the audit trail
+            failed after its Tasks ran (EX-66). The trail holds the dispatch's
+            intent but not these outcomes. Absence does not prove the outcome
+            was audited: the field can appear shortly after `job_status` is
+            complete, and is never recorded if the Relay exits before the
+            outcome write.
 
     CancelledJob:
       type: object
