@@ -140,9 +140,12 @@ relay/internal/hostfile/**
 relay/internal/relayconfig/**
 relay/cmd/relay/init*.go
 relay/cmd/relay/reload*.go
-relay/cmd/relay/shutdown*.go
 daemon/src/join*.rs
 daemon/src/join/**
+
+# Added 2026-11-17 (owner decision on #1368): the Relay's clean-shutdown path. It decides
+# when the control plane closes and how long accepted Jobs may run before the process exits.
+relay/cmd/relay/shutdown*.go
 
 # Added 2026-10-26 (install matrix; the owner confirms at review): the per-platform images
 # the install matrix boots. Each decides what the matrix proves about a package, for the

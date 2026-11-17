@@ -60,12 +60,16 @@ enrollment playbook you already ran.**
    `POST /api/v1/freeze/engage`): all new dispatch halts fleet-wide (ADR-0013). If the Relay
    host itself is compromised, stop the Relay instead (step 2): a Relay that has exited
    dispatches nothing.
-2. **Stop the Relay.** A stop waits up to 60 s for running Jobs to write their outcome. Meanwhile
-   the Control API and Console are closed, but the node plane still serves: Tasks of an
-   already accepted Job may still be sent, and enrollment and renewal are still answered. For an
-   immediate stop, send a second stop signal or run `systemctl kill --signal=SIGKILL relay`;
-   Tasks still queued then never run (EX-32). Once the Relay has exited, no new certificates
-   can be minted; existing Node certs age out within ~14 days regardless.
+2. **Stop the Relay.** Run `systemctl stop relay`. A stop waits up to about 65 s for running
+   Jobs to write their outcome. Meanwhile MCP, the Control API and the Console are closed, but
+   the node plane still serves: Tasks of an already accepted Job may still be sent, and
+   enrollment and renewal are still answered. For an immediate stop, while `systemctl stop` is
+   waiting, send a second stop signal (`kill -TERM <relay-pid>`) or run
+   `systemctl kill --signal=SIGKILL relay`; Tasks still queued then never run (EX-32). Run on
+   its own, without `systemctl stop`, a SIGKILL ends the Relay and the unit's
+   `Restart=on-failure` starts it again a few seconds later. Once the Relay has exited under a
+   stop, no new certificates can be minted; existing Node certs age out within ~14 days
+   regardless.
 3. **Retire the old CA.** Move the old `ca.dir` aside for forensics (reuse none of it). Rotate
    every API Token too: mint each caller a replacement and revoke the old one
    ([control-plane-credential.md](control-plane-credential.md)), assuming everything on the host

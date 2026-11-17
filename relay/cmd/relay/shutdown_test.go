@@ -78,7 +78,7 @@ func TestShutdown_AJobThatFinishesInsideTheBoundHasItsOutcomeWrittenBeforeTheRel
 		time.Sleep(20 * time.Millisecond)
 	}
 	if !closed {
-		t.Fatal("the control plane still accepted a dispatch after the shutdown began")
+		t.Fatal("the control plane still answered a request after the shutdown began")
 	}
 	select {
 	case <-done:

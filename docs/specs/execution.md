@@ -54,7 +54,9 @@ server, by rules kept there (its Policy), after everything here has passed.
 - **EX-10** The approval gate runs after the cap and before any Task exists; what a park leaves
   and how it is audited are `approval.md`'s.
 - **EX-11** Every dispatch, including one whose dispatcher errored partway, has its outcome
-  written to the audit trail.
+  written to the audit trail. On a stop signal the Relay waits up to 60 seconds for running
+  Jobs, so a Job that finishes inside that bound has its outcome written before the Relay exits;
+  one still running is logged by ID (R57).
 - **EX-66** A dispatch whose outcome write fails after it has returned its Job ID records the failure on the Job where the store can still write it, and `get_job` and the Jobs route show it.
 - **EX-12** The execution path never evaluates Policy; a Node's own daemon decides what it runs.
 - **EX-69** Before the pipeline runs, an adapter refuses a request it cannot decode or whose
