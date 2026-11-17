@@ -1,6 +1,7 @@
 package controlplane
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -54,6 +55,27 @@ func ResolveWaitSeconds(s int32) (time.Duration, error) {
 		return 0, fmt.Errorf("wait_seconds must be <= %d, got %d; poll get_job for longer waits", MaxWaitSeconds, s)
 	}
 	return time.Duration(s) * time.Second, nil
+}
+
+// AwaitStartedJob holds until the Job's Done closes, the wait lapses or ctx
+// ends, and returns at once on a zero wait, a re-attached Job or a nil Done
+// (an adapter or fake that hands back a Job with no completion signal). The
+// wait is presentation only: how long a call holds belongs to the adapter
+// (EX-69) and decides nothing about what was dispatched. A lapse or a dropped
+// caller leaves the Job running exactly as it was (EX-35). Every execution
+// surface that holds for a Job does so through this one function, so they
+// cannot drift.
+func AwaitStartedJob(ctx context.Context, sj capability.StartedJob, wait time.Duration) {
+	if wait <= 0 || sj.Reattached || sj.Done == nil {
+		return
+	}
+	t := time.NewTimer(wait)
+	defer t.Stop()
+	select {
+	case <-sj.Done:
+	case <-t.C:
+	case <-ctx.Done():
+	}
 }
 
 // VerdictName renders a capability.VerdictStatus as its lowercase wire name.
