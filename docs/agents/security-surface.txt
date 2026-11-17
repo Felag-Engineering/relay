@@ -140,6 +140,7 @@ relay/internal/hostfile/**
 relay/internal/relayconfig/**
 relay/cmd/relay/init*.go
 relay/cmd/relay/reload*.go
+relay/cmd/relay/shutdown*.go
 daemon/src/join*.rs
 daemon/src/join/**
 

@@ -112,11 +112,12 @@ func closedChan() <-chan struct{} {
 // so a late call can never add work after Drain's Wait began, whatever the
 // transport does with an in-flight request.
 //
-// Production does not call Drain yet: cmd/relay has no shutdown path, so only
-// test fixtures use it. On process exit a background Job's post-dispatch
-// KindDispatch audit record and its metrics can therefore be lost. At-most-once
-// still holds: the dispatch intent is persisted before any Task is sent, and the
-// daemon dedups by Task ID.
+// The composition root calls Drain on SIGTERM or SIGINT, under a fixed bound,
+// so a clean shutdown writes each finished Job's outcome record (EX-11) and
+// records any failed write on the Job (EX-66). A Job still running when ctx
+// ends is not cancelled; if the process then exits, its outcome record is lost,
+// but its dispatch intent was persisted before any Task was sent (EX-29) and
+// the daemon dedups by Task ID (invariant 4).
 func (s *Execution) Drain(ctx context.Context) error {
 	s.bgMu.Lock()
 	s.draining = true

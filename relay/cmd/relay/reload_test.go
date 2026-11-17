@@ -475,14 +475,16 @@ func TestNewServer_ZeroFilesStillRefusedFirst(t *testing.T) {
 	}
 }
 
-// TestSignals_OnlyFreezeAndReloadHandleSignals: os/signal is imported by the
-// Freeze lever and the reload lever and nowhere else that runs in a serving
-// Relay, so no third signal-driven path to a running Relay exists. The one
+// TestSignals_OnlyFreezeReloadAndStopHandleSignals: os/signal is imported by the
+// Freeze lever, the reload lever and the stop signal's shutdown (shutdown.go,
+// which stops dispatch, waits for running Jobs under a fixed bound and returns
+// to main; it does not end the process itself) and nowhere else that runs in a
+// serving Relay, so no other signal-driven path to a running Relay exists. The one
 // other importer is relay init's password prompt, which restores the terminal
 // on SIGINT or SIGTERM, lives only while the prompt does, and runs in the
 // short-lived init process, never in a serving Relay.
-func TestSignals_OnlyFreezeAndReloadHandleSignals(t *testing.T) {
-	allowed := map[string]bool{"freeze_signal.go": true, "reload_signal.go": true, "init_term_linux.go": true}
+func TestSignals_OnlyFreezeReloadAndStopHandleSignals(t *testing.T) {
+	allowed := map[string]bool{"freeze_signal.go": true, "reload_signal.go": true, "shutdown.go": true, "init_term_linux.go": true}
 	entries, err := fs.ReadDir(os.DirFS("."), ".")
 	if err != nil {
 		t.Fatal(err)
@@ -498,7 +500,7 @@ func TestSignals_OnlyFreezeAndReloadHandleSignals(t *testing.T) {
 		}
 		for _, imp := range file.Imports {
 			if p, _ := strconv.Unquote(imp.Path.Value); p == "os/signal" && !allowed[name] {
-				t.Errorf("%s imports os/signal; only the Freeze and reload levers may", name)
+				t.Errorf("%s imports os/signal; only the Freeze, reload and stop levers may", name)
 			}
 		}
 	}
