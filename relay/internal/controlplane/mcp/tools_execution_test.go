@@ -411,13 +411,16 @@ func TestBuildOperationAction_TemplateNameCarriesNoClass(t *testing.T) {
 	}
 }
 
-// TestRenderRunError_TemplateRefusalsPassThroughVerbatim: the capability
-// layer's unknown-operation and malformed-call refusals already tell the
+// TestRenderRunError_CallRefusalsPassThroughVerbatim: the capability layer's
+// unknown-operation, malformed-call and timeout refusals already tell the
 // AI-agent what to do next, so they reach it unwrapped.
-func TestRenderRunError_TemplateRefusalsPassThroughVerbatim(t *testing.T) {
+//
+// Proves EX-59.
+func TestRenderRunError_CallRefusalsPassThroughVerbatim(t *testing.T) {
 	for _, err := range []error{
 		&capability.UnknownOperationError{Operation: "nope.notreal", Matched: 1},
 		&capability.MalformedCallError{Operation: "log.tail", Reason: "unknown argument(s) [unitt]"},
+		&capability.TimeoutError{Asked: 301},
 	} {
 		if got := renderRunError(err); got.Error() != err.Error() {
 			t.Errorf("renderRunError(%q) = %q, want it verbatim", err.Error(), got.Error())

@@ -199,6 +199,7 @@ differs from an outcome, where a Job ran and a Node failed; a cancel refusal lea
   capability layer, at the stage of EX-61, and the refusal is audited.
 - **EX-67** A Raw Exec call with an empty argv is refused as malformed in the capability layer, at
   the stage of EX-61, and the refusal is audited.
+- **EX-59** A dispatch asking for a Task timeout above 300 seconds is refused in the capability layer, at the stage of EX-61, naming the ceiling.
 - **EX-52** A Principal whose role does not permit the Action is refused
   (`accounts-and-access.md`); Raw Exec needs `admin`.
 - **EX-53** An idempotency key reused by the same Account within its window with different
@@ -214,7 +215,6 @@ differs from an outcome, where a Job ran and a Node failed; a cancel refusal lea
 
 | Claim | Statement | Milestone |
 |---|---|---|
-| EX-59 | A dispatch asking for a Task timeout above 300 seconds is refused in the capability layer, at the stage of EX-61, naming the ceiling. | v0.2.2 |
 | EX-66 | A dispatch whose outcome write fails after it has returned its Job ID records the failure on the Job where the store can still write it, and `get_job` and the Jobs route show it. Replaces EX-68 when promoted. | v0.2.2 |
 
 ## Out of scope
@@ -260,6 +260,7 @@ differs from an outcome, where a Job ran and a Node failed; a cancel refusal lea
 | EX-53 | `TestControlAPI_IdempotencyConflictRendersIdenticallyOnBothSurfaces` | Relay |
 | EX-57 | `TestControlAPI_ADispatchReturnsItsRunningJobBeforeTheNodeAnswers`, `TestControlAPI_ALapsedWaitReturnsTheRunningJobAndNeverCancelsIt`, `TestControlAPI_JobRoutes`, `TestControlAPI_TheFirstReDriveAfterAnApprovalWaitsAndASecondReAttachesAtOnce`, `TestControlAPI_WaitSecondsAbove300IsABadRequest`, `TestControlAPI_WaitSecondsReturnsFullResults`, `TestDispatch_AParkIsStill202AndNeverARunningJob`, `TestDispatch_AReadBackFailureAfterStartIs500NamingTheJob`, `TestDispatch_ARunningJobIs200WithJobStatusRunning`, `TestDispatch_ReattachedIsRendered`, `TestDispatch_WaitSecondsOutsideItsRangeIsABadRequest`, `TestGetJob_ReportsJobStatus`, `TestOpenAPISpec_DispatchDocumentsTheJobHandBack` | API, Relay |
 | EX-58 | `TestControlAPI_ALostResponseIsRetriedSafelyWithItsIdempotencyKey`, `TestControlAPI_AMalformedIdempotencyKeyIsABadRequest`, `TestControlAPI_APreflightWithAKeyClaimsNothing`, `TestControlAPI_AnotherAccountsSameKeyIsANewJob`, `TestControlAPI_IdempotencyConflictRendersIdenticallyOnBothSurfaces`, `TestDispatch_IdempotencyKeyHeaderReachesStart`, `TestDispatch_MoreThanOneIdempotencyKeyIsABadRequest`, `TestDispatch_ReattachedIsRendered`, `TestExecutionRefusals_IdempotencyOutcomesRenderTheirStatus`, `TestOpenAPISpec_DispatchDocumentsTheJobHandBack`, `TestPlanMode_IgnoresTheIdempotencyKey` | API, Relay |
+| EX-59 | `TestCallShape_TaskTimeoutAtTheCeilingPasses`, `TestCallShape_TaskTimeoutFromUnauthorizedCallerIsUnauthorized`, `TestCallShape_TaskTimeoutOutsideTheCeilingIsRefusedAuditedWithNoJob`, `TestCheckCallShape_TheTimeoutIsTheLastCheck`, `TestControlAPI_TimeoutAboveTheCeilingRendersIdenticallyOnBothSurfaces`, `TestDispatch_TimeoutSecondsReachesTheCapabilityLayer`, `TestExecutionRefusals_ATimeoutOutsideTheCeilingIsInvalidTimeoutSeconds`, `TestMCP_ExecutionToolsInputSchemaConstraints`, `TestMCP_TimeoutOutsideTheCeilingIsRefusedByTheLayer`, `TestRenderRunError_CallRefusalsPassThroughVerbatim`, `TestStart_MalformedCallMatchingNoNodeIsRefusedAsNoNodesMatched`, `TestTimeoutError_NamesTheCeilingAndSaysNothingWasDispatched` | API, MCP, Relay, capability |
 | EX-60 | `TestMCP_ListOperationsSaysArgumentsAreAuditedVerbatim` | MCP |
 | EX-64 | `TestCallShape_MalformedNativeCallFromUnauthorizedCallerIsUnauthorized`, `TestCallShape_MalformedNativeCallIsRefusedAuditedWithNoJob`, `TestControlAPI_CallShapeRefusalRendersIdenticallyOnBothSurfaces`, `TestPlan_UndeclaredNativeArgumentIsRefusedBeforeAnyNodeIsQueried`, `TestRunOperation_ArgumentNamesReachTheCapabilityLayer`, `TestRunOperation_TemplateRefusalsAreBadRequests`, `TestStart_MalformedCallMatchingNoNodeIsRefusedAsNoNodesMatched` | API, Relay, capability |
 | EX-67 | `TestCallShape_EmptyArgvFromAnOperatorIsUnauthorized`, `TestCallShape_EmptyRawExecArgvIsRefusedAuditedWithNoJob`, `TestControlAPI_CallShapeRefusalRendersIdenticallyOnBothSurfaces`, `TestMCP_ExecutionToolsInputSchemaConstraints`, `TestMCP_RawExec_EmptyArgvIsRefusedByTheLayer`, `TestRawExec_EmptyArgvReachesTheCapabilityLayer`, `TestStart_MalformedCallMatchingNoNodeIsRefusedAsNoNodesMatched` | API, MCP, Relay, capability |

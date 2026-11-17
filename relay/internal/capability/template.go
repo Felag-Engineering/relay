@@ -100,7 +100,7 @@ type resolvedAction struct {
 	refusalKind RefusalKind
 
 	// callRefusal is a refusal computed from the Action alone (callshape.go;
-	// EX-64, EX-67). refusal holds the Node-dependent Template refusals and a
+	// EX-59, EX-64, EX-67). refusal holds the Node-dependent Template refusals and a
 	// preset class. Each caller acts on callRefusal first.
 	callRefusal     error
 	callRefusalKind RefusalKind

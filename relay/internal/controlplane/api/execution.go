@@ -273,9 +273,9 @@ func handleRunOperation(d Deps) http.HandlerFunc {
 
 		act, err := buildOperationAction(req.Operation, req.Args, req.TimeoutSeconds)
 		if err != nil {
-			// An empty operation name or an out-of-range timeout: malformed
-			// input, never a Policy verdict. Argument names are the capability
-			// layer's, which refuses and audits them.
+			// An empty operation name: malformed input, never a Policy verdict.
+			// Argument names and the timeout are the capability layer's, which
+			// refuses and audits them.
 			writeProblem(w, http.StatusBadRequest, "invalid operation request", err.Error())
 			return
 		}
@@ -295,7 +295,9 @@ func handleRunOperation(d Deps) http.HandlerFunc {
 //
 // An empty or omitted argv is not refused here either: it reaches the
 // capability layer, which refuses it as a malformed call and audits it (EX-67),
-// and writeExecError renders that as 400 "invalid operation request".
+// and writeExecError renders that as 400 "invalid operation request". A
+// timeout_seconds outside 0-300 reaches it too: the layer refuses and audits it
+// (EX-59), and writeExecError renders it as 400 "invalid timeout_seconds".
 func handleRawExec(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		p, ok := principal(w, r)
@@ -313,18 +315,12 @@ func handleRawExec(d Deps) http.HandlerFunc {
 			return
 		}
 
-		timeout, err := controlplane.ResolveTimeoutSeconds(req.TimeoutSeconds)
-		if err != nil {
-			writeProblem(w, http.StatusBadRequest, "invalid timeout_seconds", err.Error())
-			return
-		}
-
 		// No risk class: the capability layer fixes Raw Exec to mutate
 		// (ADR-0012, invariant 13), and this adapter must not set it.
 		act := jobs.Action{
 			Kind:           jobs.ActionRawExec,
 			RawExecArgv:    req.Argv,
-			TimeoutSeconds: timeout,
+			TimeoutSeconds: req.TimeoutSeconds,
 		}
 
 		dispatchOrPlan(w, r, d, p, sel, act, req.Plan, req.WaitSeconds)
@@ -447,15 +443,11 @@ func dispatchOrPlan(w http.ResponseWriter, r *http.Request, d Deps, p capability
 // ---------------------------------------------------------------------------
 
 // buildOperationAction builds the jobs.Action for an operation request. This
-// adapter decides nothing about argument names or class: the capability layer
-// refuses a malformed call (EX-64, EX-61) and fixes every risk class
-// (ADR-0012, invariants 10 and 13), so no class is set here. It never reads
-// argument values (ADR-0011, invariant 12).
+// adapter decides nothing about argument names, class or the timeout (EX-59):
+// the capability layer refuses a malformed call (EX-64, EX-61) and fixes every
+// risk class (ADR-0012, invariants 10 and 13), so no class is set here. It
+// never reads argument values (ADR-0011, invariant 12).
 func buildOperationAction(name string, args map[string]string, timeoutSeconds int32) (jobs.Action, error) {
-	timeout, err := controlplane.ResolveTimeoutSeconds(timeoutSeconds)
-	if err != nil {
-		return jobs.Action{}, err
-	}
 	if name == "" {
 		return jobs.Action{}, fmt.Errorf("operation is required")
 	}
@@ -463,7 +455,7 @@ func buildOperationAction(name string, args map[string]string, timeoutSeconds in
 		Kind:           jobs.ActionOperation,
 		OperationName:  name,
 		OperationArgs:  args,
-		TimeoutSeconds: timeout,
+		TimeoutSeconds: timeoutSeconds,
 	}, nil
 }
 
@@ -498,6 +490,9 @@ func buildOperationAction(name string, args map[string]string, timeoutSeconds in
 //   - Malformed call or unknown operation → 400 Bad Request, title "invalid
 //     operation request": a refusal the capability layer decided after
 //     authorization, never a Policy verdict.
+//   - Timeout outside 0-300 → 400 Bad Request, title "invalid
+//     timeout_seconds": the capability layer's refusal (EX-59), after
+//     authorization.
 //   - anything else   → 500.
 //
 // Detail carries the error's own text: these are rule statements (which role
@@ -535,6 +530,11 @@ func writeExecError(w http.ResponseWriter, err error) {
 	var malformedErr *capability.MalformedCallError
 	if errors.As(err, &unknownErr) || errors.As(err, &malformedErr) {
 		writeProblem(w, http.StatusBadRequest, "invalid operation request", err.Error())
+		return
+	}
+	var timeoutErr *capability.TimeoutError
+	if errors.As(err, &timeoutErr) {
+		writeProblem(w, http.StatusBadRequest, "invalid timeout_seconds", err.Error())
 		return
 	}
 	// The idempotency outcomes carry err itself, so a joined audit-write

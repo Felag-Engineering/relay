@@ -864,4 +864,67 @@ func TestMCP_RawExec_EmptyArgvIsRefusedByTheLayer(t *testing.T) {
 	}
 }
 
+// TestMCP_TimeoutOutsideTheCeilingIsRefusedByTheLayer proves a timeout_seconds
+// above 300 or below 0 reaches the capability layer from both execution tools,
+// which refuses the call as malformed and audits it, with and without plan: no
+// Task sent, no Node queried, one refusal record and no dispatch or park.
+//
+// Proves EX-59.
+func TestMCP_TimeoutOutsideTheCeilingIsRefusedByTheLayer(t *testing.T) {
+	tools := map[string]map[string]any{
+		"run_operation": {"operation": "system.facts"},
+		"raw_exec":      {"argv": []string{"/usr/bin/true"}},
+	}
+	for tool, base := range tools {
+		for _, asked := range []int32{301, -1} {
+			for _, plan := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/%d/plan=%v", tool, asked, plan), func(t *testing.T) {
+					ts := newTestServer(t)
+					ts.conduit.connect(ts.nodeA, ts.nodeB)
+					session := ts.connect(t)
+
+					args := map[string]any{"selector": capability.WholeFleetSelector, "plan": plan, "timeout_seconds": asked}
+					for k, v := range base {
+						args[k] = v
+					}
+					res := callTool(t, session, tool, args)
+
+					if !res.IsError {
+						t.Fatal("IsError = false, want a tool error")
+					}
+					text := toolErrorText(t, res)
+					if !strings.Contains(text, "300") || !strings.Contains(text, "Nothing was dispatched") {
+						t.Errorf("error = %q, want the refusal naming the ceiling and that nothing was dispatched", text)
+					}
+					for _, id := range []string{ts.nodeA, ts.nodeB} {
+						if n := ts.conduit.dispatchCount(id); n != 0 {
+							t.Errorf("%s was sent %d Tasks, want 0", id, n)
+						}
+					}
+					if q := ts.conduit.queriedNodes(); len(q) != 0 {
+						t.Errorf("Nodes queried = %v, want none", q)
+					}
+
+					records, err := ts.store.Audit().List(context.Background())
+					if err != nil {
+						t.Fatalf("Audit().List: %v", err)
+					}
+					refusals := 0
+					for _, rec := range records {
+						switch rec.Kind {
+						case audit.KindRefusal:
+							refusals++
+						case audit.KindDispatch, audit.KindDispatchIntent, audit.KindApprovalRequested:
+							t.Errorf("found a %s record for a refused timeout: %+v", rec.Kind, rec)
+						}
+					}
+					if refusals != 1 {
+						t.Errorf("refusal records = %d, want exactly 1 among %+v", refusals, records)
+					}
+				})
+			}
+		}
+	}
+}
+
 func ptr[T any](v T) *T { return &v }
