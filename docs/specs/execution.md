@@ -89,6 +89,7 @@ server, by rules kept there (its Policy), after everything here has passed.
   runs, not what runs after it. Its gate on the Node is `policy.md`'s.
 - **EX-21** Arguments and Raw Exec argv are the record of what was done and are audited
   verbatim; by contract a caller never passes a secret in one, and no slot type holds one (R55).
+- **EX-60** The `list_operations` description tells the caller that arguments and Raw Exec argv are audited verbatim and must never carry a secret.
 
 ### Fan-out, timeouts and halts
 
@@ -215,7 +216,6 @@ differs from an outcome, where a Job ran and a Node failed; a cancel refusal lea
 | EX-57 | A Control API dispatch returns its Job ID once the Tasks are stored, after an optional bounded wait, and the caller reads the rest from the Jobs route. Replaces EX-36 when promoted. | v0.2.2 |
 | EX-58 | A Control API dispatch accepts an `Idempotency-Key` header under the rule of EX-9 and EX-53. | v0.2.2 |
 | EX-59 | A dispatch asking for a Task timeout above 300 seconds is refused in the capability layer, at the stage of EX-61, naming the ceiling. | v0.2.2 |
-| EX-60 | The `list_operations` description tells the caller that arguments and Raw Exec argv are audited verbatim and must never carry a secret. | v0.2.2 |
 | EX-66 | A dispatch whose outcome write fails after it has returned its Job ID records the failure on the Job where the store can still write it, and `get_job` and the Jobs route show it. Replaces EX-68 when promoted. | v0.2.2 |
 
 ## Out of scope
@@ -247,6 +247,7 @@ differs from an outcome, where a Job ran and a Node failed; a cancel refusal lea
 |---|---|---|
 | EX-3 | `TestStart_MalformedCallMatchingNoNodeIsRefusedAsNoNodesMatched` | capability |
 | EX-52 | `TestCallShape_EmptyArgvFromAnOperatorIsUnauthorized` | capability |
+| EX-60 | `TestMCP_ListOperationsSaysArgumentsAreAuditedVerbatim` | MCP |
 | EX-64 | `TestCallShape_MalformedNativeCallFromUnauthorizedCallerIsUnauthorized`, `TestCallShape_MalformedNativeCallIsRefusedAuditedWithNoJob`, `TestControlAPI_CallShapeRefusalRendersIdenticallyOnBothSurfaces`, `TestPlan_UndeclaredNativeArgumentIsRefusedBeforeAnyNodeIsQueried`, `TestRunOperation_ArgumentNamesReachTheCapabilityLayer`, `TestRunOperation_TemplateRefusalsAreBadRequests`, `TestStart_MalformedCallMatchingNoNodeIsRefusedAsNoNodesMatched` | API, Relay, capability |
 | EX-67 | `TestCallShape_EmptyArgvFromAnOperatorIsUnauthorized`, `TestCallShape_EmptyRawExecArgvIsRefusedAuditedWithNoJob`, `TestControlAPI_CallShapeRefusalRendersIdenticallyOnBothSurfaces`, `TestMCP_ExecutionToolsInputSchemaConstraints`, `TestMCP_RawExec_EmptyArgvIsRefusedByTheLayer`, `TestRawExec_EmptyArgvReachesTheCapabilityLayer`, `TestStart_MalformedCallMatchingNoNodeIsRefusedAsNoNodesMatched` | API, MCP, Relay, capability |
 | EX-69 | `TestMCP_ExecutionToolsInputSchemaConstraints` | MCP |
