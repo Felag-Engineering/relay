@@ -78,6 +78,10 @@ func TestAppendWithTasks_CommitsTheTasksAndTheIntentTogether(t *testing.T) {
 	}
 }
 
+// TestAppendWithTasks_AnUnwritableIntentLeavesNoTask holds invariant 4: a Task
+// ID seen once is never executed twice.
+// An intent that cannot be written leaves no Task, so nothing is left to send.
+// Proves EX-29.
 func TestAppendWithTasks_AnUnwritableIntentLeavesNoTask(t *testing.T) {
 	st, _ := openTestStore(t)
 	ctx := context.Background()
@@ -103,6 +107,10 @@ func TestAppendWithTasks_AnUnwritableIntentLeavesNoTask(t *testing.T) {
 	}
 }
 
+// TestAppendWithTasks_AnUnwritableTaskLeavesNoIntent holds invariant 4: a Task
+// ID seen once is never executed twice.
+// A Task that cannot be written leaves no intent: the two commit in one transaction.
+// Proves EX-29.
 func TestAppendWithTasks_AnUnwritableTaskLeavesNoIntent(t *testing.T) {
 	st, _ := openTestStore(t)
 	ctx := context.Background()

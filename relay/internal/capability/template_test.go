@@ -182,7 +182,11 @@ func TestResolveAction_NativeAndRawExecTakeTheirFixedClass(t *testing.T) {
 	}
 }
 
-func TestResolveAction_ClassIsMostRestrictiveOverReportingNodes(t *testing.T) {
+// TestInvariant13_ATemplateTakesTheMostRestrictiveClassItsNodesReport holds
+// invariant 13: a risk class is contract no caller can set or loosen, and it chooses the cap.
+// One mutate, unspecified or out-of-range report among the reporting Nodes makes the dispatch mutate.
+// Proves EX-15.
+func TestInvariant13_ATemplateTakesTheMostRestrictiveClassItsNodesReport(t *testing.T) {
 	nodes := reportedNodes("a", "b", "c")
 	tests := []struct {
 		name  string
@@ -280,10 +284,12 @@ func TestResolveAction_NoVocabularySourceDispatchesNothingBlind(t *testing.T) {
 	}
 }
 
-// The structural half of invariant 10 for Templates: an adapter can never
-// choose a Template's class, because the capability layer refuses one that
-// arrives already set rather than trusting it.
-func TestResolveAction_RefusesATemplateActionThatArrivesWithAClass(t *testing.T) {
+// TestInvariant13_ATemplateClassACallerSetsIsRefused holds
+// invariant 13: a risk class is contract no caller can set or loosen, and it chooses the cap.
+// A Template Action that arrives with a class is refused, so the class is always the one its
+// Nodes report (invariant 10: no adapter decides it).
+// Proves EX-15.
+func TestInvariant13_ATemplateClassACallerSetsIsRefused(t *testing.T) {
 	s := buildRaw(t, seams{nodeVocab: staticVocab{"a": reported(mutateTemplate("svc.restart"))}})
 	for _, preset := range []jobs.RiskClass{jobs.RiskClassRead, jobs.RiskClassMutate} {
 		act := templateAction("svc.restart", nil)
@@ -424,7 +430,11 @@ func TestRun_TemplateExcludesNonReportingNodesAndNeverSendsThem(t *testing.T) {
 	}
 }
 
-func TestRun_TemplateOneMutateReportTakesTheMutateCap(t *testing.T) {
+// TestInvariant13_OneMutateReportPutsATemplateUnderTheMutateCap holds
+// invariant 13: a risk class is contract no caller can set or loosen, and it chooses the cap.
+// One Node reporting a Template as mutate puts the whole dispatch under the mutate cap.
+// Proves EX-15.
+func TestInvariant13_OneMutateReportPutsATemplateUnderTheMutateCap(t *testing.T) {
 	reg := seedNodes(t, 2)
 	var log []string
 	conduit := connectedConduit(&log, "node-0", "node-1")

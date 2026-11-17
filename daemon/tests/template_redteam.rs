@@ -221,8 +221,12 @@ async fn ansi_c_quoting_hides_the_placeholder_from_the_shell() {
 // Placement: top-level rows that load stay inert for every value
 // ---------------------------------------------------------------------------
 
+/// Invariant 1: nothing on the wire can compose or escalate a command.
+/// Through the production invoke and executor, under dash, bash and bash --posix, a hostile
+/// slot value is echoed back as data and never runs.
+// Proves EX-18.
 #[tokio::test]
-async fn plain_word_at_the_top_level() {
+async fn invariant_1_a_template_slot_value_is_never_part_of_the_text_its_shell_parses() {
     every_canary_is_inert("echo {{p}}", Some(|v| format!("{v}\n"))).await;
     every_canary_is_inert("echo x | cat -n {{p}} | wc -c", None).await;
     every_canary_is_inert("{ echo {{p}} ; }", Some(|v| format!("{v}\n"))).await;

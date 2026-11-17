@@ -143,15 +143,12 @@ allow = ["^/bin/echo .+$"]
         );
     }
 
-    // -----------------------------------------------------------------------
-    // 4a. argv is data, never shell-expanded — re-pins the DoD property for
-    // #223 across a richer encoding/shell-metacharacter token vector than
-    // no_implicit_shell_injected above ($IFS, backticks, $(...), &&, |,
-    // percent-encoding, backslash-escapes).
-    // -----------------------------------------------------------------------
-
+    /// Invariant 1: nothing on the wire can compose or escalate a command.
+    /// Raw Exec runs the argv Policy allowed, through the real executor, with no shell: every
+    /// metacharacter arrives literally.
+    // Proves EX-20.
     #[tokio::test]
-    async fn argv_is_data_not_shell_expanded() {
+    async fn invariant_1_raw_exec_reaches_the_executor_as_its_argv_with_no_shell() {
         let policy = from_toml_str(
             r#"
 [raw_exec]
@@ -193,7 +190,7 @@ allow = ["^/bin/echo .+$"]
     }
 
     // -----------------------------------------------------------------------
-    // 4b. A NUL anywhere in argv fails closed at the executor (execv), not
+    // 4. A NUL anywhere in argv fails closed at the executor (execv), not
     // just at the Policy gate — the "real argv that reaches Command::new"
     // pin for control bytes referenced by policy.rs red-team rows
     // ctl_nul_in_arg_breaks_anchored_class_allow / ctl_slash_s_does_not_match_nul.

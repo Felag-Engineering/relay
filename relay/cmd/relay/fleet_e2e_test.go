@@ -637,14 +637,15 @@ func assertIntentPlusOutcomes(t *testing.T, when string, recs []map[string]any, 
 	}
 }
 
-// TestFleetE2E_CrashMidJobNeverDoubleRuns is acceptance criterion 5 — the
-// hardest one (ADR-0004): kill the Relay after a Task is durably Dispatched
-// but before any Result lands, restart both the Relay and the daemon (the
-// daemon has no reconnect loop of its own), and confirm the Task is not
+// TestFleetE2E_Invariant4_ARelayAndDaemonRestartNeverRunsATaskTwice
+// holds invariant 4: a Task ID seen once is never executed twice.
+// It kills the Relay after a Task is durably Dispatched but before any Result
+// lands, restarts both the Relay and the daemon, and confirms the Task is not
 // re-run: the daemon's own dedup marker (daemon/src/dedup.rs) makes the
 // reconciled resend return the benign already-processed result, never a
 // second real execution.
-func TestFleetE2E_CrashMidJobNeverDoubleRuns(t *testing.T) {
+// Proves EX-31, DI-16.
+func TestFleetE2E_Invariant4_ARelayAndDaemonRestartNeverRunsATaskTwice(t *testing.T) {
 	relayBin, daemonBin := skipUnlessFleetBins(t)
 
 	fr := startFleetRelay(t, relayBin, "")
