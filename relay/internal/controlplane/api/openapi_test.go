@@ -13,6 +13,7 @@ import (
 	"github.com/getkin/kin-openapi/openapi3"
 
 	"github.com/Felag-Engineering/relay/relay/internal/capability"
+	"github.com/Felag-Engineering/relay/relay/internal/controlplane"
 	"github.com/Felag-Engineering/relay/relay/internal/nodestate"
 )
 
@@ -314,4 +315,81 @@ func TestOpenAPISpec_DispatchSelectorIsRequired(t *testing.T) {
 	if strings.Contains(desc, "matches every Node") {
 		t.Errorf("RunOperationRequest.selector still says an empty Selector matches every Node: %q", desc)
 	}
+}
+
+// The document says what a dispatch hands back and how it is retried: an
+// Idempotency-Key header on both dispatch operations, every response a retry
+// can meet, wait_seconds bounded as the Relay bounds it, and job_status on
+// both the dispatch and the Jobs response.
+//
+// Proves EX-57, EX-58.
+func TestOpenAPISpec_DispatchDocumentsTheJobHandBack(t *testing.T) {
+	doc := loadSpec(t)
+
+	for _, path := range []string{"/api/v1/operations", "/api/v1/raw-exec"} {
+		op := doc.Paths.Value(path).Post
+		if op == nil {
+			t.Fatalf("%s has no POST operation", path)
+		}
+		var hasKey bool
+		for _, p := range op.Parameters {
+			if p.Value != nil && p.Value.In == "header" && p.Value.Name == "Idempotency-Key" {
+				hasKey = true
+				if p.Value.Required {
+					t.Errorf("%s: Idempotency-Key is required, want optional", path)
+				}
+			}
+		}
+		if !hasKey {
+			t.Errorf("%s: no Idempotency-Key header parameter", path)
+		}
+		for _, code := range []string{"202", "409", "422", "503"} {
+			if op.Responses.Value(code) == nil {
+				t.Errorf("%s: no %s response", path, code)
+			}
+		}
+	}
+
+	if key := doc.Components.Parameters["IdempotencyKey"]; key == nil {
+		t.Error("components.parameters has no IdempotencyKey")
+	} else {
+		schema := key.Value.Schema.Value
+		if re, err := regexp.Compile(schema.Pattern); err != nil || re.MatchString("") {
+			t.Errorf("IdempotencyKey pattern %q must compile and refuse the empty value: %v", schema.Pattern, err)
+		}
+		if schema.MinLength != 1 {
+			t.Errorf("IdempotencyKey minLength = %d, want 1", schema.MinLength)
+		}
+	}
+
+	for _, name := range []string{"RunOperationRequest", "RawExecRequest"} {
+		wait := doc.Components.Schemas[name].Value.Properties["wait_seconds"]
+		if wait == nil {
+			t.Fatalf("%s has no wait_seconds", name)
+		}
+		if wait.Value.Min == nil || *wait.Value.Min != 0 || wait.Value.Max == nil || *wait.Value.Max != controlplane.MaxWaitSeconds {
+			t.Errorf("%s.wait_seconds bounds = [%v, %v], want [0, %d]", name, wait.Value.Min, wait.Value.Max, controlplane.MaxWaitSeconds)
+		}
+	}
+
+	exec := doc.Components.Schemas["ExecutionResponse"].Value
+	status := exec.Properties["job_status"]
+	if status == nil || !slices.Equal(enumStrings(status.Value.Enum), []string{"running", "complete"}) {
+		t.Errorf("ExecutionResponse.job_status = %+v, want enum running, complete", status)
+	}
+	if exec.Properties["reattached"] == nil {
+		t.Error("ExecutionResponse has no reattached")
+	}
+	if !slices.Contains(doc.Components.Schemas["JobResponse"].Value.Required, "job_status") {
+		t.Error("JobResponse.required must list job_status")
+	}
+}
+
+func enumStrings(enum []any) []string {
+	out := make([]string, 0, len(enum))
+	for _, e := range enum {
+		s, _ := e.(string)
+		out = append(out, s)
+	}
+	return out
 }

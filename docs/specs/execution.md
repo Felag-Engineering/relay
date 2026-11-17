@@ -1,6 +1,6 @@
 # Execution
 
-**Status:** designed, not built, as of `2026-11-16`.
+**Status:** designed, not built, as of `2026-11-17`.
 **Claim prefix:** `EX`
 **Governed by:** ADR-0054, ADR-0001, ADR-0011, ADR-0012, ADR-0013, ADR-0014, ADR-0021, ADR-0025,
 ADR-0027, ADR-0042, ADR-0047, ADR-0049, ADR-0052; invariants 1, 4, 5, 10, 11, 12, 13, 14.
@@ -139,7 +139,8 @@ server, by rules kept there (its Policy), after everything here has passed.
 
 - **EX-35** An MCP dispatch returns its Job ID once the Tasks are stored, after an optional wait
   of up to 300 seconds (none by default), and the caller reads the rest with `get_job`.
-- **EX-36** A Control API dispatch returns when every Task of the Job is resolved.
+- **EX-57** A Control API dispatch returns its Job ID once the Tasks are stored, after an optional bounded wait, and the caller reads the rest from the Jobs route.
+- **EX-58** A Control API dispatch accepts an `Idempotency-Key` header under the rule of EX-9 and EX-53.
 
 ### Cancellation
 
@@ -213,8 +214,6 @@ differs from an outcome, where a Job ran and a Node failed; a cancel refusal lea
 
 | Claim | Statement | Milestone |
 |---|---|---|
-| EX-57 | A Control API dispatch returns its Job ID once the Tasks are stored, after an optional bounded wait, and the caller reads the rest from the Jobs route. Replaces EX-36 when promoted. | v0.2.2 |
-| EX-58 | A Control API dispatch accepts an `Idempotency-Key` header under the rule of EX-9 and EX-53. | v0.2.2 |
 | EX-59 | A dispatch asking for a Task timeout above 300 seconds is refused in the capability layer, at the stage of EX-61, naming the ceiling. | v0.2.2 |
 | EX-66 | A dispatch whose outcome write fails after it has returned its Job ID records the failure on the Job where the store can still write it, and `get_job` and the Jobs route show it. Replaces EX-68 when promoted. | v0.2.2 |
 
@@ -247,6 +246,7 @@ differs from an outcome, where a Job ran and a Node failed; a cancel refusal lea
 |---|---|---|
 | EX-3 | `TestStart_MalformedCallMatchingNoNodeIsRefusedAsNoNodesMatched` | capability |
 | EX-8 | `TestInvariant13_RawExecIsMutateWhateverTheAdapterPasses`, `TestInvariant13_RawExecTakesTheMutateCap` | capability |
+| EX-9 | `TestControlAPI_ALostResponseIsRetriedSafelyWithItsIdempotencyKey` | Relay |
 | EX-13 | `TestInvariant5_TheBlastCapRefusesBeforeAnyTaskIsStoredOrSent` | capability |
 | EX-14 | `TestInvariant13_TheCapIsChosenByClassAndAnUnspecifiedClassTakesTheMutateCap` | capability |
 | EX-15 | `TestInvariant13_ATemplateClassACallerSetsIsRefused`, `TestInvariant13_ATemplateTakesTheMostRestrictiveClassItsNodesReport`, `TestInvariant13_OneMutateReportPutsATemplateUnderTheMutateCap` | capability |
@@ -257,15 +257,19 @@ differs from an outcome, where a Job ran and a Node failed; a cancel refusal lea
 | EX-30 | `TestInvariant4_ASendErrorLeavesTheTaskInFlightNeverResolved`, `TestInvariant4_ATaskIsMarkedDispatchedBeforeItIsSent` | capability |
 | EX-31 | `TestFleetE2E_Invariant4_ARelayAndDaemonRestartNeverRunsATaskTwice`, `TestFleetE2E_Invariant4_ARelayRestartNeverRunsATaskTwice`, `TestInvariant4_ARestartResendsAnInFlightTaskUnderItsOwnIDForItsResult` | Relay, dispatch |
 | EX-52 | `TestCallShape_EmptyArgvFromAnOperatorIsUnauthorized` | capability |
+| EX-53 | `TestControlAPI_IdempotencyConflictRendersIdenticallyOnBothSurfaces` | Relay |
+| EX-57 | `TestControlAPI_ADispatchReturnsItsRunningJobBeforeTheNodeAnswers`, `TestControlAPI_ALapsedWaitReturnsTheRunningJobAndNeverCancelsIt`, `TestControlAPI_JobRoutes`, `TestControlAPI_TheFirstReDriveAfterAnApprovalWaitsAndASecondReAttachesAtOnce`, `TestControlAPI_WaitSecondsAbove300IsABadRequest`, `TestControlAPI_WaitSecondsReturnsFullResults`, `TestDispatch_AParkIsStill202AndNeverARunningJob`, `TestDispatch_AReadBackFailureAfterStartIs500NamingTheJob`, `TestDispatch_ARunningJobIs200WithJobStatusRunning`, `TestDispatch_ReattachedIsRendered`, `TestDispatch_WaitSecondsOutsideItsRangeIsABadRequest`, `TestGetJob_ReportsJobStatus`, `TestOpenAPISpec_DispatchDocumentsTheJobHandBack` | API, Relay |
+| EX-58 | `TestControlAPI_ALostResponseIsRetriedSafelyWithItsIdempotencyKey`, `TestControlAPI_AMalformedIdempotencyKeyIsABadRequest`, `TestControlAPI_APreflightWithAKeyClaimsNothing`, `TestControlAPI_AnotherAccountsSameKeyIsANewJob`, `TestControlAPI_IdempotencyConflictRendersIdenticallyOnBothSurfaces`, `TestDispatch_IdempotencyKeyHeaderReachesStart`, `TestDispatch_MoreThanOneIdempotencyKeyIsABadRequest`, `TestDispatch_ReattachedIsRendered`, `TestExecutionRefusals_IdempotencyOutcomesRenderTheirStatus`, `TestOpenAPISpec_DispatchDocumentsTheJobHandBack`, `TestPlanMode_IgnoresTheIdempotencyKey` | API, Relay |
 | EX-60 | `TestMCP_ListOperationsSaysArgumentsAreAuditedVerbatim` | MCP |
 | EX-64 | `TestCallShape_MalformedNativeCallFromUnauthorizedCallerIsUnauthorized`, `TestCallShape_MalformedNativeCallIsRefusedAuditedWithNoJob`, `TestControlAPI_CallShapeRefusalRendersIdenticallyOnBothSurfaces`, `TestPlan_UndeclaredNativeArgumentIsRefusedBeforeAnyNodeIsQueried`, `TestRunOperation_ArgumentNamesReachTheCapabilityLayer`, `TestRunOperation_TemplateRefusalsAreBadRequests`, `TestStart_MalformedCallMatchingNoNodeIsRefusedAsNoNodesMatched` | API, Relay, capability |
 | EX-67 | `TestCallShape_EmptyArgvFromAnOperatorIsUnauthorized`, `TestCallShape_EmptyRawExecArgvIsRefusedAuditedWithNoJob`, `TestControlAPI_CallShapeRefusalRendersIdenticallyOnBothSurfaces`, `TestMCP_ExecutionToolsInputSchemaConstraints`, `TestMCP_RawExec_EmptyArgvIsRefusedByTheLayer`, `TestRawExec_EmptyArgvReachesTheCapabilityLayer`, `TestStart_MalformedCallMatchingNoNodeIsRefusedAsNoNodesMatched` | API, MCP, Relay, capability |
-| EX-69 | `TestMCP_ExecutionToolsInputSchemaConstraints` | MCP |
+| EX-69 | `TestDispatch_MoreThanOneIdempotencyKeyIsABadRequest`, `TestMCP_ExecutionToolsInputSchemaConstraints`, `TestPlanMode_WaitSecondsOutsideItsRangeIsABadRequest` | API, MCP |
 
-Unproven: EX-1, EX-2, EX-4, EX-5, EX-6, EX-7, EX-9, EX-10, EX-11, EX-12, EX-16, EX-19, EX-21, EX-22, EX-23, EX-24, EX-25, EX-26, EX-27, EX-28, EX-32, EX-33, EX-34, EX-35, EX-36, EX-37, EX-38, EX-39, EX-40, EX-41, EX-42, EX-43, EX-44, EX-45, EX-46, EX-47, EX-48, EX-49, EX-50, EX-51, EX-53, EX-54, EX-55, EX-56, EX-61, EX-62, EX-68.
+Unproven: EX-1, EX-2, EX-4, EX-5, EX-6, EX-7, EX-10, EX-11, EX-12, EX-16, EX-19, EX-21, EX-22, EX-23, EX-24, EX-25, EX-26, EX-27, EX-28, EX-32, EX-33, EX-34, EX-35, EX-37, EX-38, EX-39, EX-40, EX-41, EX-42, EX-43, EX-44, EX-45, EX-46, EX-47, EX-48, EX-49, EX-50, EX-51, EX-54, EX-55, EX-56, EX-61, EX-62, EX-68.
 <!-- proof:end -->
 
 ## Retired
 
+- **EX-36** — `2026-11-17` — a Control API dispatch returns when every Task is resolved; replaced by EX-57.
 - **EX-63** — `2026-11-16` — a Native bad argument name refused by an adapter; replaced by EX-64.
 - **EX-65** — `2026-11-16` — a Raw Exec empty argv refused by an adapter; replaced by EX-67.

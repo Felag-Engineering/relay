@@ -113,11 +113,19 @@ type approvalListBody struct {
 // to interpret — a 202 park or a 200 execution.
 func restartMutate(t *testing.T, f *relayFixture, credential string) *http.Response {
 	t.Helper()
+	return restartMutateWaiting(t, f, credential, 0)
+}
+
+// restartMutateWaiting is restartMutate holding up to waitSeconds for the Job,
+// so a re-drive that returns has written the dispatch's audit records.
+func restartMutateWaiting(t *testing.T, f *relayFixture, credential string, waitSeconds int) *http.Response {
+	t.Helper()
 	return controlAPIRequest(t, f.ClientFor(credential), http.MethodPost,
 		f.ControlBase+"/api/v1/operations", credential, map[string]any{
-			"selector":  e2eFleetSelector,
-			"operation": "service.restart",
-			"args":      map[string]string{"unit": "nginx"},
+			"selector":     e2eFleetSelector,
+			"operation":    "service.restart",
+			"args":         map[string]string{"unit": "nginx"},
+			"wait_seconds": waitSeconds,
 		})
 }
 
@@ -212,15 +220,18 @@ func TestApprovalCallout_ParkDecideRun(t *testing.T) {
 
 	// 5. The SAME dispatch, re-driven, now runs. The Node is registered but
 	//    has no Tunnel, so `unreachable` is the truthful outcome — what matters
-	//    is that a Job exists, which it could not before the approval.
-	runResp := restartMutate(t, f, requester)
+	//    is that a Job exists, which it could not before the approval. The
+	//    re-drive waits for the Job, so its dispatch record exists when step 6
+	//    reads the trail.
+	runResp := restartMutateWaiting(t, f, requester, 30)
 	defer runResp.Body.Close()
 	if runResp.StatusCode != http.StatusOK {
 		t.Fatalf("re-drive status = %d, want 200 after approval", runResp.StatusCode)
 	}
 	var ran struct {
-		JobID   string `json:"job_id"`
-		Results []struct {
+		JobID     string `json:"job_id"`
+		JobStatus string `json:"job_status"`
+		Results   []struct {
 			NodeID  string `json:"node_id"`
 			Outcome string `json:"outcome"`
 		} `json:"results"`
@@ -231,8 +242,11 @@ func TestApprovalCallout_ParkDecideRun(t *testing.T) {
 	if ran.JobID == "" {
 		t.Fatal("no job_id after approval; the approved Plan must actually dispatch")
 	}
-	if len(ran.Results) != 1 || ran.Results[0].NodeID != "node-e2e-1" {
-		t.Fatalf("results = %+v, want the approved fan-out", ran.Results)
+	if ran.JobStatus != "complete" {
+		t.Fatalf("job_status = %q, want complete after a waiting re-drive", ran.JobStatus)
+	}
+	if len(ran.Results) != 1 || ran.Results[0].NodeID != "node-e2e-1" || ran.Results[0].Outcome != "unreachable" {
+		t.Fatalf("results = %+v, want the approved fan-out, unreachable", ran.Results)
 	}
 
 	// 6. Audit answers "who asked / who approved / what ran" — the park, the

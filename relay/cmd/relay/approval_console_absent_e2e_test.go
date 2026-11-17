@@ -72,19 +72,21 @@ func decideOnAPI(t *testing.T, f *relayFixture, credential string, parked parked
 	return got
 }
 
-// assertRestartRuns re-drives the dispatch as requester and requires that it
-// ran. The Node is registered but never connects, so `unreachable` is the
-// truthful per-Node outcome; what matters is that dispatch happened.
+// assertRestartRuns re-drives the dispatch as requester, waiting for its Job,
+// and requires that it ran. The Node is registered but never connects, so
+// `unreachable` is the truthful per-Node outcome; what matters is that
+// dispatch happened.
 func assertRestartRuns(t *testing.T, f *relayFixture, requester string) {
 	t.Helper()
-	resp := restartMutate(t, f, requester)
+	resp := restartMutateWaiting(t, f, requester, 30)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("re-drive status = %d, want 200 after approval", resp.StatusCode)
 	}
 	var ran struct {
-		JobID   string `json:"job_id"`
-		Results []struct {
+		JobID     string `json:"job_id"`
+		JobStatus string `json:"job_status"`
+		Results   []struct {
 			NodeID  string `json:"node_id"`
 			Outcome string `json:"outcome"`
 		} `json:"results"`
@@ -94,6 +96,9 @@ func assertRestartRuns(t *testing.T, f *relayFixture, requester string) {
 	}
 	if ran.JobID == "" {
 		t.Fatal("no job_id after approval; the approved Plan must actually dispatch")
+	}
+	if ran.JobStatus != "complete" {
+		t.Errorf("job_status = %q, want complete after a waiting re-drive", ran.JobStatus)
 	}
 	if len(ran.Results) != 1 || ran.Results[0].NodeID != "node-e2e-1" || ran.Results[0].Outcome != "unreachable" {
 		t.Errorf("results = %+v, want one truthful unreachable result for node-e2e-1", ran.Results)

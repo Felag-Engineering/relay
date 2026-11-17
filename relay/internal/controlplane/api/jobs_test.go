@@ -421,3 +421,35 @@ func TestGetJob_NoHaltKeyWhenTheJobDidNotHalt(t *testing.T) {
 		t.Errorf("halt = %#v, want the key absent", halt)
 	}
 }
+
+// job_status tells a poller when to stop: running while any Task is
+// unresolved, complete once every Task is, and present in both.
+//
+// Proves EX-57.
+func TestGetJob_ReportsJobStatus(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		state jobs.DispatchState
+		want  string
+	}{
+		{"one Task dispatched", jobs.DispatchStateDispatched, "running"},
+		{"every Task resolved", jobs.DispatchStateResolved, "complete"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			jr := fakeJobs{job: jobs.Job{ID: "job-1"}, tasks: []jobs.Task{{NodeID: "n1", State: tt.state}}}
+			h := newJobFixture(t, accounts.RoleViewer, &fakeExecutor{}, jr, &fakeReadAuditor{})
+
+			rec := do(t, h, http.MethodGet, "/api/v1/jobs/job-1", nil)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body %s", rec.Code, rec.Body.String())
+			}
+			var raw map[string]json.RawMessage
+			if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if got := string(raw["job_status"]); got != `"`+tt.want+`"` {
+				t.Errorf("job_status = %s, want %q", got, tt.want)
+			}
+		})
+	}
+}

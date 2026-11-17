@@ -61,7 +61,7 @@ func TestDecodeJSON_AFormPostNeverReachesAMutatingHandler(t *testing.T) {
 			if !strings.Contains(rec.Body.String(), "Content-Type") {
 				t.Errorf("body = %s, want the refusal to name Content-Type", rec.Body.String())
 			}
-			if got := len(exec.runCalls()); got != 0 {
+			if got := len(exec.startCalls()); got != 0 {
 				t.Errorf("the request dispatched %d time(s) — a body this surface never agreed to read reached the capability layer", got)
 			}
 		})
@@ -91,7 +91,7 @@ func TestDecodeJSON_AcceptsApplicationJSON(t *testing.T) {
 			if rec.Code == http.StatusBadRequest {
 				t.Fatalf("a JSON body declared %q was refused: %s", contentType, rec.Body.String())
 			}
-			if got := len(exec.runCalls()); got != 1 {
+			if got := len(exec.startCalls()); got != 1 {
 				t.Errorf("dispatched %d time(s), want 1", got)
 			}
 		})

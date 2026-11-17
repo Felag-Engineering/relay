@@ -1,9 +1,12 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
 	"sync"
@@ -38,19 +41,21 @@ type recordedCall struct {
 	Principal capability.Principal
 	Selector  capability.Selector
 	Action    jobs.Action
+	// Options is what Start received; zero for a Plan call.
+	Options capability.StartOptions
 }
 
 type fakeExecutor struct {
-	mu    sync.Mutex
-	runs  []recordedCall
-	plans []recordedCall
+	mu     sync.Mutex
+	starts []recordedCall
+	plans  []recordedCall
 
 	// gate, when set, authorizes each call before the canned result is
 	// returned — wired to the production authz.RoleGate by newExecFixture.
 	gate capability.Authorizer
 
-	runResults []capability.NodeResult
-	runErr     error
+	started    capability.StartedJob
+	startErr   error
 	planResult capability.PlanResult
 	planErr    error
 
@@ -72,16 +77,16 @@ func (f *fakeExecutor) cancelCalls() []string {
 	return append([]string(nil), f.cancels...)
 }
 
-func (f *fakeExecutor) Run(ctx context.Context, p capability.Principal, sel capability.Selector, act jobs.Action) ([]capability.NodeResult, error) {
+func (f *fakeExecutor) Start(ctx context.Context, p capability.Principal, sel capability.Selector, act jobs.Action, o capability.StartOptions) (capability.StartedJob, error) {
 	f.mu.Lock()
-	f.runs = append(f.runs, recordedCall{Principal: p, Selector: sel, Action: act})
+	f.starts = append(f.starts, recordedCall{Principal: p, Selector: sel, Action: act, Options: o})
 	f.mu.Unlock()
 	if f.gate != nil {
 		if err := f.gate.Authorize(ctx, p, act, sel); err != nil {
-			return nil, err
+			return capability.StartedJob{}, err
 		}
 	}
-	return f.runResults, f.runErr
+	return f.started, f.startErr
 }
 
 func (f *fakeExecutor) Plan(ctx context.Context, p capability.Principal, sel capability.Selector, act jobs.Action) (capability.PlanResult, error) {
@@ -96,10 +101,10 @@ func (f *fakeExecutor) Plan(ctx context.Context, p capability.Principal, sel cap
 	return f.planResult, f.planErr
 }
 
-func (f *fakeExecutor) runCalls() []recordedCall {
+func (f *fakeExecutor) startCalls() []recordedCall {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return append([]recordedCall(nil), f.runs...)
+	return append([]recordedCall(nil), f.starts...)
 }
 
 func (f *fakeExecutor) planCalls() []recordedCall {
@@ -187,9 +192,9 @@ func TestRawExec_RequiresAdmin(t *testing.T) {
 			}
 			// The Action really did carry the Raw Exec kind — that is what the
 			// ladder keyed on, and it is this route's responsibility.
-			calls := exec.runCalls()
+			calls := exec.startCalls()
 			if len(calls) != 1 {
-				t.Fatalf("Run called %d times, want 1 (the gate must decide, not this package)", len(calls))
+				t.Fatalf("Start called %d times, want 1 (the gate must decide, not this package)", len(calls))
 			}
 			if calls[0].Action.Kind != jobs.ActionRawExec {
 				t.Errorf("Action.Kind = %v, want ActionRawExec", calls[0].Action.Kind)
@@ -198,7 +203,7 @@ func TestRawExec_RequiresAdmin(t *testing.T) {
 	}
 
 	// ...and an admin is not refused: the gate is a ladder, not a wall.
-	exec := &fakeExecutor{runResults: []capability.NodeResult{{NodeID: "n1", JobID: "job-1"}}}
+	exec := &fakeExecutor{started: capability.StartedJob{JobID: "job-1"}}
 	h := newExecFixture(t, accounts.RoleAdmin, exec, fakeJobs{
 		job:   jobs.Job{ID: "job-1"},
 		tasks: []jobs.Task{{NodeID: "n1", Outcome: jobs.OutcomeSuccess, ExitCode: 0}},
@@ -213,7 +218,7 @@ func TestRawExec_RequiresAdmin(t *testing.T) {
 // An operator MAY run a structured Operation — the same ladder that refuses
 // them Raw Exec permits the typed path (ActionOperation -> RoleOperator).
 func TestRunOperation_OperatorIsPermitted(t *testing.T) {
-	exec := &fakeExecutor{runResults: []capability.NodeResult{{NodeID: "n1", JobID: "job-1"}}}
+	exec := &fakeExecutor{started: capability.StartedJob{JobID: "job-1"}}
 	h := newExecFixture(t, accounts.RoleOperator, exec, fakeJobs{
 		job:   jobs.Job{ID: "job-1"},
 		tasks: []jobs.Task{{NodeID: "n1", Outcome: jobs.OutcomeSuccess}},
@@ -284,8 +289,8 @@ func TestPlanMode_QueriesAndNeverDispatches(t *testing.T) {
 		}
 	}
 
-	if got := len(exec.runCalls()); got != 0 {
-		t.Errorf("Run called %d times during plan mode, want 0 — a Plan must execute nothing", got)
+	if got := len(exec.startCalls()); got != 0 {
+		t.Errorf("Start called %d times during plan mode, want 0 — a Plan must execute nothing", got)
 	}
 	if got := len(exec.planCalls()); got != 2 {
 		t.Errorf("Plan called %d times, want 2", got)
@@ -385,40 +390,40 @@ func TestRenderPlan_NoNodesMatchedTakesPrecedence(t *testing.T) {
 
 func TestExecutionRefusals_RenderTruthfulStatuses(t *testing.T) {
 	tests := []struct {
-		name    string
-		runErr  error
-		want    int
-		wantSub string
+		name     string
+		startErr error
+		want     int
+		wantSub  string
 	}{
 		{
-			name:    "freeze engaged is a state conflict, not a client error",
-			runErr:  &capability.FrozenError{},
-			want:    http.StatusConflict,
-			wantSub: "frozen",
+			name:     "freeze engaged is a state conflict, not a client error",
+			startErr: &capability.FrozenError{},
+			want:     http.StatusConflict,
+			wantSub:  "frozen",
 		},
 		{
-			name:    "blast cap is a guardrail rejection of a well-formed request",
-			runErr:  &capability.CapExceededError{Class: jobs.RiskClassRead, Matched: 900, Cap: 100},
-			want:    http.StatusUnprocessableEntity,
-			wantSub: "cap",
+			name:     "blast cap is a guardrail rejection of a well-formed request",
+			startErr: &capability.CapExceededError{Class: jobs.RiskClassRead, Matched: 900, Cap: 100},
+			want:     http.StatusUnprocessableEntity,
+			wantSub:  "cap",
 		},
 		{
-			name:    "no nodes matched is a guardrail rejection of a well-formed request",
-			runErr:  &capability.NoNodesMatchedError{Selector: "node:role=db"},
-			want:    http.StatusUnprocessableEntity,
-			wantSub: "no_nodes_matched",
+			name:     "no nodes matched is a guardrail rejection of a well-formed request",
+			startErr: &capability.NoNodesMatchedError{Selector: "node:role=db"},
+			want:     http.StatusUnprocessableEntity,
+			wantSub:  "no_nodes_matched",
 		},
 		{
-			name:    "an empty Selector is malformed input, not a guardrail",
-			runErr:  &capability.EmptySelectorError{},
-			want:    http.StatusBadRequest,
-			wantSub: "empty_selector",
+			name:     "an empty Selector is malformed input, not a guardrail",
+			startErr: &capability.EmptySelectorError{},
+			want:     http.StatusBadRequest,
+			wantSub:  "empty_selector",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			exec := &fakeExecutor{runErr: tt.runErr}
+			exec := &fakeExecutor{startErr: tt.startErr}
 			h := newExecFixture(t, accounts.RoleAdmin, exec, fakeJobs{})
 
 			rec := do(t, h, http.MethodPost, "/api/v1/operations",
@@ -441,7 +446,7 @@ func TestExecutionRefusals_RenderTruthfulStatuses(t *testing.T) {
 // 422 (TestExecutionRefusals_RenderTruthfulStatuses's "cap" case), and detail
 // carries the canonical Selector so a typo is visible.
 func TestRunOperation_NoNodesMatchedIs422WithTitleAndSelector(t *testing.T) {
-	exec := &fakeExecutor{runErr: &capability.NoNodesMatchedError{Selector: "node:role=db"}}
+	exec := &fakeExecutor{startErr: &capability.NoNodesMatchedError{Selector: "node:role=db"}}
 	h := newExecFixture(t, accounts.RoleAdmin, exec, fakeJobs{})
 
 	rec := do(t, h, http.MethodPost, "/api/v1/operations",
@@ -482,9 +487,9 @@ func TestRunOperation_TemplateNameReachesTheCapabilityLayerWithNoClass(t *testin
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body %s", rec.Code, rec.Body.String())
 	}
-	calls := exec.runCalls()
+	calls := exec.startCalls()
 	if len(calls) != 1 {
-		t.Fatalf("%d Run calls, want 1", len(calls))
+		t.Fatalf("%d Start calls, want 1", len(calls))
 	}
 	act := calls[0].Action
 	if act.Kind != jobs.ActionOperation || act.OperationName != "svc.status" || act.OperationArgs["unit"] != "nginx" {
@@ -510,7 +515,7 @@ func TestRunOperation_TemplateRefusalsAreBadRequests(t *testing.T) {
 		{"malformed Native call", &capability.MalformedCallError{Operation: "service.restart", Reason: "unknown argument(s) [unitt]"}, "unitt"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			exec := &fakeExecutor{runErr: tt.err}
+			exec := &fakeExecutor{startErr: tt.err}
 			h := newExecFixture(t, accounts.RoleAdmin, exec, fakeJobs{})
 			rec := do(t, h, http.MethodPost, "/api/v1/operations", runOperationRequest{Selector: "node:role=web", Operation: "nope.notreal"})
 			if rec.Code != http.StatusBadRequest {
@@ -543,9 +548,9 @@ func TestRunOperation_ArgumentNamesReachTheCapabilityLayer(t *testing.T) {
 
 			do(t, h, http.MethodPost, "/api/v1/operations", body)
 
-			calls := exec.runCalls()
+			calls := exec.startCalls()
 			if len(calls) != 1 {
-				t.Fatalf("Run called %d times, want 1: the adapter must not refuse argument names", len(calls))
+				t.Fatalf("Start called %d times, want 1: the adapter must not refuse argument names", len(calls))
 			}
 			act := calls[0].Action
 			if !reflect.DeepEqual(act.OperationArgs, body.Args) {
@@ -595,7 +600,7 @@ func TestRunOperation_MalformedInputIsRejectedBeforeDispatch(t *testing.T) {
 			}
 			// The load-bearing half: nothing was dispatched, so a malformed call
 			// can never come back as a Policy verdict (#345).
-			if got := len(exec.runCalls()) + len(exec.planCalls()); got != 0 {
+			if got := len(exec.startCalls()) + len(exec.planCalls()); got != 0 {
 				t.Errorf("%d capability calls for a malformed request, want 0", got)
 			}
 		})
@@ -621,9 +626,9 @@ func TestRawExec_EmptyArgvReachesTheCapabilityLayer(t *testing.T) {
 
 			do(t, h, http.MethodPost, "/api/v1/raw-exec", body)
 
-			calls := exec.runCalls()
+			calls := exec.startCalls()
 			if len(calls) != 1 {
-				t.Fatalf("Run called %d times, want 1: the adapter must not refuse an empty argv", len(calls))
+				t.Fatalf("Start called %d times, want 1: the adapter must not refuse an empty argv", len(calls))
 			}
 			if len(calls[0].Action.RawExecArgv) != 0 {
 				t.Errorf("RawExecArgv = %v, want it empty and unchanged", calls[0].Action.RawExecArgv)
@@ -632,7 +637,7 @@ func TestRawExec_EmptyArgvReachesTheCapabilityLayer(t *testing.T) {
 	}
 
 	t.Run("the layer's refusal is a 400", func(t *testing.T) {
-		exec := &fakeExecutor{runErr: &capability.MalformedCallError{Operation: "Raw Exec", Reason: "argv is empty"}}
+		exec := &fakeExecutor{startErr: &capability.MalformedCallError{Operation: "Raw Exec", Reason: "argv is empty"}}
 		h := newExecFixture(t, accounts.RoleAdmin, exec, fakeJobs{})
 
 		rec := do(t, h, http.MethodPost, "/api/v1/raw-exec", map[string]any{"selector": "node:role=web"})
@@ -664,9 +669,9 @@ func TestRunOperation_BuildsTheActionTheCapabilityLayerExpects(t *testing.T) {
 		TimeoutSeconds: 30,
 	})
 
-	calls := exec.runCalls()
+	calls := exec.startCalls()
 	if len(calls) != 1 {
-		t.Fatalf("Run called %d times, want 1", len(calls))
+		t.Fatalf("Start called %d times, want 1", len(calls))
 	}
 	act := calls[0].Action
 	if act.Kind != jobs.ActionOperation {
@@ -698,9 +703,9 @@ func TestRawExec_AdapterSetsNoClass(t *testing.T) {
 
 	do(t, h, http.MethodPost, "/api/v1/raw-exec", rawExecRequest{Argv: []string{"/bin/cat", "/etc/hostname"}})
 
-	calls := exec.runCalls()
+	calls := exec.startCalls()
 	if len(calls) != 1 {
-		t.Fatalf("Run called %d times, want 1", len(calls))
+		t.Fatalf("Start called %d times, want 1", len(calls))
 	}
 	if calls[0].Action.RiskClass != jobs.RiskClassUnspecified {
 		t.Errorf("RiskClass = %v, want unspecified: the adapter sets no class (invariant 13)", calls[0].Action.RiskClass)
@@ -728,7 +733,7 @@ func TestExecutionResponse_ExitCodeAndJobIDShape(t *testing.T) {
 			{NodeID: "n-timeout", Outcome: jobs.OutcomeTimeout, ExitCode: -1},
 			{NodeID: "n-unreachable", Outcome: jobs.OutcomeUnreachable, ExitCode: 0},
 		}
-		exec := &fakeExecutor{runResults: []capability.NodeResult{{NodeID: "n-success", JobID: "job-1"}}}
+		exec := &fakeExecutor{started: capability.StartedJob{JobID: "job-1"}}
 		h := newExecFixture(t, accounts.RoleAdmin, exec, fakeJobs{job: jobs.Job{ID: "job-1"}, tasks: tasks})
 
 		rec := do(t, h, http.MethodPost, "/api/v1/operations", runOperationRequest{Operation: "system.facts"})
@@ -767,8 +772,8 @@ func TestExecutionResponse_ExitCodeAndJobIDShape(t *testing.T) {
 		}
 	})
 
-	t.Run("an Executor returning no results renders no job_id and an empty array", func(t *testing.T) {
-		exec := &fakeExecutor{runResults: nil} // out-of-contract: *capability.Execution refuses zero-match as no_nodes_matched
+	t.Run("an Executor returning no Job renders no job_id and an empty array", func(t *testing.T) {
+		exec := &fakeExecutor{} // out-of-contract: *capability.Execution refuses zero-match as no_nodes_matched
 		h := newExecFixture(t, accounts.RoleAdmin, exec, fakeJobs{})
 
 		rec := do(t, h, http.MethodPost, "/api/v1/operations", runOperationRequest{Operation: "system.facts"})
@@ -784,7 +789,7 @@ func TestExecutionResponse_ExitCodeAndJobIDShape(t *testing.T) {
 
 // Results are sorted by node_id so a caller polling twice sees a stable order.
 func TestExecutionResponse_ResultsAreSortedByNodeID(t *testing.T) {
-	exec := &fakeExecutor{runResults: []capability.NodeResult{{NodeID: "n-c", JobID: "job-1"}}}
+	exec := &fakeExecutor{started: capability.StartedJob{JobID: "job-1"}}
 	h := newExecFixture(t, accounts.RoleAdmin, exec, fakeJobs{
 		job: jobs.Job{ID: "job-1"},
 		tasks: []jobs.Task{
@@ -809,7 +814,7 @@ func TestExecutionResponse_ResultsAreSortedByNodeID(t *testing.T) {
 // Task's unbounded output cannot inflate the response.
 func TestExecutionResponse_TruncatesLargeOutput(t *testing.T) {
 	big := strings.Repeat("x", controlplane.MaxRenderedOutputBytes+100)
-	exec := &fakeExecutor{runResults: []capability.NodeResult{{NodeID: "n1", JobID: "job-1"}}}
+	exec := &fakeExecutor{started: capability.StartedJob{JobID: "job-1"}}
 	h := newExecFixture(t, accounts.RoleAdmin, exec, fakeJobs{
 		job:   jobs.Job{ID: "job-1"},
 		tasks: []jobs.Task{{NodeID: "n1", Outcome: jobs.OutcomeSuccess, Stdout: []byte(big)}},
@@ -882,7 +887,7 @@ func TestExecutionRoutes_UnwiredDependenciesAreALegible500(t *testing.T) {
 // AND a new refusal_explanation naming the boundary.
 func TestAPI_PolicyDenyNamesItsBoundary(t *testing.T) {
 	const daemonReason = "no allow rule matched args [\"sshd\"] for operation 'service.restart' (allow rules exist for other arguments)"
-	exec := &fakeExecutor{runResults: []capability.NodeResult{{NodeID: "n1", JobID: "job-1"}}}
+	exec := &fakeExecutor{started: capability.StartedJob{JobID: "job-1"}}
 	h := newExecFixture(t, accounts.RoleAdmin, exec, fakeJobs{
 		job: jobs.Job{ID: "job-1"},
 		tasks: []jobs.Task{
@@ -964,7 +969,7 @@ func TestAPI_PlanDenyNamesItsBoundary(t *testing.T) {
 // Relay authored both stderr and refusal_explanation, so they must be
 // byte-identical to jobs.VersionRefusedMessage.
 func TestAPI_VersionRefusedCarriesFullExplanation(t *testing.T) {
-	exec := &fakeExecutor{runResults: []capability.NodeResult{{NodeID: "n1", JobID: "job-1"}}}
+	exec := &fakeExecutor{started: capability.StartedJob{JobID: "job-1"}}
 	h := newExecFixture(t, accounts.RoleAdmin, exec, fakeJobs{
 		job: jobs.Job{ID: "job-1"},
 		tasks: []jobs.Task{
@@ -999,7 +1004,7 @@ func TestAPI_VersionRefusedCarriesFullExplanation(t *testing.T) {
 // meaning: a success and a failure row must both carry an EMPTY
 // refusal_explanation.
 func TestAPI_ExplanationAbsentWhenNotRefused(t *testing.T) {
-	exec := &fakeExecutor{runResults: []capability.NodeResult{{NodeID: "n1", JobID: "job-1"}}}
+	exec := &fakeExecutor{started: capability.StartedJob{JobID: "job-1"}}
 	h := newExecFixture(t, accounts.RoleAdmin, exec, fakeJobs{
 		job: jobs.Job{ID: "job-1"},
 		tasks: []jobs.Task{
@@ -1069,7 +1074,7 @@ func TestPreflightRender_CarriesRuleReference(t *testing.T) {
 // TestRawExec_ResponseCarriesTheHalt: a dispatch response reports the halt of
 // the Job it created the same way GET /jobs/{id} does (#1150).
 func TestRawExec_ResponseCarriesTheHalt(t *testing.T) {
-	exec := &fakeExecutor{runResults: []capability.NodeResult{{NodeID: "node-1", JobID: "job-1"}}}
+	exec := &fakeExecutor{started: capability.StartedJob{JobID: "job-1"}}
 	jr := haltedFakeJobs(true)
 	h := newExecFixture(t, accounts.RoleAdmin, exec, jr)
 
@@ -1080,5 +1085,371 @@ func TestRawExec_ResponseCarriesTheHalt(t *testing.T) {
 	want := map[string]any{"node_id": "node-1", "outcome": "failure", "resolved": true, "reason": jr.job.Halt.Reason()}
 	if halt := decodeHalt(t, rec.Body.Bytes()); !reflect.DeepEqual(halt, want) {
 		t.Errorf("halt = %#v, want %#v", halt, want)
+	}
+}
+
+// -----------------------------------------------------------------------
+// A dispatch returns its Job once stored (EX-57) and accepts an
+// Idempotency-Key (EX-58).
+// -----------------------------------------------------------------------
+
+// doWithHeaders is do() with extra request headers; a header with several
+// values is sent as several header lines.
+func doWithHeaders(t *testing.T, h http.Handler, method, path string, body any, hdr http.Header) *httptest.ResponseRecorder {
+	t.Helper()
+	b, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("json.Marshal request body: %v", err)
+	}
+	req := httptest.NewRequest(method, path, bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+testCredential)
+	req.Header.Set("Content-Type", "application/json")
+	for name, vals := range hdr {
+		for _, v := range vals {
+			req.Header.Add(name, v)
+		}
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+// dispatchRoutes are the two dispatch routes, each with a body builder that
+// carries the given wait_seconds and plan flag.
+var dispatchRoutes = []struct {
+	path string
+	body func(waitSeconds int32, plan bool) any
+}{
+	{"/api/v1/operations", func(w int32, plan bool) any {
+		return runOperationRequest{Operation: "system.facts", WaitSeconds: w, Plan: plan}
+	}},
+	{"/api/v1/raw-exec", func(w int32, plan bool) any {
+		return rawExecRequest{Argv: []string{"/bin/echo", "hi"}, WaitSeconds: w, Plan: plan}
+	}},
+}
+
+// decodeProblemTitle returns an RFC 9457 body's title.
+func decodeProblemTitle(t *testing.T, body []byte) string {
+	t.Helper()
+	var p struct {
+		Title string `json:"title"`
+	}
+	if err := json.Unmarshal(body, &p); err != nil {
+		t.Fatalf("decode problem: %v; body %s", err, body)
+	}
+	return p.Title
+}
+
+// A Job whose Tasks are not all resolved is a 200 with job_status "running";
+// once every Task is resolved it is "complete". Neither is a 202.
+//
+// Proves EX-57.
+func TestDispatch_ARunningJobIs200WithJobStatusRunning(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		state      jobs.DispatchState
+		wantStatus string
+	}{
+		{"dispatched", jobs.DispatchStateDispatched, "running"},
+		{"resolved", jobs.DispatchStateResolved, "complete"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			exec := &fakeExecutor{started: capability.StartedJob{JobID: "job-1"}}
+			h := newExecFixture(t, accounts.RoleAdmin, exec, fakeJobs{
+				job:   jobs.Job{ID: "job-1"},
+				tasks: []jobs.Task{{NodeID: "n1", State: tt.state}},
+			})
+
+			rec := do(t, h, http.MethodPost, "/api/v1/operations", runOperationRequest{Operation: "system.facts"})
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body %s", rec.Code, rec.Body.String())
+			}
+			var raw map[string]json.RawMessage
+			if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			var got struct {
+				JobID     string `json:"job_id"`
+				JobStatus string `json:"job_status"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if got.JobID != "job-1" || got.JobStatus != tt.wantStatus {
+				t.Errorf("job_id, job_status = %q, %q; want job-1, %q", got.JobID, got.JobStatus, tt.wantStatus)
+			}
+			if _, present := raw["reattached"]; present {
+				t.Errorf("a fresh dispatch carries reattached: %s", rec.Body.String())
+			}
+		})
+	}
+}
+
+// A park stays the one 202: no Job exists, so there is no job_id and no
+// job_status.
+//
+// Proves EX-57.
+func TestDispatch_AParkIsStill202AndNeverARunningJob(t *testing.T) {
+	exec := &fakeExecutor{startErr: &capability.ParkedError{RequestID: "req-1", PlanHash: "h"}}
+	h := newExecFixture(t, accounts.RoleAdmin, exec, fakeJobs{})
+
+	rec := do(t, h, http.MethodPost, "/api/v1/operations", runOperationRequest{Operation: "system.facts"})
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202; body %s", rec.Code, rec.Body.String())
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if string(raw["status"]) != `"pending_approval"` {
+		t.Errorf("status = %s, want \"pending_approval\"", raw["status"])
+	}
+	for _, key := range []string{"job_id", "job_status"} {
+		if _, present := raw[key]; present {
+			t.Errorf("a parked dispatch carries %s: %s", key, rec.Body.String())
+		}
+	}
+}
+
+// A call that dispatched nothing and returned an earlier call's Job says so.
+//
+// Proves EX-57, EX-58.
+func TestDispatch_ReattachedIsRendered(t *testing.T) {
+	exec := &fakeExecutor{started: capability.StartedJob{JobID: "job-1", Reattached: true}}
+	h := newExecFixture(t, accounts.RoleAdmin, exec, fakeJobs{
+		job:   jobs.Job{ID: "job-1"},
+		tasks: []jobs.Task{{NodeID: "n1", State: jobs.DispatchStateDispatched}},
+	})
+
+	rec := do(t, h, http.MethodPost, "/api/v1/operations", runOperationRequest{Operation: "system.facts"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body %s", rec.Code, rec.Body.String())
+	}
+	var got struct {
+		JobID      string `json:"job_id"`
+		Reattached bool   `json:"reattached"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.JobID != "job-1" || !got.Reattached {
+		t.Errorf("job_id, reattached = %q, %v; want job-1, true", got.JobID, got.Reattached)
+	}
+}
+
+// wait_seconds outside 0 to 300 is a 400 that dispatches nothing; the bounds
+// themselves reach Start.
+//
+// Proves EX-57.
+func TestDispatch_WaitSecondsOutsideItsRangeIsABadRequest(t *testing.T) {
+	for _, rt := range dispatchRoutes {
+		for _, wait := range []int32{-1, controlplane.MaxWaitSeconds + 1} {
+			exec := &fakeExecutor{started: capability.StartedJob{JobID: "job-1"}}
+			h := newExecFixture(t, accounts.RoleAdmin, exec, fakeJobs{job: jobs.Job{ID: "job-1"}})
+
+			rec := do(t, h, http.MethodPost, rt.path, rt.body(wait, false))
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("%s wait_seconds %d: status = %d, want 400; body %s", rt.path, wait, rec.Code, rec.Body.String())
+			}
+			if title := decodeProblemTitle(t, rec.Body.Bytes()); title != "invalid wait_seconds" {
+				t.Errorf("%s wait_seconds %d: title = %q, want \"invalid wait_seconds\"", rt.path, wait, title)
+			}
+			if got := len(exec.startCalls()); got != 0 {
+				t.Errorf("%s wait_seconds %d: Start called %d times, want 0", rt.path, wait, got)
+			}
+		}
+		for _, wait := range []int32{0, controlplane.MaxWaitSeconds} {
+			// A nil Done returns at once, so the bound itself does not hold the test.
+			exec := &fakeExecutor{started: capability.StartedJob{JobID: "job-1"}}
+			h := newExecFixture(t, accounts.RoleAdmin, exec, fakeJobs{job: jobs.Job{ID: "job-1"}})
+
+			rec := do(t, h, http.MethodPost, rt.path, rt.body(wait, false))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("%s wait_seconds %d: status = %d, want 200; body %s", rt.path, wait, rec.Code, rec.Body.String())
+			}
+			if got := len(exec.startCalls()); got != 1 {
+				t.Errorf("%s wait_seconds %d: Start called %d times, want 1", rt.path, wait, got)
+			}
+		}
+	}
+}
+
+// When the Job was stored but cannot be read back, the 500 names the Job so
+// the caller can read it later.
+//
+// Proves EX-57.
+func TestDispatch_AReadBackFailureAfterStartIs500NamingTheJob(t *testing.T) {
+	exec := &fakeExecutor{started: capability.StartedJob{JobID: "job-9"}}
+	h := newExecFixture(t, accounts.RoleAdmin, exec, fakeJobs{job: jobs.Job{ID: "job-9"}, taskErr: errors.New("db gone")})
+
+	rec := do(t, h, http.MethodPost, "/api/v1/operations", runOperationRequest{Operation: "system.facts"})
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500; body %s", rec.Code, rec.Body.String())
+	}
+	var p struct {
+		Title  string `json:"title"`
+		Detail string `json:"detail"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &p); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if p.Title != "read job results failed" || !strings.Contains(p.Detail, "job-9") {
+		t.Errorf("title, detail = %q, %q; want the read-back title and a detail naming job-9", p.Title, p.Detail)
+	}
+}
+
+// The Idempotency-Key header reaches Start verbatim on both routes; no header
+// is no key: whether a key is valid is the capability layer's to say.
+//
+// Proves EX-58.
+func TestDispatch_IdempotencyKeyHeaderReachesStart(t *testing.T) {
+	for _, rt := range dispatchRoutes {
+		for _, tt := range []struct {
+			name string
+			hdr  http.Header
+			want string
+		}{
+			{"a key", http.Header{"Idempotency-Key": {"k-1"}}, "k-1"},
+			{"no header", nil, ""},
+		} {
+			t.Run(rt.path+" "+tt.name, func(t *testing.T) {
+				exec := &fakeExecutor{started: capability.StartedJob{JobID: "job-1"}}
+				h := newExecFixture(t, accounts.RoleAdmin, exec, fakeJobs{job: jobs.Job{ID: "job-1"}})
+
+				rec := doWithHeaders(t, h, http.MethodPost, rt.path, rt.body(0, false), tt.hdr)
+				if rec.Code != http.StatusOK {
+					t.Fatalf("status = %d, want 200; body %s", rec.Code, rec.Body.String())
+				}
+				calls := exec.startCalls()
+				if len(calls) != 1 || calls[0].Options.IdempotencyKey != tt.want {
+					t.Fatalf("Start calls = %+v, want one with IdempotencyKey %q", calls, tt.want)
+				}
+			})
+		}
+	}
+}
+
+// More than one Idempotency-Key header, or a single empty one, is a 400 that
+// dispatches nothing.
+//
+// Proves EX-58, EX-69.
+func TestDispatch_MoreThanOneIdempotencyKeyIsABadRequest(t *testing.T) {
+	for _, rt := range dispatchRoutes {
+		for _, tt := range []struct {
+			name string
+			hdr  []string
+		}{
+			{"more than one", []string{"k-1", "k-2"}},
+			{"an empty value", []string{""}},
+		} {
+			t.Run(rt.path+" "+tt.name, func(t *testing.T) {
+				exec := &fakeExecutor{started: capability.StartedJob{JobID: "job-1"}}
+				h := newExecFixture(t, accounts.RoleAdmin, exec, fakeJobs{job: jobs.Job{ID: "job-1"}})
+
+				rec := doWithHeaders(t, h, http.MethodPost, rt.path, rt.body(0, false),
+					http.Header{"Idempotency-Key": tt.hdr})
+				if rec.Code != http.StatusBadRequest {
+					t.Fatalf("status = %d, want 400; body %s", rec.Code, rec.Body.String())
+				}
+				if title := decodeProblemTitle(t, rec.Body.Bytes()); title != "invalid Idempotency-Key header" {
+					t.Errorf("title = %q, want \"invalid Idempotency-Key header\"", title)
+				}
+				if got := len(exec.startCalls()); got != 0 {
+					t.Errorf("Start called %d times, want 0", got)
+				}
+			})
+		}
+	}
+}
+
+// A preflight claims no key and holds for nothing: plan ignores the header,
+// even one a real dispatch would refuse.
+//
+// Proves EX-58, PF-8.
+func TestPlanMode_IgnoresTheIdempotencyKey(t *testing.T) {
+	for _, rt := range dispatchRoutes {
+		exec := &fakeExecutor{planResult: capability.PlanResult{Matched: 1}}
+		h := newExecFixture(t, accounts.RoleAdmin, exec, fakeJobs{})
+
+		rec := doWithHeaders(t, h, http.MethodPost, rt.path, rt.body(controlplane.MaxWaitSeconds, true),
+			http.Header{"Idempotency-Key": {"k-1", "k-2"}})
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: status = %d, want 200; body %s", rt.path, rec.Code, rec.Body.String())
+		}
+		if got := len(exec.planCalls()); got != 1 {
+			t.Errorf("%s: Plan called %d times, want 1", rt.path, got)
+		}
+		if got := len(exec.startCalls()); got != 0 {
+			t.Errorf("%s: Start called %d times, want 0", rt.path, got)
+		}
+	}
+}
+
+// A preflight refuses wait_seconds outside 0 to 300 as a real dispatch does,
+// matching MCP's input schema, and queries nothing.
+//
+// Proves EX-69.
+func TestPlanMode_WaitSecondsOutsideItsRangeIsABadRequest(t *testing.T) {
+	for _, rt := range dispatchRoutes {
+		for _, wait := range []int32{-1, controlplane.MaxWaitSeconds + 1} {
+			exec := &fakeExecutor{planResult: capability.PlanResult{Matched: 1}}
+			h := newExecFixture(t, accounts.RoleAdmin, exec, fakeJobs{})
+
+			rec := do(t, h, http.MethodPost, rt.path, rt.body(wait, true))
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("%s plan wait_seconds %d: status = %d, want 400; body %s", rt.path, wait, rec.Code, rec.Body.String())
+			}
+			if title := decodeProblemTitle(t, rec.Body.Bytes()); title != "invalid wait_seconds" {
+				t.Errorf("%s plan wait_seconds %d: title = %q, want \"invalid wait_seconds\"", rt.path, wait, title)
+			}
+			if got := len(exec.planCalls()); got != 0 {
+				t.Errorf("%s plan wait_seconds %d: Plan called %d times, want 0", rt.path, wait, got)
+			}
+		}
+	}
+}
+
+// Each idempotency outcome renders its own status and title, with the
+// layer's text verbatim as the detail.
+//
+// Proves EX-58.
+func TestExecutionRefusals_IdempotencyOutcomesRenderTheirStatus(t *testing.T) {
+	for _, tt := range []struct {
+		err    error
+		status int
+		title  string
+	}{
+		{&capability.IdempotencyConflictError{}, http.StatusUnprocessableEntity, "idempotency key conflict"},
+		{&capability.IdempotencyKeyError{Reason: "too long"}, http.StatusBadRequest, "invalid idempotency key"},
+		{&capability.IdempotencyPendingError{JobID: "job-1"}, http.StatusConflict, "idempotency key pending"},
+		{&capability.IdempotencyReleasedError{}, http.StatusConflict, "idempotency key released"},
+		{&capability.IdempotencyAbandonedError{JobID: "job-1"}, http.StatusConflict, "idempotency key abandoned"},
+		{capability.ErrIdempotencyUnavailable, http.StatusServiceUnavailable, "idempotency unavailable"},
+	} {
+		t.Run(tt.title, func(t *testing.T) {
+			exec := &fakeExecutor{startErr: tt.err}
+			h := newExecFixture(t, accounts.RoleAdmin, exec, fakeJobs{})
+
+			rec := do(t, h, http.MethodPost, "/api/v1/operations", runOperationRequest{Operation: "system.facts"})
+			if rec.Code != tt.status {
+				t.Fatalf("status = %d, want %d; body %s", rec.Code, tt.status, rec.Body.String())
+			}
+			if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/problem+json") {
+				t.Errorf("Content-Type = %q, want application/problem+json", ct)
+			}
+			var p struct {
+				Title  string `json:"title"`
+				Detail string `json:"detail"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &p); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if p.Title != tt.title {
+				t.Errorf("title = %q, want %q", p.Title, tt.title)
+			}
+			if p.Detail != tt.err.Error() {
+				t.Errorf("detail = %q, want the error's own text %q", p.Detail, tt.err.Error())
+			}
+		})
 	}
 }

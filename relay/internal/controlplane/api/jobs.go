@@ -51,9 +51,12 @@ const readCapabilityGetJob = "get_job"
 
 // jobResponse is GET /api/v1/jobs/{id}'s body: the Job's identity plus its
 // per-Node Task results, rendered exactly as a dispatch response renders them
-// (same perNodeResult shape, same exit_code presence rules).
+// (same perNodeResult shape, same exit_code presence rules). job_status tells a
+// poller when to stop (EX-57); it has no omitempty so a poller always has its
+// stop condition.
 type jobResponse struct {
 	JobID     string          `json:"job_id"`
+	JobStatus string          `json:"job_status"`
 	CreatedAt string          `json:"created_at,omitempty"`
 	Results   []perNodeResult `json:"results"`
 	Halt      *haltResponse   `json:"halt,omitempty"`
@@ -108,7 +111,7 @@ func handleGetJob(d Deps) http.HandlerFunc {
 			return
 		}
 
-		resp := jobResponse{JobID: out.JobID, Results: out.Results, Halt: out.Halt}
+		resp := jobResponse{JobID: out.JobID, JobStatus: out.JobStatus, Results: out.Results, Halt: out.Halt}
 		if job, err := d.Jobs.GetJob(r.Context(), jobID); err == nil {
 			resp.CreatedAt = controlplane.RFC3339(job.CreatedAt)
 		}
