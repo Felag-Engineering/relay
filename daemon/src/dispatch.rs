@@ -1110,56 +1110,167 @@ allow = ["^/bin/echo hello$"]
     //     sshd  → DENIED_BY_POLICY, runner never called
     // -----------------------------------------------------------------------
 
+    /// Invariant 1: nothing on the wire can compose or escalate a command.
+    /// A Native Operation starts a process only with an argv its own code fixes, each value one
+    /// element, never a shell. The data Natives never reach the executor.
+    // Proves EX-17.
     #[tokio::test]
-    async fn service_restart_nginx_calls_runner() {
-        let state_dir = TempDir::created("svc-nginx");
+    async fn invariant_1_a_native_operation_reaches_the_executor_as_its_fixed_argv() {
+        use crate::operations::pkg_install::{pkg_install_with_manager, Package, PackageManager};
+
+        let state_dir = TempDir::created("inv1-native");
         let dedup = crate::dedup::DedupStore::open(state_dir.path()).expect("open dedup");
         let policy = fixture_policy(); // nginx allowed, sshd denied
 
-        let recorded = Arc::new(Mutex::new(None::<Vec<String>>));
-        let rec = recorded.clone();
-        let fake_run = move |req: ExecRequest| {
-            *rec.lock().unwrap() = Some(req.argv.clone());
-            let task_id = req.task_id.clone();
-            async move {
-                TaskResult {
-                    task_id,
-                    outcome: Outcome::Success as i32,
-                    exit_code: 0,
-                    stdout: vec![],
-                    stderr: vec![],
-                    truncated: false,
-                    duration_millis: 0,
+        let recorded = Arc::new(Mutex::new(Vec::<Vec<String>>::new()));
+        let recorder = |recorded: Arc<Mutex<Vec<Vec<String>>>>| {
+            move |req: ExecRequest| {
+                recorded.lock().unwrap().push(req.argv.clone());
+                let task_id = req.task_id.clone();
+                async move {
+                    TaskResult {
+                        task_id,
+                        outcome: Outcome::Success as i32,
+                        exit_code: 0,
+                        stdout: vec![],
+                        stderr: vec![],
+                        truncated: false,
+                        duration_millis: 0,
+                    }
                 }
             }
         };
 
+        // service.restart through the real dispatch path.
         let task = make_task_service_restart("t-nginx", "nginx");
         let result = dispatch_with_runner(
             &task,
             &policy,
             TemplateSet::empty_static(),
             &dedup,
-            fake_run,
+            recorder(recorded.clone()),
             None,
         )
         .await;
-
         assert_eq!(
             result.outcome,
             Outcome::Success as i32,
             "nginx restart must succeed"
         );
-        let argv = recorded
-            .lock()
-            .unwrap()
-            .clone()
-            .expect("runner must be called");
         assert_eq!(
-            argv,
-            ["systemctl", "restart", "nginx"],
+            recorded.lock().unwrap().as_slice(),
+            [["systemctl", "restart", "nginx"]],
             "runner must receive [systemctl, restart, nginx]"
         );
+
+        // pkg.install: detection is host-dependent, so drive the seam just below it.
+        let before = recorded.lock().unwrap().len();
+        for mgr in [
+            PackageManager::Apt,
+            PackageManager::Dnf,
+            PackageManager::Yum,
+        ] {
+            let result = pkg_install_with_manager(
+                "t-inv1-pkg".to_string(),
+                Some(mgr),
+                Package {
+                    name: "nginx",
+                    version: None,
+                },
+                Duration::from_secs(5),
+                MAX_OUTPUT_BYTES,
+                None,
+                recorder(recorded.clone()),
+            )
+            .await;
+            assert_eq!(result.outcome, Outcome::Success as i32);
+        }
+        {
+            let argvs = recorded.lock().unwrap();
+            assert_eq!(
+                &argvs[before..],
+                [
+                    ["apt-get", "install", "-y", "nginx"],
+                    ["dnf", "install", "-y", "nginx"],
+                    ["yum", "install", "-y", "nginx"],
+                ],
+                "pkg.install argv must be exactly the package manager, install, -y, the name"
+            );
+        }
+
+        // A version is fixed into the same element as the name, by the daemon's own code.
+        let before = recorded.lock().unwrap().len();
+        for mgr in [PackageManager::Apt, PackageManager::Dnf] {
+            let result = pkg_install_with_manager(
+                "t-inv1-pkgver".to_string(),
+                Some(mgr),
+                Package {
+                    name: "nginx",
+                    version: Some("1.18.0"),
+                },
+                Duration::from_secs(5),
+                MAX_OUTPUT_BYTES,
+                None,
+                recorder(recorded.clone()),
+            )
+            .await;
+            assert_eq!(result.outcome, Outcome::Success as i32);
+        }
+        {
+            let argvs = recorded.lock().unwrap();
+            assert_eq!(
+                &argvs[before..],
+                [
+                    ["apt-get", "install", "-y", "nginx=1.18.0"],
+                    ["dnf", "install", "-y", "nginx-1.18.0"],
+                ],
+                "name and version must be one argv element, joined by the daemon"
+            );
+        }
+
+        // file.read and system.facts are data-only: they never reach the executor.
+        let before = recorded.lock().unwrap().len();
+        let tmp = TempFile::with_requested_mode("inv1-read", b"data", 0o600);
+        for task in [
+            make_task_file_read("t-inv1-read", &canonical_path(&tmp)),
+            make_task_system_facts("t-inv1-facts"),
+        ] {
+            let result = dispatch_with_runner(
+                &task,
+                &policy,
+                TemplateSet::empty_static(),
+                &dedup,
+                recorder(recorded.clone()),
+                None,
+            )
+            .await;
+            assert_eq!(
+                result.outcome,
+                Outcome::Success as i32,
+                "{} must succeed",
+                task.task_id
+            );
+        }
+        assert_eq!(
+            recorded.lock().unwrap().len(),
+            before,
+            "a data Native must never reach the executor"
+        );
+
+        // Whatever reached the executor was never a shell invocation.
+        let argvs = recorded.lock().unwrap();
+        assert!(!argvs.is_empty());
+        for argv in argvs.iter() {
+            assert!(
+                !["/bin/sh", "sh", "/bin/bash", "bash", "/usr/bin/env"].contains(&argv[0].as_str()),
+                "argv[0] must not be a shell: {argv:?}"
+            );
+            assert_ne!(
+                argv.get(1).map(String::as_str),
+                Some("-c"),
+                "argv must not be a shell -c invocation: {argv:?}"
+            );
+        }
     }
 
     #[tokio::test]

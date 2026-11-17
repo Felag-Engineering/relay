@@ -592,11 +592,12 @@ func TestEngineMixedOutcomesTruthful(t *testing.T) {
 	}
 }
 
-// TestEngineConduitErrorLeavesTaskInFlight locks in the deliberate asymmetry:
-// a connected Node whose Conduit.Dispatch errors leaves its Task Dispatched
-// (never Resolved), reports OutcomeFailure, and the conduit error is joined
-// into run's returned error.
-func TestEngineConduitErrorLeavesTaskInFlight(t *testing.T) {
+// TestInvariant4_ASendErrorLeavesTheTaskInFlightNeverResolved holds invariant 4:
+// a Task ID seen once is never executed twice.
+// A send that errors leaves its Task Dispatched and in InFlight, for the restart to ask
+// after, never resolved; the Node reports OutcomeFailure and the error is joined into run's.
+// Proves EX-30.
+func TestInvariant4_ASendErrorLeavesTheTaskInFlightNeverResolved(t *testing.T) {
 	jobsRepo, tasksRepo := testEngineStore(t)
 	conduit := newFakeConduit(nil)
 	conduit.connected["node-flaky"] = true
