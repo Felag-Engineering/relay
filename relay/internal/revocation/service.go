@@ -101,8 +101,8 @@ const cascadeRecordChunk = 500
 //
 // A nil recorder must not be read as "skip recording": a cascade or a
 // single-Node revoke that CAN run unattributed is the bug, so making that state unreachable IS the fix. This mirrors
-// api.authorizeControl's nil-Authz posture — loud and closed, never
-// quiet and open.
+// the Control API's unwired-gate posture (a nil Gate refuses with 500): loud
+// and closed, never quiet and open.
 var ErrRecorderRequired = errors.New("revocation: a Node revocation requires a recorder; refusing to run an unattributed revoke")
 
 // CascadeShortfall reports how much of a cascade went unrecorded. It wraps

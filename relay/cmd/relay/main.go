@@ -737,13 +737,8 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 			// record. TestSurfaceDeps_AuditSinkIsWired is the regression
 			// guard, because a nil here fails silently by design.
 			auditSink: auditSink,
-			// The same RoleGate the capability layer authorizes with:
-			// the Control API's administrative routes never reach the
-			// capability layer, so they read their floor from this object
-			// directly rather than from a second table.
-			roleGate: roleGate,
-			now:      func() time.Time { return time.Now().UTC() },
-			metrics:  appMetrics,
+			now:       func() time.Time { return time.Now().UTC() },
+			metrics:   appMetrics,
 
 			// The Console's read seams (v0.6.0 screens). Every one is an object
 			// already assembled above and already handed to another surface —

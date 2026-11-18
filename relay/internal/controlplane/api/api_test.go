@@ -18,7 +18,6 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/relay/relay/internal/audit"
 	"github.com/Felag-Engineering/relay/relay/internal/auditsink"
-	"github.com/Felag-Engineering/relay/relay/internal/authz"
 	"github.com/Felag-Engineering/relay/relay/internal/capability"
 	"github.com/Felag-Engineering/relay/relay/internal/controlplane"
 	"github.com/Felag-Engineering/relay/relay/internal/enroll"
@@ -315,14 +314,14 @@ func testPrincipal() capability.Principal {
 // newTestHandler builds an http.Handler that mounts Register(mux, d) behind
 // a real controlplane.Authenticator accepting testCredential.
 //
-// An unset d.Authz defaults to the PRODUCTION authz.RoleGate (#397), not to a
-// permissive fake. staticVerifier authenticates as the founding admin, so
-// every pre-existing lifecycle test keeps passing the real ladder rather than
+// An unset d.Gate defaults to a real capability Control over the PRODUCTION
+// authz.RoleGate (#397), not to a permissive fake. staticVerifier
+// authenticates as the founding admin, so every pre-existing lifecycle test keeps passing the real ladder rather than
 // being waved through — which is the point: if a floor were later raised
 // above admin, these tests would notice.
 func newTestHandler(d Deps) http.Handler {
-	if d.Authz == nil {
-		d.Authz = authz.NewRoleGate()
+	if d.Gate == nil {
+		d.Gate = newTestGate(new(fakeCapabilityAuditSink))
 	}
 	authn := controlplane.NewAuthenticator(staticVerifier{credential: testCredential})
 	mux := http.NewServeMux()

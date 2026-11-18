@@ -6,7 +6,8 @@
 // (RiskClassViolations, invariant 13, ADR-0012), and the guard that keeps any
 // adapter from importing internal/enroll (EnrollMinterViolations, invariant
 // 10), the go-test twin of a depguard entry so a planted fixture can prove it
-// fires.
+// fires, and the guard that keeps any adapter from naming the Authorizer
+// (ControlAuthorizationViolations, invariant 10, EX-7).
 //
 // These guards hold only what an import path or a resolved identifier cannot
 // express; .golangci.yml's depguard rules and "adapter boundary" forbidigo
