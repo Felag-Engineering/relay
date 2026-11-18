@@ -30,7 +30,7 @@ server, by rules kept there (its Policy), after everything here has passed.
 
 - **EX-1** MCP and the Control API reach execution through one capability-layer entry point.
   Its dispatch type and constructor are unexported, so a package outside the layer that builds a
-  dispatch fails to compile, and a structural guard per adapter forbids naming them.
+  dispatch fails to compile, and a structural guard per adapter forbids naming the constructor.
 - **EX-2** The Console names no dispatch entry point; its structural guard forbids every one.
 - **EX-3** One call runs its stages in this order: the Freeze gate, the empty-Selector refusal,
   Selector resolution, Template resolution (EX-6, EX-15), authorization, the idempotency lookup,
@@ -94,7 +94,7 @@ server, by rules kept there (its Policy), after everything here has passed.
 ### Fan-out, timeouts and halts
 
 - **EX-22** A call makes one Job, and the Job one Task per resolved Node. At most 16 Tasks of one
-  Job are in flight at once, a built-in constant, in no promised order.
+  Job are `Dispatched` and unresolved at once, a built-in constant, in no promised order.
 - **EX-23** The daemon runs one `mutate` Task at a time per Node and up to 4 `read` Tasks at once,
   a constant, classing each Task from its own vocabulary and Raw Exec as mutate.
 - **EX-24** A Task carries the timeout the caller asked for. The daemon applies 30 seconds when
@@ -103,9 +103,9 @@ server, by rules kept there (its Policy), after everything here has passed.
 - **EX-25** A Task that overruns its timeout resolves `timeout`, an outcome recorded against
   that Node.
 - **EX-26** A `mutate` Job halts on its first `failure` or `timeout`: no further Task is sent,
-  every unsent Task resolves `cancelled` with the halt as its reason, and Tasks already in flight
-  finish with their real outcomes (R56), except across a restart (EX-28). The Job's result names
-  the halting Node and why.
+  every unsent Task resolves `cancelled` with the halt as its reason, and Tasks whose send has begun
+  finish with their real outcomes (R56), except across a restart (EX-28). The Job's result names the
+  halting Node and why.
 - **EX-27** `denied_by_policy`, `unsupported`, `unreachable` and `version_refused` do not halt a
   Job, and a `read` Job never halts.
 - **EX-28** A halt survives a Relay restart. Before the Relay serves, it sends no Task of a halted
@@ -120,7 +120,7 @@ server, by rules kept there (its Policy), after everything here has passed.
   dispatched. That record names the caller, the Selector, the Operation with its arguments and
   the number of Nodes; if the transaction fails, nothing is dispatched.
 - **EX-30** A Task is marked `Dispatched` in the store before it is sent, so a send error leaves
-  it in flight, never resolved.
+  it `Dispatched`, never resolved.
 - **EX-31** On restart the Relay re-sends each Task `Dispatched` without a result, for its
   result, except a halted Job's (EX-28); re-sending is safe because the daemon dedups by Task ID
   (`daemon-installation.md`).
@@ -128,9 +128,10 @@ server, by rules kept there (its Policy), after everything here has passed.
   `version_refused` Tasks are terminal and never reconciled.
 - **EX-33** A Task for a disconnected Node is never sent, queued or retried: it resolves
   `unreachable` at once, and a reconnecting Node never runs it.
-- **EX-34** A Task moves `Pending` → `Dispatched` → `Resolved`. It resolves straight from
-  `Pending`, never in flight, when it is `unreachable`, `version_refused`, excluded under EX-6,
-  cancelled before dispatch, or left unsent by a halt.
+- **EX-34** A Task moves `Pending` → `Dispatched` → `Resolved`. It resolves without ever being
+  sent when it is `unreachable`, `version_refused`, excluded under EX-6, cancelled before its send
+  (EX-37), or left unsent by a halt (except a `Dispatched` one across a restart, EX-28): straight
+  from `Pending`, or from `Dispatched` before its send began.
 - **EX-62** A `Dispatched` Task whose Node disconnects while the Relay is serving, before its
   result arrives, resolves `failure`, exit code -1, with stderr saying whether it ran is unknown
   (R56). It is never re-sent, and it halts a `mutate` Job.
@@ -144,10 +145,11 @@ server, by rules kept there (its Policy), after everything here has passed.
 
 ### Cancellation
 
-- **EX-37** Cancelling a Job marks each `Pending` Task `cancelled` and never sends it, asks the
-  daemon to cancel each `Dispatched` Task, best effort, and leaves each resolved Task alone.
-- **EX-38** Cancel only ever asks: a Task that resolved first keeps its real outcome, and one that
-  moves from `Pending` to `Dispatched` while the cancel runs is sent and runs to completion.
+- **EX-37** Cancelling a Job resolves `cancelled`, and never sends, each `Pending` Task and each
+  `Dispatched` Task whose send has not begun; asks the daemon to cancel each Task whose send has
+  begun, best effort; and leaves each resolved Task alone.
+- **EX-38** Cancel never rewrites an outcome: a Task whose send has begun is never resolved
+  `cancelled` by the Relay, and keeps the outcome it resolves with.
 - **EX-39** Who may cancel is decided in the capability layer. A human Account at `operator` or
   above may cancel any Job; a machine Account at `operator` or above only a Job whose verified
   requester it is. The rule follows the Account's kind, not how it signed in (R19).
