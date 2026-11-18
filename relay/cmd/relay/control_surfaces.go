@@ -27,7 +27,6 @@ import (
 
 	"github.com/Felag-Engineering/relay/relay/internal/audit"
 	"github.com/Felag-Engineering/relay/relay/internal/auditsink"
-	"github.com/Felag-Engineering/relay/relay/internal/authz"
 	"github.com/Felag-Engineering/relay/relay/internal/ca"
 	"github.com/Felag-Engineering/relay/relay/internal/capability"
 	"github.com/Felag-Engineering/relay/relay/internal/consoleauth"
@@ -75,7 +74,7 @@ type surfaceDeps struct {
 	// approvals is the approval callout: mcp ApprovalAnswerer; api Approvals; console
 	// Approvals (Job detail's read).
 	approvals *capability.Approvals
-	// freezeControl is the Freeze and its role floor (api.Freezer).
+	// freezeControl is the Freeze and its role floor (api.Freezer, api.ControlGate).
 	freezeControl *capability.Control
 	// readLane backs the MCP read tools (through mcpReadLane), api.NodeReader
 	// and console.Queries.
@@ -99,15 +98,8 @@ type surfaceDeps struct {
 	revocation       *revocation.Service
 	audit            audit.Repository
 	auditSink        *auditsink.Sink
-	// roleGate is the ONE authz.RoleGate the process holds — the same object
-	// the capability layer authorizes dispatches and Freeze with. The Control
-	// API asks it before reading the mint body, then mints through
-	// capability.EnrollmentTokens, which asks it again; the Console reaches it
-	// through the same action. The floor is read from the same table
-	// rather than a second one kept per surface (invariant 10).
-	roleGate *authz.RoleGate
-	now      func() time.Time
-	metrics  *metrics.Metrics
+	now              func() time.Time
+	metrics          *metrics.Metrics
 
 	// consoleAuth is the Console's sign-in service. Nil when the
 	// Console is not enabled, in which case consoleSurface is not in the
@@ -224,10 +216,8 @@ func (apiSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		Nodes:        d.revocation,
 		Freeze:       d.freezeControl,
 		Audit:        d.audit,
-		// The role floor for mint/revoke. Same *authz.RoleGate the
-		// capability layer holds — one ladder, consulted from both places,
-		// never re-derived here.
-		Authz: d.roleGate,
+		// The same Control the Freeze goes through: one floor and one trail.
+		Gate: apiControlGateOrNil(d.freezeControl),
 		// Account and API-Token administration — the SAME
 		// *capability.AccountAdmin instance every other surface here holds: the
 		// same floor, the same self-target/last-admin refusals, and the same
@@ -559,6 +549,15 @@ func consoleTemporaryPasswordsOrNil(t *capability.TemporaryPasswords) console.Te
 		return nil
 	}
 	return t
+}
+
+// apiControlGateOrNil returns c as an api.ControlGate, or an untyped nil when c
+// is nil, for the reason consoleTagsOrNil documents.
+func apiControlGateOrNil(c *capability.Control) api.ControlGate {
+	if c == nil {
+		return nil
+	}
+	return c
 }
 
 // apiEnrollmentTokensOrNil returns e as an api.TokenMinter, or an untyped nil

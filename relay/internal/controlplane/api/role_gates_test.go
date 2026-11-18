@@ -2,13 +2,13 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/Felag-Engineering/relay/relay/internal/accounts"
-	"github.com/Felag-Engineering/relay/relay/internal/audit"
 	"github.com/Felag-Engineering/relay/relay/internal/authz"
 	"github.com/Felag-Engineering/relay/relay/internal/capability"
 	"github.com/Felag-Engineering/relay/relay/internal/controlplane"
@@ -47,11 +47,12 @@ func (m *recordingMinter) MintEnrollmentToken(ctx context.Context, p capability.
 
 // newRoleFixture mounts the full route table behind a real Authenticator that
 // authenticates testCredential as an Account with the given role and kind,
-// with the production RoleGate wired as Deps.Authz.
+// with a real capability Control over the production RoleGate wired as
+// Deps.Gate, unless the test supplies its own.
 func newRoleFixture(t *testing.T, role accounts.Role, kind accounts.Kind, d Deps) http.Handler {
 	t.Helper()
-	if d.Authz == nil {
-		d.Authz = authz.NewRoleGate()
+	if d.Gate == nil {
+		d.Gate = newTestGate(new(fakeCapabilityAuditSink))
 	}
 	if d.Now == nil {
 		d.Now = fixedNow
@@ -62,29 +63,45 @@ func newRoleFixture(t *testing.T, role accounts.Role, kind accounts.Kind, d Deps
 	return authn.Middleware(mux)
 }
 
-// wantRefusal asserts a 403 whose body carries the gate's own reason, and
-// exactly one audit.KindRefusal record attributed to the caller.
-func wantRefusal(t *testing.T, rec *httptest.ResponseRecorder, auditor *fakeAuditor, role accounts.Role) {
+// newTestGate is the capability layer's authorization of the administrative
+// routes, over the production RoleGate, recording its refusals to sink.
+func newTestGate(sink capability.AuditSink) ControlGate {
+	return capability.NewControl(capability.NewRecorder(sink, nil, nil), authz.NewRoleGate(), neverFrozen{})
+}
+
+// wantLayerRefusal asserts a 403 whose body carries the gate's own reason,
+// exactly one refusal recorded by the capability layer attributed to the
+// caller, and no second record from the surface.
+func wantLayerRefusal(t *testing.T, rec *httptest.ResponseRecorder, sink *mintSink, auditor *fakeAuditor, role accounts.Role) {
 	t.Helper()
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403; body = %s", rec.Code, rec.Body.String())
 	}
-	records := auditor.all()
-	if len(records) != 1 {
-		t.Fatalf("audit records = %d, want exactly 1 refusal; refusals are the most interesting audit event", len(records))
+	refusals := sink.refusals()
+	if len(refusals) != 1 {
+		t.Fatalf("layer refusals = %d, want exactly 1; refusals are the most interesting audit event", len(refusals))
 	}
-	got := records[0]
-	if got.Kind != audit.KindRefusal {
-		t.Errorf("audit Kind = %q, want %q", got.Kind, audit.KindRefusal)
+	got := refusals[0]
+	if got.Principal.Role != string(role) {
+		t.Errorf("refusal Principal.Role = %q, want %q", got.Principal.Role, role)
 	}
-	if !strings.Contains(got.Principal, string(role)) {
-		t.Errorf("audit Principal = %q, want it to name the refused role %q", got.Principal, role)
-	}
-	if got.Attribution.Verified.Role != string(role) {
-		t.Errorf("audit verified role = %q, want %q", got.Attribution.Verified.Role, role)
+	if got.Principal.Account == "" {
+		t.Error("refusal Principal.Account is empty; the refusal must name who was refused")
 	}
 	if got.Reason == "" {
-		t.Error("audit Reason is empty; a refusal that does not say why is not a record of anything")
+		t.Error("refusal Reason is empty; a refusal that does not say why is not a record of anything")
+	}
+	var problem struct {
+		Detail string `json:"detail"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &problem); err != nil {
+		t.Fatalf("decode problem body %q: %v", rec.Body.String(), err)
+	}
+	if problem.Detail != got.Reason {
+		t.Errorf("problem detail = %q, want the recorded Reason %q", problem.Detail, got.Reason)
+	}
+	if records := auditor.all(); len(records) != 0 {
+		t.Errorf("surface audit records = %+v, want none: the layer records the refusal, the surface writes no second", records)
 	}
 }
 
@@ -103,10 +120,11 @@ func TestMintToken_RequiresAdmin(t *testing.T) {
 		t.Run(string(role)+" is refused", func(t *testing.T) {
 			minter := newRecordingMinter(t)
 			auditor := &fakeAuditor{}
-			h := newRoleFixture(t, role, accounts.KindMachine, Deps{Tokens: minter, Audit: auditor})
+			sink := newMintSink()
+			h := newRoleFixture(t, role, accounts.KindMachine, Deps{Tokens: minter, Audit: auditor, Gate: newTestGate(sink)})
 
 			rec := do(t, h, http.MethodPost, "/api/v1/enrollment-tokens", body)
-			wantRefusal(t, rec, auditor, role)
+			wantLayerRefusal(t, rec, sink, auditor, role)
 
 			// Nothing was minted: the refusal must precede the act, not
 			// annotate it.
@@ -150,10 +168,11 @@ func TestRevokeToken_RequiresAdmin(t *testing.T) {
 		t.Run(string(role)+" is refused", func(t *testing.T) {
 			tr := &fakeTokenRevoker{}
 			auditor := &fakeAuditor{}
-			h := newRoleFixture(t, role, accounts.KindMachine, Deps{TokenRevoker: tr, Audit: auditor})
+			sink := newMintSink()
+			h := newRoleFixture(t, role, accounts.KindMachine, Deps{TokenRevoker: tr, Audit: auditor, Gate: newTestGate(sink)})
 
 			rec := do(t, h, http.MethodDelete, "/api/v1/enrollment-tokens/tok-1", nil)
-			wantRefusal(t, rec, auditor, role)
+			wantLayerRefusal(t, rec, sink, auditor, role)
 
 			if len(tr.calledWith) != 0 {
 				t.Errorf("TokenRevoker.RevokeToken called with %v on a refused request", tr.calledWith)
@@ -185,10 +204,11 @@ func TestRevokeNode_RequiresAdmin(t *testing.T) {
 		t.Run(string(role)+" is refused", func(t *testing.T) {
 			nr := &fakeNodeRevoker{}
 			auditor := &fakeAuditor{}
-			h := newRoleFixture(t, role, accounts.KindMachine, Deps{Nodes: nr, Audit: auditor})
+			sink := newMintSink()
+			h := newRoleFixture(t, role, accounts.KindMachine, Deps{Nodes: nr, Audit: auditor, Gate: newTestGate(sink)})
 
 			rec := do(t, h, http.MethodPost, "/api/v1/nodes/node-abc/revoke", nil)
-			wantRefusal(t, rec, auditor, role)
+			wantLayerRefusal(t, rec, sink, auditor, role)
 
 			if len(nr.calledWith) != 0 {
 				t.Errorf("NodeRevoker.RevokeNodeRecorded called with %v on a refused request; the Tunnel must stay up", nr.calledWith)
@@ -328,7 +348,7 @@ func TestFreezeRelease_RequiresAReason(t *testing.T) {
 
 // TestAdministrativeRoutes_RefuseWithoutAGate is the fail-closed direction.
 // #397 happened because an ungated administrative route failed OPEN and
-// nothing said so; a Deps with no Authz must therefore be loud and closed,
+// nothing said so; a Deps with no Gate must therefore be loud and closed,
 // even for an admin, rather than quietly permissive.
 func TestAdministrativeRoutes_RefuseWithoutAGate(t *testing.T) {
 	cases := []struct {

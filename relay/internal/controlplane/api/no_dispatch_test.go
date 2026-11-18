@@ -36,7 +36,10 @@ import (
 // false positives here. The rules below are exactly mcp's UNCONDITIONAL ones,
 // applied flat to every non-test file — which also means a new source file is
 // covered automatically, with no classification map to forget to update. It
-// also refuses any import of internal/enroll: no adapter holds enroll.Minter.
+// also refuses any import of internal/enroll (no adapter holds enroll.Minter)
+// and any naming of the Authorizer (astguard.ControlAuthorizationViolations): a
+// route asks the capability layer's entry point for its act, which masks
+// caller-asserted attribution and records the refusal (invariant 10, EX-7).
 
 const (
 	capabilityImportPath = "github.com/Felag-Engineering/relay/relay/internal/capability"
@@ -102,6 +105,7 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 
 	violations = append(violations, policyAliasViolations(fileName, file)...)
 	violations = append(violations, astguard.EnrollMinterViolations(fileName, file)...)
+	violations = append(violations, astguard.ControlAuthorizationViolations(fileName, file)...)
 	return append(violations, tagInternalWriteViolations(fileName, file)...)
 }
 
@@ -243,6 +247,30 @@ func TestDispatchViolations_Fixtures(t *testing.T) {
 		src        string
 		wantSubstr string // "" = expect NO violations
 	}{
+		{
+			name: "calling the Authorizer is refused",
+			src: `package api
+import ` + capImport + `
+func f(d D, p capability.Principal) { _ = d.Authz.AuthorizeControl(nil, p, capability.ControlRevokeNode) }
+`,
+			wantSubstr: "AuthorizeControl",
+		},
+		{
+			name: "holding capability.ControlAuthorizer is refused",
+			src: `package api
+import ` + capImport + `
+type D struct{ Authz capability.ControlAuthorizer }
+`,
+			wantSubstr: "capability.ControlAuthorizer",
+		},
+		{
+			name: "asking the capability layer's entry point is allowed",
+			src: `package api
+import ` + capImport + `
+func f(d D, p capability.Principal) { _ = d.Gate.AuthorizeNodeRevoke(nil, p) }
+`,
+			wantSubstr: "",
+		},
 		{
 			name: "holding enroll.Minter is refused",
 			src: `package api

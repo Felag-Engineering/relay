@@ -25,22 +25,22 @@ import (
 // neither the comment nor the gate. A prose promise did not survive the next
 // route; a failing test will.
 //
-// It is deliberately mechanical in the surface-gated direction (the handler's
-// call graph really is walked, so deleting an authorizeControl call fails
-// here) and deliberately declarative in the other two (a capability-layer
-// floor cannot be proven from this package's AST). The declarative half still
-// earns its keep: a NEW route cannot be added without someone writing down
-// which of the three it is.
+// It is deliberately mechanical in the gated direction (the handler's call
+// graph really is walked, so deleting its ControlGate call fails here) and
+// deliberately declarative in the other two (a capability-layer floor cannot
+// be proven from this package's AST). The declarative half still earns its
+// keep: a NEW route cannot be added without someone writing down which of the
+// three it is.
 
 // floorKind classifies where a route's role floor is enforced.
 type floorKind int
 
 const (
-	// floorSurface: the handler itself must reach a role check in this
-	// package — authorizeControl (#397's administrative routes: both
-	// enrollment-token routes, Node revoke). Verified by walking the call
-	// graph.
-	floorSurface floorKind = iota
+	// floorGate: the floor is decided in the capability layer through a
+	// ControlGate method the handler must call before it reads the request
+	// (#397's administrative routes: both enrollment-token routes, Node
+	// revoke). Verified by walking the call graph.
+	floorGate floorKind = iota
 
 	// floorCapability: the floor is enforced inside the capability layer, and
 	// this surface only renders the refusal. Execution (authz.RoleGate via
@@ -61,8 +61,8 @@ const (
 
 func (f floorKind) String() string {
 	switch f {
-	case floorSurface:
-		return "floorSurface"
+	case floorGate:
+		return "floorGate"
 	case floorCapability:
 		return "floorCapability"
 	default:
@@ -76,11 +76,11 @@ var routeFloors = map[string]floorKind{
 	// Administrative routes (#397). admin, admin, admin; the Freeze pair is
 	// operator+/admin and is decided in the capability layer with the same
 	// RoleGate object.
-	// The mint stays floorSurface: the route asks the gate before it reads the
-	// body (EN-1), and the capability layer then asks the same RoleGate again.
-	"POST /api/v1/enrollment-tokens":        floorSurface,
-	"DELETE /api/v1/enrollment-tokens/{id}": floorSurface,
-	"POST /api/v1/nodes/{node_id}/revoke":   floorSurface,
+	// The mint is floorGate: the route asks the capability layer before it
+	// reads the body (EN-1), and the layer then asks the same RoleGate again.
+	"POST /api/v1/enrollment-tokens":        floorGate,
+	"DELETE /api/v1/enrollment-tokens/{id}": floorGate,
+	"POST /api/v1/nodes/{node_id}/revoke":   floorGate,
 	// Reading one Node is a read, and the read floor is `viewer` — which every
 	// authenticated Account already clears. Consistent with MCP's describe_node,
 	// which is likewise ungated, and with the Console's own rule that a viewer
@@ -129,16 +129,46 @@ var routeFloors = map[string]floorKind{
 	"POST /api/v1/approvals/{id}/decision": floorCapability,
 }
 
-// surfaceGateFuncs are the identifiers that count as "this handler reaches a
-// role check in this package". It takes the ResponseWriter and refuses the
-// request itself, so reaching it is reaching a decision.
-//
-// requireAdmin is GONE (#653): the identity routes' role floor moved into
-// capability.AccountAdmin, so the only surface-level role check left in this
-// package is authorizeControl, for the three routes (both enrollment-token
-// routes, Node revoke) that still call it directly.
-var surfaceGateFuncs = map[string]bool{
-	"authorizeControl": true,
+// routeGate names the ControlGate method each floorGate route's handler must
+// reach: one per act, so a route cannot satisfy its floor with another act's.
+var routeGate = map[string]string{
+	"POST /api/v1/enrollment-tokens":        "AuthorizeEnrollmentTokenMint",
+	"DELETE /api/v1/enrollment-tokens/{id}": "AuthorizeEnrollmentTokenRevoke",
+	"POST /api/v1/nodes/{node_id}/revoke":   "AuthorizeNodeRevoke",
+}
+
+// controlGateMethods are the ControlGate methods, and so the only role checks
+// a handler in this package may reach.
+var controlGateMethods = map[string]bool{
+	"AuthorizeEnrollmentTokenMint":   true,
+	"AuthorizeEnrollmentTokenRevoke": true,
+	"AuthorizeNodeRevoke":            true,
+}
+
+// surfaceGateIdents are the identifiers that count as "this handler reaches a
+// surface-level role check": a ControlGate method, gateControl, or a direct
+// AuthorizeControl call, which the no_dispatch guard forbids here anyway.
+var surfaceGateIdents = map[string]bool{
+	"AuthorizeEnrollmentTokenMint":   true,
+	"AuthorizeEnrollmentTokenRevoke": true,
+	"AuthorizeNodeRevoke":            true,
+	"gateControl":                    true,
+	"AuthorizeControl":               true,
+}
+
+// TestControlGateMethodsAreTheSeam keeps controlGateMethods equal to the
+// ControlGate interface, so the call-graph walk cannot go stale when a method
+// is added to or removed from the seam.
+func TestControlGateMethodsAreTheSeam(t *testing.T) {
+	typ := reflect.TypeOf((*ControlGate)(nil)).Elem()
+	got := map[string]bool{}
+	for i := 0; i < typ.NumMethod(); i++ {
+		got[typ.Method(i).Name] = true
+	}
+	if !reflect.DeepEqual(got, controlGateMethods) {
+		t.Errorf("ControlGate methods = %v, controlGateMethods = %v; they must be the same set",
+			sortedKeys(got), sortedKeys(controlGateMethods))
+	}
 }
 
 // TestEveryRouteIsRoleClassified is the guard. Two directions, both
@@ -151,7 +181,7 @@ func TestEveryRouteIsRoleClassified(t *testing.T) {
 		served[pattern] = true
 		if _, ok := routeFloors[pattern]; !ok {
 			t.Errorf("route %q has no entry in routeFloors — decide its role floor (#397): "+
-				"floorSurface if the handler must call authorizeControl, "+
+				"floorGate if the handler must call its ControlGate method, "+
 				"floorCapability if the capability layer decides it, floorNone if any "+
 				"authenticated Account may call it", pattern)
 		}
@@ -170,48 +200,53 @@ func TestEveryRouteIsRoleClassified(t *testing.T) {
 	}
 }
 
-// TestSurfaceGatedRoutesReachARoleCheck is the mechanical half: for every
-// route classified floorSurface, the handler's call graph within this package
-// must reach authorizeControl. Deleting the gate call from a handler fails
-// here, which is exactly the regression #397 records.
-func TestSurfaceGatedRoutesReachARoleCheck(t *testing.T) {
+// TestGatedRoutesReachTheirOwnControlGate is the mechanical half: for every
+// route classified floorGate, the handler's call graph within this package
+// must reach the ControlGate method of its own act. Deleting the gate call
+// from a handler fails here, which is exactly the regression #397 records.
+func TestGatedRoutesReachTheirOwnControlGate(t *testing.T) {
 	funcs := packageFuncs(t)
 
 	checked := 0
 	for _, r := range Routes() {
-		if routeFloors[r.Pattern()] != floorSurface {
+		if routeFloors[r.Pattern()] != floorGate {
 			continue
 		}
 		checked++
+		method, ok := routeGate[r.Pattern()]
+		if !ok {
+			t.Errorf("route %q is classified floorGate but has no routeGate entry naming its ControlGate method", r.Pattern())
+			continue
+		}
 		entry := handlerFuncName(t, r)
 		if _, ok := funcs[entry]; !ok {
 			t.Errorf("route %q: handler %q not found among this package's top-level functions", r.Pattern(), entry)
 			continue
 		}
-		if !reachesGate(entry, funcs) {
-			t.Errorf("route %q is classified floorSurface but its handler %q never reaches a role check "+
-				"(%s) — a route that authenticates and then proceeds is #397 all over again",
-				r.Pattern(), entry, strings.Join(sortedKeys(surfaceGateFuncs), " or "))
+		if !reachesAny(entry, funcs, map[string]bool{method: true}) {
+			t.Errorf("route %q is classified floorGate but its handler %q never reaches %s "+
+				"— a route that authenticates and then proceeds is #397 all over again",
+				r.Pattern(), entry, method)
 		}
 	}
 
 	// Non-vacuity: if a refactor made every route capability-floored, the loop
 	// above would pass by checking nothing.
 	if checked == 0 {
-		t.Fatal("checked 0 surface-gated routes — the guard must actually inspect something")
+		t.Fatal("checked 0 gated routes — the guard must actually inspect something")
 	}
 }
 
 // TestCapabilityFlooredRoutesDoNotReachASurfaceGate is the INVERSE of
-// TestSurfaceGatedRoutesReachARoleCheck (#653 suggestion 11): for every route
+// TestGatedRoutesReachTheirOwnControlGate (#653 suggestion 11): for every route
 // classified floorCapability, the handler's call graph within this package
-// must NOT reach any surfaceGateFuncs entry.
+// must NOT reach any surfaceGateIdents entry.
 //
 // Without this, "this surface re-derives nothing" (this file's own comment
 // on the identity rows above) is a declaration nobody checks. This is what
 // would fail if a future editor re-introduced a local role check beside a
 // capability call that already refuses — a regression as real as the one
-// TestSurfaceGatedRoutesReachARoleCheck catches, just in the other direction.
+// TestGatedRoutesReachTheirOwnControlGate catches, just in the other direction.
 func TestCapabilityFlooredRoutesDoNotReachASurfaceGate(t *testing.T) {
 	funcs := packageFuncs(t)
 
@@ -226,15 +261,15 @@ func TestCapabilityFlooredRoutesDoNotReachASurfaceGate(t *testing.T) {
 			t.Errorf("route %q: handler %q not found among this package's top-level functions", r.Pattern(), entry)
 			continue
 		}
-		if reachesGate(entry, funcs) {
+		if reachesAny(entry, funcs, surfaceGateIdents) {
 			t.Errorf("route %q is classified floorCapability but its handler %q reaches a surface-level role check "+
 				"(%s) — the capability layer already decides this route's floor; a local check beside it is the "+
 				"second control path invariant 10 forbids",
-				r.Pattern(), entry, strings.Join(sortedKeys(surfaceGateFuncs), " or "))
+				r.Pattern(), entry, strings.Join(sortedKeys(surfaceGateIdents), " or "))
 		}
 	}
 
-	// Non-vacuity: if a refactor classified every route floorSurface/floorNone,
+	// Non-vacuity: if a refactor classified every route floorGate/floorNone,
 	// the loop above would pass by checking nothing.
 	if checked == 0 {
 		t.Fatal("checked 0 capability-floored routes — the guard must actually inspect something")
@@ -267,8 +302,8 @@ func handlerFuncName(t *testing.T, r Route) string {
 	// call site, which makes runtime.FuncForPC attribute the returned
 	// closure to Routes itself rather than to the function that built it.
 	// Routes' own body references literally every handler in the table as a
-	// value, so reachesGate("Routes", …) walks into all of them — making the
-	// FORWARD guard (TestSurfaceGatedRoutesReachARoleCheck) trivially true
+	// value, so reachesAny("Routes", …) walks into all of them — making the
+	// FORWARD guard (TestGatedRoutesReachTheirOwnControlGate) trivially true
 	// for that route regardless of whether ITS OWN handler reaches a gate
 	// (a silent false pass), while the INVERSE guard
 	// (TestCapabilityFlooredRoutesDoNotReachASurfaceGate) fails LOUDLY but
@@ -323,10 +358,10 @@ func packageFuncs(t *testing.T) map[string]*ast.FuncDecl {
 	return funcs
 }
 
-// reachesGate walks the call graph from entry, within this package, looking
-// for one of surfaceGateFuncs. Identifiers inside nested closures count,
-// because a closure's body is part of its enclosing declaration.
-func reachesGate(entry string, funcs map[string]*ast.FuncDecl) bool {
+// reachesAny walks the call graph from entry, within this package, looking for
+// one of names. Identifiers inside nested closures count, because a closure's
+// body is part of its enclosing declaration.
+func reachesAny(entry string, funcs map[string]*ast.FuncDecl, names map[string]bool) bool {
 	seen := map[string]bool{entry: true}
 	queue := []string{entry}
 
@@ -342,7 +377,7 @@ func reachesGate(entry string, funcs map[string]*ast.FuncDecl) bool {
 			if !ok {
 				return true
 			}
-			if surfaceGateFuncs[id.Name] {
+			if names[id.Name] {
 				found = true
 				return false
 			}
@@ -359,10 +394,10 @@ func reachesGate(entry string, funcs map[string]*ast.FuncDecl) bool {
 	return false
 }
 
-// TestReachesGate_Fixtures proves the walker actually discriminates, rather
+// TestReachesAny_Fixtures proves the walker actually discriminates, rather
 // than answering true for everything — the failure mode that would make the
 // guard above decorative.
-func TestReachesGate_Fixtures(t *testing.T) {
+func TestReachesAny_Fixtures(t *testing.T) {
 	parse := func(src string) map[string]*ast.FuncDecl {
 		fset := token.NewFileSet()
 		file, err := parser.ParseFile(fset, "fixture.go", src, 0)
@@ -388,7 +423,7 @@ func TestReachesGate_Fixtures(t *testing.T) {
 			name: "gate called inside the returned closure",
 			src: `package api
 func handler() {
-	_ = func() { authorizeControl() }
+	_ = func() { g.AuthorizeNodeRevoke() }
 }`,
 			entry: "handler", want: true,
 		},
@@ -396,7 +431,7 @@ func handler() {
 			name: "gate reached one hop away",
 			src: `package api
 func handler() { helper() }
-func helper() { authorizeControl() }`,
+func helper() { g.AuthorizeNodeRevoke() }`,
 			entry: "handler", want: true,
 		},
 		{
@@ -418,8 +453,8 @@ func helper() { handler() }`,
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := reachesGate(tc.entry, parse(tc.src)); got != tc.want {
-				t.Errorf("reachesGate() = %v, want %v", got, tc.want)
+			if got := reachesAny(tc.entry, parse(tc.src), controlGateMethods); got != tc.want {
+				t.Errorf("reachesAny() = %v, want %v", got, tc.want)
 			}
 		})
 	}

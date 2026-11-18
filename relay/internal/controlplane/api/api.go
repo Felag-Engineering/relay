@@ -89,6 +89,20 @@ type Freezer interface {
 	ReleaseFreeze(ctx context.Context, p capability.Principal, reason string) error
 }
 
+// ControlGate is the capability layer's authorization of the three
+// administrative acts this surface performs outside a capability service.
+// *capability.Control satisfies it. The floor, the mask (EX-7) and the
+// refusal's record are the layer's. There is one method per act and no
+// ControlAction parameter, so a route cannot ask about an act it does not
+// perform. Like Freezer, it is a narrow seam; the unauthorized levers on
+// *capability.Control stay out of reach because the astguard authorize rule
+// forbids an adapter from naming them.
+type ControlGate interface {
+	AuthorizeEnrollmentTokenMint(ctx context.Context, p capability.Principal) error
+	AuthorizeEnrollmentTokenRevoke(ctx context.Context, p capability.Principal) error
+	AuthorizeNodeRevoke(ctx context.Context, p capability.Principal) error
+}
+
 // Auditor appends a lifecycle audit.Record. audit.Repository satisfies this
 // interface.
 type Auditor interface {
@@ -148,28 +162,15 @@ type Deps struct {
 	// slog.Default(). Wiring, not configuration (invariant 11); context
 	// correlation comes from the handler the composition root builds.
 	Logger *slog.Logger
-	// Authz is the control plane's role ladder for the ADMINISTRATIVE acts
-	// that never construct a jobs.Action and so never reach the capability
-	// layer's dispatch pipeline: enrollment-token mint and revoke, and Node
-	// revoke. The composition root passes the SAME *authz.RoleGate the
-	// capability layer holds, so a floor is decided in one table for every
-	// surface (invariant 10) — this package consults it and renders the
-	// answer, it never decides one.
-	//
-	// Freeze is NOT gated here: it goes through Deps.Freeze into the
-	// capability layer, which consults the same object itself. This package
-	// gates its mint and revoke here, before the body is read (EN-1). The mint
-	// then goes through Tokens, which asks the same RoleGate at the same
-	// ControlAction and writes the token_mint record. The Console's form goes
-	// through the same action.
-	//
-	// Nil refuses every route that needs it with a 500 rather than proceeding
-	// ungated: an unwired gate is a composition-root bug, and an ungated path
-	// fails open silently.
-	Authz capability.ControlAuthorizer
+	// Gate authorizes Enrollment Token mint and revoke and Node revoke in the
+	// capability layer, which records each refusal. The composition root
+	// passes the same *capability.Control the Freeze goes through. Nil refuses
+	// those three routes with a 500, the same unwired-gate posture as
+	// AccountAdmin.
+	Gate ControlGate
 	// AccountAdmin backs the identity-management routes through the
 	// capability layer. Nil refuses every identity route with a
-	// 500, on the same unwired-gate posture Authz above documents.
+	// 500, on the same unwired-gate posture Gate above documents.
 	AccountAdmin AccountAdmin
 	// Tags is the capability layer's tag write, behind both tag routes. Nil
 	// answers them with a 500, on the same unwired-gate posture as AccountAdmin.
@@ -236,13 +237,13 @@ func (r Route) Pattern() string { return r.Method + " " + r.Path }
 // Register mounts exactly these; the OpenAPI drift gate reads exactly these.
 func Routes() []Route {
 	return []Route{
-		// Enrollment Tokens, Node revocation, Freeze. Every route
-		// here has a role floor, and every floor is decided by the ONE
-		// authz.RoleGate: the enrollment and revocation routes consult
-		// it through authorizeControl below, the Freeze routes inherit it
-		// inside the capability layer. Which of the two applies to a given
-		// route is asserted by TestEveryRouteIsRoleClassified, so a route
-		// added to this group later cannot silently have neither.
+		// Enrollment Tokens, Node revocation, Freeze. Every route here has a
+		// role floor, and every floor is decided by the ONE authz.RoleGate: the
+		// enrollment and revocation routes consult it through Gate before they
+		// read the request (gateControl), the Freeze routes inherit it inside
+		// the capability layer. Which of the two applies to a given route is
+		// asserted by TestEveryRouteIsRoleClassified, so a route added to this
+		// group later cannot silently have neither.
 		{"POST", "/api/v1/enrollment-tokens", handleMintToken},
 		{"DELETE", "/api/v1/enrollment-tokens/{id}", handleRevokeToken},
 		{"GET", "/api/v1/nodes/{node_id}", handleGetNode},
@@ -252,7 +253,7 @@ func Routes() []Route {
 
 		// Tag writes (ADR-0050). The floor, a human Account at operator or
 		// above, lives in the capability layer behind TagWriter; these handlers
-		// decode and render and call no authorizeControl.
+		// decode and render and call no gateControl.
 		{"POST", "/api/v1/nodes/{node_id}/tags", handleWriteNodeTag},
 		{"POST", "/api/v1/tags", handleWriteTags},
 
@@ -310,7 +311,7 @@ func Routes() []Route {
 // site — which makes FuncForPC report the closure as belonging to Routes
 // itself. Routes' own body references literally every handler in the table
 // as a value, so a resolution of "Routes" makes the FORWARD guard
-// (TestSurfaceGatedRoutesReachARoleCheck) trivially true for that route
+// (TestGatedRoutesReachTheirOwnControlGate) trivially true for that route
 // regardless of what its own handler actually does — a SILENT false pass —
 // while the INVERSE guard (TestCapabilityFlooredRoutesDoNotReachASurfaceGate)
 // fails, but spuriously: loud, yet for the wrong reason, not because the
@@ -352,36 +353,34 @@ func principal(w http.ResponseWriter, r *http.Request) (capability.Principal, bo
 	return p, true
 }
 
-// authorizeControl is the surface-side role gate for the
-// administrative routes that never reach the capability layer's dispatch
-// pipeline (enrollment-token mint/revoke, Node revoke).
+// gateControl asks the capability layer whether p may perform one of the
+// administrative acts this surface performs outside a capability service, and
+// renders the answer. It decides nothing and records nothing: the layer has
+// already recorded the refusal. A refusal that could not be recorded arrives
+// joined with the record failure, which is logged and never shown.
 //
-// It DECIDES NOTHING. The floor lives in one table — authz.RoleGate's
-// requiredControlRole — which the capability layer consults for the Freeze
-// and the composition root hands to this package as Deps.Authz, so the same
-// answer reaches MCP, the Control API, and the Console (invariant 10). This
-// function's whole job is to ask, audit a refusal, and render it.
-//
-// A nil Authz refuses with 500. That is the deliberate direction: an ungated
+// A nil Gate refuses with 500. That is the deliberate direction: an ungated
 // administrative route fails open and nothing says so, so an unwired gate
 // must be loud and closed rather than quiet and open.
-//
-// The refusal is recorded as audit.KindRefusal with the acting Principal,
-// matching how the capability layer records a refused dispatch — a refusal is
-// the most interesting kind of audit event, and one that only appears for
-// some refusal paths is worse than none.
-func authorizeControl(w http.ResponseWriter, r *http.Request, d Deps, p capability.Principal, act capability.ControlAction) bool {
-	if d.Authz == nil {
+func gateControl(w http.ResponseWriter, r *http.Request, d Deps, authorize func(ControlGate) error) bool {
+	if d.Gate == nil {
 		writeProblem(w, http.StatusInternalServerError, "authorization unavailable",
 			"no control-plane authorizer is wired; refusing rather than proceeding ungated")
 		return false
 	}
-	if err := d.Authz.AuthorizeControl(r.Context(), p, act); err != nil {
-		recordLifecycle(r.Context(), d, p, audit.KindRefusal, "", err.Error())
-		writeProblem(w, http.StatusForbidden, "forbidden", err.Error())
-		return false
+	err := authorize(d.Gate)
+	if err == nil {
+		return true
 	}
-	return true
+	// The layer always returns a join: one element once the refusal is recorded,
+	// two when the record failed too. A length check, never a
+	// FirstRefusal(err) != err comparison: comparing a non-comparable error
+	// value panics.
+	if joined, ok := err.(interface{ Unwrap() []error }); ok && len(joined.Unwrap()) > 1 {
+		d.logger().ErrorContext(r.Context(), "control api: control refusal not recorded", "error", err)
+	}
+	writeProblem(w, http.StatusForbidden, "forbidden", capability.FirstRefusal(err).Error())
+	return false
 }
 
 // newAuditID mints a unique audit.Record.ID. audit_id is the table's PRIMARY
@@ -405,12 +404,12 @@ func authorizeControl(w http.ResponseWriter, r *http.Request, d Deps, p capabili
 // and a wrap here would announce one failure twice.
 var newAuditID = audit.NewID
 
-// recordLifecycle appends one lifecycle audit.Record (token mint/revoke, or
-// a refusal of one — see authorizeControl) attributed to p. Freeze
-// engage/release, and a refused Freeze, are audited intrinsically by
-// capability.Control (RecordFreeze) and must never call this — doing so
-// would double-audit (see freeze.go). reason must never carry an Enrollment
-// Token plaintext.
+// recordLifecycle appends one lifecycle audit.Record (a token revoke)
+// attributed to p. A refusal is recorded by the capability layer, never here.
+// Freeze engage/release, and a refused Freeze, are audited intrinsically by
+// capability.Control (RecordFreeze) and must never call this — doing so would
+// double-audit (see freeze.go). reason must never carry an Enrollment Token
+// plaintext.
 //
 // On an audit-write failure, this logs and returns without undoing the
 // already-completed lifecycle action: the action happened; a failed audit
@@ -422,7 +421,8 @@ var newAuditID = audit.NewID
 // back because the trail write failed would be worse than an incomplete
 // trail. Node revoke does not call this — it needs a fail-closed record,
 // so it goes through revocation.Service.RevokeNodeRecorded instead, the
-// one place that ordering can be atomic against a concurrent cascade for the same Node.
+// one place that ordering can be atomic against a concurrent cascade for the
+// same Node.
 func recordLifecycle(ctx context.Context, d Deps, p capability.Principal, kind, nodeID, reason string) {
 	rec, err := newLifecycleRecord(ctx, d, p, kind, nodeID, reason)
 	if err != nil {
