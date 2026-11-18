@@ -242,6 +242,7 @@ differs from an outcome, where a Job ran and a Node failed; a cancel refusal lea
 |---|---|---|
 | EX-3 | `TestPipeline_StagesRunInSpecOrder`, `TestStart_MalformedCallMatchingNoNodeIsRefusedAsNoNodesMatched` | capability |
 | EX-4 | `TestPipeline_NoStageWidensALaterStage`, `TestPipeline_StagesRunInSpecOrder` | capability |
+| EX-7 | `TestCapabilityLayer_EveryAuthorizationCallMasksAssertions`, `TestEngageFreeze_AuthorizesWithoutAssertions`, `TestReleaseFreeze_AuthorizesWithoutAssertions` | capability |
 | EX-8 | `TestInvariant13_RawExecIsMutateWhateverTheAdapterPasses`, `TestInvariant13_RawExecTakesTheMutateCap` | capability |
 | EX-9 | `TestControlAPI_ALostResponseIsRetriedSafelyWithItsIdempotencyKey` | Relay |
 | EX-11 | `TestShutdown_AJobThatFinishesInsideTheBoundHasItsOutcomeWrittenBeforeTheRelayExits` | Relay |
@@ -265,7 +266,7 @@ differs from an outcome, where a Job ran and a Node failed; a cancel refusal lea
 | EX-67 | `TestCallShape_EmptyArgvFromAnOperatorIsUnauthorized`, `TestCallShape_EmptyRawExecArgvIsRefusedAuditedWithNoJob`, `TestControlAPI_CallShapeRefusalRendersIdenticallyOnBothSurfaces`, `TestMCP_ExecutionToolsInputSchemaConstraints`, `TestMCP_RawExec_EmptyArgvIsRefusedByTheLayer`, `TestRawExec_EmptyArgvReachesTheCapabilityLayer`, `TestStart_MalformedCallMatchingNoNodeIsRefusedAsNoNodesMatched` | API, MCP, Relay, capability |
 | EX-69 | `TestDispatch_MoreThanOneIdempotencyKeyIsABadRequest`, `TestMCP_ExecutionToolsInputSchemaConstraints`, `TestPlanMode_WaitSecondsOutsideItsRangeIsABadRequest` | API, MCP |
 
-Unproven: EX-1, EX-2, EX-5, EX-6, EX-7, EX-10, EX-12, EX-16, EX-19, EX-21, EX-22, EX-23, EX-24, EX-25, EX-26, EX-27, EX-28, EX-32, EX-33, EX-34, EX-35, EX-37, EX-38, EX-39, EX-40, EX-41, EX-42, EX-43, EX-44, EX-45, EX-46, EX-47, EX-48, EX-49, EX-50, EX-51, EX-54, EX-55, EX-56, EX-61, EX-62.
+Unproven: EX-1, EX-2, EX-5, EX-6, EX-10, EX-12, EX-16, EX-19, EX-21, EX-22, EX-23, EX-24, EX-25, EX-26, EX-27, EX-28, EX-32, EX-33, EX-34, EX-35, EX-37, EX-38, EX-39, EX-40, EX-41, EX-42, EX-43, EX-44, EX-45, EX-46, EX-47, EX-48, EX-49, EX-50, EX-51, EX-54, EX-55, EX-56, EX-61, EX-62.
 <!-- proof:end -->
 
 ## Retired

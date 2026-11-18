@@ -15,12 +15,14 @@ import "context"
 // and nothing else. A field a caller controls must never be able to widen what
 // a caller may do.
 //
-// That is enforced, not merely intended: Execution.Run and Execution.Plan strip
-// assertions from the context before calling the Authorizer (see
-// withoutAssertions), so an Authorizer implementation cannot reach them even
-// though it is handed a context. The blast cap counts Nodes and takes no
-// context at all, and Policy is evaluated on the Node, which never sees them.
-// TestAssertionsAreNotAnAuthorizationInput pins the Authorizer half.
+// That is enforced, not merely intended: every authorization call in this
+// package (Authorize, AuthorizeControl, AuthorizeApprovalDecision) strips
+// assertions from the context first (see withoutAssertions), so an Authorizer
+// implementation cannot reach them even though it is handed a context. The
+// blast cap counts Nodes and takes no context at all, and Policy is evaluated
+// on the Node, which never sees them.
+// TestCapabilityLayer_EveryAuthorizationCallMasksAssertions pins that for every
+// call site.
 type Assertions struct {
 	OnBehalfOf  string
 	Traceparent string
