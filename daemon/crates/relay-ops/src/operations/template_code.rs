@@ -1047,6 +1047,7 @@ mod tests {
         ]);
     }
 
+    // Proves EX-19.
     #[test]
     fn undecidable_programs_warn() {
         assert_warning(

@@ -30,6 +30,7 @@ func TestAssertions_ContextRoundTrip(t *testing.T) {
 // Service.Run attaches assertions to the audit entry, never to the
 // authorization call's context. If a future change routes them through, the
 // recorded assertions here will start appearing and this fails.
+// Proves EX-7.
 func TestAssertionsAreNotAnAuthorizationInput(t *testing.T) {
 	spy := &assertionSpyAuthorizer{}
 	reg := registry.NewInMemory()

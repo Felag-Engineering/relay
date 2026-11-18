@@ -98,6 +98,7 @@ func failNode(node string, res jobs.Result) func(context.Context, string, jobs.T
 // Task to resolve failure or timeout stops a mutate Job sending; every Task not
 // yet sent resolves cancelled with the halt as its reason, and the halt is
 // recorded on the Job.
+// Proves EX-25, EX-26.
 func TestJobEngine_MutateJobHaltsOnFailureOrTimeout(t *testing.T) {
 	for _, outcome := range []jobs.Outcome{jobs.OutcomeFailure, jobs.OutcomeTimeout} {
 		t.Run(jobs.OutcomeName(outcome), func(t *testing.T) {
@@ -220,6 +221,7 @@ func TestJobEngine_HaltOnAnIncompleteSendNamesTheTaskUnresolved(t *testing.T) {
 // TestJobEngine_HaltOnANodeGoingOfflineAfterSendIsResolved: a Node that goes
 // offline with a Task in flight resolves that Task failure, which halts a
 // mutate Job with a recorded result.
+// Proves EX-62.
 func TestJobEngine_HaltOnANodeGoingOfflineAfterSendIsResolved(t *testing.T) {
 	var offline atomic.Bool
 	c := newScriptConduit()
@@ -310,6 +312,7 @@ func TestJobEngine_HaltPanicStillClosesTheGate(t *testing.T) {
 
 // TestJobEngine_NonHaltingOutcomesDoNotHalt: denied_by_policy, unsupported and
 // unreachable do not halt a mutate Job, nor do the outcomes that never ran.
+// Proves EX-27.
 func TestJobEngine_NonHaltingOutcomesDoNotHalt(t *testing.T) {
 	tests := []struct {
 		name string
@@ -373,6 +376,7 @@ func TestJobEngine_NonHaltingOutcomesDoNotHalt(t *testing.T) {
 
 // TestJobEngine_ReadJobNeverHalts: a read Job sends to every Node whatever
 // fails.
+// Proves EX-27.
 func TestJobEngine_ReadJobNeverHalts(t *testing.T) {
 	for _, outcome := range []jobs.Outcome{jobs.OutcomeFailure, jobs.OutcomeTimeout} {
 		t.Run(jobs.OutcomeName(outcome), func(t *testing.T) {
@@ -394,6 +398,7 @@ func TestJobEngine_ReadJobNeverHalts(t *testing.T) {
 // TestJobEngine_HaltLetsInFlightTasksFinishWithinTheBound: a Task in flight
 // when the Job halts finishes and reports its real outcome, and the halt never
 // raises the number of Tasks in flight past the dispatch bound.
+// Proves EX-26.
 func TestJobEngine_HaltLetsInFlightTasksFinishWithinTheBound(t *testing.T) {
 	var peak peakTracker
 	var jobID atomic.Value

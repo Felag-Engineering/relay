@@ -86,6 +86,7 @@ func countAudit(t *testing.T, ts testServer, kind string) int {
 // Job later reports node-b unreachable. A connected Node that never answers
 // stays Dispatched until restart reconciliation — "unacknowledged" is not
 // built — so unreachable applies to node-b only.
+// Proves EX-35, EX-43.
 func TestMCP_RunOperation_SilentNodeReturnsTheJobOncePersisted(t *testing.T) {
 	ts := newTestServer(t)
 	ts.conduit.connect(ts.nodeA)
@@ -148,6 +149,7 @@ func TestMCP_RunOperation_SilentNodeReturnsTheJobOncePersisted(t *testing.T) {
 // TestMCP_RunOperation_WaitSecondsReturnsFullResults: with wait_seconds the
 // call blocks until the Job finishes, returns the per-Node results and
 // job_status=complete, and the dispatch audit record is already written.
+// Proves EX-35.
 func TestMCP_RunOperation_WaitSecondsReturnsFullResults(t *testing.T) {
 	ts := newTestServer(t)
 	ts.conduit.connect(ts.nodeA, ts.nodeB)
@@ -182,6 +184,7 @@ func TestMCP_RunOperation_WaitSecondsReturnsFullResults(t *testing.T) {
 
 // TestMCP_RunOperation_LapsedWaitReturnsTheRunningJob: a wait that lapses
 // returns the running Job and does not cancel it.
+// Proves EX-24, EX-35.
 func TestMCP_RunOperation_LapsedWaitReturnsTheRunningJob(t *testing.T) {
 	ts := newTestServer(t)
 	ts.conduit.connect(ts.nodeA)

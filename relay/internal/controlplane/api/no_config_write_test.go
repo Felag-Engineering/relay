@@ -72,7 +72,7 @@ var routeWrites = map[string]string{
 // TestNoRouteWritesConfiguration is RC-11 for the Control API: no route writes
 // Relay configuration. See the header above for how the absence is asserted.
 //
-// Proves AP-5.
+// Proves AP-5, EX-16.
 func TestNoRouteWritesConfiguration(t *testing.T) {
 	t.Run("every route writes a runtime object or nothing", func(t *testing.T) {
 		served := map[string]bool{}

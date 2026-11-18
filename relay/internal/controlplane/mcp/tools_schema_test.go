@@ -28,7 +28,7 @@ import (
 // re-marshalled into a *jsonschema.Schema here for a clean assertion rather
 // than poking at the map directly.
 //
-// Proves EX-59, EX-67, EX-69.
+// Proves EX-35, EX-59, EX-67, EX-69.
 func TestMCP_ExecutionToolsInputSchemaConstraints(t *testing.T) {
 	ts := newTestServer(t)
 	session := ts.connect(t)

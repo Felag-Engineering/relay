@@ -32,6 +32,7 @@ func authorize(t *testing.T, p capability.Principal, act jobs.Action) error {
 
 // The role ladder, asserted as one table: viewer dispatches nothing, operator
 // runs Operations but not Raw Exec, admin runs both.
+// Proves EX-52.
 func TestRoleGate_Ladder(t *testing.T) {
 	cases := []struct {
 		role      accounts.Role
@@ -56,6 +57,7 @@ func TestRoleGate_Ladder(t *testing.T) {
 
 // Acceptance: "an operator may run_operation but is refused raw_exec". The
 // refusal is recognizable via errors.Is and legible in the audit Reason.
+// Proves EX-52.
 func TestRoleGate_OperatorIsRefusedRawExec(t *testing.T) {
 	err := authorize(t, principal(accounts.RoleOperator), rawExecAction)
 	if !errors.Is(err, ErrUnauthorized) {

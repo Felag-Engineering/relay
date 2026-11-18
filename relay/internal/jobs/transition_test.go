@@ -28,6 +28,7 @@ func isLegal(s DispatchState, k TaskEventKind) bool {
 
 // TestTaskTransition_Table enumerates every state x event pair, legal and
 // illegal, including the zero and out-of-range values of each.
+// Proves EX-32, EX-34.
 func TestTaskTransition_Table(t *testing.T) {
 	now := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
 	dispatchedAt := now.Add(-time.Minute)

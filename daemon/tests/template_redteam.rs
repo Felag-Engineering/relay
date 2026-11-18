@@ -86,6 +86,7 @@ async fn every_canary_is_inert(body: &str, expect: Option<fn(&str) -> String>) {
 // Placement: refused at load
 // ---------------------------------------------------------------------------
 
+// Proves EX-19.
 #[tokio::test]
 async fn nested_placements_are_refused_at_load() {
     for body in [
@@ -261,6 +262,7 @@ async fn crlf_line_ending_data_row() {
 
 /// A slot where its value would be executed is refused at load (ADR-0021
 /// amendment of 2026-10-15, decision 3), not left to positional rendering.
+// Proves EX-19.
 #[test]
 fn code_positions_are_refused_at_load() {
     for body in [

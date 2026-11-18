@@ -195,6 +195,7 @@ func policyAliasViolations(fileName string, file *ast.File) []string {
 // depth over the interface boundary — Deps.Exec is an Executor, so the compiler
 // already refuses a Service today — catching a future widening at `go test`
 // time with a message that names the rule.
+// Proves EX-1.
 func TestNoDispatchConstruction(t *testing.T) {
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {
@@ -236,6 +237,7 @@ func TestNoDispatchConstruction(t *testing.T) {
 // snippets rather than this package's real files, proving each rule actually
 // fires — and that the legitimate capability usage these routes depend on does
 // not.
+// Proves EX-1.
 func TestDispatchViolations_Fixtures(t *testing.T) {
 	const capImport = `"github.com/Felag-Engineering/relay/relay/internal/capability"`
 	const regImport = `"github.com/Felag-Engineering/relay/relay/internal/registry"`

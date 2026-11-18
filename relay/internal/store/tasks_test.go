@@ -30,6 +30,7 @@ func seedJobAndStage(t *testing.T, st *Store, jobID, stageID string) {
 // TestInFlightResolve is acceptance #4: CreateTask -> pending; MarkDispatched
 // -> InFlight returns it, dispatched_at set and outcome unresolved; Resolve
 // -> InFlight empty, outcome/exit/stdout/stderr/resolved_at populated.
+// Proves EX-32.
 func TestInFlightResolve(t *testing.T) {
 	st, _ := openTestStore(t)
 	ctx := context.Background()
@@ -299,6 +300,7 @@ func TestMarkCancelledBeforeSend_InvalidState(t *testing.T) {
 // TestMarkUnreachable_FromPending is the offline-fail-fast contract
 // (ADR-0004): a Pending Task moves straight to Resolved/OutcomeUnreachable
 // with no DispatchedAt, and is absent from InFlight (it was never sent).
+// Proves EX-32.
 func TestMarkUnreachable_FromPending(t *testing.T) {
 	st, _ := openTestStore(t)
 	ctx := context.Background()
@@ -372,6 +374,7 @@ func TestMarkUnreachable_InvalidState(t *testing.T) {
 // store contract: a Pending Task moves straight to Resolved/
 // OutcomeVersionRefused with the legible VersionRefusedMessage as Stderr, no
 // DispatchedAt, and is absent from InFlight (it was never sent).
+// Proves EX-32.
 func TestMarkVersionRefused_FromPending(t *testing.T) {
 	st, _ := openTestStore(t)
 	ctx := context.Background()

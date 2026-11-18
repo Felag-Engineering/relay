@@ -303,6 +303,7 @@ func (h *holdingConduit) Dispatch(ctx context.Context, nodeID string, task jobs.
 // engine. A cancel that lands while one worker is past MarkDispatched and
 // before the Tunnel write means that Task is never written, and the Task
 // behind the dispatch bound is never dispatched.
+// Proves EX-37.
 func TestDispatchWiring_ACancelDuringFanOutWithholdsUnsentTasksThroughTheRealRouter(t *testing.T) {
 	tasks, st := testTaskRepositoryWithStore(t)
 	reads := newSignalInFlight(tasks)
@@ -610,6 +611,7 @@ func (s *signalInFlight) awaitReads(t *testing.T, n int) {
 // A Node whose stream ends resolves the Tasks in flight to it as failures with
 // the node-offline message, leaves alone a Task whose real result had already
 // arrived, and never re-sends either on the Node's next connect (invariant 4).
+// Proves EX-62.
 func TestDispatchWiring_InFlightTaskResolvesWhenNodeStreamEndsAndIsNeverResent(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -919,6 +921,7 @@ func TestDispatchWiring_AHaltedJobsUnsentTasksAreNeverSentAfterARestart(t *testi
 // Task's TaskRequest is never written, it resolves cancelled with the halt as
 // its reason and no DispatchedAt, and nothing is left in flight for a
 // Reconciler to send (invariant 4).
+// Proves EX-26, EX-34.
 func TestDispatchWiring_AHaltClosingAfterASiblingPassedAdmitWithholdsItsSend(t *testing.T) {
 	tasks, st := testTaskRepositoryWithStore(t)
 	reads := newSignalInFlight(tasks)

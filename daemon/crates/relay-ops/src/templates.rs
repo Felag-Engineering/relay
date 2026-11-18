@@ -758,6 +758,7 @@ fn fingerprint_files(files: &[(String, PathBuf, Vec<u8>)]) -> String {
 mod tests {
     use super::*;
     use crate::gen::RiskClass;
+    use crate::operations::template::SlotType;
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
     use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -1010,6 +1011,71 @@ body = "echo {{missing}}"
         let set = TemplateSet::load_or_fail_closed(&dir.path);
         assert_eq!(set.len(), 0, "a partial vocabulary is never served");
         assert_eq!(set.fingerprint(), UNLOADABLE_FINGERPRINT);
+    }
+
+    /// A placeholder in a quoted, nested or code position makes the whole
+    /// Template set unloadable: no partial vocabulary is served.
+    // Proves EX-19.
+    #[test]
+    fn a_misplaced_placeholder_fails_the_whole_set() {
+        let cases = [
+            ("echo \"{{p}}\"", "PlaceholderInQuotedContext"),
+            ("echo $(echo {{p}})", "PlaceholderNotTopLevel"),
+            ("eval {{p}}", "PlaceholderInCodePosition"),
+        ];
+        for (body, variant) in cases {
+            let dir = TempDir::new("misplaced");
+            dir.write("good.toml", DISK);
+            dir.write(
+                "bad.toml",
+                &format!(
+                    "[[template]]\nname = \"bad.placement\"\nrisk_class = \"read\"\nbody = '{body}'\n\
+                     [[template.slots]]\nname = \"p\"\ntype = \"identifier\"\n"
+                ),
+            );
+            let err = TemplateSet::load(&dir.path).expect_err("must fail closed");
+            assert!(
+                matches!(&err, TemplateLoadError::Invalid { source, .. }
+                    if format!("{source:?}").starts_with(variant)),
+                "body {body:?}: want {variant}, got {err:?}"
+            );
+
+            let set = TemplateSet::load_or_fail_closed(&dir.path);
+            assert_eq!(set.len(), 0, "a partial vocabulary is never served");
+            assert_eq!(set.fingerprint(), UNLOADABLE_FINGERPRINT);
+        }
+    }
+
+    /// No slot type holds a secret: the declared type set is closed, and a
+    /// file that declares a `secret` slot does not load.
+    // Proves EX-21.
+    #[test]
+    fn no_slot_type_is_for_a_secret() {
+        let dir = TempDir::new("secret-slot");
+        dir.write(
+            "x.toml",
+            r#"
+[[template]]
+name = "has.secret"
+risk_class = "read"
+body = "echo {{s}}"
+[[template.slots]]
+name = "s"
+type = "secret"
+"#,
+        );
+        let err = TemplateSet::load(&dir.path).expect_err("a secret slot type must not load");
+        assert!(
+            matches!(err, TemplateLoadError::Parse { .. }),
+            "got {err:?}"
+        );
+
+        // The exhaustive match, with no wildcard arm, is the guard: a new slot
+        // type breaks the build here so it is reviewed against the rule that a
+        // caller never passes a secret in an argument.
+        let _closed_set = |ty: &SlotType| match ty {
+            SlotType::Identifier | SlotType::Integer | SlotType::Path | SlotType::Enum(_) => (),
+        };
     }
 
     /// A file saved with CRLF line endings makes the carriage return part of

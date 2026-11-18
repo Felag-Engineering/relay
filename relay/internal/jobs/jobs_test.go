@@ -1,9 +1,51 @@
 package jobs
 
 import (
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
+
+// The version-refused reason tells the caller the Task never ran and that an
+// upgrade flows through the customer's config management, not through Relay.
+// Proves EX-44.
+func TestVersionRefusedMessage_SaysUpgradesFlowThroughConfigManagement(t *testing.T) {
+	for _, want := range []string{"never sent", "config-management", "never pushes binaries"} {
+		if !strings.Contains(VersionRefusedMessage, want) {
+			t.Errorf("VersionRefusedMessage = %q, want it to contain %q", VersionRefusedMessage, want)
+		}
+	}
+}
+
+// A Task in flight to a Node that goes offline resolves as a failure with no
+// exit status, and its reason says the Relay cannot know whether it ran.
+// Proves EX-62.
+func TestNodeOfflineMessage_SaysWhetherTheTaskRanIsUnknown(t *testing.T) {
+	for _, want := range []string{"whether it ran is unknown", "does not re-send"} {
+		if !strings.Contains(NodeOfflineMessage, want) {
+			t.Errorf("NodeOfflineMessage = %q, want it to contain %q", NodeOfflineMessage, want)
+		}
+	}
+	res := NodeOfflineResult()
+	if res.Outcome != OutcomeFailure || res.ExitCode != -1 || string(res.Stderr) != NodeOfflineMessage {
+		t.Errorf("NodeOfflineResult() = %+v, want a failure, exit -1, Stderr NodeOfflineMessage", res)
+	}
+}
+
+// A Job ends only when its Tasks resolve: it carries no timeout or deadline of
+// its own.
+// Proves EX-24.
+func TestJob_CarriesNoJobLevelTimeout(t *testing.T) {
+	typ := reflect.TypeOf(Job{})
+	for i := 0; i < typ.NumField(); i++ {
+		f := typ.Field(i)
+		if f.Type == reflect.TypeOf(time.Duration(0)) ||
+			strings.Contains(f.Name, "Timeout") || strings.Contains(f.Name, "Deadline") {
+			t.Errorf("Job.%s looks like a Job-level timeout; a Job ends only when its Tasks resolve", f.Name)
+		}
+	}
+}
 
 // TestProtocolViolationExplanation_Legibility pins ProtocolViolation's TEXT
 // against the exact lie #632 is about, mirroring
@@ -95,6 +137,7 @@ func TestProtocolViolation_Violated(t *testing.T) {
 // collapsed: an operator who cannot tell them apart cannot tell a Policy problem
 // from a fleet problem. In particular version_refused (ADR-0014's dispatch-level
 // gate) must never render as denied_by_policy or unreachable.
+// Proves EX-43.
 func TestOutcomeName_CoversAllEight(t *testing.T) {
 	want := map[Outcome]string{
 		OutcomeSuccess:        "success",
@@ -196,6 +239,7 @@ func TestHalt_ReasonNeverSaysResolvedOfAnUnresolvedTask(t *testing.T) {
 
 // TestHalt_RestartReasonNamesTheHaltAndClaimsNoLess: a Task marked dispatched
 // at a restart may have been sent, so its text never says it was not.
+// Proves EX-28.
 func TestHalt_RestartReasonNamesTheHaltAndClaimsNoLess(t *testing.T) {
 	for _, resolved := range []bool{true, false} {
 		h := Halt{TaskID: "task-1", NodeID: "node-7", Outcome: OutcomeTimeout, Resolved: resolved}
@@ -216,6 +260,8 @@ func TestHalt_RestartReasonNamesTheHaltAndClaimsNoLess(t *testing.T) {
 	}
 }
 
+// A restart settles a Dispatched Task as a failure with no exit status.
+// Proves EX-28.
 func TestHalt_RestartResultIsAFailureWithNoExitStatus(t *testing.T) {
 	h := Halt{TaskID: "task-1", NodeID: "node-7", Outcome: OutcomeFailure, Resolved: true}
 	got := h.RestartResult()
@@ -225,6 +271,8 @@ func TestHalt_RestartResultIsAFailureWithNoExitStatus(t *testing.T) {
 	}
 }
 
+// ResolvedOutcomes is the eight terminal outcomes and never the unspecified zero value.
+// Proves EX-43.
 func TestResolvedOutcomes(t *testing.T) {
 	got := ResolvedOutcomes()
 	if len(got) != 8 {

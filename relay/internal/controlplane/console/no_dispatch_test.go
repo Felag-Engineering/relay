@@ -531,6 +531,8 @@ func policyAliasInternalWriteViolations(fileName string, file *ast.File) []strin
 	return violations
 }
 
+// Every non-test Console file passes the dispatch guard: it names no dispatch entry point.
+// Proves EX-2.
 func TestConsole_NoDispatchOutsideCapabilityLayer(t *testing.T) {
 	entries, err := os.ReadDir(".")
 	if err != nil {
@@ -564,6 +566,7 @@ func TestConsole_NoDispatchOutsideCapabilityLayer(t *testing.T) {
 // TestDispatchViolations_Fixtures exercises the guard on sources that are not
 // in this package, because a guard nobody has ever seen fail is a guard that
 // might not run. Mirrors api/no_dispatch_test.go's fixture table.
+// Proves EX-2.
 func TestDispatchViolations_Fixtures(t *testing.T) {
 	const capImport = `"github.com/Felag-Engineering/relay/relay/internal/capability"`
 	const regImport = `"github.com/Felag-Engineering/relay/relay/internal/registry"`
@@ -579,6 +582,13 @@ func TestDispatchViolations_Fixtures(t *testing.T) {
 		file       string
 		wantSubstr string // "" = expect NO violations
 	}{
+		{
+			name: "the unexported newDispatch identifier is refused",
+			src: `package console
+func f() { _ = newDispatch() }
+`,
+			wantSubstr: "references newDispatch",
+		},
 		{
 			name: "calling the Authorizer is refused",
 			src: `package console

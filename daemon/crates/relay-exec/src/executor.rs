@@ -679,6 +679,7 @@ mod tests {
     }
 
     // 5. ACCEPTANCE-CRITICAL: timeout kills the entire process group (no orphans).
+    // Proves EX-25.
     #[tokio::test]
     async fn timeout_kills_group_no_orphans() {
         let result = execute(ExecRequest {
@@ -734,6 +735,7 @@ mod tests {
     }
 
     // 6. ACCEPTANCE-CRITICAL: output past the cap is truncated and drained (no deadlock).
+    // Proves EX-42.
     #[tokio::test]
     async fn large_output_is_truncated() {
         let result = execute(ExecRequest {
@@ -780,6 +782,7 @@ mod tests {
 
     // 6c. Cap boundary, cap+1: output one byte past the cap IS truncated and
     // captured length stays exactly the cap (no off-by-one, memory stays bounded).
+    // Proves EX-42.
     #[tokio::test]
     async fn output_one_byte_past_cap_is_truncated() {
         let result = execute(ExecRequest {
@@ -796,6 +799,30 @@ mod tests {
         })
         .await;
         assert_eq!(result.stdout.len(), 1024);
+        assert!(result.truncated);
+        assert_eq!(result.outcome, Outcome::Success as i32);
+    }
+
+    // 6d. The cap applies to stderr as it does to stdout: each stream is capped
+    // on its own, so stderr past the cap is truncated while stdout stays empty.
+    // Proves EX-42.
+    #[tokio::test]
+    async fn stderr_past_cap_is_truncated() {
+        let result = execute(ExecRequest {
+            task_id: "t6d".to_string(),
+            argv: vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                "head -c 1025 /dev/zero 1>&2".to_string(),
+            ],
+            timeout: Duration::from_secs(5),
+            max_output_bytes: 1024,
+            cancel: None,
+            limits: no_limits(),
+        })
+        .await;
+        assert_eq!(result.stderr.len(), 1024);
+        assert!(result.stdout.is_empty());
         assert!(result.truncated);
         assert_eq!(result.outcome, Outcome::Success as i32);
     }

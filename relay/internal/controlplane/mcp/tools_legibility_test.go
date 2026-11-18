@@ -313,7 +313,7 @@ func TestMCP_ExplanationAbsentWhenNotRefused(t *testing.T) {
 	}
 }
 
-// Proves EX-60.
+// Proves EX-21, EX-60.
 // The audit trail keeps arguments verbatim, so the description must tell the
 // caller to keep secrets out of them.
 func TestMCP_ListOperationsSaysArgumentsAreAuditedVerbatim(t *testing.T) {

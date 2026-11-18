@@ -290,6 +290,8 @@ func TestRunAuthorizeDeniedShortCircuits(t *testing.T) {
 	}
 }
 
+// An over-cap dispatch is refused and audited, and the dispatcher is never called.
+// Proves EX-54.
 func TestRunCapCheckDeniedShortCircuits(t *testing.T) {
 	reg := seedOneNode(t)
 	authz := &spyAuthorizer{}
@@ -331,6 +333,7 @@ func TestRunCapCheckDeniedShortCircuits(t *testing.T) {
 // Selector resolving to zero Nodes is refused, once, in the capability layer
 // — authorized but never dispatched, never capacity-checked — and audited as
 // a refusal rather than a job-level dispatch row.
+// Proves EX-50.
 func TestRunZeroMatchRefusedBeforeAnyJob(t *testing.T) {
 	reg := seedOneNode(t)
 	authz := &spyAuthorizer{}
@@ -400,20 +403,22 @@ func TestRunZeroMatchRefusedBeforeAnyJob(t *testing.T) {
 // TestRunZeroMatchCreatesNoJob proves the zero-match refusal happens before
 // any Job exists: CreateJob is never reached, so a later GetJob for the id
 // the (untouched) ID generator would have produced returns ErrJobNotFound,
-// and the Conduit is never touched.
+// no Task is created, and the Conduit is never touched.
+// Proves EX-50.
 func TestRunZeroMatchCreatesNoJob(t *testing.T) {
 	reg := seedOneNode(t)
 	var log []string
 	conduit := newFakeConduit(&log)
 
 	jobsRepo, tasksRepo := testEngineStore(t)
+	countedJobs := &countingJobs{JobRepository: jobsRepo}
 	audit := &spyAuditSink{}
 	svc := build(t, seams{reg: reg,
 		authz:    &spyAuthorizer{},
 		cap:      &spyCapChecker{},
 		audit:    audit,
 		freeze:   &fakeFreezeStore{},
-		jobsRepo: jobsRepo, tasksRepo: tasksRepo, conduit: conduit, newID: sequentialIDs("id-"),
+		jobsRepo: countedJobs, tasksRepo: &recordingTasks{TaskRepository: tasksRepo, log: &log}, conduit: conduit, newID: sequentialIDs("id-"),
 	})
 
 	sel := Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "db"}}}
@@ -425,11 +430,14 @@ func TestRunZeroMatchCreatesNoJob(t *testing.T) {
 		t.Fatalf("Run() error = %v, want errors.As to find a *NoNodesMatchedError", err)
 	}
 
-	if _, err := jobsRepo.GetJob(context.Background(), "id-1"); !errors.Is(err, jobs.ErrJobNotFound) {
-		t.Errorf("jobsRepo.GetJob(id-1) error = %v, want ErrJobNotFound (CreateJob must never be called)", err)
+	if got := countedJobs.created.Load(); got != 0 {
+		t.Errorf("CreateJob called %d times, want 0", got)
+	}
+	if _, err := jobsRepo.GetJob(context.Background(), "job-id-1"); !errors.Is(err, jobs.ErrJobNotFound) {
+		t.Errorf("jobsRepo.GetJob(job-id-1) error = %v, want ErrJobNotFound (CreateJob must never be called)", err)
 	}
 	if len(log) != 0 {
-		t.Errorf("Conduit was touched (log = %v), want no Dispatch/Query calls on a zero-match Run", log)
+		t.Errorf("the Conduit or the Task store was touched (log = %v), want no Dispatch/Query call and no Task created on a zero-match Run", log)
 	}
 }
 
@@ -488,6 +496,7 @@ func TestNoNodesMatchedErrorIsLegibleForAnEmptySelector(t *testing.T) {
 	}
 }
 
+// Proves EX-11.
 func TestRunThreadsPrincipalToAudit(t *testing.T) {
 	reg := seedOneNode(t)
 	authz := &spyAuthorizer{}
@@ -554,6 +563,7 @@ func TestRunHappyPathDefaultsToNoopDispatcher(t *testing.T) {
 	}
 }
 
+// Proves EX-11.
 func TestRunAuditsPartialResultsOnDispatchError(t *testing.T) {
 	reg := seedOneNode(t)
 	authz := &spyAuthorizer{}
@@ -759,6 +769,7 @@ func TestNewApprovals_NilNotifierParksWithoutNotifying(t *testing.T) {
 	}
 }
 
+// Proves EX-11.
 func TestRunJoinsDispatchAndAuditErrors(t *testing.T) {
 	reg := seedOneNode(t)
 	authz := &spyAuthorizer{}
