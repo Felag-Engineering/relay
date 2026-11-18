@@ -63,6 +63,10 @@ type fakeExecutor struct {
 	// cancels records every CancelJob call; cancelErr is what it returns.
 	cancels   []string
 	cancelErr error
+
+	// afterStart, when set, runs in Start once the call is recorded and the
+	// gate has passed, just before it returns.
+	afterStart func()
 }
 
 func (f *fakeExecutor) CancelJob(_ context.Context, _ capability.Principal, jobID string) error {
@@ -86,6 +90,9 @@ func (f *fakeExecutor) Start(ctx context.Context, p capability.Principal, sel ca
 		if err := f.gate.Authorize(ctx, p, act, sel); err != nil {
 			return capability.StartedJob{}, err
 		}
+	}
+	if f.afterStart != nil {
+		f.afterStart()
 	}
 	return f.started, f.startErr
 }
@@ -128,6 +135,73 @@ func (f fakeJobs) GetJob(_ context.Context, _ string) (jobs.Job, error) {
 
 func (f fakeJobs) TasksByJob(_ context.Context, _ string) ([]jobs.Task, error) {
 	return f.tasks, f.taskErr
+}
+
+// cancellingJobs is a JobResultReader whose read cancels the caller's context
+// and fails with it: a caller that disconnects during the read-back.
+type cancellingJobs struct{ cancel context.CancelFunc }
+
+func (c cancellingJobs) GetJob(context.Context, string) (jobs.Job, error) {
+	c.cancel()
+	return jobs.Job{}, context.Canceled
+}
+
+func (c cancellingJobs) TasksByJob(context.Context, string) ([]jobs.Task, error) {
+	c.cancel()
+	return nil, context.Canceled
+}
+
+// failingJobs is a JobResultReader that fails the test if it is read: the
+// caller was gone before the read-back began.
+type failingJobs struct{ t *testing.T }
+
+func (f failingJobs) GetJob(context.Context, string) (jobs.Job, error) {
+	f.t.Error("GetJob called for a caller already gone")
+	return jobs.Job{}, context.Canceled
+}
+
+func (f failingJobs) TasksByJob(context.Context, string) ([]jobs.Task, error) {
+	f.t.Error("TasksByJob called for a caller already gone")
+	return nil, context.Canceled
+}
+
+// abortRecorder is a ResponseWriter that only records whether anything was
+// written.
+type abortRecorder struct {
+	hdr     http.Header
+	written bool
+}
+
+func (a *abortRecorder) Header() http.Header {
+	if a.hdr == nil {
+		a.hdr = http.Header{}
+	}
+	return a.hdr
+}
+
+func (a *abortRecorder) WriteHeader(int) { a.written = true }
+
+func (a *abortRecorder) Write(b []byte) (int, error) {
+	a.written = true
+	return len(b), nil
+}
+
+// serveExpectingAbort serves req and fails unless the handler ended the
+// exchange with http.ErrAbortHandler having written nothing.
+func serveExpectingAbort(t *testing.T, h http.Handler, req *http.Request) {
+	t.Helper()
+	w := &abortRecorder{}
+	func() {
+		defer func() {
+			if got := recover(); got != http.ErrAbortHandler {
+				t.Errorf("handler ended with %v, want panic(http.ErrAbortHandler)", got)
+			}
+		}()
+		h.ServeHTTP(w, req)
+	}()
+	if w.written {
+		t.Error("the handler wrote a response to a caller that has gone")
+	}
 }
 
 // roleVerifier authenticates testCredential as an Account with a chosen role,
@@ -1345,26 +1419,92 @@ func TestDispatch_WaitSecondsOutsideItsRangeIsABadRequest(t *testing.T) {
 }
 
 // When the Job was stored but cannot be read back, the 500 names the Job so
-// the caller can read it later.
+// the caller can read it later. A cancelled-context error is still a 500 while
+// the request's context is live.
 //
 // Proves EX-57.
 func TestDispatch_AReadBackFailureAfterStartIs500NamingTheJob(t *testing.T) {
-	exec := &fakeExecutor{started: capability.StartedJob{JobID: "job-9"}}
-	h := newExecFixture(t, accounts.RoleAdmin, exec, fakeJobs{job: jobs.Job{ID: "job-9"}, taskErr: errors.New("db gone")})
+	for _, taskErr := range []error{errors.New("db gone"), context.Canceled} {
+		t.Run(taskErr.Error(), func(t *testing.T) {
+			exec := &fakeExecutor{started: capability.StartedJob{JobID: "job-9"}}
+			h := newExecFixture(t, accounts.RoleAdmin, exec, fakeJobs{job: jobs.Job{ID: "job-9"}, taskErr: taskErr})
 
-	rec := do(t, h, http.MethodPost, "/api/v1/operations", runOperationRequest{Operation: "system.facts"})
-	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want 500; body %s", rec.Code, rec.Body.String())
+			rec := do(t, h, http.MethodPost, "/api/v1/operations", runOperationRequest{Operation: "system.facts"})
+			if rec.Code != http.StatusInternalServerError {
+				t.Fatalf("status = %d, want 500; body %s", rec.Code, rec.Body.String())
+			}
+			var p struct {
+				Title  string `json:"title"`
+				Detail string `json:"detail"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &p); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if p.Title != "read job results failed" || !strings.Contains(p.Detail, "job-9") {
+				t.Errorf("title, detail = %q, %q; want the read-back title and a detail naming job-9", p.Title, p.Detail)
+			}
+		})
 	}
-	var p struct {
-		Title  string `json:"title"`
-		Detail string `json:"detail"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &p); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if p.Title != "read job results failed" || !strings.Contains(p.Detail, "job-9") {
-		t.Errorf("title, detail = %q, %q; want the read-back title and a detail naming job-9", p.Title, p.Detail)
+}
+
+// Once Start has succeeded, a caller whose context is done is answered with
+// nothing, whether it went during the wait or during the read-back; the Job
+// is neither cancelled nor re-dispatched.
+//
+// Proves EX-57.
+func TestDispatch_ACallerGoneAfterStartIsAnsweredWithNothing(t *testing.T) {
+	for _, rt := range dispatchRoutes {
+		for _, tt := range []struct {
+			name    string
+			started capability.StartedJob
+			wait    int32
+			reader  func(t *testing.T, cancel context.CancelFunc) JobResultReader
+		}{
+			{
+				name:    "gone during the wait",
+				started: capability.StartedJob{JobID: "job-9", Done: make(chan struct{})},
+				wait:    300,
+				// The read-back must not be reached, which pins the check
+				// made right after the wait returns.
+				reader: func(t *testing.T, _ context.CancelFunc) JobResultReader { return failingJobs{t: t} },
+			},
+			{
+				name:    "gone during the read-back",
+				started: capability.StartedJob{JobID: "job-9"},
+				reader: func(_ *testing.T, cancel context.CancelFunc) JobResultReader {
+					return cancellingJobs{cancel: cancel}
+				},
+			},
+		} {
+			t.Run(rt.path+" "+tt.name, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+
+				exec := &fakeExecutor{started: tt.started}
+				if tt.wait > 0 {
+					exec.afterStart = cancel
+				}
+				jr := tt.reader(t, cancel)
+				h := newExecFixture(t, accounts.RoleAdmin, exec, jr)
+
+				b, err := json.Marshal(rt.body(tt.wait, false))
+				if err != nil {
+					t.Fatalf("json.Marshal request body: %v", err)
+				}
+				req := httptest.NewRequest(http.MethodPost, rt.path, bytes.NewReader(b)).WithContext(ctx)
+				req.Header.Set("Authorization", "Bearer "+testCredential)
+				req.Header.Set("Content-Type", "application/json")
+
+				serveExpectingAbort(t, h, req)
+
+				if got := len(exec.startCalls()); got != 1 {
+					t.Errorf("Start called %d times, want 1", got)
+				}
+				if got := exec.cancelCalls(); len(got) != 0 {
+					t.Errorf("CancelJob called for %v; a gone caller must leave the Job running", got)
+				}
+			})
+		}
 	}
 }
 
