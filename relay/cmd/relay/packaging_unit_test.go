@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 // unitDirectives parses a systemd unit file into section -> key -> values, in
@@ -164,5 +165,27 @@ func TestRelayUnit_AddressFamiliesAreTheListenersAndAddressListing(t *testing.T)
 	want := map[string]bool{"AF_INET": true, "AF_INET6": true, "AF_NETLINK": true}
 	if !maps.Equal(got, want) {
 		t.Errorf("RestrictAddressFamilies=%q, want exactly AF_INET AF_INET6 AF_NETLINK", values[0])
+	}
+}
+
+// The shutdown drain must end before the host manager's SIGKILL, or the
+// outcome records it waits for are lost anyway.
+//
+// The value is parsed with time.ParseDuration, so only Go-style durations
+// ("90s") are understood; a systemd-only spelling ("1min 30s", "infinity") fails
+// here rather than being guessed at.
+func TestRelayUnit_StopTimeoutOutlastsTheShutdownDrain(t *testing.T) {
+	unit := relayUnitPath(t)
+	values := unitDirectives(t, unit)["Service"]["TimeoutStopSec"]
+	if len(values) != 1 {
+		t.Fatalf("TimeoutStopSec= occurs %d times in %s, want exactly once", len(values), unit)
+	}
+	stop, err := time.ParseDuration(values[0])
+	if err != nil {
+		t.Fatalf("TimeoutStopSec=%q is not a Go duration: write the value with a unit, such as 90s: %v", values[0], err)
+	}
+	if need := shutdownDrainBound + shutdownListBudget; need >= stop {
+		t.Errorf("TimeoutStopSec=%s does not outlast the shutdown drain: shutdownDrainBound %s + shutdownListBudget %s = %s",
+			stop, shutdownDrainBound, shutdownListBudget, need)
 	}
 }

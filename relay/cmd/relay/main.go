@@ -1086,6 +1086,9 @@ func main() {
 	go watchFreezeSignals(context.Background(), deps.freezeControl)
 	// SIGHUP reloads the configuration file (reload_signal.go).
 	go watchReload(context.Background(), hup, newReloader(path, sc, deps, logs, os.Stderr))
+	// Registered before any listener serves, so from here on a stop signal
+	// always gets a drained shutdown.
+	stopSigs, stopNotify := notifyStop()
 	lis := mustListen(cfg.Addr, "listen failed")
 	logListening(cfg, path)
 
@@ -1100,8 +1103,25 @@ func main() {
 		startHousekeeping(deps)
 	}
 
-	if err := srv.Serve(lis); err != nil {
-		exitOnError("serve failed", err)
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- srv.Serve(lis) }()
+	select {
+	case err := <-serveErr:
+		if err != nil {
+			exitOnError("serve failed", err)
+		}
+	case sig := <-stopSigs:
+		stopNotify()
+		slog.Info("relay received stop signal", "signal", sig.String())
+		// The node plane keeps serving until the process exits: see shutdownRelay.
+		shutdownRelay(deps, shutdownDrainBound, slog.Default())
+		select {
+		case err := <-serveErr:
+			if err != nil {
+				slog.Error("node-plane serve failed during the shutdown", "err", err)
+			}
+		default:
+		}
 	}
 }
 

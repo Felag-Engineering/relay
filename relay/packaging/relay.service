@@ -49,6 +49,12 @@ ExecStart=/usr/bin/relay
 Restart=on-failure
 RestartSec=5s
 
+# A stop waits for running Jobs to write their outcome (relay/cmd/relay,
+# shutdownDrainBound, 60 s) before the Relay exits. Pinned here rather than
+# left to the host's DefaultTimeoutStopSec, so the drain always ends before
+# systemd's SIGKILL.
+TimeoutStopSec=90s
+
 # Writable state: the SQLite store (Jobs, Tasks, audit trail, Accounts, API
 # Tokens, approvals) and the CA key and certificate.
 #
