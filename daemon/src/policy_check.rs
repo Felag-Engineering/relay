@@ -1000,6 +1000,7 @@ body = "cat /etc/hostname"
     /// A slot where its value would run as code makes the template set
     /// unloadable, so the check exits 1 with or without `--strict`
     /// (ADR-0021, 2026-10-15 decision 3).
+    // Proves EX-19.
     #[test]
     fn templates_a_slot_in_a_code_position_is_invalid() {
         for body in ["{{path}} --version", "eval {{path}}", "sh -c {{path}}"] {
@@ -1012,6 +1013,7 @@ body = "cat /etc/hostname"
 
     /// An undecidable code position loads and passes a plain check; `--strict`
     /// fails it.
+    // Proves EX-19.
     #[test]
     fn templates_an_undecidable_code_position_fails_only_under_strict() {
         let body = "find / -maxdepth 1 -exec {{path}} \\;";

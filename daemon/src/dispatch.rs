@@ -1539,6 +1539,7 @@ allowed_args = []
     // effective_timeout unit tests
     // -----------------------------------------------------------------------
 
+    // Proves EX-24.
     #[test]
     fn effective_timeout_zero_gives_default() {
         assert_eq!(effective_timeout(0), DEFAULT_TIMEOUT);
@@ -1554,10 +1555,21 @@ allowed_args = []
         assert_eq!(effective_timeout(10), Duration::from_secs(10));
     }
 
+    // Proves EX-24.
     #[test]
     fn effective_timeout_exceeds_max_is_clamped() {
         // 1000 s > MAX_TIMEOUT (300 s) → clamped to MAX_TIMEOUT.
         assert_eq!(effective_timeout(1000), MAX_TIMEOUT);
+    }
+
+    // The default Task timeout is 30 s and the ceiling is 300 s, as the spec states them.
+    // Proves EX-24.
+    #[test]
+    fn the_default_timeout_is_thirty_seconds_and_the_ceiling_three_hundred() {
+        assert_eq!(DEFAULT_TIMEOUT, Duration::from_secs(30));
+        assert_eq!(MAX_TIMEOUT, Duration::from_secs(300));
+        assert_eq!(effective_timeout(0), Duration::from_secs(30));
+        assert_eq!(effective_timeout(301), Duration::from_secs(300));
     }
 
     #[test]
@@ -2237,6 +2249,7 @@ allow = ["^/bin/sleep [0-9]+$"]
     // concurrently via the scheduler must never execute simultaneously.
     // An injected slow runner asserts the concurrency gauge never exceeds 1.
     // -----------------------------------------------------------------------
+    // Proves EX-23.
     #[tokio::test]
     async fn ac1_two_mutate_tasks_never_overlap() {
         let state_dir = TempDir::created("sched-m-overlap");
@@ -2566,6 +2579,7 @@ allow = ['^/bin/sh /\S+$']
     // still times out while queued behind a live (never-released) blocker —
     // as opposed to the already-past-deadline case covered by
     // queued_timeout_outcome_no_runner_then_deduped above.
+    // Proves EX-24, EX-25.
     #[tokio::test(start_paused = true)]
     async fn queued_task_deadline_fires_while_genuinely_queued() {
         let state_dir = TempDir::created("sched-qt-live");
@@ -2644,6 +2658,7 @@ allow = ['^/bin/sh /\S+$']
     // M4(b): the single received_at clock deducts real queue-wait time from
     // the executor's budget — a Task that waits ~3s behind a live blocker
     // must receive ~2s remaining, not a fresh 5s effective_timeout.
+    // Proves EX-24.
     #[tokio::test(start_paused = true)]
     async fn queued_wait_deducts_from_exec_budget_single_clock() {
         let state_dir = TempDir::created("sched-carryover");
@@ -3465,6 +3480,7 @@ allow = ["^/bin/true$"]
         (result, ran)
     }
 
+    // Proves EX-43.
     #[tokio::test]
     async fn task_dispatched_as_read_for_a_mutate_template_is_refused_and_never_runs() {
         let (result, ran) = run_class_test(&class_test_task("svc.restart", RiskClass::Read)).await;
@@ -3520,6 +3536,7 @@ allow = ["^/bin/true$"]
         }
     }
 
+    // Proves EX-44.
     #[tokio::test]
     async fn an_unknown_name_dispatched_as_read_is_unsupported_not_a_mismatch() {
         let (result, ran) = run_class_test(&class_test_task("not.here", RiskClass::Read)).await;
@@ -3633,6 +3650,22 @@ allowed_args = []
         let mut empty = class_test_task("svc.restart", RiskClass::Read);
         empty.action = None;
         let (result, ran) = run_class_test(&empty).await;
+        assert_eq!(
+            String::from_utf8_lossy(&result.stderr),
+            "missing task action"
+        );
+        assert!(!ran);
+    }
+
+    // A Task with no action is a protocol error: it resolves failure, never
+    // denied_by_policy, and nothing runs.
+    // Proves EX-43.
+    #[tokio::test]
+    async fn a_task_with_no_action_resolves_failure_never_denied_by_policy() {
+        let mut task = class_test_task("svc.restart", RiskClass::Unspecified);
+        task.action = None;
+        let (result, ran) = run_class_test(&task).await;
+        assert_eq!(result.outcome, Outcome::Failure as i32);
         assert_eq!(
             String::from_utf8_lossy(&result.stderr),
             "missing task action"

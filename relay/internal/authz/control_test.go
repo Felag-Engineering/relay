@@ -31,6 +31,7 @@ func machine(role accounts.Role) capability.Principal {
 // TestAuthorizeControl_Floors is the issue's headline acceptance: each of the
 // five administrative acts refuses every role below its floor and permits
 // every role at or above it, for a human Account.
+// Proves EX-39, EX-56.
 func TestAuthorizeControl_Floors(t *testing.T) {
 	gate := NewRoleGate()
 	ctx := context.Background()
@@ -178,6 +179,7 @@ func TestAuthorizeControl_MachineAdminKeepsTheOthers(t *testing.T) {
 
 // TestAuthorizeControl_MachineOperatorMayCancelAJob pins #346's decision on
 // its own: cancel is not human-only at any role, unlike Freeze engage.
+// Proves EX-39.
 func TestAuthorizeControl_MachineOperatorMayCancelAJob(t *testing.T) {
 	gate := NewRoleGate()
 	if err := gate.AuthorizeControl(context.Background(), machine(accounts.RoleOperator), capability.ControlCancelJob); err != nil {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Felag-Engineering/relay/relay/internal/jobs"
@@ -39,6 +40,7 @@ func (f *fakeFreezeStore) Release(_ context.Context, principal, reason string) e
 // TestRunRefusedWhenFrozen is acceptance criterion 1/5: a frozen Relay
 // refuses dispatch before any Task is sent, for either risk class, and the
 // dispatcher is never reached.
+// Proves EX-48.
 func TestRunRefusedWhenFrozen(t *testing.T) {
 	reg := seedOneNode(t)
 	authz := &spyAuthorizer{}
@@ -56,6 +58,7 @@ func TestRunRefusedWhenFrozen(t *testing.T) {
 	}{
 		{"read", jobs.RiskClassRead},
 		{"mutate", jobs.RiskClassMutate},
+		{"unspecified", jobs.RiskClassUnspecified},
 	}
 	for _, tt := range tests {
 		class := tt.class
@@ -67,6 +70,11 @@ func TestRunRefusedWhenFrozen(t *testing.T) {
 			var frozenErr *FrozenError
 			if !errors.As(err, &frozenErr) {
 				t.Fatalf("Run() error = %v, want errors.As to find a *FrozenError", err)
+			}
+			for _, want := range []string{"ADR-0013", "an admin releases the Freeze"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("Freeze refusal %q must contain %q", err.Error(), want)
+				}
 			}
 			if authz.called {
 				t.Error("Authorizer must not be called when the Relay is frozen")

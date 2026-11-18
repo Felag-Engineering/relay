@@ -485,6 +485,13 @@ mod tests {
     // Serialize all env-touching tests within this module so they don't race.
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
+    // The daemon caps each of a Task's stdout and stderr at 1 MiB.
+    // Proves EX-42.
+    #[test]
+    fn max_output_bytes_is_one_mib() {
+        assert_eq!(MAX_OUTPUT_BYTES, 1024 * 1024);
+    }
+
     // --- normalize_scheme (pure, no lock needed) ----------------------------
 
     #[test]

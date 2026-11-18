@@ -1075,6 +1075,7 @@ mod tests {
         }
     }
 
+    // Proves EX-19.
     #[test]
     fn a_placeholder_must_be_a_whole_word() {
         for body in [
@@ -1104,6 +1105,7 @@ mod tests {
         }
     }
 
+    // Proves EX-19.
     #[test]
     fn a_placeholder_in_quotes_is_refused() {
         for body in [
@@ -1186,6 +1188,7 @@ mod tests {
         assert!(analyse("cat <<EOF\nhi\nEOF\ncat <<< x", &slots(&[])).is_ok());
     }
 
+    // Proves EX-19.
     #[test]
     fn a_placeholder_is_accepted_only_at_the_top_level() {
         for body in [

@@ -74,6 +74,7 @@ func auditKinds(entries []AuditEntry) []AuditKind {
 // dispatch whose Selector names nothing is refused before the registry is read,
 // an idempotency key is claimed, anything parks or a Job ID is minted, even
 // where the same call with a Selector would park (#1274).
+// Proves EX-49.
 func TestExecution_EmptySelectorIsRefusedBeforeAnythingResolves(t *testing.T) {
 	acts := map[string]jobs.Action{
 		"native read":   readFacts(),

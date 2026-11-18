@@ -351,6 +351,7 @@ func TestSelectorMatchesTagReadsOnlyTagLabels(t *testing.T) {
 
 // TestSelectorResolve_TagTermResolvesStoredTags: a parsed tag: Selector
 // resolves the tagged Nodes through Resolve, as every surface does.
+// Proves EX-5.
 func TestSelectorResolve_TagTermResolvesStoredTags(t *testing.T) {
 	reg := tagRegistry(t)
 	sel, err := ParseSelector("tag:team=payments")
@@ -406,6 +407,8 @@ func TestNamespaceNames_ReportsAllFourNamespaces(t *testing.T) {
 	}
 }
 
+// Resolve narrows the registry by node: and relay: terms.
+// Proves EX-5.
 func TestSelectorResolve(t *testing.T) {
 	reg := seedRegistry(t)
 
@@ -441,6 +444,7 @@ func TestSelectorResolve(t *testing.T) {
 // TestSelectorResolve_StateIsNodeLocal is acceptance 3 at the resolver level:
 // a second Node's state (offline, outdated) must not change whether the
 // first Node matches a state: Selector.
+// Proves EX-5.
 func TestSelectorResolve_StateIsNodeLocal(t *testing.T) {
 	reg := registry.NewInMemory(registry.WithMinDaemonVersion("1.4.0"))
 	if _, err := reg.Upsert(registry.Report{NodeID: "node-healthy", DaemonVersion: "1.5.0"}); err != nil {

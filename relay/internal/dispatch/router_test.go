@@ -466,6 +466,7 @@ func TestRouter_SendSlotsDoNotLeak(t *testing.T) {
 
 // TestRouter_CancelSendsTaskCancel asserts Cancel sends the TaskCancel body
 // and returns immediately (never waits for a Result).
+// Proves EX-37.
 func TestRouter_CancelSendsTaskCancel(t *testing.T) {
 	r := NewRouter(nil, nil)
 	send := &recordingSend{}
@@ -549,6 +550,7 @@ func TestRouter_SendsOnOneStreamAreSerialised(t *testing.T) {
 // TestRouter_CancelOfflineNodeIsBestEffort asserts Cancel against a Node
 // with no live Tunnel is a no-op, not an error — cancellation is inherently
 // best-effort (ADR-0013).
+// Proves EX-37.
 func TestRouter_CancelOfflineNodeIsBestEffort(t *testing.T) {
 	r := NewRouter(nil, nil)
 	if err := r.Cancel(context.Background(), "node-absent", "task-1"); err != nil {

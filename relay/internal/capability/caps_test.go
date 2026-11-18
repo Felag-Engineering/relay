@@ -55,6 +55,8 @@ func TestInvariant13_TheCapIsChosenByClassAndAnUnspecifiedClassTakesTheMutateCap
 	}
 }
 
+// A non-positive cap is the default at the check, never unlimited.
+// Proves EX-16.
 func TestNewBlastCapClampsNonPositiveToDefaults(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -84,6 +86,8 @@ func TestNewBlastCapClampsNonPositiveToDefaults(t *testing.T) {
 	}
 }
 
+// The cap error names the class, the matched count and the cap.
+// Proves EX-54.
 func TestCapExceededErrorContent(t *testing.T) {
 	bc := NewBlastCap(caps(100, 10))
 	err := bc.Check(jobs.RiskClassMutate, 11)
@@ -113,6 +117,8 @@ func TestCapExceededErrorContent(t *testing.T) {
 	}
 }
 
+// The read-class cap error names the class, the matched count and the cap.
+// Proves EX-54.
 func TestCapExceededErrorContentReadCap(t *testing.T) {
 	bc := NewBlastCap(caps(10, 100))
 	err := bc.Check(jobs.RiskClassRead, 11)
@@ -161,7 +167,7 @@ func (c *countingJobs) CreateJob(ctx context.Context, job jobs.Job) error {
 // A dispatch over its class's cap, counted after Template exclusion, is refused with no Job,
 // no Task, no intent and nothing sent; the control row shows the same wiring does persist
 // and send when under the cap.
-// Proves EX-13.
+// Proves EX-6, EX-13, EX-54.
 func TestInvariant5_TheBlastCapRefusesBeforeAnyTaskIsStoredOrSent(t *testing.T) {
 	twoOfThreeReport := staticVocab{
 		"node-0": reported(readTemplate("svc.status")),

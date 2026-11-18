@@ -619,6 +619,7 @@ func TestRecordFreezeEngageAndRelease(t *testing.T) {
 // RecordCancel writes exactly one KindJobCancel row, attributed to the
 // cancelling Principal, carrying the target JobID and no Selector/NodeID/
 // Action (a cancel targets an existing Job by ID, not a fresh dispatch).
+// Proves EX-40.
 func TestRecordCancelAttributesPrincipal(t *testing.T) {
 	_, repo, _ := openSinkStore(t)
 	sink := New(repo, WithNewID(sequentialIDs("audit-")), WithClock(fixedClock(time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC))))
@@ -707,6 +708,8 @@ func TestSink_RecordProtocolViolationWritesTheRowAndNoOutput(t *testing.T) {
 	}
 }
 
+// A halted-Job settlement is recorded as an outcome row with no Principal.
+// Proves EX-28.
 func TestSink_RecordHaltedSettlementWritesAnOutcomeRowWithNoPrincipal(t *testing.T) {
 	_, repo, _ := openSinkStore(t)
 	sink := New(repo, WithNewID(sequentialIDs("audit-")), WithClock(fixedClock(time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC))))
@@ -1047,6 +1050,7 @@ func TestRecordRedactsTokensAndKeys(t *testing.T) {
 // unverified. The decision line must omit the secret-bearing arg value and
 // the captured Stdout/Stderr, while the store — by the accepted verbatim-
 // audit-output decision (not a bug) — still retains all three.
+// Proves EX-21.
 func TestRecordDispatchDecisionLineExcludesOperationArgs(t *testing.T) {
 	_, repo, _ := openSinkStore(t)
 	var buf bytes.Buffer
@@ -1123,9 +1127,70 @@ func TestRecordDispatchDecisionLineExcludesOperationArgs(t *testing.T) {
 	}
 }
 
+// Arguments are kept verbatim whatever the class or tier: the Operation
+// arguments of a Native call and the argv of a Raw Exec are stored exactly as
+// sent. Only a read-class dispatch's output is dropped, never its arguments.
+// Proves EX-21.
+func TestRecordDispatch_ArgumentsAndRawExecArgvAreStoredVerbatim(t *testing.T) {
+	_, repo, _ := openSinkStore(t)
+	sink := New(repo,
+		WithNewID(sequentialIDs("audit-")),
+		WithClock(fixedClock(time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC))),
+	)
+
+	args := map[string]string{"path": `/tmp/a b; 'single' "double"`}
+	argv := []string{"/usr/bin/env", "A=b c", "--x='y'", ""}
+	entries := []capability.AuditEntry{
+		{
+			Kind:      capability.AuditKindDispatch,
+			Principal: capability.Principal{Account: "alice", Role: "operator"},
+			JobID:     "job-native",
+			Action: jobs.Action{
+				Kind:          jobs.ActionOperation,
+				OperationName: "file.read",
+				OperationArgs: args,
+				RiskClass:     jobs.RiskClassRead,
+			},
+			Results: []capability.NodeResult{{NodeID: "node-1", Outcome: jobs.OutcomeSuccess}},
+		},
+		{
+			Kind:      capability.AuditKindDispatch,
+			Principal: capability.Principal{Account: "alice", Role: "admin"},
+			JobID:     "job-raw",
+			Action: jobs.Action{
+				Kind:        jobs.ActionRawExec,
+				RiskClass:   jobs.RiskClassMutate,
+				RawExecArgv: argv,
+			},
+			Results: []capability.NodeResult{{NodeID: "node-1", Outcome: jobs.OutcomeSuccess}},
+		},
+	}
+	for _, e := range entries {
+		if err := sink.Record(context.Background(), e); err != nil {
+			t.Fatalf("Record(%s): %v", e.JobID, err)
+		}
+	}
+
+	native, err := repo.ByJob(context.Background(), "job-native")
+	if err != nil || len(native) != 1 {
+		t.Fatalf("ByJob(job-native) = %d records, err %v, want 1", len(native), err)
+	}
+	if !reflect.DeepEqual(native[0].Args, args) {
+		t.Errorf("stored Args = %q, want %q verbatim", native[0].Args, args)
+	}
+	raw, err := repo.ByJob(context.Background(), "job-raw")
+	if err != nil || len(raw) != 1 {
+		t.Fatalf("ByJob(job-raw) = %d records, err %v, want 1", len(raw), err)
+	}
+	if !reflect.DeepEqual(raw[0].RawExecArgv, argv) {
+		t.Errorf("stored RawExecArgv = %q, want %q verbatim", raw[0].RawExecArgv, argv)
+	}
+}
+
 // #288 / ADR-0025: a read-class dispatch records WHAT was read, never what
 // came back. The mutate case in the same test is the control — without it,
 // this would pass just as well against a sink that stored nothing at all.
+// Proves EX-45.
 func TestRecordDispatchReadClassRetainsNoOutput(t *testing.T) {
 	_, repo, _ := openSinkStore(t)
 	sink := New(repo, WithNewID(sequentialIDs("audit-")), WithClock(fixedClock(time.Date(2026, 8, 12, 0, 0, 0, 0, time.UTC))))

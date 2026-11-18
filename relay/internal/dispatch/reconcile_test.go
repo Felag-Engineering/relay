@@ -813,6 +813,7 @@ func TestReconciler_ResolveOffline_LeavesTasksWhoseResultAlreadyArrived(t *testi
 
 // Invariant 4: a Task resolved on offline leaves InFlight, so the next
 // connect of the Node sends nothing.
+// Proves EX-62.
 func TestReconciler_TaskResolvedOnOfflineIsNeverResentOnReconnect(t *testing.T) {
 	tasks := newFakeTaskRepository(jobs.Task{ID: "task-1", NodeID: "node-1", State: jobs.DispatchStateDispatched})
 	router := NewRouter(nil, nil)

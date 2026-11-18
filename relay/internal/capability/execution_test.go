@@ -164,6 +164,7 @@ func testNode(nodeID string) registry.Node {
 // TestEngineOneTaskPerNodePersistedBeforeDispatch is acceptance criterion 2:
 // N matched Nodes yield N Tasks with unique IDs, and every CreateTask
 // happens before any Dispatch.
+// Proves EX-22.
 func TestEngineOneTaskPerNodePersistedBeforeDispatch(t *testing.T) {
 	jobsRepo, tasksRepo := testEngineStore(t)
 	var log []string
@@ -465,9 +466,11 @@ func TestEngineRecordsNoRequesterWithoutAnAccountID(t *testing.T) {
 // the rest. It also covers #185's full-output-always plumbing: a successful
 // Dispatch's Stdout/Stderr/Truncated must reach the returned NodeResult, and
 // an unreachable Node (never dispatched) must carry none.
+// Proves EX-33.
 func TestEngineOfflineNodeUnreachable(t *testing.T) {
 	jobsRepo, tasksRepo := testEngineStore(t)
-	conduit := newFakeConduit(nil)
+	var log []string
+	conduit := newFakeConduit(&log)
 	conduit.connected["node-online"] = true
 	conduit.results["node-online"] = jobs.Result{
 		Outcome: jobs.OutcomeSuccess, ExitCode: 0,
@@ -530,6 +533,11 @@ func TestEngineOfflineNodeUnreachable(t *testing.T) {
 	}
 	if !offlineTask.DispatchedAt.IsZero() {
 		t.Errorf("offline Task DispatchedAt = %v, want zero (never dispatched)", offlineTask.DispatchedAt)
+	}
+	for _, entry := range log {
+		if entry == "dispatch:node-offline" {
+			t.Errorf("the conduit was asked to dispatch to the offline Node: %v", log)
+		}
 	}
 
 	inFlight, err := tasksRepo.InFlight(ctx)
@@ -806,6 +814,7 @@ func TestJobEngine_DispatchPanicBeforeMarkDispatchedIsNeverSent(t *testing.T) {
 // TestServiceRunDispatchPanicReachesAuditAndResults: through Execution.Run, the
 // panicking Node's OutcomeFailure is in the returned results and in the
 // KindDispatch audit record — the durable record of the failure (#942).
+// Proves EX-11.
 func TestServiceRunDispatchPanicReachesAuditAndResults(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "relay.db")
 	st, err := store.Open(path)
@@ -966,6 +975,7 @@ func TestEngineDispatchOneUnsupportedTaskCancelledFirstReportsCancelled(t *testi
 // with OutcomeVersionRefused and NEVER reaches the Conduit — and the
 // version-refusal is present in the AuditKindDispatch entry's Results (the
 // audit trail), not a separate AuditKindRefusal.
+// Proves EX-44.
 func TestEngineMixedFleetVersionGate(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "relay.db")
 	st, err := store.Open(path, store.WithMinDaemonVersion("1.2.0"))
@@ -1268,6 +1278,7 @@ func TestNewExecutionRefusesWithoutFreeze(t *testing.T) {
 // TestNewExecution_RefusesEachFailOpenSeam: each fail-open seam, alone, makes
 // NewExecution panic naming that seam. Every other seam is real, so only that
 // row's check can fire.
+// Proves EX-46.
 func TestNewExecution_RefusesEachFailOpenSeam(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -1387,6 +1398,7 @@ func TestBuild_KeepsNewExecutionsRealDispatchGuard(t *testing.T) {
 // `state:` Selector against the ReadLane's clock and cert-expiring window — the
 // same StateEval ListNodes uses — so the two can never disagree about which
 // Nodes are expiring. With the window at zero the marker never fires.
+// Proves EX-5.
 func TestExecution_ResolvesStateAgainstTheReadLanesWindow(t *testing.T) {
 	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 	sel := Selector{Predicates: []Predicate{{Namespace: NamespaceState, Key: "cert-expiring"}}}
@@ -1822,6 +1834,8 @@ func TestJobEngine_ContextCarriesJobID(t *testing.T) {
 	}
 }
 
+// The engine never holds more Tasks of one Job in flight than its dispatch bound.
+// Proves EX-22.
 func TestJobEngine_FanOutNeverExceedsTheBound(t *testing.T) {
 	const n, bound = 8, 3
 	var peak peakTracker
@@ -2062,6 +2076,7 @@ func (w *windowTasks) settledPeek() <-chan struct{} {
 // admit is refused and the worker cancels its own Task; without it node-2 would
 // be sent, never receive Conduit.Cancel, and cancel would return a joined
 // ErrInvalidTaskState.
+// Proves EX-37.
 func TestJobEngine_CancelGateClosesTheSnapshotToMarkCancelledWindow(t *testing.T) {
 	const jobID = "job-id-1"
 	// sequentialIDs("id-"): job id-1, stage id-2, then one Task per Node.
@@ -2420,6 +2435,7 @@ func (w *cancelAfterDispatchTasks) MarkDispatched(ctx context.Context, id string
 // guard: a cancel recorded right after admit is seen by the guard the Conduit
 // consults before its wire write; the guard commits the withhold itself and the
 // Task is never sent. The engine has no check of its own ahead of the Conduit.
+// Proves EX-34, EX-37.
 func TestJobEngine_CancelAfterAdmitWithholdsThroughTheGuard(t *testing.T) {
 	const jobID, taskID = "job-id-1", "task-id-3"
 	c := newScriptConduit()
@@ -2602,6 +2618,7 @@ func (s staleByJob) ByJob(ctx context.Context, jobID string) ([]jobs.Task, error
 // TestJobEngine_CancelToleratesAWorkerThatResolvedThePendingTaskFirst: a Task
 // Pending in cancel's snapshot but already Resolved in the store is a truthful
 // outcome, not an error, and cancel must not rewrite it.
+// Proves EX-38.
 func TestJobEngine_CancelToleratesAWorkerThatResolvedThePendingTaskFirst(t *testing.T) {
 	c := newScriptConduit()
 	e, tasksRepo := newConcurrentEngine(t, c, 16)
@@ -2622,6 +2639,68 @@ func TestJobEngine_CancelToleratesAWorkerThatResolvedThePendingTaskFirst(t *test
 	}
 	if tasks[0].Outcome != jobs.OutcomeSuccess {
 		t.Errorf("Outcome = %v, want the truthful Success left untouched", tasks[0].Outcome)
+	}
+}
+
+// A Task whose send has begun is never resolved cancelled by the Relay: when
+// the Job is cancelled mid-flight the daemon is asked to stop it, and the
+// outcome the Task resolves with, here a real success, is the one that is kept.
+// Proves EX-38.
+func TestJobEngine_ATaskWhoseSendBeganKeepsTheOutcomeItResolvesWith(t *testing.T) {
+	inflight := make(chan struct{}, 1)
+	cancelSeen := make(chan struct{})
+	var once sync.Once
+
+	c := newScriptConduit()
+	c.dispatchFn = func(ctx context.Context, _ string, _ jobs.Task) (jobs.Result, error) {
+		if jobs.SendWithheld(ctx) {
+			return jobs.Result{}, jobs.ErrSendWithheld
+		}
+		inflight <- struct{}{}
+		select {
+		case <-cancelSeen:
+		case <-time.After(testWaitTimeout):
+		}
+		return jobs.Result{Outcome: jobs.OutcomeSuccess, Stdout: []byte("ran")}, nil
+	}
+	c.cancelFn = func(_, _ string) { once.Do(func() { close(cancelSeen) }) }
+	e, tasksRepo := newConcurrentEngine(t, c, 16)
+
+	type runOut struct {
+		dr  dispatchResult
+		err error
+	}
+	done := make(chan runOut, 1)
+	go func() {
+		dr, err := e.run(context.Background(), newDispatch(Principal{Account: "alice"}, Selector{}, nodeSet(1), fanOutAction))
+		done <- runOut{dr, err}
+	}()
+
+	waitFor(t, inflight, "node-1 in flight")
+	if err := e.cancel(context.Background(), "job-id-1"); err != nil {
+		t.Fatalf("cancel: %v", err)
+	}
+	out := waitFor(t, done, "run to finish")
+	if out.err != nil {
+		t.Fatalf("run: %v", out.err)
+	}
+
+	if got := c.cancelledNodes(); len(got) != 1 || got[0] != "node-1" {
+		t.Errorf("Conduit.Cancel called for %v, want exactly [node-1]", got)
+	}
+	if len(out.dr.results) != 1 || out.dr.results[0].Outcome != jobs.OutcomeSuccess || string(out.dr.results[0].Stdout) != "ran" {
+		t.Fatalf("results = %+v, want one success with Stdout \"ran\"", out.dr.results)
+	}
+	tasks, err := tasksRepo.ByJob(context.Background(), "job-id-1")
+	if err != nil || len(tasks) != 1 {
+		t.Fatalf("ByJob = %v, %v", tasks, err)
+	}
+	task := tasks[0]
+	if task.State != jobs.DispatchStateResolved || task.Outcome != jobs.OutcomeSuccess || string(task.Stdout) != "ran" {
+		t.Errorf("Task = %v/%v stdout=%q, want Resolved/Success/\"ran\" kept after the cancel", task.State, task.Outcome, task.Stdout)
+	}
+	if task.DispatchedAt.IsZero() {
+		t.Error("Task has no DispatchedAt, but its send began")
 	}
 }
 
@@ -2723,6 +2802,7 @@ func onlyTask(t *testing.T, tasksRepo jobs.TaskRepository) jobs.Task {
 // A Task in flight to a Node that goes offline resolves failure with the
 // Relay-authored no-result message, and never stays in flight to be re-sent
 // on reconnect (invariant 4, ADR-0004).
+// Proves EX-62.
 func TestEngine_TaskInFlightToANodeThatGoesOffline_ResolvesFailureNeverResent(t *testing.T) {
 	jobsRepo, tasksRepo := testEngineStore(t)
 	fake := newFakeConduit(nil)

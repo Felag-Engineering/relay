@@ -367,7 +367,7 @@ func TestFromFile_CertExpiringFractionIsAQuarter(t *testing.T) {
 	}
 }
 
-// Proves RC-40.
+// Proves EX-22, RC-40.
 func TestFromFile_DispatchConcurrencyIsSixteen(t *testing.T) {
 	sc, err := parseConfig([]byte(requiredTOML), readSecretPlain)
 	if err != nil {

@@ -18,6 +18,7 @@ import (
 // it with `go build -o <tempdir>/foreign` (rather than in the package
 // directory) means an accidental future success never leaves a stray
 // binary behind.
+// Proves EX-1.
 func TestForeignPackageCannotConstructDispatch(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "foreign")
 	cmd := exec.Command("go", "build", "-o", out, "./testdata/foreign")
@@ -40,6 +41,7 @@ func TestForeignPackageCannotConstructDispatch(t *testing.T) {
 // parse-and-inspect check): even if the
 // testdata build above were ever skipped, this catches an accidental future
 // export of the dispatch type or its constructor by name.
+// Proves EX-1.
 func TestDispatchSymbolsUnexported(t *testing.T) {
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {

@@ -306,6 +306,7 @@ func (f *startFx) readTools() []string {
 	return out
 }
 
+// Proves EX-35.
 func TestStart_ReturnsOnceTasksArePersistedBeforeAnyResolves(t *testing.T) {
 	f := newStartFx(t)
 	f.conduit.block()
@@ -359,6 +360,7 @@ func TestStart_CallerCancellationDoesNotAbandonTheJob(t *testing.T) {
 	}
 }
 
+// Proves EX-11.
 func TestStart_DoneClosesAfterTheDispatchAuditRecord(t *testing.T) {
 	f := newStartFx(t)
 	sj, err := f.svc.Start(context.Background(), alice, fleetSel, factsAct, StartOptions{})
@@ -424,6 +426,7 @@ func TestStart_RefusesOnceDraining(t *testing.T) {
 	}
 }
 
+// Proves EX-9.
 func TestStart_SameKeyReattachesAndDispatchesNothing(t *testing.T) {
 	f := newStartFx(t)
 	first, err := f.svc.Start(context.Background(), alice, fleetSel, factsAct, keyed("k-1"))
@@ -453,6 +456,7 @@ func TestStart_SameKeyReattachesAndDispatchesNothing(t *testing.T) {
 	}
 }
 
+// Proves EX-53.
 func TestStart_SameKeyDifferentArgumentsIsRefusedAndAudited(t *testing.T) {
 	f := newStartFx(t)
 	first, err := f.svc.Start(context.Background(), alice, fleetSel, factsAct, keyed("k-1"))
@@ -748,6 +752,7 @@ func TestStart_InvalidKeyIsRefusedWithoutDispatching(t *testing.T) {
 	}
 }
 
+// Proves EX-9.
 func TestStart_KeyIsScopedToTheAccount(t *testing.T) {
 	f := newStartFx(t)
 	bob := Principal{AccountID: "acct-2", Account: "bob"}
@@ -764,7 +769,12 @@ func TestStart_KeyIsScopedToTheAccount(t *testing.T) {
 	}
 }
 
+// Proves EX-9.
 func TestStart_KeyPastTheWindowDispatchesAfresh(t *testing.T) {
+	window := IdempotencyWindow
+	if window != 24*time.Hour {
+		t.Fatalf("IdempotencyWindow = %v, want 24h", window)
+	}
 	f := newStartFx(t)
 	a, err := f.svc.Start(context.Background(), alice, fleetSel, factsAct, keyed("k-1"))
 	if err != nil {

@@ -13,6 +13,7 @@ import (
 
 	"github.com/Felag-Engineering/relay/relay/internal/audit"
 	"github.com/Felag-Engineering/relay/relay/internal/capability"
+	"github.com/Felag-Engineering/relay/relay/internal/controlplane"
 	"github.com/Felag-Engineering/relay/relay/internal/controlplane/mcp"
 	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 )
@@ -254,13 +255,133 @@ func TestMCP_RunOperation_PerNodeResults(t *testing.T) {
 	}
 }
 
+// Each per-Node row carries its Node, outcome, exit code, both streams, their
+// truncation flags and a duration, and the Job ID appears once for the Job, never
+// on a row.
+// Proves EX-41.
+func TestMCP_RunOperation_EachRowCarriesItsNodeOutcomeExitCodeStreamsTruncationAndDuration(t *testing.T) {
+	ts := newTestServer(t)
+	ts.conduit.connect(ts.nodeA, ts.nodeB)
+	ts.conduit.results[ts.nodeA] = jobs.Result{Outcome: jobs.OutcomeSuccess, ExitCode: 0, Stdout: []byte("a-out"), Stderr: []byte("a-err")}
+	ts.conduit.results[ts.nodeB] = jobs.Result{Outcome: jobs.OutcomeFailure, ExitCode: 3, Stdout: []byte(strings.Repeat("x", 5000)), Stderr: []byte("b-err")}
+
+	session := ts.connect(t)
+	res := callTool(t, session, "run_operation", map[string]any{"selector": capability.WholeFleetSelector, "operation": "system.facts", "wait_seconds": 300})
+	var out mcp.RunOrPlanOutput
+	decodeResult(t, res, &out)
+
+	if out.JobID == "" {
+		t.Fatal("run_operation: job_id is empty, want the Job id")
+	}
+	rows := map[string]mcp.PerNodeResult{}
+	for _, r := range out.Results {
+		rows[r.NodeID] = r
+	}
+	if len(out.Results) != 2 || len(rows) != 2 {
+		t.Fatalf("results = %+v, want exactly one row each for %s and %s", out.Results, ts.nodeA, ts.nodeB)
+	}
+	a, okA := rows[ts.nodeA]
+	b, okB := rows[ts.nodeB]
+	if !okA || !okB {
+		t.Fatalf("rows = %+v, want one for each of %s and %s", rows, ts.nodeA, ts.nodeB)
+	}
+	if a.Outcome != "success" || a.ExitCode == nil || *a.ExitCode != 0 || a.Stdout != "a-out" || a.Stderr != "a-err" {
+		t.Errorf("node A row = %+v, want success, exit 0, stdout a-out, stderr a-err", a)
+	}
+	if b.Outcome != "failure" || b.ExitCode == nil || *b.ExitCode != 3 || b.Stderr != "b-err" {
+		t.Errorf("node B row = %+v, want failure, exit 3, stderr b-err", b)
+	}
+	for _, r := range out.Results {
+		if r.DurationMS < 0 {
+			t.Errorf("row %s duration_ms = %d, want >= 0", r.NodeID, r.DurationMS)
+		}
+	}
+	if !b.StdoutTruncated || len(b.Stdout) != controlplane.MaxRenderedOutputBytes {
+		t.Errorf("node B stdout truncated=%v length=%d, want truncated at %d bytes", b.StdoutTruncated, len(b.Stdout), controlplane.MaxRenderedOutputBytes)
+	}
+	if a.StdoutTruncated || a.StderrTruncated {
+		t.Errorf("node A row = %+v, want neither stream truncated", a)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(resultText(t, res)), &raw); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	rawRows, _ := raw["results"].([]any)
+	if len(rawRows) != 2 {
+		t.Fatalf("raw results = %v, want 2 rows", raw["results"])
+	}
+	// Both rows ran a process and exited, so exit_code is present on each.
+	wantKeys := []string{"node_id", "outcome", "exit_code", "stdout", "stderr", "stdout_truncated", "stderr_truncated", "duration_ms"}
+	for _, row := range rawRows {
+		fields, _ := row.(map[string]any)
+		for _, key := range wantKeys {
+			if _, has := fields[key]; !has {
+				t.Errorf("a result row lacks %q: %v", key, row)
+			}
+		}
+		if _, has := fields["job_id"]; has {
+			t.Errorf("a result row carries job_id: %v; the Job ID appears once, for the Job", row)
+		}
+	}
+}
+
+// A read Operation's output lives on the Task row get_job reads, never in the
+// audit trail: the dispatch's audit rows keep what was asked, not what came back.
+// Proves EX-45.
+func TestMCP_GetJob_ReadOutputLivesInTheTaskRowNotTheAuditTrail(t *testing.T) {
+	ts := newTestServer(t)
+	ts.conduit.connect(ts.nodeA)
+	ts.conduit.results[ts.nodeA] = jobs.Result{Outcome: jobs.OutcomeSuccess, Stdout: []byte("facts-a")}
+
+	session := ts.connect(t)
+	res := callTool(t, session, "run_operation", map[string]any{"selector": "node:role=web", "operation": "system.facts", "wait_seconds": 300})
+	var run mcp.RunOrPlanOutput
+	decodeResult(t, res, &run)
+
+	var got mcp.ExecutionOutput
+	decodeResult(t, callTool(t, session, "get_job", map[string]any{"job_id": run.JobID}), &got)
+	var row mcp.PerNodeResult
+	for _, r := range got.Results {
+		if r.NodeID == ts.nodeA {
+			row = r
+		}
+	}
+	if row.Stdout != "facts-a" {
+		t.Errorf("get_job row for %s = %+v, want stdout facts-a", ts.nodeA, row)
+	}
+
+	ctx := context.Background()
+	tasks, err := ts.store.Tasks().ByJob(ctx, run.JobID)
+	if err != nil || len(tasks) != 1 || string(tasks[0].Stdout) != "facts-a" {
+		t.Fatalf("Tasks().ByJob = %+v, %v, want one Task holding stdout facts-a", tasks, err)
+	}
+	records, err := ts.store.Audit().ByJob(ctx, run.JobID)
+	if err != nil {
+		t.Fatalf("Audit().ByJob: %v", err)
+	}
+	dispatchRows := 0
+	for _, rec := range records {
+		if rec.Kind != audit.KindDispatch {
+			continue
+		}
+		dispatchRows++
+		if len(rec.Stdout) != 0 || len(rec.Stderr) != 0 {
+			t.Errorf("dispatch audit row %s retains output stdout=%q stderr=%q, want none for a read Operation", rec.ID, rec.Stdout, rec.Stderr)
+		}
+	}
+	if dispatchRows == 0 {
+		t.Error("no dispatch audit row found; the check proved nothing")
+	}
+}
+
 // TestMCP_RunOperation_OutdatedNodeVersionRefused is ADR-0014's dispatch-level
 // gate exercised end to end through run_operation: against a mixed fleet
 // (node A reports 1.1.0, node B reports 1.3.0 — see newTestServerWithConfig),
 // with a minimum of 1.2.0 configured, the outdated Node's result renders
 // outcome=version_refused and is never sent to the Conduit, while the current
 // Node executes normally.
-// Proves DI-17, NC-26.
+// Proves DI-17, EX-44, NC-26.
 func TestMCP_RunOperation_OutdatedNodeVersionRefused(t *testing.T) {
 	ts := newTestServerWithConfig(t, 0, 0, "1.2.0")
 	ts.conduit.connect(ts.nodeA, ts.nodeB) // nodeA (1.1.0, outdated) stays connected: the gate is connectivity-independent
@@ -404,6 +525,7 @@ func TestMCP_RawExec_OverCap(t *testing.T) {
 // TestMCP_Frozen_RefusesBothExecutionTools is the frozen acceptance line: a
 // frozen Relay refuses both execution tools with the distinct "the Relay is
 // frozen" error.
+// Proves EX-48.
 func TestMCP_Frozen_RefusesBothExecutionTools(t *testing.T) {
 	ts := newTestServer(t)
 	if err := ts.store.Freeze().Engage(context.Background(), "test-admin"); err != nil {
@@ -507,6 +629,7 @@ func TestMCP_ZeroMatch_RefusesBothExecutionTools(t *testing.T) {
 // RB5 (plan review): explicit channel synchronization, no sleep — fakeConduit
 // signals ready right before blocking node A's Dispatch, and this test waits
 // on that channel before calling cancel_job.
+// Proves EX-37, EX-40.
 func TestMCP_CancelJob_InFlightAndPendingSibling(t *testing.T) {
 	// registry.List() is sorted by NodeID, and this test pins the Job engine to
 	// one Task in flight at a time (an Execution built with concurrency 1),
@@ -593,6 +716,7 @@ func TestMCP_CancelJob_InFlightAndPendingSibling(t *testing.T) {
 // TestMCP_TimeoutSeconds_ThreadsToTask is DECISION 3's acceptance line: an
 // explicit timeout_seconds is observed on the dispatched Task, and omitting
 // it keeps today's default (0).
+// Proves EX-24.
 func TestMCP_TimeoutSeconds_ThreadsToTask(t *testing.T) {
 	tests := []struct {
 		tool string
@@ -671,6 +795,7 @@ func TestMCP_RunOperation_AuditedWithPrincipal(t *testing.T) {
 // halts on its first failure reports the halt, with the Tasks it left unsent
 // cancelled for that reason, identically from raw_exec and a later get_job, and
 // the halt is audited (#1150).
+// Proves EX-26.
 func TestMCP_HaltedMutateJob_ReportsTheHaltOnRunAndGetJob(t *testing.T) {
 	// One Task in flight at a time, so the first Node's failure leaves the
 	// second Pending to be halt-cancelled.
@@ -742,6 +867,7 @@ func TestMCP_HaltedMutateJob_ReportsTheHaltOnRunAndGetJob(t *testing.T) {
 // an omitted, empty and whitespace-only Selector: a tool error naming how to
 // proceed, no Task sent or queried, and an audited refusal rather than a
 // dispatch or a park (#1274).
+// Proves EX-49.
 func TestMCP_EmptySelectorIsRefusedOnEveryExecutionTool(t *testing.T) {
 	tools := map[string]map[string]any{
 		"run_operation": {"operation": "system.facts"},

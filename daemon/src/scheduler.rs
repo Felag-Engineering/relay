@@ -239,6 +239,7 @@ mod tests {
     // classify() matrix
     // -----------------------------------------------------------------------
 
+    // Proves EX-23.
     #[test]
     fn classify_raw_exec_is_mutate() {
         assert_eq!(
@@ -294,6 +295,7 @@ mod tests {
     /// A Template Operation is classified from its authored `risk_class`
     /// (ADR-0012/0021): a `mutate` template takes the strictly-serial lane like
     /// any native mutate, a `read` template joins the bounded-parallel lane.
+    // Proves EX-23.
     #[test]
     fn classify_reads_the_template_vocabulary() {
         use crate::operations::template::{RiskClassDef, TemplateDef};
@@ -341,6 +343,7 @@ mod tests {
     // AC1: mutate gate is strictly serial (observed max concurrent == 1)
     // -----------------------------------------------------------------------
 
+    // Proves EX-23.
     #[tokio::test]
     async fn ac1_mutate_serial_max_concurrent_one() {
         let sched = Scheduler::new();
@@ -381,6 +384,7 @@ mod tests {
     // AC2: read gate is bounded-parallel (max concurrent == READ_CONCURRENCY)
     // -----------------------------------------------------------------------
 
+    // Proves EX-23.
     #[tokio::test]
     async fn ac2_read_bounded_max_four() {
         let sched = Scheduler::new();
@@ -427,6 +431,7 @@ mod tests {
     // READ_CONCURRENCY, which stays green even if the constant is changed).
     // -----------------------------------------------------------------------
 
+    // Proves EX-23.
     #[test]
     fn read_concurrency_bound_is_four() {
         assert_eq!(READ_CONCURRENCY, 4, "ADR-0012 pins the read bound to 4");

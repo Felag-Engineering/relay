@@ -280,7 +280,7 @@ func TestGatedDispatchParksAndSendsNothing(t *testing.T) {
 // never parks, and a park is made only once both have passed, before any Job or
 // Task exists.
 //
-// Proves AP-1.
+// Proves AP-1, EX-10.
 func TestRun_GateIsConsultedAfterAuthorizationAndTheCap(t *testing.T) {
 	type rig struct {
 		s     *testSvc
@@ -1087,7 +1087,10 @@ func (w errByPlanHashApprovalStore) ByPlanHash(context.Context, string) (approva
 // TestRun_StoreErrorReadingForAPlanIsRefused: a store failure reading whether
 // THIS plan already has a released Request fails the dispatch closed.
 // A Request the Relay cannot currently read, possibly already released, must
-// never be treated as absent and run a second time.
+// never be treated as absent and run a second time. The store read is the
+// representative case of the generic approval-check error branch, which refuses
+// for any error.
+// Proves EX-55.
 func TestRun_StoreErrorReadingForAPlanIsRefused(t *testing.T) {
 	failing := errByPlanHashApprovalStore{ApprovalStore: newMemApprovals(), err: errors.New("approvals store unavailable")}
 	reg := registry.NewInMemory()

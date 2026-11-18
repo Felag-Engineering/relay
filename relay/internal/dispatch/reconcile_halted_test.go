@@ -67,6 +67,7 @@ func testHalt(resolved bool) jobs.Halt {
 
 // A restart resolves every unsent Task of a halted Job without sending any,
 // and the Reconciler a Node then connects to has nothing of that Job to send.
+// Proves EX-28.
 func TestReconciler_SettleHaltedJobs_SendsNothingAndResolvesEveryUnsentTask(t *testing.T) {
 	ctx := context.Background()
 	halt := testHalt(true)

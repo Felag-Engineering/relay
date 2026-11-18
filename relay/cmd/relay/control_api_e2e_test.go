@@ -1318,6 +1318,7 @@ func TestControlAPI_HaltRendersIdenticallyOnBothSurfaces(t *testing.T) {
 // Control API as a 400 problem naming empty_selector, creates no Job, is
 // audited once as a refusal, and reads word for word as it does on MCP
 // (invariant 10) (#1274).
+// Proves EX-49.
 func TestControlAPI_EmptySelectorIsRefusedOnDispatchAndPlan(t *testing.T) {
 	f := startRelay(t, WithControlPlane())
 

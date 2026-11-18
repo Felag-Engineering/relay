@@ -230,6 +230,8 @@ func TestInvariant13_ATemplateTakesTheMostRestrictiveClassItsNodesReport(t *test
 	}
 }
 
+// A Node that reports no such Template is excluded from the match.
+// Proves EX-6.
 func TestResolveAction_ExcludesNodesThatDoNotReportOrHaveNoReport(t *testing.T) {
 	s := buildRaw(t, seams{nodeVocab: staticVocab{
 		"has":   reported(readTemplate("svc.status")),
@@ -260,6 +262,8 @@ func TestResolveAction_ExcludesNodesThatDoNotReportOrHaveNoReport(t *testing.T) 
 	}
 }
 
+// A Template no Node reports is an unknown Operation.
+// Proves EX-51.
 func TestResolveAction_NoReportingNodeIsAnUnknownOperation(t *testing.T) {
 	s := buildRaw(t, seams{nodeVocab: staticVocab{"a": reported()}})
 	ra := s.resolveAction(templateAction("nope.notreal", nil), reportedNodes("a", "b"))
@@ -302,6 +306,8 @@ func TestInvariant13_ATemplateClassACallerSetsIsRefused(t *testing.T) {
 	}
 }
 
+// Argument names are checked against the Template's declared slots.
+// Proves EX-61.
 func TestResolveAction_ArgumentNamesAreCheckedAgainstTheSlots(t *testing.T) {
 	s := buildRaw(t, seams{nodeVocab: staticVocab{
 		"a": reported(readTemplate("log.tail", "unit")),
@@ -334,6 +340,7 @@ func TestResolveAction_ArgumentNamesAreCheckedAgainstTheSlots(t *testing.T) {
 	}
 }
 
+// Proves EX-61.
 func TestResolveAction_NodesThatDisagreeAboutSlotsRefuseTheCall(t *testing.T) {
 	s := buildRaw(t, seams{nodeVocab: staticVocab{
 		"a": reported(readTemplate("log.tail", "unit")),
@@ -346,6 +353,11 @@ func TestResolveAction_NodesThatDisagreeAboutSlotsRefuseTheCall(t *testing.T) {
 	}
 	if !strings.Contains(mal.Error(), "do not agree") {
 		t.Errorf("error %q must say the Nodes disagree", mal.Error())
+	}
+	for _, node := range []string{`Node "a"`, `Node "b"`} {
+		if !strings.Contains(mal.Error(), node) {
+			t.Errorf("error %q must name %s", mal.Error(), node)
+		}
 	}
 
 	// Declaration order is not a disagreement: slots are compared as names.
@@ -360,6 +372,8 @@ func TestResolveAction_NodesThatDisagreeAboutSlotsRefuseTheCall(t *testing.T) {
 
 // --- Service.Run ----------------------------------------------------------
 
+// Nodes that do not report a Template are excluded before the cap and never sent it.
+// Proves EX-6, EX-44.
 func TestRun_TemplateExcludesNonReportingNodesAndNeverSendsThem(t *testing.T) {
 	reg := seedNodes(t, 3)
 	var log []string
@@ -453,6 +467,8 @@ func TestInvariant13_OneMutateReportPutsATemplateUnderTheMutateCap(t *testing.T)
 	}
 }
 
+// An unknown Template is refused after authorization, audited, with no Job.
+// Proves EX-51.
 func TestRun_UnknownTemplateIsRefusedAfterAuthorizationWithNoJob(t *testing.T) {
 	reg := seedNodes(t, 2)
 	var log []string
@@ -516,6 +532,72 @@ func TestRun_MalformedTemplateCallIsRefusedBeforeDispatch(t *testing.T) {
 	}
 	if len(log) != 0 {
 		t.Errorf("conduit log = %v, want nothing dispatched or queried", log)
+	}
+}
+
+// A slot disagreement between Nodes and an argument name no slot declares are
+// each refused before anything is sent, and each refusal is audited with its
+// reason.
+// Proves EX-61.
+func TestRun_ATemplateSlotDisagreementOrArgumentMismatchIsRefusedAndAudited(t *testing.T) {
+	tests := []struct {
+		name  string
+		vocab staticVocab
+		args  map[string]string
+		want  []string
+	}{
+		{
+			name: "slot disagreement",
+			vocab: staticVocab{
+				"node-0": reported(readTemplate("log.tail", "unit")),
+				"node-1": reported(readTemplate("log.tail", "unit", "lines")),
+			},
+			args: map[string]string{"unit": "nginx"},
+			want: []string{"do not agree", `Node "node-0"`, `Node "node-1"`},
+		},
+		{
+			name: "argument names",
+			vocab: staticVocab{
+				"node-0": reported(readTemplate("log.tail", "unit")),
+				"node-1": reported(readTemplate("log.tail", "unit")),
+			},
+			args: map[string]string{"unitt": "nginx"},
+			want: []string{"unitt"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := seedNodes(t, 2)
+			var log []string
+			svc, f := newTemplateTestService(t, reg, connectedConduit(&log, "node-0", "node-1"), tt.vocab, &spyCapChecker{})
+
+			_, err := svc.Run(context.Background(), Principal{Account: "alice"}, webSelector(), templateAction("log.tail", tt.args))
+			var mal *MalformedCallError
+			if !errors.As(err, &mal) {
+				t.Fatalf("err = %v, want MalformedCallError", err)
+			}
+			entries := f.audit.entries
+			if len(entries) == 0 {
+				t.Fatal("no audit entry recorded for the refusal")
+			}
+			last := entries[len(entries)-1]
+			if last.Kind != AuditKindRefusal {
+				t.Fatalf("last audit entry kind = %v, want AuditKindRefusal", last.Kind)
+			}
+			for _, want := range tt.want {
+				if !strings.Contains(last.Reason, want) {
+					t.Errorf("audit Reason %q must contain %q", last.Reason, want)
+				}
+			}
+			if got := f.metrics.refusals; len(got) != 1 || got[0] != RefusalMalformed {
+				t.Errorf("refusal metrics = %v, want [RefusalMalformed]", got)
+			}
+			for _, entry := range log {
+				if strings.HasPrefix(entry, "dispatch:") || strings.HasPrefix(entry, "query:") {
+					t.Errorf("conduit saw %q, want nothing dispatched or queried", entry)
+				}
+			}
+		})
 	}
 }
 

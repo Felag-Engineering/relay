@@ -85,6 +85,58 @@ func (r *recordingTemplateVocab) Get(nodeID string) (nodevocab.Snapshot, bool) {
 	return r.snap, true
 }
 
+// The execution path never evaluates Policy: a dispatch sends the Task to every
+// matched Node whatever the cached Policy view says, asks no Node for a verdict
+// beforehand, and reports the verdict the daemon's own engine gave.
+// Proves EX-12.
+func TestRun_TheExecutionPathNeverEvaluatesPolicy(t *testing.T) {
+	reg := registry.NewInMemory()
+	for _, id := range []string{"node-allow", "node-deny"} {
+		if _, err := reg.Upsert(linuxReport(id)); err != nil {
+			t.Fatalf("Upsert(%s): %v", id, err)
+		}
+	}
+	var log []string
+	conduit := newFakeConduit(&log)
+	conduit.connected["node-allow"] = true
+	conduit.connected["node-deny"] = true
+	conduit.results["node-allow"] = jobs.Result{Outcome: jobs.OutcomeSuccess}
+	conduit.results["node-deny"] = jobs.Result{Outcome: jobs.OutcomeDeniedByPolicy, ExitCode: -1, Stderr: []byte("denied by the daemon")}
+
+	pv := &recordingPolicyView{snap: policyview.Snapshot{PolicyFingerprint: contradictingPolicyFP}}
+	nv := &recordingTemplateVocab{}
+	svc := newPreflightServiceWithCaches(t, reg, conduit, pv, nv)
+
+	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"}
+	results, err := svc.Run(context.Background(), Principal{Account: "alice"}, fleetSel, act)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if len(pv.gets) != 0 {
+		t.Errorf("the Policy view was read for %v during a Run: the Relay never evaluates Policy", pv.gets)
+	}
+	sent := map[string]bool{}
+	for _, entry := range log {
+		if strings.HasPrefix(entry, "query:") {
+			t.Errorf("conduit saw %q: a Run asks no Node for a verdict", entry)
+		}
+		sent[entry] = true
+	}
+	for _, want := range []string{"dispatch:node-allow", "dispatch:node-deny"} {
+		if !sent[want] {
+			t.Errorf("log = %v, want %q: the Task is sent although the cached view allows nothing", log, want)
+		}
+	}
+	got := map[string]jobs.Outcome{}
+	for _, r := range results {
+		got[r.NodeID] = r.Outcome
+	}
+	if got["node-allow"] != jobs.OutcomeSuccess || got["node-deny"] != jobs.OutcomeDeniedByPolicy {
+		t.Errorf("outcomes = %v, want node-allow success and node-deny denied_by_policy as the daemon answered", got)
+	}
+}
+
 // TestPreflightNeverConsultsCachedPolicyOrVocabulary proves PF-7's
 // behavioural half. Five Nodes: one the daemon allows, one it denies (with a
 // rule), one it says is unsupported, one offline, and one whose Query itself
@@ -305,6 +357,7 @@ const (
 // proves nothing, the same failure mode no_dispatch and handlerFuncName were
 // bitten by): each of the four counts at least one hit before the test
 // trusts its own zero-violations result.
+// Proves EX-12.
 func TestCachedPolicyAndVocabularyReachOnlyTheDisplayReadLane(t *testing.T) {
 	// template.go joined the field and import lists with #626 (ADR-0042,
 	// PF-7 as amended 2026-10-02): it reads the cached Template vocabulary to

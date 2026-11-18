@@ -261,6 +261,7 @@ func nonTestGoFiles(t *testing.T) (dir string, names []string) {
 // JobResultReader. This test is defense in depth that catches the mistake at
 // `go test` time with an explicit message, rather than an opaque compiler
 // error or runtime panic.
+// Proves EX-1.
 func TestNoDispatchConstruction(t *testing.T) {
 	dir, names := nonTestGoFiles(t)
 	fset := token.NewFileSet()
@@ -296,6 +297,7 @@ func TestExecFiles_NameRealFiles(t *testing.T) {
 // synthetic source snippets rather than this package's real files, proving
 // each rule actually fires (and that legitimate read-only usage doesn't) at
 // the strictness the case specifies.
+// Proves EX-1.
 func TestDispatchViolations_Fixtures(t *testing.T) {
 	const capImport = `"github.com/Felag-Engineering/relay/relay/internal/capability"`
 	const regImport = `"github.com/Felag-Engineering/relay/relay/internal/registry"`
