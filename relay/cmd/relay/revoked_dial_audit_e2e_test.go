@@ -161,10 +161,7 @@ func TestRevokedNode_DialAuditedThenThrottled(t *testing.T) {
 
 	// Nothing was admitted and nothing reached back to the Node (DI-21): the
 	// revoke dropped the live Tunnel and no redial created another.
-	deadline := time.Now().Add(5 * time.Second)
-	for deps.conns.Count() != 0 && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
+	pollUntil(5*time.Second, 10*time.Millisecond, func() bool { return deps.conns.Count() == 0 })
 	if n := deps.conns.Count(); n != 0 {
 		t.Errorf("tracked connections = %d, want 0", n)
 	}

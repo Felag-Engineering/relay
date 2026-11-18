@@ -476,27 +476,12 @@ func TestTunnelOpen_HeartbeatUpdatesLastSeen(t *testing.T) {
 		t.Fatalf("send heartbeat: %v", err)
 	}
 
-	// Poll for LastSeen to advance past oldTime. The handler processes the
-	// Heartbeat asynchronously; a select-with-timeout loop with a small sleep
-	// avoids a busy-spin while bounding the test's wall-clock cost.
-	found := make(chan struct{}, 1)
-	go func() {
-		for {
-			n, ok := reg.Get(certNodeID)
-			if ok && n.LastSeen.After(oldTime) {
-				found <- struct{}{}
-				return
-			}
-			time.Sleep(time.Millisecond)
-		}
-	}()
-
-	select {
-	case <-found:
-		// LastSeen advanced past oldTime — RecordHeartbeat was called.
-	case <-time.After(5 * time.Second):
-		t.Fatal("timeout: LastSeen was not updated after Heartbeat")
-	}
+	// The handler processes the Heartbeat asynchronously; LastSeen advancing
+	// past oldTime is what shows RecordHeartbeat was called.
+	waitUntil(t, "LastSeen to advance after the Heartbeat", 5*time.Second, func() bool {
+		n, ok := reg.Get(certNodeID)
+		return ok && n.LastSeen.After(oldTime)
+	})
 }
 
 // TestNodeLabelsFromHello is a pure unit test for the nodeLabelsFromHello
@@ -725,31 +710,19 @@ func TestTunnelOpen_PolicySnapshotCapturesIntoCache(t *testing.T) {
 
 	// The handler processes the PolicySnapshot asynchronously; poll for the
 	// cache entry to appear rather than assuming synchronous delivery.
-	found := make(chan struct{}, 1)
-	go func() {
-		for {
-			if _, ok := cache.Get(certNodeID); ok {
-				found <- struct{}{}
-				return
-			}
-			time.Sleep(time.Millisecond)
-		}
-	}()
-
-	select {
-	case <-found:
-		got, ok := cache.Get(certNodeID)
-		if !ok {
-			t.Fatal("cache.Get after found signal: ok = false")
-		}
-		if got.PolicyFingerprint != "sha256:live" {
-			t.Errorf("PolicyFingerprint = %q, want %q", got.PolicyFingerprint, "sha256:live")
-		}
-		if !got.RawExecEnabled {
-			t.Error("RawExecEnabled = false, want true")
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("timeout: PolicySnapshot was not captured into the policyview.Cache")
+	waitUntil(t, "the PolicySnapshot to be captured into the policyview.Cache", 5*time.Second, func() bool {
+		_, ok := cache.Get(certNodeID)
+		return ok
+	})
+	got, ok := cache.Get(certNodeID)
+	if !ok {
+		t.Fatal("cache.Get after the entry appeared: ok = false")
+	}
+	if got.PolicyFingerprint != "sha256:live" {
+		t.Errorf("PolicyFingerprint = %q, want %q", got.PolicyFingerprint, "sha256:live")
+	}
+	if !got.RawExecEnabled {
+		t.Error("RawExecEnabled = false, want true")
 	}
 }
 
@@ -790,17 +763,6 @@ func nodeMarkedOffline(t *testing.T, reg registry.Repository, nodeID string) boo
 		}
 	}
 	return false
-}
-
-func waitUntil(t *testing.T, what string, within time.Duration, cond func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(within)
-	for !cond() {
-		if time.Now().After(deadline) {
-			t.Fatalf("timeout waiting for %s", what)
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
 }
 
 // Proves NC-9.

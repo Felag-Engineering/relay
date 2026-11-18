@@ -115,19 +115,17 @@ func TestDispatchWiring_ARestartSendsNoTaskOfAHaltedJobAndCancelsEverySibling(t 
 
 	// The un-halted Job's resend proves the reconcile ran and that the skip is
 	// specific to the halted Job.
-	deadline := time.Now().Add(5 * time.Second)
-	for {
+	var control jobs.Task
+	resolved := func() bool {
 		got, err := tasks.Get(ctx, seed.controlTaskID)
 		if err != nil {
 			t.Fatalf("Get(control): %v", err)
 		}
-		if got.State == jobs.DispatchStateResolved {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("the un-halted Job's Task is %v, want Resolved by its reconcile", got.State)
-		}
-		time.Sleep(10 * time.Millisecond)
+		control = got
+		return got.State == jobs.DispatchStateResolved
+	}
+	if !pollUntil(5*time.Second, 10*time.Millisecond, resolved) {
+		t.Fatalf("the un-halted Job's Task is %v, want Resolved by its reconcile", control.State)
 	}
 
 	mu.Lock()
