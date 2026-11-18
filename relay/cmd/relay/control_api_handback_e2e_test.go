@@ -93,16 +93,10 @@ func startHeldNode(t *testing.T, f *relayFixture) *heldNode {
 	n.send(t, &relayv1.DaemonMessage{Body: &relayv1.DaemonMessage_Heartbeat{
 		Heartbeat: &relayv1.Heartbeat{UnixMillis: time.Now().UnixMilli()},
 	}})
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		if cur, _ := f.Deps.registry.Get(nodeID); cur.LastSeen.After(before.LastSeen) {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("the Relay never processed the Node's Heartbeat")
-		}
-		time.Sleep(time.Millisecond)
-	}
+	waitUntil(t, "the Relay to process the Node's Heartbeat", 5*time.Second, func() bool {
+		cur, _ := f.Deps.registry.Get(nodeID)
+		return cur.LastSeen.After(before.LastSeen)
+	})
 	return n
 }
 
@@ -246,17 +240,17 @@ func requireProblem(t *testing.T, resp *http.Response, status int) problemBody {
 // pollJob reads GET /api/v1/jobs/{id} until job_status is complete.
 func pollJob(t *testing.T, f *relayFixture, jobID string) dispatchBody {
 	t.Helper()
-	for range 100 {
+	var out dispatchBody
+	complete := func() bool {
 		resp := controlAPIRequest(t, f.ClientFor(""), http.MethodGet, f.ControlBase+"/api/v1/jobs/"+jobID, f.Credential, nil)
-		var out dispatchBody
+		out = dispatchBody{}
 		decodeBody(t, resp, &out)
-		if out.JobStatus == "complete" {
-			return out
-		}
-		time.Sleep(50 * time.Millisecond)
+		return out.JobStatus == "complete"
 	}
-	t.Fatalf("Job %s never became complete", jobID)
-	return dispatchBody{}
+	if !pollUntil(5*time.Second, 50*time.Millisecond, complete) {
+		t.Fatalf("Job %s never became complete", jobID)
+	}
+	return out
 }
 
 func operationsURL(f *relayFixture) string { return f.ControlBase + "/api/v1/operations" }
