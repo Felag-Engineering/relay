@@ -375,9 +375,9 @@ func idempotencyKey(w http.ResponseWriter, r *http.Request) (string, bool) {
 // queries verdicts and executes nothing; plan=false starts the dispatch and
 // renders its Job. A real dispatch returns once the Tasks are stored, after
 // the optional wait; a lapse or a dropped caller leaves the Job running
-// (Start's fan-out is detached, invariant 4). Keeping it single-sourced means
-// the two routes cannot drift in how they treat the plan flag or render a
-// refusal.
+// (Start's fan-out is detached, invariant 4), and a dropped caller is answered
+// with nothing. Keeping it single-sourced means the two routes cannot drift in
+// how they treat the plan flag or render a refusal.
 func dispatchOrPlan(w http.ResponseWriter, r *http.Request, d Deps, p capability.Principal, sel capability.Selector, act jobs.Action, plan bool, waitSeconds int32) {
 	ctx := r.Context()
 
@@ -447,16 +447,34 @@ func dispatchOrPlan(w http.ResponseWriter, r *http.Request, d Deps, p capability
 	}
 
 	controlplane.AwaitStartedJob(ctx, sj, wait)
+	abortIfCallerGone(ctx)
 	out, err := renderJob(ctx, d.Jobs, sj.JobID)
+	abortIfCallerGone(ctx)
 	if err != nil {
-		// The Job exists (this call stored it, or re-attached to one); only
-		// the read-back failed.
+		// Reached only while the caller is still connected. The Job exists
+		// (this call stored it, or re-attached to one); only the read-back
+		// failed.
 		writeProblem(w, http.StatusInternalServerError, "read job results failed",
 			fmt.Sprintf("Job %s exists, but reading it back failed: %v; read it with GET /api/v1/jobs/%s", sj.JobID, err, sj.JobID))
 		return
 	}
 	out.Reattached = sj.Reattached
 	writeJSON(w, http.StatusOK, out)
+}
+
+// abortIfCallerGone ends the exchange with nothing written once the request's
+// context is done, so a caller that has gone is not sent an error about its
+// own disconnect. The signal is exact only while nothing but the caller
+// cancels the request context: the control-plane server sets no read timeout,
+// base context or timeout handler, and a deadline added to any of them would
+// make this abort answer a connected caller with nothing. A plain return is
+// not enough, because net/http then writes an implicit 200;
+// http.ErrAbortHandler is its way to send nothing. The Job keeps running and
+// its Idempotency-Key re-attaches (EX-57, EX-58).
+func abortIfCallerGone(ctx context.Context) {
+	if ctx.Err() != nil {
+		panic(http.ErrAbortHandler)
+	}
 }
 
 // ---------------------------------------------------------------------------

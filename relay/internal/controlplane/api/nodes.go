@@ -69,7 +69,7 @@ func handleRevokeNode(d Deps) http.HandlerFunc {
 		if !ok {
 			return
 		}
-		if !authorizeControl(w, r, d, p, capability.ControlRevokeNode) {
+		if !gateControl(w, r, d, func(g ControlGate) error { return g.AuthorizeNodeRevoke(r.Context(), p) }) {
 			return
 		}
 

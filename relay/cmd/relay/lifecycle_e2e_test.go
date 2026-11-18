@@ -235,23 +235,11 @@ func TestLifecycle_SeedEnrollMTLSRenewRevoke(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("send Heartbeat: %v", err)
 	}
-	heartbeatDone := make(chan struct{}, 1)
-	go func() {
-		for {
-			n, ok := deps.registry.Get(nodeID)
-			if ok && n.LastSeen.After(seenAfterHello) {
-				heartbeatDone <- struct{}{}
-				return
-			}
-			time.Sleep(time.Millisecond)
-		}
-	}()
-	select {
-	case <-heartbeatDone:
-		// LastSeen advanced — RecordHeartbeat was called on the Heartbeat.
-	case <-time.After(5 * time.Second):
-		t.Fatal("timeout: LastSeen did not advance after Heartbeat")
-	}
+	// LastSeen advancing is what shows RecordHeartbeat was called on the Heartbeat.
+	waitUntil(t, "LastSeen to advance after the Heartbeat", 5*time.Second, func() bool {
+		n, ok := deps.registry.Get(nodeID)
+		return ok && n.LastSeen.After(seenAfterHello)
+	})
 
 	// -------------------------------------------------------------------------
 	// (e) Renew: fresh cert over the same mTLS conn.

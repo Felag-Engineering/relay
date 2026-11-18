@@ -56,18 +56,19 @@ type mintTokenResponse struct {
 // is the capability layer's and is fail-closed: a mint that cannot be recorded is
 // withdrawn and answers 500, with no credential in the response.
 //
-// **Requires `admin`** (ADR-0032 §5), checked before the body is even
-// decoded. Minting makes every Node that presents the token join the fleet
-// carrying its initial tags, which a Selector then targets (ADR-0050), so the
-// act is an admin's. A machine Account is refused when it names any initial
-// tag (EN-44), and any relay: label is refused naming it, whoever mints (EN-35).
+// **Requires `admin`** (ADR-0032 §5), checked in the capability layer (Gate)
+// before the body is decoded (EN-1). Minting makes every Node that presents the
+// token join the fleet carrying its initial tags, which a Selector then targets
+// (ADR-0050), so the act is an admin's. A machine Account is refused when it
+// names any initial tag (EN-44), and any relay: label is refused naming it,
+// whoever mints (EN-35).
 func handleMintToken(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		p, ok := principal(w, r)
 		if !ok {
 			return
 		}
-		if !authorizeControl(w, r, d, p, capability.ControlMintEnrollmentToken) {
+		if !gateControl(w, r, d, func(g ControlGate) error { return g.AuthorizeEnrollmentTokenMint(r.Context(), p) }) {
 			return
 		}
 
@@ -205,7 +206,7 @@ func handleRevokeToken(d Deps) http.HandlerFunc {
 		if !ok {
 			return
 		}
-		if !authorizeControl(w, r, d, p, capability.ControlRevokeEnrollmentToken) {
+		if !gateControl(w, r, d, func(g ControlGate) error { return g.AuthorizeEnrollmentTokenRevoke(r.Context(), p) }) {
 			return
 		}
 

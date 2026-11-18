@@ -373,18 +373,15 @@ func TestDispatchWiring_ACancelDuringFanOutWithholdsUnsentTasksThroughTheRealRou
 	}
 	// The other in-flight Task has now been written (or is about to be);
 	// wait until its TaskRequest is on a Tunnel.
-	deadline := time.Now().Add(5 * time.Second)
-	for {
+	var n int
+	oneRequested := func() bool {
 		mu.Lock()
-		n := len(requested)
+		n = len(requested)
 		mu.Unlock()
-		if n == 1 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("expected exactly one TaskRequest on a Tunnel, saw %d", n)
-		}
-		time.Sleep(time.Millisecond)
+		return n == 1
+	}
+	if !pollUntil(5*time.Second, time.Millisecond, oneRequested) {
+		t.Fatalf("expected exactly one TaskRequest on a Tunnel, saw %d", n)
 	}
 
 	hold.mu.Lock()
@@ -996,17 +993,16 @@ func TestDispatchWiring_AHaltClosingAfterASiblingPassedAdmitWithholdsItsSend(t *
 	close(failNow) // the other Task fails while the held one waits before its guard
 
 	var halt jobs.Halt
-	deadline := time.Now().Add(5 * time.Second)
-	for !halt.Halted() {
+	halted := func() bool {
 		job, err := st.Jobs().GetJob(context.Background(), held.JobID)
 		if err != nil {
 			t.Fatalf("GetJob: %v", err)
 		}
 		halt = job.Halt
-		if !halt.Halted() && time.Now().After(deadline) {
-			t.Fatal("the Job did not halt on the sibling's failure")
-		}
-		time.Sleep(time.Millisecond)
+		return halt.Halted()
+	}
+	if !pollUntil(5*time.Second, time.Millisecond, halted) {
+		t.Fatal("the Job did not halt on the sibling's failure")
 	}
 	if halt.TaskID != firstID {
 		t.Fatalf("halted by %s, want the first Task %s", halt.TaskID, firstID)

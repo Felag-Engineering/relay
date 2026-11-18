@@ -154,24 +154,6 @@ func startRelaySubprocessWithHostname(t *testing.T, layout *relaytest.RelayLayou
 	return nil, ""
 }
 
-// pollUntil calls done every interval until it returns true, and reports
-// false once timeout has passed without that. done always runs at least once,
-// and the call that gives up is the first one made after the deadline. It
-// never fails the test itself, so each caller's failure message can name the
-// state its last call observed.
-func pollUntil(timeout, interval time.Duration, done func() bool) bool {
-	deadline := time.Now().Add(timeout)
-	for {
-		if done() {
-			return true
-		}
-		if time.Now().After(deadline) {
-			return false
-		}
-		time.Sleep(interval)
-	}
-}
-
 // waitForSocket polls until path exists or deadline expires.
 func waitForSocket(t *testing.T, path string, deadline time.Duration) {
 	t.Helper()

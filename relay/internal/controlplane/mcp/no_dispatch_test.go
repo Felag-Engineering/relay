@@ -150,6 +150,7 @@ func dispatchViolations(fileName string, file *ast.File, strictCapabilityIdents 
 
 	// Unconditional, outside the strict/exec partition: no MCP file holds enroll.Minter.
 	violations = append(violations, astguard.EnrollMinterViolations(fileName, file)...)
+	violations = append(violations, astguard.ControlAuthorizationViolations(fileName, file)...)
 	violations = append(violations, policyAliasViolations(fileName, file)...)
 	return append(violations, tagWriteViolations(fileName, file)...)
 }
@@ -310,6 +311,14 @@ func TestDispatchViolations_Fixtures(t *testing.T) {
 		strict     bool
 		wantSubstr string // substring expected in one of the returned violations
 	}{
+		{
+			name: "calling the Authorizer is refused",
+			src: `package mcp
+func f(x D) { _ = x.authz.AuthorizeControl(nil, nil, nil) }
+`,
+			strict:     false,
+			wantSubstr: "AuthorizeControl",
+		},
 		{
 			name: "holding enroll.Minter is refused",
 			src: `package mcp

@@ -443,6 +443,7 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 		return true
 	})
 	violations = append(violations, astguard.EnrollMinterViolations(fileName, file)...)
+	violations = append(violations, astguard.ControlAuthorizationViolations(fileName, file)...)
 	violations = append(violations, tagInternalWriteViolations(fileName, file)...)
 	return append(violations, policyAliasInternalWriteViolations(fileName, file)...)
 }
@@ -587,6 +588,13 @@ func TestDispatchViolations_Fixtures(t *testing.T) {
 func f() { _ = newDispatch() }
 `,
 			wantSubstr: "references newDispatch",
+		},
+		{
+			name: "calling the Authorizer is refused",
+			src: `package console
+func f(x D) { _ = x.authz.AuthorizeControl(nil, nil, nil) }
+`,
+			wantSubstr: "AuthorizeControl",
 		},
 		{
 			name: "holding enroll.Minter is refused",

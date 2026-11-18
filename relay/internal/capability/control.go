@@ -77,7 +77,8 @@ func localHostPrincipal() Principal { return Principal{Account: "local-host"} }
 // A refusal is audited as a refusal, with the Principal, exactly like a
 // refused dispatch — see refuseControl.
 func (c *Control) EngageFreeze(ctx context.Context, p Principal) error {
-	if err := c.authz.AuthorizeControl(ctx, p, ControlFreezeEngage); err != nil {
+	// The audit record keeps the asserted attribution; the decision never reads it.
+	if err := c.authz.AuthorizeControl(withoutAssertions(ctx), p, ControlFreezeEngage); err != nil {
 		return c.rec.refuseControl(ctx, p, err)
 	}
 	return c.engageFreeze(ctx, p)
@@ -113,7 +114,7 @@ func (c *Control) engageFreeze(ctx context.Context, p Principal) error {
 // fire-alarm asymmetry is that anyone may pull the handle and the chief
 // clears re-entry. Both refusals are audited with the Principal.
 func (c *Control) ReleaseFreeze(ctx context.Context, p Principal, reason string) error {
-	if err := c.authz.AuthorizeControl(ctx, p, ControlFreezeRelease); err != nil {
+	if err := c.authz.AuthorizeControl(withoutAssertions(ctx), p, ControlFreezeRelease); err != nil {
 		return c.rec.refuseControl(ctx, p, err)
 	}
 	if strings.TrimSpace(reason) == "" {

@@ -245,11 +245,11 @@ type APITokenStore interface {
 	List(ctx context.Context, accountID string) ([]accounts.APIToken, error)
 }
 
-// ControlAuthorizer decides whether p may perform a ControlAction — the
-// administrative half of the authorization question, split out as its own
-// interface so a surface that only needs *this* half (the Control API's
-// enrollment and revocation routes, which never dispatch) can depend on it
-// without holding anything that can reach a Node.
+// ControlAuthorizer decides whether p may perform a ControlAction: the
+// administrative half of Authorizer. Every call must go through
+// withoutAssertions (EX-7); only the capability layer makes one, and an
+// adapter holds no ControlAuthorizer, because each act has a capability entry
+// point.
 type ControlAuthorizer interface {
 	AuthorizeControl(ctx context.Context, p Principal, act ControlAction) error
 }
