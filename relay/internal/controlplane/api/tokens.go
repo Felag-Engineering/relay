@@ -1,16 +1,13 @@
 package api
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"net/http"
 	"time"
 
-	"github.com/Felag-Engineering/relay/relay/internal/audit"
 	"github.com/Felag-Engineering/relay/relay/internal/authz"
 	"github.com/Felag-Engineering/relay/relay/internal/capability"
-	"github.com/Felag-Engineering/relay/relay/internal/revocation"
 )
 
 // maxTTLSeconds bounds ttl_seconds: it guards against
@@ -173,156 +170,72 @@ func writeMintTokenError(w http.ResponseWriter, r *http.Request, d Deps, err err
 	}
 }
 
-// cascadeAuditBudget bounds the wall-clock time the cascade's chunked record
-// writes may take in total, once detached from the request context.
+// handleRevokeToken implements DELETE /api/v1/enrollment-tokens/{id}: revoke
+// the token, cascade-revoke every Node it enrolled, and return 204.
+// Idempotent: revoking an unknown or already-revoked id still returns 204.
 //
-// Generous rather than tight: it exists to stop an unbounded stall on the
-// Relay's single store connection, not to police a slow disk. A cascade that
-// exceeds it stops recording and reports the shortfall like any other
-// unrecorded cascade — the Nodes are still revoked, which is the direction
-// revocation/service.go settles.
-const cascadeAuditBudget = 2 * time.Minute
-
-// handleRevokeToken implements DELETE /api/v1/enrollment-tokens/{id}:
-// revoke the token (and, via TokenRevoker.RevokeToken, cascade-revoke every
-// Node it enrolled), audit the revoke (KindTokenRevoke) plus one
-// KindNodeRevoke per cascaded Node, and return 204. Idempotent:
-// revoking an unknown or already-revoked id still returns 204
-// (revocation.Service.RevokeToken swallows enroll.ErrNotFound).
-//
-// **Requires `admin`**. It cascades to every Node the token enrolled, tearing down
-// live Tunnels — the same availability blast radius as revoking those Nodes
-// one at a time, which ADR-0020's incident ladder puts at admin.
+// **Requires `admin`**: it cascades to every Node the token enrolled, tearing
+// down live Tunnels, the same availability blast radius as revoking those Nodes
+// one at a time, which ADR-0020's incident ladder puts at admin. The floor is
+// asked inside capability.Revocations, before the id is rendered into the
+// cascade's reason, so this route holds no gate of its own. The act and its
+// records are the layer's too.
 //
 // Can also answer 400 (the token id cannot be rendered into a revocation
-// reason) and a completed-but-unrecorded 500 (the token and its Nodes were
+// reason), a completed-but-unrecorded 500 (the token and its Nodes were
 // revoked, but one or more per-Node records could not be written), and a
-// token-revoked-cascade-incomplete 500 (the token was revoked, but the
-// registry could not be read completely, so some of its Nodes may still be
-// trusted).
+// token-revoked-cascade-incomplete 500 (the registry could not be read
+// completely, so some of its Nodes may still be trusted).
 func handleRevokeToken(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		p, ok := principal(w, r)
 		if !ok {
 			return
 		}
-		if !gateControl(w, r, d, func(g ControlGate) error { return g.AuthorizeEnrollmentTokenRevoke(r.Context(), p) }) {
-			return
-		}
-
 		id, ok := requirePathValue(w, r, "id", "missing token id", "path parameter id must not be empty")
 		if !ok {
 			return
 		}
-
-		// id is raw r.PathValue input, not a store-validated value — RevokeToken
-		// deliberately tolerates an unknown id and still cascades (it may name a
-		// token that was already deleted) — so this is NOT ceremony: without it, a
-		// control character or bidi override in the path would be persisted
-		// verbatim into every cascade record and rendered on Node detail. A
-		// genuine 32-hex id passes this trivially.
-		reason, err := capability.ValidateRevokeReason(capability.CascadeRevokeReason(id))
-		if err != nil {
-			writeProblem(w, http.StatusBadRequest, "invalid token id",
-				"the token id cannot be rendered into a revocation reason: "+err.Error())
+		if d.Revocations == nil {
+			writeRevocationsUnavailable(w)
 			return
 		}
 
-		// WithoutCancel: the cascade performs N irreversible acts (denylist +
-		// live-Tunnel teardown per Node); if the client hangs up midway the
-		// revocations continue, so the audit records describing them must too.
-		// Values — and so capability.AssertionsFromContext's asserted lane —
-		// survive WithoutCancel; only the cancellation signal is dropped.
-		//
-		// BUT NOT WITHOUT A DEADLINE. Detaching from the request would otherwise
-		// leave these writes unbounded, and they are not cheap: the store runs
-		// on a single connection (SetMaxOpenConns(1)). The records are
-		// written in chunked transactions (revocation.cascadeRecordChunk), one
-		// commit per chunk rather than one per Node, so a token covering a
-		// large fleet does not make every other store-backed request —
-		// registry reads, Job persistence, the fail-closed read-audit path —
-		// queue behind one commit per Node; the connection is instead held
-		// for one chunk's transaction at a time. The deadline still bounds
-		// the total: a chunk that is in flight or not yet started when the
-		// budget expires fails whole and is counted whole by the cascade,
-		// while earlier committed chunks stay. N must still stay unbounded:
-		// capping the cascade would leave Nodes either unrevoked (an
-		// authentication hole) or unrecorded (the bug this closes).
-		//
-		// The registry writes are now chunked the same way: on the
-		// happy path the cascade marks each chunk's Nodes revoked in ONE
-		// transaction per revocation.cascadeRecordChunk, not one autocommit
-		// UPDATE per Node; a batch failure falls back to exactly that
-		// per-Node autocommit loop for the chunk (revocation.Service).
-		// Both halves are the same two-sided trade, and it is worth stating
-		// precisely. SetMaxOpenConns(1) serialises STATEMENTS, not
-		// transactions (store/accounts.go), so the per-Node autocommits
-		// already let other store callers interleave between every pair of
-		// them; what they cost was one commit — one WAL fsync — per Node,
-		// and that total is what made a large cascade's run, and everyone
-		// else's queuing behind it, scale with N. Chunking divides that by
-		// the chunk size. In exchange the single connection is now held for
-		// a whole chunk transaction, so a dispatch write or a read-audit
-		// write arriving mid-chunk waits for the chunk rather than for one
-		// statement. Accepted deliberately, in both halves.
-		//
-		// The registry half is deliberately NOT bound by this budget. A
-		// budget expiry that stopped persisting revocations would leave
-		// Nodes denylisted in memory only, and a restart rehydrates the
-		// denylist from the registry (ADR-0006) — it would silently
-		// un-revoke them. That is under-denying, which this cascade's stated
-		// posture forbids; the chunk SIZE, not a deadline, is what bounds
-		// the registry write.
-		//
-		// The budget starts here, BEFORE RevokeToken — so if a second
-		// concurrent revoke of this same token is already waiting on
-		// tokenLocks, this cascade's cascadeAuditBudget clock is already
-		// running for the whole of that wait too. Bounded harm: the wait
-		// itself is bounded by the first cascade's own run, and a budget that
-		// expires mid-wait is reported the same way as one that expires
-		// mid-cascade — a shortfall, not a silent success.
-		auditCtx, cancelAudit := context.WithTimeout(
-			context.WithoutCancel(r.Context()), cascadeAuditBudget)
-		defer cancelAudit()
-		record := func(nodeIDs []string) error {
-			return recordLifecycleAllErr(auditCtx, d, p, audit.KindNodeRevoke, nodeIDs, reason)
-		}
-
-		err = d.TokenRevoker.RevokeToken(r.Context(), id, record)
-		if errors.Is(err, revocation.ErrCascadeIncomplete) {
-			// The token WAS revoked — the cascade only reads the registry after
-			// the token barrier — so the act is recorded, marked incomplete. But
-			// the cascade could not see every Node, so this must neither claim
-			// failure (the token is dead) nor claim the Nodes were revoked:
-			// some enrolled under it may still be trusted.
-			recordLifecycle(r.Context(), d, p, audit.KindTokenRevoke, "", "token_id="+id+" cascade=incomplete")
+		err := d.Revocations.RevokeEnrollmentToken(r.Context(), p, id)
+		switch {
+		case err == nil:
+			w.WriteHeader(http.StatusNoContent)
+		case errors.Is(err, authz.ErrUnauthorized):
+			writeControlRefusal(w, r, d, err)
+		case isRevokeReasonError(err):
+			writeProblem(w, http.StatusBadRequest, "invalid token id",
+				"the token id cannot be rendered into a revocation reason: "+err.Error())
+		case errors.Is(err, capability.ErrRevokeCascadeIncomplete):
 			writeProblem(w, http.StatusInternalServerError, "token revoked, cascade incomplete",
 				"the Enrollment Token was revoked, but the registry could not be read completely, "+
 					"so Nodes enrolled under it may still be trusted; retry the revoke, and if it "+
 					"fails again revoke the Nodes named in the Relay's log individually")
-			return
-		}
-		if err != nil && !errors.Is(err, revocation.ErrCascadeNotRecorded) {
-			writeProblem(w, http.StatusInternalServerError, "revoke enrollment token failed", "")
-			return
-		}
-
-		// KindTokenRevoke stays AFTER the act and best-effort (recordLifecycle) —
-		// unlike handleRevokeNode's record-before-act ordering, deliberately:
-		// RevokeToken CAN return an error, so recording first would risk a
-		// permanent record asserting a revoke that never happened.
-		// revocation.Service.RevokeNodeRecorded's doc explains it may invert
-		// this ordering only because RevokeNode has no error return to
-		// strand; RevokeToken does, so this route keeps recordLifecycle's
-		// ordinary best-effort contract instead.
-		recordLifecycle(r.Context(), d, p, audit.KindTokenRevoke, "", "token_id="+id)
-
-		if err != nil {
+		case errors.Is(err, capability.ErrRevokeCascadeNotRecorded):
 			writeProblem(w, http.StatusInternalServerError, "revoke not fully recorded",
 				"the Enrollment Token and its Nodes were revoked, but one or more per-Node "+
 					"revocation records could not be written; retrying will not restore them")
-			return
+		default:
+			writeProblem(w, http.StatusInternalServerError, "revoke enrollment token failed", "")
 		}
-		w.WriteHeader(http.StatusNoContent)
 	}
+}
+
+// isRevokeReasonError reports whether err is the capability layer's refusal of
+// an unusable revocation reason.
+func isRevokeReasonError(err error) bool {
+	return errors.Is(err, capability.ErrRevokeReasonRequired) ||
+		errors.Is(err, capability.ErrRevokeReasonTooLong) ||
+		errors.Is(err, capability.ErrRevokeReasonMalformed)
+}
+
+// writeRevocationsUnavailable answers a revoke route when no Revocations is
+// wired: loud and closed rather than quiet and open.
+func writeRevocationsUnavailable(w http.ResponseWriter) {
+	writeProblem(w, http.StatusInternalServerError, "revocation unavailable",
+		"no revocation service is wired; refusing rather than proceeding ungated")
 }

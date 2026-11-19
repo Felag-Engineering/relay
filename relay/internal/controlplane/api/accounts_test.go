@@ -137,8 +137,6 @@ func buildIdentityFixture(t *testing.T, wrap func(capability.AccountStore) capab
 	mux := http.NewServeMux()
 	Register(mux, Deps{
 		AccountAdmin: capSvc.AccountAdmin,
-		Audit:        &fakeAuditor{}, // unused by the identity routes; kept so Register never sees a nil Auditor.
-		Now:          fixedNow,
 		HarnessSetup: target,
 	})
 

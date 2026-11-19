@@ -223,6 +223,51 @@ type EnrollmentMintEvent struct {
 	Asserted  Assertions
 }
 
+// Revoker is the ungated revocation act. The composition root implements it over
+// revocation.Service, which this layer cannot import (capability-imports: it
+// reaches internal/enroll and so the wire protocol). It decides nothing; who may
+// revoke and the record are Revocations'. No adapter holds one: the method names
+// are deliberately the identifiers the astguard revocation rule bans in adapter
+// packages.
+//
+// record is revocation.RevocationRecorder's contract: all-or-nothing per call,
+// nodeIDs is a read-only borrow, it never calls back into the Revoker, and it
+// returns in bounded time. Errors wrap ErrRevokeCascadeIncomplete and
+// ErrRevokeCascadeNotRecorded where the cascade fell short.
+type Revoker interface {
+	RevokeNodeRecorded(ctx context.Context, nodeID string, record func(nodeIDs []string) error) error
+	RevokeToken(ctx context.Context, tokenID string, record func(nodeIDs []string) error) error
+}
+
+// RevokeRecorder records revocations. It is kept off AuditSink, as
+// EnrollmentMintRecorder is, so existing AuditSink implementers are untouched,
+// and Revocations asserts it at construction.
+type RevokeRecorder interface {
+	// RecordNodeRevokes writes one node_revoke record per id, all or none.
+	RecordNodeRevokes(ctx context.Context, e NodeRevokeEvent) error
+	// RecordEnrollmentTokenRevoke writes one token_revoke record.
+	RecordEnrollmentTokenRevoke(ctx context.Context, e EnrollmentTokenRevokeEvent) error
+}
+
+// NodeRevokeEvent is the revocation of one or more Nodes. The sink copies
+// NodeIDs and never retains the slice.
+type NodeRevokeEvent struct {
+	Principal Principal
+	Asserted  Assertions
+	NodeIDs   []string
+	Reason    string
+}
+
+// EnrollmentTokenRevokeEvent is one Enrollment Token revoke. It carries the
+// token's public ID only. CascadeIncomplete marks a revoke whose registry read
+// fell short, so Nodes enrolled under the token may still be trusted.
+type EnrollmentTokenRevokeEvent struct {
+	Principal         Principal
+	Asserted          Assertions
+	TokenID           string
+	CascadeIncomplete bool
+}
+
 // AccountStore is the Account half of the collaborator accountadmin.go needs:
 // five methods narrowed from accounts.Repository. Deliberately not
 // accounts.Repository itself: GetByName/TouchLastSeen belong to the

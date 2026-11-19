@@ -62,17 +62,17 @@ type TokenRevoker interface {
 // WHY A CALLBACK AND NOT A SINK FIELD: package revocation imports neither
 // internal/audit nor internal/capability (.golangci.yml's revocation-imports rule), so
 // the record's CONTENT — the acting Principal, its asserted lane, and the
-// derived reason naming the token — must be authored by the surface that
-// authenticated the operator, while the SET of Nodes to record is decided
-// HERE, inside RevokeToken's re-scan, which is the only place that set is
+// derived reason naming the token — must be authored by the capability
+// layer's Revocations, from the Principal the surface authenticated, while the
+// SET of Nodes to record is decided HERE, inside RevokeToken's re-scan, which is the only place that set is
 // first knowable (a Node can appear on a later pass than the caller's own
 // snapshot). A callback is what lets those two facts stay split along the
 // line that already exists between this package and its caller.
 //
 // WHY IT TAKES NO context.Context: the caller already chose the context its
 // audit write runs under before constructing this closure — that is what lets
-// the Control API detach the write from the client connection (see
-// context.WithoutCancel in tokens.go) so an irreversible cascade is not
+// Revocations detach the write from the client connection (see
+// context.WithoutCancel in capability.Revocations) so an irreversible cascade is not
 // aborted by a client that hangs up mid-revoke.
 //
 // The recorder MUST NEVER CALL BACK INTO Service: it runs while Service is
@@ -81,8 +81,8 @@ type TokenRevoker interface {
 // It MUST ALSO RETURN IN BOUNDED TIME: it is invoked while holding up to
 // cascadeRecordChunk node locks and the token lock, so a recorder that stalls
 // blocks every single-Node revoke of those Nodes as well as the cascade's own
-// forward progress. The Control API's cascade recorder satisfies the
-// bounded-time half via cascadeAuditBudget (tokens.go).
+// forward progress. The capability layer's cascade recorder satisfies the
+// bounded-time half via cascadeAuditBudget (capability.Revocations).
 type RevocationRecorder func(nodeIDs []string) error
 
 // cascadeRecordChunk bounds how many Nodes one RevocationRecorder call covers.
@@ -90,7 +90,7 @@ type RevocationRecorder func(nodeIDs []string) error
 // It bounds how long one recorder call holds the store's only connection
 // (SetMaxOpenConns(1)), so other requests can run between chunks. It bounds
 // how long a Node waits between being found and being revoked. And a chunk
-// that commits before the Control API's audit budget runs out stays
+// that commits before the cascade's audit budget runs out stays
 // committed. It does NOT bound N: the pass loop below still walks every
 // matching Node in the registry, in chunks, however many there are.
 const cascadeRecordChunk = 500
@@ -101,8 +101,8 @@ const cascadeRecordChunk = 500
 //
 // A nil recorder must not be read as "skip recording": a cascade or a
 // single-Node revoke that CAN run unattributed is the bug, so making that state unreachable IS the fix. This mirrors
-// the Control API's unwired-gate posture (a nil Gate refuses with 500): loud
-// and closed, never quiet and open.
+// NewRevocations' refusal to assemble an unrecorded revoke: loud and closed,
+// never quiet and open.
 var ErrRecorderRequired = errors.New("revocation: a Node revocation requires a recorder; refusing to run an unattributed revoke")
 
 // CascadeShortfall reports how much of a cascade went unrecorded. It wraps
@@ -127,7 +127,7 @@ func (e *CascadeShortfall) Error() string {
 }
 
 // Unwrap lets errors.Is(err, ErrCascadeNotRecorded) hold, which is what the
-// Control API route keys on to tell a completed-but-unrecorded cascade from an
+// cmd/relay bridge keys on to tell a completed-but-unrecorded cascade from an
 // outright failure.
 func (e *CascadeShortfall) Unwrap() error { return ErrCascadeNotRecorded }
 

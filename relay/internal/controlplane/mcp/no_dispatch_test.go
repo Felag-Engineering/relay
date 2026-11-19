@@ -151,6 +151,7 @@ func dispatchViolations(fileName string, file *ast.File, strictCapabilityIdents 
 	// Unconditional, outside the strict/exec partition: no MCP file holds enroll.Minter.
 	violations = append(violations, astguard.EnrollMinterViolations(fileName, file)...)
 	violations = append(violations, astguard.ControlAuthorizationViolations(fileName, file)...)
+	violations = append(violations, astguard.RevocationViolations(fileName, file)...)
 	violations = append(violations, policyAliasViolations(fileName, file)...)
 	return append(violations, tagWriteViolations(fileName, file)...)
 }
@@ -327,6 +328,31 @@ type D struct{ M *enroll.Minter }
 `,
 			strict:     false,
 			wantSubstr: "imports internal/enroll",
+		},
+		{
+			name: "holding revocation.Service is refused",
+			src: `package mcp
+import "github.com/Felag-Engineering/relay/relay/internal/revocation"
+type D struct{ R *revocation.Service }
+`,
+			strict:     false,
+			wantSubstr: "imports internal/revocation",
+		},
+		{
+			name: "declaring RevokeNode on a seam is refused",
+			src: `package mcp
+type R interface{ RevokeNode(nodeID string) }
+`,
+			strict:     false,
+			wantSubstr: "RevokeNode",
+		},
+		{
+			name: "calling RevokeToken is refused",
+			src: `package mcp
+func f(d D) { _ = d.R.RevokeToken(nil, "t", nil) }
+`,
+			strict:     false,
+			wantSubstr: "RevokeToken",
 		},
 		{
 			name: "capability selector not on the pure-read allow-list (strict)",

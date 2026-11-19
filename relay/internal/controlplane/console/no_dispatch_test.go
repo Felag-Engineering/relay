@@ -444,6 +444,7 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 	})
 	violations = append(violations, astguard.EnrollMinterViolations(fileName, file)...)
 	violations = append(violations, astguard.ControlAuthorizationViolations(fileName, file)...)
+	violations = append(violations, astguard.RevocationViolations(fileName, file)...)
 	violations = append(violations, tagInternalWriteViolations(fileName, file)...)
 	return append(violations, policyAliasInternalWriteViolations(fileName, file)...)
 }
@@ -603,6 +604,28 @@ import "github.com/Felag-Engineering/relay/relay/internal/enroll"
 type D struct{ M *enroll.Minter }
 `,
 			wantSubstr: "imports internal/enroll",
+		},
+		{
+			name: "holding revocation.Service is refused",
+			src: `package console
+import "github.com/Felag-Engineering/relay/relay/internal/revocation"
+type D struct{ R *revocation.Service }
+`,
+			wantSubstr: "imports internal/revocation",
+		},
+		{
+			name: "declaring RevokeNode on a seam is refused",
+			src: `package console
+type R interface{ RevokeNode(nodeID string) }
+`,
+			wantSubstr: "RevokeNode",
+		},
+		{
+			name: "calling RevokeToken is refused",
+			src: `package console
+func f(d D) { _ = d.R.RevokeToken(nil, "t", nil) }
+`,
+			wantSubstr: "RevokeToken",
 		},
 		{
 			name: "asserting the audit repository to the atomic tag write is refused",

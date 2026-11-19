@@ -137,6 +137,21 @@ func TestMCP_RegistersNoEnrollmentTool(t *testing.T) {
 		t.Errorf("no hit names EnrollmentTokens: %v", hits)
 	})
 
+	t.Run("the type walk finds capability.Revocations", func(t *testing.T) {
+		hits, _ := findTypesMatching(reflect.TypeOf(struct {
+			F func() *capability.Revocations
+		}{}), isEnrollmentType)
+		if len(hits) < 1 {
+			t.Fatalf("walk of a type returning *capability.Revocations found no hit")
+		}
+		for _, hit := range hits {
+			if strings.Contains(hit, "Revocations") {
+				return
+			}
+		}
+		t.Errorf("no hit names Revocations: %v", hits)
+	})
+
 	t.Run("the type walk finds the revocation capability", func(t *testing.T) {
 		hits, _ := findTypesMatching(reflect.TypeOf(struct {
 			F func() *revocation.Service
@@ -352,9 +367,9 @@ func findConfigTypes(root reflect.Type) (hits []string, named int) {
 
 // isEnrollmentType reports whether t carries the enrollment capability: anything in the
 // enroll package or the revocation package, or the capability types that mint or list an
-// Enrollment Token. Tokens are minted through capability.EnrollmentTokens and revoked
-// through internal/revocation (revocation.Service.RevokeToken). It matches on package path
-// and name strings.
+// Enrollment Token or revoke one or a Node. Tokens are minted through
+// capability.EnrollmentTokens and revoked through capability.Revocations. It matches on
+// package path and name strings.
 func isEnrollmentType(t reflect.Type) bool {
 	pkg, name := t.PkgPath(), t.Name()
 	switch pkg {
@@ -362,7 +377,7 @@ func isEnrollmentType(t reflect.Type) bool {
 		return true
 	case relayModule + "internal/capability":
 		switch name {
-		case "EnrollmentTokens", "EnrollmentMint", "EnrollmentMintForm", "MintedEnrollmentToken":
+		case "EnrollmentTokens", "EnrollmentMint", "EnrollmentMintForm", "MintedEnrollmentToken", "Revocations", "Revoker":
 			return true
 		}
 	}

@@ -56,7 +56,7 @@ func newJobFixture(t *testing.T, role accounts.Role, exec *fakeExecutor, jr JobR
 	exec.gate = authz.NewRoleGate()
 	authn := controlplane.NewAuthenticator(roleVerifier{credential: testCredential, role: role})
 	mux := http.NewServeMux()
-	Register(mux, Deps{Exec: exec, Jobs: jr, Reads: reads, Now: fixedNow})
+	Register(mux, Deps{Exec: exec, Jobs: jr, Reads: reads})
 	return authn.Middleware(mux)
 }
 
@@ -328,7 +328,7 @@ func TestCancelJob_IsNotReadAudited(t *testing.T) {
 func TestJobRoutes_UnwiredDependenciesAreALegible500(t *testing.T) {
 	authn := controlplane.NewAuthenticator(roleVerifier{credential: testCredential, role: accounts.RoleAdmin})
 	mux := http.NewServeMux()
-	Register(mux, Deps{Now: fixedNow}) // no Exec, no Jobs
+	Register(mux, Deps{}) // no Exec, no Jobs
 	h := authn.Middleware(mux)
 
 	if rec := do(t, h, http.MethodGet, "/api/v1/jobs/job-1", nil); rec.Code != http.StatusInternalServerError {

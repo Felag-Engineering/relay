@@ -89,7 +89,7 @@ func newApprovalFixture(t *testing.T, role accounts.Role, ap *fakeApprovals) htt
 	t.Helper()
 	authn := controlplane.NewAuthenticator(roleVerifier{credential: testCredential, role: role})
 	mux := http.NewServeMux()
-	Register(mux, Deps{Approvals: ap, Now: fixedNow})
+	Register(mux, Deps{Approvals: ap})
 	return authn.Middleware(mux)
 }
 
@@ -374,7 +374,7 @@ func TestDecideApproval_ReasonIsBounded(t *testing.T) {
 func TestApprovalRoutes_UnwiredDependency(t *testing.T) {
 	authn := controlplane.NewAuthenticator(roleVerifier{credential: testCredential, role: accounts.RoleAdmin})
 	mux := http.NewServeMux()
-	Register(mux, Deps{Now: fixedNow})
+	Register(mux, Deps{})
 	h := authn.Middleware(mux)
 
 	if rec := do(t, h, http.MethodGet, "/api/v1/approvals", nil); rec.Code != http.StatusInternalServerError {

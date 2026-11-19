@@ -76,10 +76,12 @@ var routeFloors = map[string]floorKind{
 	// Administrative routes (#397). admin, admin, admin; the Freeze pair is
 	// operator+/admin and is decided in the capability layer with the same
 	// RoleGate object.
-	// The mint is floorGate: the route asks the capability layer before it
-	// reads the body (EN-1), and the layer then asks the same RoleGate again.
+	// Mint and Node revoke are floorGate: the route asks the capability layer
+	// before it reads the body (EN-1), and the layer then asks the same RoleGate
+	// again. The token revoke has no body, so it is floorCapability: the layer
+	// asks inside Revocations, before the id is rendered into a reason.
 	"POST /api/v1/enrollment-tokens":        floorGate,
-	"DELETE /api/v1/enrollment-tokens/{id}": floorGate,
+	"DELETE /api/v1/enrollment-tokens/{id}": floorCapability,
 	"POST /api/v1/nodes/{node_id}/revoke":   floorGate,
 	// Reading one Node is a read, and the read floor is `viewer` — which every
 	// authenticated Account already clears. Consistent with MCP's describe_node,
@@ -132,28 +134,25 @@ var routeFloors = map[string]floorKind{
 // routeGate names the ControlGate method each floorGate route's handler must
 // reach: one per act, so a route cannot satisfy its floor with another act's.
 var routeGate = map[string]string{
-	"POST /api/v1/enrollment-tokens":        "AuthorizeEnrollmentTokenMint",
-	"DELETE /api/v1/enrollment-tokens/{id}": "AuthorizeEnrollmentTokenRevoke",
-	"POST /api/v1/nodes/{node_id}/revoke":   "AuthorizeNodeRevoke",
+	"POST /api/v1/enrollment-tokens":      "AuthorizeEnrollmentTokenMint",
+	"POST /api/v1/nodes/{node_id}/revoke": "AuthorizeNodeRevoke",
 }
 
 // controlGateMethods are the ControlGate methods, and so the only role checks
 // a handler in this package may reach.
 var controlGateMethods = map[string]bool{
-	"AuthorizeEnrollmentTokenMint":   true,
-	"AuthorizeEnrollmentTokenRevoke": true,
-	"AuthorizeNodeRevoke":            true,
+	"AuthorizeEnrollmentTokenMint": true,
+	"AuthorizeNodeRevoke":          true,
 }
 
 // surfaceGateIdents are the identifiers that count as "this handler reaches a
 // surface-level role check": a ControlGate method, gateControl, or a direct
 // AuthorizeControl call, which the no_dispatch guard forbids here anyway.
 var surfaceGateIdents = map[string]bool{
-	"AuthorizeEnrollmentTokenMint":   true,
-	"AuthorizeEnrollmentTokenRevoke": true,
-	"AuthorizeNodeRevoke":            true,
-	"gateControl":                    true,
-	"AuthorizeControl":               true,
+	"AuthorizeEnrollmentTokenMint": true,
+	"AuthorizeNodeRevoke":          true,
+	"gateControl":                  true,
+	"AuthorizeControl":             true,
 }
 
 // TestControlGateMethodsAreTheSeam keeps controlGateMethods equal to the

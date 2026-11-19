@@ -14,7 +14,6 @@ var controlActs = []struct {
 	asked ControlAction
 }{
 	{"mint", (*Control).AuthorizeEnrollmentTokenMint, ControlMintEnrollmentToken},
-	{"token revoke", (*Control).AuthorizeEnrollmentTokenRevoke, ControlRevokeEnrollmentToken},
 	{"node revoke", (*Control).AuthorizeNodeRevoke, ControlRevokeNode},
 }
 

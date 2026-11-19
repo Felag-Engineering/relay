@@ -240,7 +240,7 @@ func newExecFixture(t *testing.T, role accounts.Role, exec *fakeExecutor, jr Job
 	exec.gate = authz.NewRoleGate()
 	authn := controlplane.NewAuthenticator(roleVerifier{credential: testCredential, role: role})
 	mux := http.NewServeMux()
-	Register(mux, Deps{Exec: exec, Jobs: jr, Now: fixedNow})
+	Register(mux, Deps{Exec: exec, Jobs: jr})
 	return authn.Middleware(mux)
 }
 
@@ -1002,7 +1002,7 @@ func TestExecutionResponse_DurationOnlyFromRealTimestamps(t *testing.T) {
 func TestExecutionRoutes_UnwiredDependenciesAreALegible500(t *testing.T) {
 	authn := controlplane.NewAuthenticator(roleVerifier{credential: testCredential, role: accounts.RoleAdmin})
 	mux := http.NewServeMux()
-	Register(mux, Deps{Now: fixedNow}) // no Exec, no Jobs
+	Register(mux, Deps{}) // no Exec, no Jobs
 	h := authn.Middleware(mux)
 
 	for _, rt := range []struct {
