@@ -488,7 +488,12 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 	// connection (NC-33, NC-34, NC-35, NC-36, NC-39).
 	connectionChanges := auditsink.NewConnectionRecorder(auditSink, hooks.testConnectionClock)
 
-	ts := &tunnelServer{conns: conns, reg: reg, policy: policyCache, vocab: vocabCache, changes: connectionChanges}
+	violations, err := newViolationRecorder(auditSink, appMetrics, connectionChanges)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	ts := &tunnelServer{conns: conns, reg: reg, policy: policyCache, vocab: vocabCache, changes: connectionChanges, strays: violations}
 	// ts.sink is set below, ONLY inside the cfg.ControlEnabled branch:
 	// execution is on if and only if the control plane (its only consumer
 	// surface, MCP + /api/v1) is on. Disabled: ts.sink stays nil. Integration tests, or
@@ -629,7 +634,7 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 		// dispatch and refusal is audited. This flip adds no new
 		// bypass — it only turns on the same pipeline every other surface
 		// already dispatches through.
-		router, reconciler, sink := newDispatchStack(st.Tasks(), violationRecorder{audit: auditSink, metrics: appMetrics}, logger)
+		router, reconciler, sink := newDispatchStack(st.Tasks(), violations, logger)
 		// reconciler is captured by router's onConnect closure
 		// (dispatch_wiring.go) and fires on every Node (re)connect. The sweep
 		// runs here, before srv.Serve, so no Node connects and is reconciled

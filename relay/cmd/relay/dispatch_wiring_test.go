@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -189,6 +191,119 @@ func TestNewDispatchStack_ReconcilerUsesRouter(t *testing.T) {
 	}
 }
 
+// testViolationRecorder is the production composer over st's audit trail, with
+// no metrics.
+func testViolationRecorder(st *store.Store) violationRecorder {
+	sink := auditsink.New(st.Audit())
+	v, err := newViolationRecorder(sink, nil, auditsink.NewConnectionRecorder(sink, nil))
+	if err != nil {
+		panic(err)
+	}
+	return v
+}
+
+func TestNewViolationRecorder_RefusesNilAuditOrUnsolicited(t *testing.T) {
+	_, st := testTaskRepositoryWithStore(t)
+	sink := auditsink.New(st.Audit())
+	stray := auditsink.NewConnectionRecorder(sink, nil)
+
+	if _, err := newViolationRecorder(nil, nil, stray); err == nil {
+		t.Error("a nil audit sink was accepted")
+	}
+	if _, err := newViolationRecorder(sink, nil, nil); err == nil {
+		t.Error("a nil unsolicited recorder was accepted")
+	}
+	if _, err := newViolationRecorder(sink, nil, stray); err != nil {
+		t.Errorf("a complete recorder was refused: %v", err)
+	}
+}
+
+// TestNewDispatchStack_AnOutcomeOutsideTheEnumWritesOneProtocolViolationRow
+// drives the production assembly with an Outcome the enum does not define.
+// Proves NC-40.
+func TestNewDispatchStack_AnOutcomeOutsideTheEnumWritesOneProtocolViolationRow(t *testing.T) {
+	tasks, st := testTaskRepositoryWithStore(t)
+	router, _, sink := newDispatchStack(tasks, testViolationRecorder(st), nil)
+
+	sentCh := make(chan *relayv1.RelayMessage, 4)
+	unregister := sink.register("node-1", func(msg *relayv1.RelayMessage) error {
+		sentCh <- msg
+		return nil
+	})
+	defer unregister()
+
+	task := jobs.Task{
+		ID:     "task-1",
+		JobID:  "job-1",
+		NodeID: "node-1",
+		Action: jobs.Action{Kind: jobs.ActionOperation, OperationName: "list_files", RiskClass: jobs.RiskClassRead},
+	}
+	resultCh := make(chan jobs.Result, 1)
+	go func() {
+		res, _ := router.Dispatch(context.Background(), "node-1", task)
+		resultCh <- res
+	}()
+	select {
+	case <-sentCh:
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for router to send the dispatched task")
+	}
+
+	sink.deliver("node-1", &relayv1.TaskResult{TaskId: "task-1", Outcome: relayv1.Outcome(99), Stdout: []byte("ran")})
+	if res := <-resultCh; res.Outcome != jobs.OutcomeFailure || len(res.Stdout) != 0 {
+		t.Errorf("Result = outcome %v stdout %q, want failure with no Node bytes", res.Outcome, res.Stdout)
+	}
+
+	var rows []audit.Record
+	for _, rec := range auditByNode(t, st.Audit(), "node-1") {
+		if rec.Kind == audit.KindProtocolViolation {
+			rows = append(rows, rec)
+		}
+	}
+	if len(rows) != 1 {
+		t.Fatalf("found %d KindProtocolViolation rows, want exactly 1", len(rows))
+	}
+	got := rows[0]
+	if got.Reason != "rule=unknown_outcome reported_outcome=99 task_id=task-1" {
+		t.Errorf("Reason = %q", got.Reason)
+	}
+	if len(got.Stdout) != 0 || len(got.Stderr) != 0 || got.Principal != "" {
+		t.Errorf("row carries output or an actor: %+v", got)
+	}
+}
+
+// TestViolationRecorder_RecordUnsolicitedResultCountsEveryResultAndLimitsTheRows
+// counts every unsolicited result on the metric and limits the audit rows.
+// Proves NC-41.
+func TestViolationRecorder_RecordUnsolicitedResultCountsEveryResultAndLimitsTheRows(t *testing.T) {
+	_, st := testTaskRepositoryWithStore(t)
+	sink := auditsink.New(st.Audit())
+	m := metrics.New(metrics.GaugeSources{})
+	rec, err := newViolationRecorder(sink, m, auditsink.NewConnectionRecorder(sink, time.Now))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 0; i < 3; i++ {
+		rec.RecordUnsolicitedResult("node-1")
+	}
+
+	w := httptest.NewRecorder()
+	m.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if want := `relay_protocol_violations_total{rule="unsolicited_result"} 3`; !strings.Contains(w.Body.String(), want) {
+		t.Errorf("metrics body lacks %q", want)
+	}
+	var rows int
+	for _, r := range auditByNode(t, st.Audit(), "node-1") {
+		if r.Kind == audit.KindProtocolViolation {
+			rows++
+		}
+	}
+	if rows != 1 {
+		t.Errorf("audit rows = %d, want exactly 1", rows)
+	}
+}
+
 // TestNewDispatchStack_AProtocolViolationOnAReadClassTaskIsRecordedWithNoOutput
 // is (a) the end-to-end proof that the production assembly —
 // newDispatchStack -> Router -> *auditsink.Sink -> store — is wired, which is
@@ -202,8 +317,7 @@ func TestNewDispatchStack_ReconcilerUsesRouter(t *testing.T) {
 // re-tested here.
 func TestNewDispatchStack_AProtocolViolationOnAReadClassTaskIsRecordedWithNoOutput(t *testing.T) {
 	tasks, st := testTaskRepositoryWithStore(t)
-	violations := auditsink.New(st.Audit())
-	router, _, sink := newDispatchStack(tasks, violations, nil)
+	router, _, sink := newDispatchStack(tasks, testViolationRecorder(st), nil)
 
 	sentCh := make(chan *relayv1.RelayMessage, 4)
 	send := func(msg *relayv1.RelayMessage) error {

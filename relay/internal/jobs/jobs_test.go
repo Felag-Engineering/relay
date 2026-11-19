@@ -74,6 +74,7 @@ func TestProtocolViolationExplanation_Legibility(t *testing.T) {
 	}{
 		{"relay_only_outcome", ProtocolViolation{Rule: ViolationRelayOnlyOutcome, ReportedOutcome: "OUTCOME_VERSION_REFUSED"}, true},
 		{"unresolved_outcome", ProtocolViolation{Rule: ViolationUnresolvedOutcome, ReportedOutcome: "OUTCOME_UNSPECIFIED"}, false},
+		{"unknown_outcome", ProtocolViolation{Rule: ViolationUnknownOutcome, ReportedOutcome: "99"}, true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -129,6 +130,29 @@ func TestProtocolViolation_Violated(t *testing.T) {
 	}
 	if !(ProtocolViolation{Rule: ViolationUnresolvedOutcome}).Violated() {
 		t.Error("Violated() = false for ViolationUnresolvedOutcome")
+	}
+	if !(ProtocolViolation{Rule: ViolationUnknownOutcome}).Violated() {
+		t.Error("Violated() = false for ViolationUnknownOutcome")
+	}
+	if !(ProtocolViolation{Rule: ViolationUnsolicitedResult}).Violated() {
+		t.Error("Violated() = false for ViolationUnsolicitedResult")
+	}
+}
+
+// TestProtocolViolationExplanation_UnsolicitedResult asserts the unsolicited
+// text never claims a Task was dispatched (there is none) and keeps the
+// drafting rules. It is not in the Legibility table, whose required substrings
+// assume a dispatched Task.
+func TestProtocolViolationExplanation_UnsolicitedResult(t *testing.T) {
+	got := ProtocolViolation{Rule: ViolationUnsolicitedResult}.Explanation()
+	if got == "" || !strings.Contains(got, "/proto") {
+		t.Errorf("Explanation() = %q, want non-empty text citing /proto", got)
+	}
+	lower := strings.ToLower(got)
+	for _, bad := range []string{"never sent", "was not sent", "nothing executed", "policy", "was dispatched"} {
+		if strings.Contains(lower, bad) {
+			t.Errorf("Explanation() must never contain %q: %s", bad, got)
+		}
 	}
 }
 

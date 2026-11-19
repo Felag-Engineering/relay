@@ -171,6 +171,12 @@ const (
 	// ViolationUnresolvedOutcome: the daemon reported a finished Task with no
 	// Outcome at all (the enum's zero value means "not yet resolved").
 	ViolationUnresolvedOutcome
+	// ViolationUnknownOutcome: the daemon reported an Outcome value the
+	// generated enum does not define (NC-40).
+	ViolationUnknownOutcome
+	// ViolationUnsolicitedResult: the daemon sent a TaskResult no Task of
+	// that Node awaits (NC-41).
+	ViolationUnsolicitedResult
 )
 
 // String renders r for a log attribute (dispatch's slog.Warn at the wire
@@ -188,6 +194,10 @@ func (r ViolationRule) String() string {
 		return "relay_only_outcome"
 	case ViolationUnresolvedOutcome:
 		return "unresolved_outcome"
+	case ViolationUnknownOutcome:
+		return "unknown_outcome"
+	case ViolationUnsolicitedResult:
+		return "unsolicited_result"
 	default:
 		return fmt.Sprintf("unknown_violation_rule(%d)", int(r))
 	}
@@ -198,7 +208,10 @@ func (r ViolationRule) String() string {
 type ProtocolViolation struct {
 	Rule ViolationRule
 	// ReportedOutcome is the wire enum's own name (e.g.
-	// "OUTCOME_VERSION_REFUSED"), not a relayv1.Outcome: this package carries
+	// "OUTCOME_VERSION_REFUSED"), or for a value outside the enum
+	// (ViolationUnknownOutcome) its decimal number, rendered by the Relay from
+	// an int32 so it holds no Node-authored bytes. It is not a
+	// relayv1.Outcome: this package carries
 	// no proto dependency (see the package doc comment), so dispatch fills
 	// this in from relayv1.Outcome_name at the wire boundary.
 	ReportedOutcome string
@@ -241,6 +254,13 @@ func (v ProtocolViolation) Explanation() string {
 	case ViolationUnresolvedOutcome:
 		return base + " The report carried no outcome at all, which a finished Task's " +
 			"result may never do."
+	case ViolationUnknownOutcome:
+		return base + fmt.Sprintf(" The reported outcome (%s) is not a value /proto defines.", name)
+	case ViolationUnsolicitedResult:
+		// No Task is involved, so base's "The Task WAS dispatched" would be
+		// false. No Task row carries this text; it keeps Explanation total.
+		return "dispatch: this Node's relay-daemon sent a result (/proto TaskResult) that no Task of this " +
+			"Node awaits, so the Relay discarded it."
 	}
 	// A ViolationRule Violated() reports true but with no case above: a future
 	// rule added to the const block without a matching case here. Returning ""

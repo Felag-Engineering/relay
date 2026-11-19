@@ -130,9 +130,9 @@ const violationAuditBudget = 5 * time.Second
 
 // ViolationRecorder records a relay-daemon's protocol violation as a
 // durable, queryable audit event. Structural, like Conduit in the
-// other direction: *auditsink.Sink satisfies it, and this package imports
-// neither internal/audit nor internal/capability to say so — the
-// composition root wires them (cmd/relay/dispatch_wiring.go).
+// other direction: this package imports neither internal/audit nor
+// internal/capability to say so — the composition root wires them
+// (cmd/relay/dispatch_wiring.go).
 //
 // It is a REQUIRED parameter of NewRouter, not an option, and that is
 // the security property rather than a style choice: a production wiring
@@ -145,6 +145,11 @@ const violationAuditBudget = 5 * time.Second
 // "log only", which is what every hermetic test in this package passes.
 type ViolationRecorder interface {
 	RecordProtocolViolation(ctx context.Context, ev jobs.ProtocolViolationEvent) error
+	// RecordUnsolicitedResult is told of each TaskResult that no Task of
+	// nodeID awaits (NC-41). It never fails, and any limit on the records it
+	// writes is the implementation's. It runs on the sending Node's own
+	// receive goroutine, so a slow write delays only that Node's stream.
+	RecordUnsolicitedResult(nodeID string)
 }
 
 // sendSlot is one task ID's send critical section. A worker's Dispatch and a
@@ -241,7 +246,7 @@ type Router struct {
 // Cancel).
 //
 // violations is REQUIRED POSITIONALLY and may be nil. Nil is a real,
-// supported mode — a Router that logs a refused TaskResult and records
+// supported mode — a Router that logs a refused or unsolicited TaskResult and records
 // nothing — and every test in this package uses it deliberately, as a
 // log-only fixture with no store to write to. It is a parameter rather
 // than an option so that adding a second production assembly cannot
@@ -729,7 +734,9 @@ func (r *Router) recordViolation(ctx context.Context, nodeID string, t jobs.Task
 // Deliver routes an inbound TaskResult to every Dispatch call waiting on it.
 // If tr.TaskId has no registered waiter, or the waiters belong to a different
 // nodeID (defense-in-depth; see the waiter doc comment), the Result is
-// silently dropped — an uncorrelated Result is not a Router error.
+// dropped and reported to the ViolationRecorder as unsolicited (NC-41). An
+// uncorrelated Result is still not a Router error: there is no return value
+// and no panic.
 //
 // Each waiter is deleted under mu before the (non-blocking, buffered(1)) send,
 // which makes this delete-then-send mutually exclusive with unregister's
@@ -763,10 +770,27 @@ func (r *Router) Deliver(nodeID string, tr *relayv1.TaskResult) {
 	}
 	r.mu.Unlock()
 
+	if len(woken) == 0 {
+		r.recordUnsolicited(nodeID)
+		return
+	}
+
 	d := &delivery{tr: tr}
 	for _, w := range woken {
 		w.ch <- d
 	}
+}
+
+// recordUnsolicited reports one TaskResult no Task of nodeID awaits. It logs
+// at Debug only, and never the Node-supplied task_id: a flood must not become
+// a log flood, and the metric counts every event while the recorder limits the
+// rows. It runs outside mu.
+func (r *Router) recordUnsolicited(nodeID string) {
+	r.logger().Debug("dispatch: dropped a TaskResult no Task of this Node awaits", "node_id", nodeID)
+	if r.violations == nil {
+		return
+	}
+	r.violations.RecordUnsolicitedResult(nodeID)
 }
 
 // newQueryID mints a unique query_id for one Query call: "query-" plus 16

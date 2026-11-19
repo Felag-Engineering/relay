@@ -1,8 +1,10 @@
 package dispatch
 
 import (
+	"math"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -321,6 +323,43 @@ func TestResult_RefusesOutcomesNoDaemonMaySend(t *testing.T) {
 	}
 }
 
+// TestResult_AnOutcomeOutsideTheEnumIsRefusedNamingTheValue refuses a value
+// the generated enum does not define, naming it by its decimal number.
+// Proves NC-40.
+func TestResult_AnOutcomeOutsideTheEnumIsRefusedNamingTheValue(t *testing.T) {
+	for _, n := range []int32{9, 99, -1, math.MaxInt32} {
+		want := strconv.FormatInt(int64(n), 10)
+		t.Run(want, func(t *testing.T) {
+			got, v := result(&relayv1.TaskResult{
+				TaskId:    "task-forged",
+				Outcome:   relayv1.Outcome(n),
+				Stdout:    []byte("i actually ran"),
+				Stderr:    []byte("my real stderr"),
+				Truncated: true,
+			})
+
+			if v.Rule != jobs.ViolationUnknownOutcome {
+				t.Errorf("violation Rule = %v, want ViolationUnknownOutcome", v.Rule)
+			}
+			if v.ReportedOutcome != want {
+				t.Errorf("violation ReportedOutcome = %q, want %q", v.ReportedOutcome, want)
+			}
+			if got.Outcome != jobs.OutcomeFailure || got.ExitCode != -1 {
+				t.Errorf("Result = outcome %v exit %d, want failure and -1", got.Outcome, got.ExitCode)
+			}
+			if string(got.Stderr) != v.Explanation() {
+				t.Errorf("Result.Stderr = %q, want v.Explanation() = %q", got.Stderr, v.Explanation())
+			}
+			if !strings.Contains(string(got.Stderr), "("+want+")") {
+				t.Errorf("Result.Stderr = %q, want it to name the value (%s)", got.Stderr, want)
+			}
+			if len(got.Stdout) != 0 || got.Truncated {
+				t.Errorf("Result kept the Node's bytes: stdout %q truncated %v", got.Stdout, got.Truncated)
+			}
+		})
+	}
+}
+
 // TestOutcome_FullEnumMap iterates relayv1.Outcome_value rather than a
 // hand-picked subset, so a new /proto Outcome value can never silently go
 // untested here (rev 1 of this test omitted OUTCOME_VERSION_REFUSED and
@@ -349,10 +388,10 @@ func TestOutcome_FullEnumMap(t *testing.T) {
 	}
 }
 
-// TestOutcome_UnrecognizedDefaultsToUnspecified documents §2's deliberate
-// forward-compat line: outcome() keeps this mapping for values >= 9 only,
-// because the wire value 0 (OUTCOME_UNSPECIFIED) is refused by result()
-// before outcome() is ever reached.
+// TestOutcome_UnrecognizedDefaultsToUnspecified pins outcome() as total for
+// non-wire callers: result() refuses an out-of-range value as a protocol
+// violation, so the wire path never reaches this mapping. The refusal is
+// proved by TestResult_AnOutcomeOutsideTheEnumIsRefusedNamingTheValue.
 func TestOutcome_UnrecognizedDefaultsToUnspecified(t *testing.T) {
 	if got := outcome(relayv1.Outcome(999)); got != jobs.OutcomeUnspecified {
 		t.Errorf("outcome(999) = %v, want jobs.OutcomeUnspecified", got)

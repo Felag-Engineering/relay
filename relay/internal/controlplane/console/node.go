@@ -52,6 +52,21 @@ import (
 // read, filtered.
 const nodeTaskRows = 40
 
+// nodeViolationRows bounds the protocol-violation list: it is a page about one
+// machine, and the full record is on the audit trail.
+const nodeViolationRows = 20
+
+// nodeViolation is one protocol_violation record of the Node. Every field is
+// Relay-authored: the record's Reason is key=value text the Relay wrote, never
+// bytes the Node sent.
+type nodeViolation struct {
+	When    string
+	What    string
+	Detail  string
+	JobID   string
+	JobHref string
+}
+
 type nodeFact struct{ Key, Value string }
 
 type nodeTask struct {
@@ -195,6 +210,9 @@ type nodeView struct {
 	Tasks       []nodeTask
 	TasksElided bool
 	AuditWired  bool
+
+	Violations       []nodeViolation
+	ViolationsElided bool
 }
 
 func handleNode(d Deps) http.HandlerFunc {
@@ -483,8 +501,8 @@ func (v *nodeView) applyReportedPolicy(d Deps, detail capability.NodeDetail) {
 	v.PolicyStale = !n.Connected
 }
 
-// applyAuditTrail fills the revocation summary and the Recent Tasks list from
-// the Node's audit trail, oldest first.
+// applyAuditTrail fills the revocation summary, the Recent Tasks list and the
+// Protocol violations list from the Node's audit trail, oldest first.
 func (v *nodeView) applyAuditTrail(recs []audit.Record) {
 	// The revocation record is read from the WHOLE trail, not from the
 	// windowed rows below: a Node with forty later records would
@@ -553,6 +571,58 @@ func (v *nodeView) applyAuditTrail(recs []audit.Record) {
 		}
 		v.Tasks = append(v.Tasks, t)
 	}
+
+	// Filtered on its own, before windowing, so violations never take Task
+	// slots and Tasks never take violation slots.
+	violations := make([]audit.Record, 0)
+	for _, rec := range recs {
+		if rec.Kind == audit.KindProtocolViolation {
+			violations = append(violations, rec)
+		}
+	}
+	vrows, velided := windowed(violations, nodeViolationRows)
+	v.ViolationsElided = velided
+	for _, rec := range vrows {
+		v.Violations = append(v.Violations, nodeViolationFrom(rec))
+	}
+}
+
+// nodeViolationFrom projects one protocol_violation record into a row.
+func nodeViolationFrom(rec audit.Record) nodeViolation {
+	nv := nodeViolation{
+		When:   utcStamp(rec.Timestamp),
+		What:   violationPhrase(rec.Reason),
+		Detail: rec.Reason,
+	}
+	if rec.JobID != "" {
+		nv.JobID = rec.JobID
+		nv.JobHref = "/console/jobs/" + rec.JobID
+	}
+	return nv
+}
+
+// violationPhrase names the rule in a protocol_violation Reason in words. The
+// phrases are a closed set; an unrecognised rule gets the generic one. The
+// unsolicited wording is neutral because the record is a count, not an
+// accusation: an honest Node can produce one after a race.
+func violationPhrase(reason string) string {
+	for _, f := range strings.Fields(reason) {
+		rule, ok := strings.CutPrefix(f, "rule=")
+		if !ok {
+			continue
+		}
+		switch rule {
+		case "relay_only_outcome":
+			return "reported an outcome only the Relay writes"
+		case "unresolved_outcome":
+			return "reported a result with no outcome"
+		case "unknown_outcome":
+			return "reported an outcome outside the contract"
+		case "unsolicited_result":
+			return "sent results no Task of this Node awaited"
+		}
+	}
+	return "sent a report the wire contract forbids"
 }
 
 // factRows renders the self-reported Facts.
@@ -787,6 +857,28 @@ var nodeTmpl = newScreen("node", `
       <p class="dim">The audit trail is not wired into this Console.</p>
       {{end}}
     </section>
+
+    {{if .Violations}}
+    <section class="panel">
+      <h3>Protocol violations</h3>
+      <div class="tablescroll">
+      <table class="rows">
+        <thead><tr><th scope="col">When</th><th scope="col">What</th><th scope="col">Record</th><th scope="col">Job</th></tr></thead>
+        <tbody>
+        {{range .Violations}}
+          <tr>
+            <td class="num">{{.When}}</td>
+            <td>{{.What}}</td>
+            <td><code>{{.Detail}}</code></td>
+            <td>{{if .JobHref}}<a href="{{.JobHref}}"><code>{{short .JobID}}</code></a>{{end}}</td>
+          </tr>
+        {{end}}
+        </tbody>
+      </table>
+      </div>
+      {{if .ViolationsElided}}<p class="dim">Older protocol violations are on the audit trail.</p>{{end}}
+    </section>
+    {{end}}
   </div>
 </div>
 

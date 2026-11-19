@@ -1495,3 +1495,122 @@ func TestShowAllRows(t *testing.T) {
 		}
 	}
 }
+
+// violationsPanelOf slices the Protocol violations panel out of a rendered Node
+// page, or returns "" when it is not there.
+func violationsPanelOf(body string) string {
+	const open = "<h3>Protocol violations</h3>"
+	i := strings.Index(body, open)
+	if i < 0 {
+		return ""
+	}
+	rest := body[i:]
+	if j := strings.Index(rest, "</section>"); j >= 0 {
+		return rest[:j]
+	}
+	return rest
+}
+
+func appendRecords(t *testing.T, repo *captureRepo, recs ...audit.Record) {
+	t.Helper()
+	for _, rec := range recs {
+		if err := repo.Append(context.Background(), rec); err != nil {
+			t.Fatalf("Append(%s): %v", rec.Kind, err)
+		}
+	}
+}
+
+// The Node's own protocol_violation records are listed beside Recent Tasks,
+// Relay-authored text only, and take no Task slot.
+func TestNode_ProtocolViolationsAreListedBesideRecentTasks(t *testing.T) {
+	repo := &captureRepo{}
+	appendRecords(t, repo,
+		audit.Record{Kind: audit.KindDispatch, NodeID: "node-web-1", OperationName: "file.read",
+			Outcome: jobs.OutcomeSuccess, JobID: "job-1", Timestamp: testNow},
+		audit.Record{Kind: audit.KindProtocolViolation, NodeID: "node-web-1", JobID: "job-9",
+			Reason: "rule=relay_only_outcome reported_outcome=OUTCOME_VERSION_REFUSED task_id=task-9", Timestamp: testNow.Add(time.Second)},
+		audit.Record{Kind: audit.KindProtocolViolation, NodeID: "node-web-1",
+			Reason: "rule=unsolicited_result results=4", Timestamp: testNow.Add(2 * time.Second)},
+		audit.Record{Kind: audit.KindProtocolViolation, NodeID: "node-web-2",
+			Reason: "rule=unknown_outcome reported_outcome=99 task_id=task-x", Timestamp: testNow.Add(3 * time.Second)},
+	)
+
+	d := fleetFixture()
+	d.Audit = repo
+	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/nodes/node-web-1").Body.String()
+
+	panel := violationsPanelOf(body)
+	if panel == "" {
+		t.Fatal("the Node page has no Protocol violations panel")
+	}
+	if strings.Index(body, "<h3>Protocol violations</h3>") < strings.Index(body, "<h3>Recent Tasks</h3>") {
+		t.Error("the Protocol violations panel comes before Recent Tasks")
+	}
+	for _, want := range []string{
+		"reported an outcome only the Relay writes",
+		"<code>rule=relay_only_outcome reported_outcome=OUTCOME_VERSION_REFUSED task_id=task-9</code>",
+		"sent results no Task of this Node awaited",
+		"<code>rule=unsolicited_result results=4</code>",
+		`href="/console/jobs/job-9"`,
+	} {
+		if !strings.Contains(panel, want) {
+			t.Errorf("the panel lacks %q", want)
+		}
+	}
+	if n := strings.Count(panel, `href="/console/jobs/`); n != 1 {
+		t.Errorf("the panel links %d Jobs, want only the record that names one", n)
+	}
+	if strings.Contains(panel, "unknown_outcome") {
+		t.Error("another Node's violation is listed")
+	}
+	tasks := tasksPanelOf(body)
+	if !strings.Contains(tasks, "<code>file.read</code>") || strings.Contains(tasks, "rule=") {
+		t.Errorf("Recent Tasks must keep its dispatch row and take no violation row: %s", tasks)
+	}
+}
+
+func TestNode_NoProtocolViolationPanelWhenNoneIsRecorded(t *testing.T) {
+	repo := &captureRepo{}
+	appendRecords(t, repo, audit.Record{Kind: audit.KindDispatch, NodeID: "node-web-1",
+		OperationName: "file.read", Outcome: jobs.OutcomeSuccess, Timestamp: testNow})
+
+	d := fleetFixture()
+	d.Audit = repo
+	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/nodes/node-web-1").Body.String()
+	if strings.Contains(body, "Protocol violations") {
+		t.Error("a Node with no protocol_violation record shows the panel")
+	}
+}
+
+func TestNode_ProtocolViolationsShowTheNewestAndSayWhenOlderAreElided(t *testing.T) {
+	repo := &captureRepo{}
+	appendRecords(t, repo, audit.Record{Kind: audit.KindDispatch, NodeID: "node-web-1",
+		OperationName: "file.read", Outcome: jobs.OutcomeSuccess, Timestamp: testNow})
+	for i := 0; i <= nodeViolationRows; i++ {
+		appendRecords(t, repo, audit.Record{Kind: audit.KindProtocolViolation, NodeID: "node-web-1",
+			Reason: fmt.Sprintf("rule=unsolicited_result results=%d", i+1), Timestamp: testNow.Add(time.Duration(i+1) * time.Second)})
+	}
+
+	d := fleetFixture()
+	d.Audit = repo
+	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/nodes/node-web-1").Body.String()
+	panel := violationsPanelOf(body)
+
+	if n := strings.Count(panel, "<code>rule="); n != nodeViolationRows {
+		t.Fatalf("rows = %d, want %d", n, nodeViolationRows)
+	}
+	newest := fmt.Sprintf("results=%d<", nodeViolationRows+1)
+	oldest := "results=1<"
+	if !strings.Contains(panel, newest) || strings.Contains(panel, oldest) {
+		t.Errorf("the window is not the newest %d records", nodeViolationRows)
+	}
+	if strings.Index(panel, newest) > strings.Index(panel, fmt.Sprintf("results=%d<", nodeViolationRows)) {
+		t.Error("rows are not newest first")
+	}
+	if !strings.Contains(panel, "Older protocol violations are on the audit trail.") {
+		t.Error("the elided note is missing")
+	}
+	if !strings.Contains(tasksPanelOf(body), "<code>file.read</code>") {
+		t.Error("many violations pushed the dispatch row out of Recent Tasks")
+	}
+}

@@ -559,7 +559,8 @@ func TestRouter_CancelOfflineNodeIsBestEffort(t *testing.T) {
 }
 
 // TestRouter_DeliverUncorrelatedTaskIDDropped asserts a Result for an
-// unknown (or already-delivered) task_id is silently dropped, never panics.
+// unknown (or already-delivered) task_id is dropped and never panics. With the
+// nil recorder here the drop is log-only.
 func TestRouter_DeliverUncorrelatedTaskIDDropped(t *testing.T) {
 	r := NewRouter(nil, nil)
 	unregister := r.Register("node-1", func(*relayv1.RelayMessage) error { return nil })
@@ -1079,6 +1080,153 @@ type fakeViolationRecorder struct {
 	started chan struct{} // closed when RecordProtocolViolation begins, if non-nil
 	release chan struct{} // blocks RecordProtocolViolation until closed, if non-nil
 	ctxErr  error         // ctx.Err(), captured at call time
+
+	unsolicited []string // node IDs RecordUnsolicitedResult was told of
+}
+
+func (f *fakeViolationRecorder) RecordUnsolicitedResult(nodeID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.unsolicited = append(f.unsolicited, nodeID)
+}
+
+func (f *fakeViolationRecorder) unsolicitedNodes() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.unsolicited...)
+}
+
+// dispatchAndWait starts a Dispatch of task on r and waits until its Task
+// request has been sent, returning the channels the call answers on.
+func dispatchAndWait(t *testing.T, r *Router, send *recordingSend, nodeID string, task jobs.Task) (<-chan jobs.Result, <-chan error) {
+	t.Helper()
+	resultCh := make(chan jobs.Result, 1)
+	errCh := make(chan error, 1)
+	want := send.len() + 1
+	go func() {
+		res, err := r.Dispatch(context.Background(), nodeID, task)
+		resultCh <- res
+		errCh <- err
+	}()
+	waitUntil(t, time.Second, func() bool { return send.len() == want })
+	return resultCh, errCh
+}
+
+// TestDispatch_AnOutcomeOutsideTheEnumResolvesFailureAndIsRecordedOnce
+// delivers an Outcome the generated enum does not define and expects the
+// terminal failure naming the value, with exactly one record.
+// Proves NC-40.
+func TestDispatch_AnOutcomeOutsideTheEnumResolvesFailureAndIsRecordedOnce(t *testing.T) {
+	fake := &fakeViolationRecorder{}
+	r := NewRouter(nil, fake)
+	send := &recordingSend{}
+	unregister := r.Register("node-1", send.send)
+	defer unregister()
+
+	task := jobs.Task{
+		ID:     "task-1",
+		JobID:  "job-1",
+		NodeID: "node-1",
+		Action: jobs.Action{Kind: jobs.ActionOperation, OperationName: "list_files"},
+	}
+	resultCh, errCh := dispatchAndWait(t, r, send, "node-1", task)
+
+	r.Deliver("node-1", &relayv1.TaskResult{TaskId: "task-1", Outcome: relayv1.Outcome(99), Stdout: []byte("ran")})
+
+	if err := <-errCh; err != nil {
+		t.Fatalf("Dispatch returned an error, want nil: %v", err)
+	}
+	res := <-resultCh
+	if res.Outcome != jobs.OutcomeFailure || !strings.Contains(string(res.Stderr), "(99)") || len(res.Stdout) != 0 {
+		t.Errorf("Result = outcome %v stdout %q stderr %q, want failure naming 99 with no Node bytes", res.Outcome, res.Stdout, res.Stderr)
+	}
+	events := fake.recorded()
+	if len(events) != 1 {
+		t.Fatalf("recorded %d protocol violation events, want exactly 1", len(events))
+	}
+	ev := events[0]
+	if ev.Violation.Rule != jobs.ViolationUnknownOutcome || ev.Violation.ReportedOutcome != "99" ||
+		ev.TaskID != "task-1" || ev.JobID != "job-1" || ev.NodeID != "node-1" {
+		t.Errorf("event = %+v, want unknown_outcome 99 for node-1 task-1 job-1", ev)
+	}
+	if got := fake.unsolicitedNodes(); len(got) != 0 {
+		t.Errorf("a correlated result was reported unsolicited for %v", got)
+	}
+}
+
+// TestRouter_AResultNoTaskAwaitsIsDroppedAndReportedUnsolicited: a result for
+// a task_id nobody waits on is dropped and reported once for the sending Node.
+// Proves NC-41.
+func TestRouter_AResultNoTaskAwaitsIsDroppedAndReportedUnsolicited(t *testing.T) {
+	fake := &fakeViolationRecorder{}
+	r := NewRouter(nil, fake)
+	unregister := r.Register("node-1", (&recordingSend{}).send)
+	defer unregister()
+
+	r.Deliver("node-1", &relayv1.TaskResult{TaskId: "task-unknown", Outcome: relayv1.Outcome_OUTCOME_SUCCESS})
+
+	if got := fake.unsolicitedNodes(); len(got) != 1 || got[0] != "node-1" {
+		t.Errorf("unsolicited = %v, want [node-1]", got)
+	}
+	if n := len(fake.recorded()); n != 0 {
+		t.Errorf("recorded %d per-Task violation events, want 0", n)
+	}
+}
+
+// TestRouter_AResultForAnotherNodesTaskIsDroppedAndReportedUnsolicited: a Node
+// answering a task_id only another Node awaits is reported for the sender and
+// leaves the other Node's waiter intact.
+// Proves NC-41.
+func TestRouter_AResultForAnotherNodesTaskIsDroppedAndReportedUnsolicited(t *testing.T) {
+	fake := &fakeViolationRecorder{}
+	r := NewRouter(nil, fake)
+	sendA, sendB := &recordingSend{}, &recordingSend{}
+	unregisterA := r.Register("node-a", sendA.send)
+	defer unregisterA()
+	unregisterB := r.Register("node-b", sendB.send)
+	defer unregisterB()
+
+	resultCh, errCh := dispatchAndWait(t, r, sendA, "node-a", jobs.Task{ID: "task-1", NodeID: "node-a"})
+
+	r.Deliver("node-b", &relayv1.TaskResult{TaskId: "task-1", Outcome: relayv1.Outcome_OUTCOME_SUCCESS})
+
+	if got := fake.unsolicitedNodes(); len(got) != 1 || got[0] != "node-b" {
+		t.Fatalf("unsolicited = %v, want [node-b]", got)
+	}
+	select {
+	case <-resultCh:
+		t.Fatal("node-a's Dispatch resolved from node-b's forged result")
+	default:
+	}
+
+	r.Deliver("node-a", &relayv1.TaskResult{TaskId: "task-1", Outcome: relayv1.Outcome_OUTCOME_SUCCESS})
+	if err := <-errCh; err != nil {
+		t.Fatalf("Dispatch error: %v", err)
+	}
+	if res := <-resultCh; res.Outcome != jobs.OutcomeSuccess {
+		t.Errorf("Result.Outcome = %v, want success", res.Outcome)
+	}
+}
+
+// TestRouter_ACorrelatedResultIsNotReportedUnsolicited: the normal round trip
+// reports nothing.
+// Proves NC-41.
+func TestRouter_ACorrelatedResultIsNotReportedUnsolicited(t *testing.T) {
+	fake := &fakeViolationRecorder{}
+	r := NewRouter(nil, fake)
+	send := &recordingSend{}
+	unregister := r.Register("node-1", send.send)
+	defer unregister()
+
+	resultCh, errCh := dispatchAndWait(t, r, send, "node-1", jobs.Task{ID: "task-1", NodeID: "node-1"})
+	r.Deliver("node-1", &relayv1.TaskResult{TaskId: "task-1", Outcome: relayv1.Outcome_OUTCOME_SUCCESS})
+	if err := <-errCh; err != nil {
+		t.Fatalf("Dispatch error: %v", err)
+	}
+	<-resultCh
+	if got := fake.unsolicitedNodes(); len(got) != 0 {
+		t.Errorf("unsolicited = %v, want none", got)
+	}
 }
 
 func (f *fakeViolationRecorder) RecordProtocolViolation(ctx context.Context, ev jobs.ProtocolViolationEvent) error {
