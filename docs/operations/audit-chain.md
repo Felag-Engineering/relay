@@ -98,3 +98,15 @@ Migration 28 chains every existing row, from row one, in one transaction:
   `audit_id`.
 - The chain vouches for rows written before the upgrade only as of the upgrade: anything edited
   before then is chained in as it stood.
+
+### Policy rule references
+
+A dispatch outcome row for a Task the daemon's Policy denied carries the pass and the deciding
+rule's section, index and line, in four columns added by migration 38. A row that carries one is
+hashed with it, and a row without one hashes exactly as it did before, so an upgraded trail
+needs no re-chaining and a trail mixing both verifies.
+
+Build `relay-audit-verify` from the same release as the Relay, or newer. An older verifier does
+not know the columns and reports a row that carries a reference as a `hash_mismatch`. The same
+holds after a rollback to an older Relay binary: the rows it wrote itself verify, and an older
+verifier flags the rows written after the upgrade that carry a reference.

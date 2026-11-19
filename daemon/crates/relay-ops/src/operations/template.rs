@@ -90,6 +90,7 @@ use super::file_read::{open_regular_and_resolve, OpenRefusal, PathCheck};
 use super::registry::{bounded_by_task_timeout, BlockingGate, OpCtx, OpFuture, ResolvedOp};
 use super::template_body::{self, BodyAnalysis};
 pub use super::template_code::{BodyWarning, CodePosition, WarningKind};
+use crate::policy_wire::policy_rule_ref;
 
 // ---------------------------------------------------------------------------
 // Bounds — every caller-controlled dimension is capped (oversized inputs are a
@@ -468,10 +469,14 @@ impl TemplateOp {
                 .await;
             positional[i] =
                 opened.map_err(|r| path_refusal_result(task_id, &self.slots[i].name, r))?;
-            if let PathCheck::Denied(reason) =
+            if let PathCheck::Denied { reason, rule } =
                 recheck_resolved_path(policy, &self.name, &positional, &path_positions)
             {
-                return Err(denied_by_policy_result(task_id.to_string(), &reason));
+                return Err(denied_by_policy_result(
+                    task_id.to_string(),
+                    &reason,
+                    Some(rule),
+                ));
             }
         }
         Ok(positional)
@@ -580,8 +585,12 @@ fn recheck_resolved_path(
         positional,
         path_positions,
     };
-    match policy.decide(&request).decision {
-        Decision::Deny { reason, .. } => PathCheck::Denied(reason),
+    let explained = policy.decide(&request);
+    match explained.decision {
+        Decision::Deny { ref reason, .. } => PathCheck::Denied {
+            reason: reason.clone(),
+            rule: policy_rule_ref(&explained),
+        },
         Decision::Allow(_) => PathCheck::Allowed,
     }
 }
@@ -605,12 +614,14 @@ fn path_refusal_result(task_id: &str, slot: &str, refusal: OpenRefusal) -> TaskR
             Outcome::Failure,
             format!("slot {slot:?}: not a regular file"),
         ),
+        // No rule decided: the daemon refused because it could not check.
         OpenRefusal::Unresolvable(e) => denied_by_policy_result(
             task_id,
             &format!(
                 "slot {slot:?}: cannot resolve the opened path for policy re-check (ADR-0018): {}",
                 clean_io_error(&e)
             ),
+            None,
         ),
     }
 }
@@ -910,6 +921,17 @@ mod tests {
     use super::super::registry::Runner;
     use super::*;
     use crate::test_support::TempFile;
+
+    /// A denial for a path the daemon could not resolve was refused for want of
+    /// a check, not by a rule, so it names no rule.
+    // Proves EX-70.
+    #[test]
+    fn an_unresolvable_path_denial_carries_no_policy_rule() {
+        let refusal = OpenRefusal::Unresolvable(std::io::Error::other("gone"));
+        let result = path_refusal_result("t-unresolvable", "path", refusal);
+        assert_eq!(result.outcome, Outcome::DeniedByPolicy as i32);
+        assert!(result.policy_rule.is_none());
+    }
 
     // -- construction helpers -------------------------------------------------
 

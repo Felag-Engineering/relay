@@ -22,6 +22,7 @@ pub(crate) use relay_proto as gen;
 pub(crate) use relay_test_support as test_support;
 
 pub mod operations;
+pub mod policy_wire;
 pub mod raw_exec;
 pub mod templates;
 

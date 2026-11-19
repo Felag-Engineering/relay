@@ -630,13 +630,14 @@ func (e *jobEngine) fanOut(pj *persistedJob) (dispatchResult, error) {
 			}
 		}
 		results[i] = NodeResult{
-			NodeID:    pt.task.NodeID,
-			Outcome:   res.Outcome,
-			JobID:     jobID,
-			Stdout:    res.Stdout,
-			Stderr:    res.Stderr,
-			Truncated: res.Truncated,
-			RiskClass: pt.task.Action.RiskClass,
+			NodeID:     pt.task.NodeID,
+			Outcome:    res.Outcome,
+			JobID:      jobID,
+			Stdout:     res.Stdout,
+			Stderr:     res.Stderr,
+			Truncated:  res.Truncated,
+			PolicyRule: res.PolicyRule,
+			RiskClass:  pt.task.Action.RiskClass,
 		}
 	}
 	// Excluded Tasks are resolved synchronously, before any real Task is

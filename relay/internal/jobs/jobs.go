@@ -509,7 +509,32 @@ type Result struct {
 	// Truncated is the daemon-side size-cap flag (proto TaskResult.truncated):
 	// a single flag over the whole result, not per-stream.
 	Truncated bool
+	// PolicyRule is where the daemon's Policy denied the Task, copied from its
+	// TaskResult. Set only on OutcomeDeniedByPolicy and never persisted on the
+	// Task row. Display-only: no Relay decision reads it (invariant 12).
+	PolicyRule PolicyRuleRef
 }
+
+// PolicyRuleRef is the daemon's account of where its Policy denied a Task,
+// copied from its TaskResult. Display-only: no Relay decision reads it
+// (invariant 12). Zero means not reported; a reported reference always has a
+// Pass.
+type PolicyRuleRef struct {
+	// Pass is the daemon's pass name: "precondition", "deny", "guard", "allow"
+	// or "default".
+	Pass string
+	// RuleSection is "operation", "deny", "raw_exec_allow" or "raw_exec_deny",
+	// or "" when no rule decided.
+	RuleSection string
+	// RuleIndex is the index within RuleSection, meaningful only when
+	// RuleSection is set.
+	RuleIndex int
+	// RuleLine is the 1-based source line, 0 when the loader did not know it.
+	RuleLine int
+}
+
+// IsZero reports whether the daemon reported no rule reference.
+func (r PolicyRuleRef) IsZero() bool { return r == PolicyRuleRef{} }
 
 // Verdict is a connected Node's PolicyVerdict, converted to its proto-free
 // domain mirror (ADR-0011): the daemon's live enforcement engine answered

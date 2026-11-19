@@ -437,3 +437,84 @@ func TestWireCarriesNoCallerIdentity(t *testing.T) {
 	protowalk.AssertExactTopLevelFieldSet(t, (&relayv1.RawExec{}).ProtoReflect().Descriptor(),
 		map[string]bool{"argv": true})
 }
+
+// A Policy denial keeps the daemon's rule reference, with the names mapped and
+// the index and line carried only beside a section.
+// Proves EX-70.
+func TestResult_APolicyDenyCarriesTheDaemonsRuleReference(t *testing.T) {
+	cases := []struct {
+		name string
+		ref  *relayv1.PolicyRuleRef
+		want jobs.PolicyRuleRef
+	}{
+		{
+			name: "a rule decided",
+			ref: &relayv1.PolicyRuleRef{
+				Pass: relayv1.PolicyPass_POLICY_PASS_DENY, RuleSection: relayv1.PolicyRuleSection_POLICY_RULE_SECTION_RAW_EXEC_DENY,
+				RuleIndex: 2, RuleLine: 14,
+			},
+			want: jobs.PolicyRuleRef{Pass: "deny", RuleSection: "raw_exec_deny", RuleIndex: 2, RuleLine: 14},
+		},
+		{
+			name: "a section at index 0 and no known line",
+			ref: &relayv1.PolicyRuleRef{
+				Pass: relayv1.PolicyPass_POLICY_PASS_DENY, RuleSection: relayv1.PolicyRuleSection_POLICY_RULE_SECTION_DENY,
+			},
+			want: jobs.PolicyRuleRef{Pass: "deny", RuleSection: "deny"},
+		},
+		{
+			name: "no rule decided keeps the pass and drops an index and line the daemon sent anyway",
+			ref:  &relayv1.PolicyRuleRef{Pass: relayv1.PolicyPass_POLICY_PASS_DEFAULT, RuleIndex: 5, RuleLine: 9},
+			want: jobs.PolicyRuleRef{Pass: "default"},
+		},
+		{name: "a daemon older than the field", ref: nil, want: jobs.PolicyRuleRef{}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, v := result(&relayv1.TaskResult{Outcome: relayv1.Outcome_OUTCOME_DENIED_BY_POLICY, PolicyRule: c.ref})
+			if v.Violated() {
+				t.Fatalf("unexpected protocol violation: %+v", v)
+			}
+			if got.PolicyRule != c.want {
+				t.Errorf("PolicyRule = %+v, want %+v", got.PolicyRule, c.want)
+			}
+		})
+	}
+}
+
+// A rule reference on any outcome but a Policy denial is dropped, and a
+// protocol violation is Relay-authored end to end.
+// Proves EX-70.
+func TestResult_ARuleReferenceOnAnyOtherOutcomeIsDropped(t *testing.T) {
+	ref := &relayv1.PolicyRuleRef{
+		Pass: relayv1.PolicyPass_POLICY_PASS_DENY, RuleSection: relayv1.PolicyRuleSection_POLICY_RULE_SECTION_DENY, RuleIndex: 1, RuleLine: 3,
+	}
+	for _, o := range []relayv1.Outcome{
+		relayv1.Outcome_OUTCOME_SUCCESS, relayv1.Outcome_OUTCOME_FAILURE, relayv1.Outcome_OUTCOME_UNSUPPORTED,
+		relayv1.Outcome_OUTCOME_VERSION_REFUSED, relayv1.Outcome_OUTCOME_UNSPECIFIED, relayv1.Outcome(99),
+	} {
+		got, _ := result(&relayv1.TaskResult{Outcome: o, PolicyRule: ref})
+		if !got.PolicyRule.IsZero() {
+			t.Errorf("outcome %v: PolicyRule = %+v, want zero", o, got.PolicyRule)
+		}
+	}
+}
+
+// An unrecognised pass or section drops the whole reference, so a
+// half-populated one never reaches a record.
+// Proves EX-70.
+func TestResult_UnrecognisedPassAndSectionAreDropped(t *testing.T) {
+	deny, sec := relayv1.PolicyPass_POLICY_PASS_DENY, relayv1.PolicyRuleSection_POLICY_RULE_SECTION_DENY
+	for name, ref := range map[string]*relayv1.PolicyRuleRef{
+		"unrecognised pass":                          {Pass: relayv1.PolicyPass(99), RuleSection: sec, RuleIndex: 1, RuleLine: 2},
+		"unrecognised section":                       {Pass: deny, RuleSection: relayv1.PolicyRuleSection(99), RuleIndex: 1, RuleLine: 2},
+		"unspecified pass with a recognised section": {RuleSection: sec, RuleIndex: 1, RuleLine: 2},
+		"unrecognised pass with no section":          {Pass: relayv1.PolicyPass(99)},
+		"both unrecognised":                          {Pass: relayv1.PolicyPass(99), RuleSection: relayv1.PolicyRuleSection(99), RuleIndex: 1},
+	} {
+		got, _ := result(&relayv1.TaskResult{Outcome: relayv1.Outcome_OUTCOME_DENIED_BY_POLICY, PolicyRule: ref})
+		if !got.PolicyRule.IsZero() {
+			t.Errorf("%s: PolicyRule = %+v, want zero", name, got.PolicyRule)
+		}
+	}
+}

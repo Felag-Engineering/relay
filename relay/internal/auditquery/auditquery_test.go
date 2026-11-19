@@ -330,6 +330,15 @@ func TestMapping_AuditRowDoesNotAliasItsSource(t *testing.T) {
 	}
 }
 
+// The read lane's row carries the daemon's Policy denial location.
+// Proves EX-70.
+func TestMapping_AuditRowCarriesThePolicyRule(t *testing.T) {
+	rule := jobs.PolicyRuleRef{Pass: "deny", RuleSection: "deny", RuleIndex: 1, RuleLine: 12}
+	if got := fromAuditRow(audit.Row{ID: "a1", PolicyRule: rule}); got.PolicyRule != rule {
+		t.Errorf("AuditRow.PolicyRule = %+v, want %+v", got.PolicyRule, rule)
+	}
+}
+
 // TestMapping_JobFilterCarriesOnBehalfOf: a filter field the mapping drops is
 // a filter that silently matches everything.
 func TestMapping_JobFilterCarriesOnBehalfOf(t *testing.T) {

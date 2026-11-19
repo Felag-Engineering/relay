@@ -78,6 +78,12 @@ type NodeResult struct {
 	Stderr    []byte
 	Truncated bool
 
+	// PolicyRule is where the daemon's Policy denied this Node's Task, copied
+	// verbatim from its result: set only on jobs.OutcomeDeniedByPolicy, zero
+	// when the daemon did not report it. Display-only: no decision reads it
+	// (invariant 12).
+	PolicyRule jobs.PolicyRuleRef
+
 	// RiskClass is the class this Node's Task ran under. For a Native
 	// Operation or Raw Exec it is the Action's; for a Template Operation it
 	// is that Node's OWN reported class, which may be looser than the

@@ -1773,3 +1773,78 @@ func TestSink_NoRecordCarriesAGrantLink(t *testing.T) {
 		}
 	}
 }
+
+// A denied Task's rule reference is recorded for every risk class, because a
+// location in the Node's own Policy is not a denial explanation, while a
+// read-class row still drops the Stderr.
+// Proves EX-70.
+func TestRecordDispatch_ADeniedTaskRecordsTheRuleReferenceOnEveryRiskClass(t *testing.T) {
+	_, repo, _ := openSinkStore(t)
+	sink := New(repo, WithNewID(sequentialIDs("audit-")), WithClock(fixedClock(time.Date(2026, 8, 12, 0, 0, 0, 0, time.UTC))))
+	rule := jobs.PolicyRuleRef{Pass: "deny", RuleSection: "deny", RuleIndex: 1, RuleLine: 12}
+
+	record := func(jobID string, class jobs.RiskClass) audit.Record {
+		t.Helper()
+		err := sink.Record(context.Background(), capability.AuditEntry{
+			Kind:      capability.AuditKindDispatch,
+			Principal: capability.Principal{Account: "gleipnir", Role: "operator"},
+			Action:    jobs.Action{Kind: jobs.ActionOperation, OperationName: "file.read", RiskClass: class},
+			JobID:     jobID,
+			Results: []capability.NodeResult{{
+				NodeID: "node-1", Outcome: jobs.OutcomeDeniedByPolicy, Stderr: []byte("denied: rule text"),
+				PolicyRule: rule,
+			}},
+		})
+		if err != nil {
+			t.Fatalf("Record(%s): %v", jobID, err)
+		}
+		recs, err := repo.ByJob(context.Background(), jobID)
+		if err != nil || len(recs) != 1 {
+			t.Fatalf("ByJob(%s): %v (%d records)", jobID, err, len(recs))
+		}
+		return recs[0]
+	}
+
+	read := record("job-read", jobs.RiskClassRead)
+	if read.PolicyRule != rule {
+		t.Errorf("read-class PolicyRule = %+v, want %+v", read.PolicyRule, rule)
+	}
+	if len(read.Stderr) != 0 {
+		t.Errorf("read-class Stderr = %q, want it dropped", read.Stderr)
+	}
+	mutate := record("job-mutate", jobs.RiskClassMutate)
+	if mutate.PolicyRule != rule {
+		t.Errorf("mutate-class PolicyRule = %+v, want %+v", mutate.PolicyRule, rule)
+	}
+	if string(mutate.Stderr) != "denied: rule text" {
+		t.Errorf("mutate-class Stderr = %q, want it retained", mutate.Stderr)
+	}
+}
+
+// Only a Policy denial records a rule reference, whatever the result holds.
+// Proves EX-70.
+func TestRecordDispatch_NoRuleReferenceOnAnOutcomeThatIsNotAPolicyDeny(t *testing.T) {
+	_, repo, _ := openSinkStore(t)
+	sink := New(repo, WithNewID(sequentialIDs("audit-")), WithClock(fixedClock(time.Date(2026, 8, 12, 0, 0, 0, 0, time.UTC))))
+
+	err := sink.Record(context.Background(), capability.AuditEntry{
+		Kind:      capability.AuditKindDispatch,
+		Principal: capability.Principal{Account: "gleipnir", Role: "operator"},
+		Action:    jobs.Action{Kind: jobs.ActionOperation, OperationName: "service.restart", RiskClass: jobs.RiskClassMutate},
+		JobID:     "job-1",
+		Results: []capability.NodeResult{{
+			NodeID: "node-1", Outcome: jobs.OutcomeSuccess,
+			PolicyRule: jobs.PolicyRuleRef{Pass: "deny", RuleSection: "deny", RuleIndex: 1, RuleLine: 12},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	recs, err := repo.ByJob(context.Background(), "job-1")
+	if err != nil || len(recs) != 1 {
+		t.Fatalf("ByJob: %v (%d records)", err, len(recs))
+	}
+	if !recs[0].PolicyRule.IsZero() {
+		t.Errorf("PolicyRule = %+v, want zero on a success", recs[0].PolicyRule)
+	}
+}

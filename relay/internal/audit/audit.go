@@ -572,6 +572,14 @@ type Record struct {
 	ApprovalAnswer  string
 	DecisionChannel string
 	PlanHash        string
+
+	// PolicyRule is where the daemon's Policy denied the Task, meaningful only
+	// on a KindDispatch outcome whose Outcome is OutcomeDeniedByPolicy. It is
+	// recorded for every risk class, because a location in the Policy the
+	// Node's owner authored is not a denial explanation. It is display-only
+	// (invariant 12) and Relay-rendered from closed names and integers, so no
+	// Node bytes reach it. Zero means not reported.
+	PolicyRule jobs.PolicyRuleRef
 }
 
 // Repository is the interface for the audit trail. Append-only: there is no

@@ -101,6 +101,30 @@ func verdict(pv *relayv1.PolicyVerdict) jobs.Verdict {
 	return v
 }
 
+// policyRuleRef converts a TaskResult's rule reference to its domain mirror.
+// Every value must be one the Relay recognises, and the index and line are kept
+// only beside a section, as verdict() does. Anything else drops the whole
+// reference, so a half-populated one never reaches a record. It names the
+// daemon's account and decides nothing (invariant 12).
+func policyRuleRef(pr *relayv1.PolicyRuleRef) jobs.PolicyRuleRef {
+	if pr == nil {
+		return jobs.PolicyRuleRef{}
+	}
+	ref := jobs.PolicyRuleRef{Pass: passName(pr.GetPass())}
+	if ref.Pass == "" {
+		return jobs.PolicyRuleRef{}
+	}
+	if pr.GetRuleSection() == relayv1.PolicyRuleSection_POLICY_RULE_SECTION_UNSPECIFIED {
+		return ref
+	}
+	if ref.RuleSection = ruleSectionName(pr.GetRuleSection()); ref.RuleSection == "" {
+		return jobs.PolicyRuleRef{}
+	}
+	ref.RuleIndex = int(pr.GetRuleIndex())
+	ref.RuleLine = int(pr.GetRuleLine())
+	return ref
+}
+
 // passName is the daemon's Pass display name for a wire PolicyPass, "" for
 // the unspecified or an unrecognised value.
 func passName(p relayv1.PolicyPass) string {
@@ -193,18 +217,25 @@ func result(tr *relayv1.TaskResult) (jobs.Result, jobs.ProtocolViolation) {
 			// recreates the two-authors-on-one-row confusion
 			// capability/refusal.go warns about. This is the one place
 			// jobs.Result.Stderr carries Relay prose rather than Node bytes —
-			// why jobs names the method Explanation(), not Stderr().
+			// why jobs names the method Explanation(), not Stderr(). The
+			// daemon's policy_rule is discarded with them.
 			Stderr: []byte(v.Explanation()),
 		}, v
 	}
 
-	return jobs.Result{
+	res := jobs.Result{
 		Outcome:   outcome(o),
 		ExitCode:  tr.GetExitCode(),
 		Stdout:    tr.GetStdout(),
 		Stderr:    tr.GetStderr(),
 		Truncated: tr.GetTruncated(),
-	}, jobs.ProtocolViolation{}
+	}
+	// The reference is kept beside a Policy denial only: this narrows by
+	// outcome and reads no rule field to decide anything (invariant 12).
+	if o == relayv1.Outcome_OUTCOME_DENIED_BY_POLICY {
+		res.PolicyRule = policyRuleRef(tr.GetPolicyRule())
+	}
+	return res, jobs.ProtocolViolation{}
 }
 
 // knownOutcome reports whether the generated enum defines o.

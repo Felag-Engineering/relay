@@ -10,7 +10,7 @@
 
 use std::time::Duration;
 
-use crate::gen::{Outcome, TaskResult};
+use crate::gen::{Outcome, PolicyRuleRef, TaskResult};
 
 /// A never-executed [`TaskResult`]: `exit_code` `-1`, empty stdout,
 /// `truncated` false, `duration_millis` `0`.
@@ -23,13 +23,23 @@ pub fn not_executed(task_id: String, outcome: Outcome, stderr: impl Into<Vec<u8>
         stderr: stderr.into(),
         truncated: false,
         duration_millis: 0,
+        policy_rule: None,
     }
 }
 
 /// An `OUTCOME_DENIED_BY_POLICY` result — no process was spawned. Shared by
-/// the Operation dispatch path and Raw Exec.
-pub fn denied_by_policy_result(task_id: String, reason: &str) -> TaskResult {
-    not_executed(task_id, Outcome::DeniedByPolicy, reason)
+/// the Operation dispatch path and Raw Exec. `rule` is set exactly when a
+/// Policy decision denied the Task, and `None` where the daemon refused for a
+/// reason no rule decided (a path it could not resolve and so could not check).
+pub fn denied_by_policy_result(
+    task_id: String,
+    reason: &str,
+    rule: Option<PolicyRuleRef>,
+) -> TaskResult {
+    TaskResult {
+        policy_rule: rule,
+        ..not_executed(task_id, Outcome::DeniedByPolicy, reason)
+    }
 }
 
 /// [`not_executed`], with `duration_millis` set to `elapsed` — for the paths

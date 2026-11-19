@@ -101,6 +101,10 @@ type Row struct {
 	ApprovalAnswer  string
 	DecisionChannel string
 	PlanHash        string
+
+	// PolicyRule is the daemon's reported Policy denial location on a dispatch
+	// outcome row, zero when not reported. Display-only (invariant 12).
+	PolicyRule jobs.PolicyRuleRef
 }
 
 // Page is one page of Rows, cursor-paginated newest first.
