@@ -153,8 +153,8 @@ func installDevHarness(cfg Config, deps *appDeps) (stop func(), err error) {
 	}
 
 	// One sink, one trail: the same *auditsink.Sink records both the
-	// harness's protocol violations (via newDispatchStack's ViolationRecorder)
-	// and its normal capability-layer audit entries, as main.go does.
+	// harness's protocol violations (through a violationRecorder) and its
+	// normal capability-layer audit entries, as main.go does.
 	harnessAudit := auditsink.New(deps.audit)
 
 	// Empty rules: nothing parks; NewApprovals requires a gate.
@@ -164,7 +164,11 @@ func installDevHarness(cfg Config, deps *appDeps) (stop func(), err error) {
 		return nil, fmt.Errorf("devharness: build empty approval gate: %w", err)
 	}
 
-	router, reconciler, sink := newDispatchStack(deps.tasks, harnessAudit, deps.logger)
+	violations, err := newViolationRecorder(harnessAudit, nil, auditsink.NewConnectionRecorder(harnessAudit, nil))
+	if err != nil {
+		return nil, fmt.Errorf("devharness: %w", err)
+	}
+	router, reconciler, sink := newDispatchStack(deps.tasks, violations, deps.logger)
 	// reconciler is captured by router's onConnect closure (dispatch_wiring.go)
 	// and fires on every Node registration, including reconnects — this is
 	// what makes the crash-mid-Job test's restart reconciliation happen.

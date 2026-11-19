@@ -757,6 +757,14 @@ func TestProtocolViolationReason_Fields(t *testing.T) {
 			},
 			want: "rule=unresolved_outcome reported_outcome=unnamed task_id=task-2",
 		},
+		{
+			name: "unknown outcome names the decimal value",
+			ev: jobs.ProtocolViolationEvent{
+				TaskID:    "task-3",
+				Violation: jobs.ProtocolViolation{Rule: jobs.ViolationUnknownOutcome, ReportedOutcome: "99"},
+			},
+			want: "rule=unknown_outcome reported_outcome=99 task_id=task-3",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

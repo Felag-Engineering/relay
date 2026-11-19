@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Felag-Engineering/relay/relay/internal/audit"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 	"github.com/Felag-Engineering/relay/relay/internal/registry"
 )
 
@@ -60,6 +61,12 @@ func streamReplacedReason(n int) string {
 	return fmt.Sprintf("replacements=%d", n)
 }
 
+// unsolicitedResultReason is Relay-authored end to end: the Node's task_id is
+// unbounded wire text and is deliberately left out.
+func unsolicitedResultReason(n int) string {
+	return "rule=" + jobs.ViolationUnsolicitedResult.String() + " results=" + strconv.Itoa(n)
+}
+
 func reportedOrNone(v string, wellFormed func(string) bool) string {
 	if v == "" || !wellFormed(v) {
 		return "none"
@@ -76,7 +83,8 @@ func rawExecText(v *bool) string {
 
 // ConnectionRecorder records the Node connection kinds
 // (audit.KindNodePolicyChanged, KindNodeDaemonVersionChanged,
-// KindNodeCertChanged and KindNodeStreamReplaced), throttling each (Node,
+// KindNodeCertChanged and KindNodeStreamReplaced) and audit.KindProtocolViolation
+// for a TaskResult no Task of the Node awaits (NC-41), throttling each (Node,
 // kind) independently.
 //
 // The first event is recorded at once. Afterwards there is at most one record
@@ -148,6 +156,14 @@ func (r *ConnectionRecorder) StreamReplaced(nodeID string) {
 	r.record(nodeID, audit.KindNodeStreamReplaced, streamReplacedReason)
 }
 
+// UnsolicitedTaskResult records one TaskResult from nodeID that no Task of
+// nodeID awaits, as a protocol_violation record limited like the connection
+// kinds (NC-41, NC-39). It never returns an error: the stream must not depend
+// on the trail.
+func (r *ConnectionRecorder) UnsolicitedTaskResult(nodeID string) {
+	r.record(nodeID, audit.KindProtocolViolation, unsolicitedResultReason)
+}
+
 func (r *ConnectionRecorder) record(nodeID, kind string, reason func(n int) string) {
 	if nodeID == "" {
 		return
@@ -191,7 +207,7 @@ func (r *ConnectionRecorder) record(nodeID, kind string, reason func(n int) stri
 		return
 	}
 
-	r.sink.log.Warn("node connection record not written",
+	r.sink.log.Warn("node audit record not written",
 		"node_id", nodeID, "kind", kind, "count", n, "err", err)
 
 	// The window stays closed after a failed write: a write that committed and

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -27,7 +28,7 @@ import (
 // authz.NewRoleGate — see TestTunnelSink_GatedByControlEnabled for the
 // disabled-vs-enabled assertion this file's callers must keep true.
 
-var _ dispatch.ViolationRecorder = (*auditsink.Sink)(nil)
+var _ dispatch.ViolationRecorder = violationRecorder{}
 var _ dispatch.SettlementRecorder = (*auditsink.Sink)(nil)
 
 var _ transport.RevokedDialObserver = (*auditsink.RevokedDialRecorder)(nil)
@@ -51,10 +52,39 @@ var _ connectionObserver = (*auditsink.ConnectionRecorder)(nil)
 // genuinely optional) because a nil *auditsink.Sink here would mean this
 // composer was built wrong, and silently dropping the row it exists to
 // write is worse than the panic s.append gives on the dispatching
-// goroutine.
+// goroutine. unsolicited is required for the same reason.
+//
+// An unsolicited TaskResult (NC-41) is counted on every event, before the
+// limiter and unconditionally, while its audit row is limited per Node by
+// unsolicited. A failed write is not counted as unrecorded: the limiter
+// carries its count into the next row, so nothing is lost while the process
+// lives.
 type violationRecorder struct {
-	audit   *auditsink.Sink
-	metrics *metrics.Metrics
+	audit       *auditsink.Sink
+	metrics     *metrics.Metrics
+	unsolicited *auditsink.ConnectionRecorder
+}
+
+// newViolationRecorder refuses a nil audit or unsolicited recorder at
+// construction, so a wiring mistake fails at start-up and never on a Tunnel
+// goroutine. metrics may be nil.
+func newViolationRecorder(audit *auditsink.Sink, m *metrics.Metrics, unsolicited *auditsink.ConnectionRecorder) (violationRecorder, error) {
+	if audit == nil {
+		return violationRecorder{}, errors.New("violation recorder: the audit sink is required")
+	}
+	if unsolicited == nil {
+		return violationRecorder{}, errors.New("violation recorder: the unsolicited-result recorder is required")
+	}
+	return violationRecorder{audit: audit, metrics: m, unsolicited: unsolicited}, nil
+}
+
+// RecordUnsolicitedResult counts one TaskResult no Task of nodeID awaits and
+// hands it to the limited writer.
+func (v violationRecorder) RecordUnsolicitedResult(nodeID string) {
+	if v.metrics != nil {
+		v.metrics.IncProtocolViolation(jobs.ViolationUnsolicitedResult)
+	}
+	v.unsolicited.UnsolicitedTaskResult(nodeID)
 }
 
 func (v violationRecorder) RecordProtocolViolation(ctx context.Context, ev jobs.ProtocolViolationEvent) error {
