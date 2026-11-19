@@ -1,6 +1,6 @@
 # Node connection
 
-**Status:** designed, not built, as of `2026-11-18`.
+**Status:** current as of `2026-11-19`.
 **Claim prefix:** `NC`
 **Governed by:** ADR-0005, ADR-0006, ADR-0014, ADR-0017, ADR-0031, ADR-0054; invariants 4, 6, 7,
 8, 11, 14.
@@ -123,6 +123,8 @@ secret distribution.
   its report, or two parties on one certificate, write a bounded number. The limit is held in
   memory and starts over when the Relay restarts. No record blocks a connection or a dispatch
   (R51, R54, R58).
+- **NC-40** A `TaskResult` whose outcome is outside the enum is treated as one whose outcome is unspecified: its Task resolves `failure` (`execution.md`), with stderr naming the value, and one protocol-violation record is written (R59).
+- **NC-41** A `TaskResult` that no Task of the sending Node awaits is dropped and writes a protocol-violation record, limited as NC-39 limits its records (R59).
 
 ### Daemon versions
 
@@ -146,13 +148,6 @@ secret distribution.
   daemon keeps retrying and cannot succeed; only enrolling again, under a new Node ID
   (`enrollment.md`), brings the Node back.
 - **NC-32** A stream whose first message is not `Hello` is refused as an invalid argument.
-
-## Designed, not built
-
-| Claim | Statement | Milestone |
-|---|---|---|
-| NC-40 | A `TaskResult` whose outcome is outside the enum is treated as one whose outcome is unspecified: its Task resolves `failure` (`execution.md`), with stderr naming the value, and one protocol-violation record is written (R59). | v0.2.2 |
-| NC-41 | A `TaskResult` that no Task of the sending Node awaits is dropped and writes a protocol-violation record, limited as NC-39 limits its records (R59). | v0.2.2 |
 
 ## Out of scope
 
@@ -221,6 +216,8 @@ secret distribution.
 | NC-37 | `TestHeartbeatClockSkew`, `TestRepositoryConformance`, `TestSQLiteRegistryConformance`, `TestTunnelOpen_HeartbeatFiveMinutesOutRecordsAboutThatSkew`, `TestTunnelOpen_NodeYearsOutKeepsItsStreamAndAnswersATask`, `TestTunnelOpen_NonPositiveHeartbeatTimestampRecordsSkewNotMeasured` | Relay, registry, store |
 | NC-38 | `TestHello_NodeIDIsDeprecatedInTheContract`, `TestRelay_NoFileSelectsTheHelloNodeID`, `TestTunnelOpen_ForgedHelloNodeIDIsKeyedByTheCertificateAndNeverLogged`, `hello_never_sets_the_node_id` | Node plane, Relay, daemon |
 | NC-39 | `TestConnectionRecorder_ConcurrentFirstEventsRecordOnce`, `TestConnectionRecorder_FailedEntrySurvivesTheSweep`, `TestConnectionRecorder_FirstEventRecordedAtOnce`, `TestConnectionRecorder_KindsAreThrottledIndependently`, `TestConnectionRecorder_NextRecordCarriesTheCountAndItsOwnValues`, `TestConnectionRecorder_NodesAreThrottledIndependently`, `TestConnectionRecorder_ReplacementsInsideTheWindowAreCarriedByTheNextRecord`, `TestConnectionRecorder_SweepDropsIdleEntriesAndKeepsPending`, `TestConnectionRecorder_ThrottledWithinTheWindow`, `TestConnectionRecorder_WriteFailureLosesNoCount`, `TestTunnelOpen_AlternatingDaemonVersionsWriteOneRowPerWindow`, `TestTunnelOpen_FailedChangeRecordNeitherRefusesNorDelaysThePing`, `TestTunnelOpen_FailedPolicyRecordKeepsTheStreamUp` | Relay, auditsink |
+| NC-40 | `TestDispatch_AnOutcomeOutsideTheEnumResolvesFailureAndIsRecordedOnce`, `TestNewDispatchStack_AnOutcomeOutsideTheEnumWritesOneProtocolViolationRow`, `TestResult_AnOutcomeOutsideTheEnumIsRefusedNamingTheValue` | Relay, dispatch |
+| NC-41 | `TestConnectionRecorder_UnsolicitedTaskResultsAreLimitedLikeTheConnectionKinds`, `TestRouter_ACorrelatedResultIsNotReportedUnsolicited`, `TestRouter_AResultForAnotherNodesTaskIsDroppedAndReportedUnsolicited`, `TestRouter_AResultNoTaskAwaitsIsDroppedAndReportedUnsolicited`, `TestTunnelOpen_ATaskResultWithTheControlPlaneDisabledWritesAProtocolViolationRow`, `TestTunnelOpen_UnsolicitedTaskResultsWriteOneProtocolViolationRowPerWindow`, `TestViolationRecorder_RecordUnsolicitedResultCountsEveryResultAndLimitsTheRows` | Relay, auditsink, dispatch |
 
 Unproven: none.
 <!-- proof:end -->

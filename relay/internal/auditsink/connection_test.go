@@ -151,6 +151,7 @@ func TestConnectionRecorder_FirstEventRecordedAtOnce(t *testing.T) {
 		{audit.KindNodeDaemonVersionChanged, func(r *ConnectionRecorder) { r.DaemonVersionChanged("node-a", "0.1.0", "0.2.0") }, "changes=1"},
 		{audit.KindNodeCertChanged, func(r *ConnectionRecorder) { r.CertChanged("node-a", fp('a'), fp('b')) }, "changes=1"},
 		{audit.KindNodeStreamReplaced, func(r *ConnectionRecorder) { r.StreamReplaced("node-a") }, "replacements=1"},
+		{audit.KindProtocolViolation, func(r *ConnectionRecorder) { r.UnsolicitedTaskResult("node-a") }, "results=1"},
 	}
 	for _, k := range kinds {
 		t.Run(k.kind, func(t *testing.T) {
@@ -178,6 +179,45 @@ func TestConnectionRecorder_FirstEventRecordedAtOnce(t *testing.T) {
 				t.Errorf("record carries Args %v / Selector %v", got.Args, got.Selector)
 			}
 		})
+	}
+}
+
+// An unsolicited TaskResult writes one Relay-authored row at once, then one per
+// window carrying the count.
+// Proves NC-41.
+func TestConnectionRecorder_UnsolicitedTaskResultsAreLimitedLikeTheConnectionKinds(t *testing.T) {
+	_, repo, _ := openSinkStore(t)
+	clk := newDialClock()
+	r := NewConnectionRecorder(New(repo), clk.Now)
+
+	r.UnsolicitedTaskResult("node-a")
+	recs := connectionRecords(t, repo, "node-a", audit.KindProtocolViolation)
+	if len(recs) != 1 {
+		t.Fatalf("records = %d, want 1", len(recs))
+	}
+	got := recs[0]
+	if got.Reason != "rule=unsolicited_result results=1" {
+		t.Errorf("Reason = %q, want rule=unsolicited_result results=1", got.Reason)
+	}
+	if got.Principal != "" || got.JobID != "" || len(got.Args) != 0 || len(got.Selector) != 0 {
+		t.Errorf("record carries more than the Node and a count: %+v", got)
+	}
+	if !got.Timestamp.Equal(clk.Now()) {
+		t.Errorf("Timestamp = %v, want %v", got.Timestamp, clk.Now())
+	}
+
+	for i := 0; i < 4; i++ {
+		r.UnsolicitedTaskResult("node-a")
+	}
+	if n := len(connectionRecords(t, repo, "node-a", audit.KindProtocolViolation)); n != 1 {
+		t.Fatalf("records inside the window = %d, want 1", n)
+	}
+
+	clk.Advance(connectionWindow)
+	r.UnsolicitedTaskResult("node-a")
+	recs = connectionRecords(t, repo, "node-a", audit.KindProtocolViolation)
+	if len(recs) != 2 || recs[1].Reason != "rule=unsolicited_result results=5" {
+		t.Fatalf("records after the window = %+v, want a second with results=5", recs)
 	}
 }
 
@@ -235,10 +275,12 @@ func TestConnectionRecorder_KindsAreThrottledIndependently(t *testing.T) {
 	r.CertChanged("node-a", fp('a'), fp('b'))
 	r.PolicyChanged("node-a", PolicyChange{FingerprintAfter: fp('a')})
 	r.StreamReplaced("node-a")
+	r.UnsolicitedTaskResult("node-a")
 
 	for _, kind := range []string{
 		audit.KindNodeDaemonVersionChanged, audit.KindNodeCertChanged,
 		audit.KindNodePolicyChanged, audit.KindNodeStreamReplaced,
+		audit.KindProtocolViolation,
 	} {
 		if n := len(connectionRecords(t, repo, "node-a", kind)); n != 1 {
 			t.Errorf("%s records = %d, want 1", kind, n)
@@ -343,7 +385,7 @@ func TestConnectionRecorder_FailedWriteLogsOneWarningAndReturns(t *testing.T) {
 	}
 
 	out := buf.String()
-	if n := strings.Count(out, "node connection record not written"); n != 1 {
+	if n := strings.Count(out, "node audit record not written"); n != 1 {
 		t.Errorf("warnings = %d, want 1; log: %s", n, out)
 	}
 	if strings.Contains(out, "0.1.0") || strings.Contains(out, "0.2.0") {

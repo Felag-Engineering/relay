@@ -60,6 +60,12 @@ type connectionObserver interface {
 	StreamReplaced(nodeID string)
 }
 
+// strayResultRecorder is told of a TaskResult no Task of the Node awaits
+// (NC-41). It records and never fails.
+type strayResultRecorder interface {
+	RecordUnsolicitedResult(nodeID string)
+}
+
 // heartbeatInterval is the relay-daemon's built-in heartbeat period. It is not
 // a setting: the daemon's HEARTBEAT_INTERVAL carries the same value, and
 // TestLivenessConstants_AgreeWithTheDaemon pins the two together.
@@ -178,6 +184,11 @@ type tunnelServer struct {
 	// execution), by installDevHarness in a devharness-tagged build, or
 	// injected directly by tests; nil when the control plane is disabled.
 	sink taskSink
+
+	// strays is told of each TaskResult that arrives while no Router is wired
+	// (the control plane is disabled), when no Task of any Node awaits one
+	// (NC-41). Set by newServer in both modes; nil-guarded.
+	strays strayResultRecorder
 
 	// heartbeatDeadline is how long a stream may go without a Heartbeat before
 	// the Relay closes it. Zero means missedHeartbeatAllowance heartbeat
@@ -464,11 +475,16 @@ func (s *tunnelServer) handleDaemonMessage(nodeID string, m *relayv1.DaemonMessa
 	}
 	// Deliver TaskResult and PolicyVerdict to the sink (if set): the real
 	// production sink is how a dispatched Task's result reaches the waiting
-	// Router.Dispatch call. Nil when the control plane is disabled.
-	if s.sink != nil {
-		if tr := m.GetTaskResult(); tr != nil {
+	// Router.Dispatch call. Nil when the control plane is disabled, and a
+	// result arriving then goes to strays (NC-41).
+	if tr := m.GetTaskResult(); tr != nil {
+		if s.sink != nil {
 			s.sink.deliver(nodeID, tr)
+		} else if s.strays != nil {
+			s.strays.RecordUnsolicitedResult(nodeID)
 		}
+	}
+	if s.sink != nil {
 		if pv := m.GetPolicyVerdict(); pv != nil {
 			s.sink.deliverVerdict(nodeID, pv)
 		}

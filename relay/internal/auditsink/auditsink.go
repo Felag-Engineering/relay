@@ -24,7 +24,8 @@
 // RecordIntent's dispatch_intent record copies the same domain fields, plus a
 // Relay-authored Reason built from closed vocabularies, counts and Relay-minted
 // Node IDs (intentReason); it never carries output. RecordProtocolViolation copies only Relay-authored fields and never any
-// Node-produced bytes, on any risk class. RecordPolicyAlias copies only the
+// Node-produced bytes, on any risk class; ConnectionRecorder's unsolicited-result
+// record copies only the Node ID and a count. RecordPolicyAlias copies only the
 // fingerprint and the old and new name, and records nothing unless the
 // repository can commit the change and the record together. RecordTagWrite
 // copies only the Node ID, the tag key and the old and new values, which a
@@ -437,7 +438,10 @@ func (s *Sink) RecordCancel(ctx context.Context, p capability.Principal, jobID s
 // byte of it, which is what keeps an append-only table out of reach of
 // the subject it is evidence about.
 //
-//	rule=<relay_only_outcome|unresolved_outcome> reported_outcome=<NAME> task_id=<id>
+//	rule=<relay_only_outcome|unresolved_outcome|unknown_outcome> reported_outcome=<NAME|decimal> task_id=<id>
+//
+// reported_outcome is the enum name, or for unknown_outcome the Relay-rendered
+// decimal value, since the enum has no name for it.
 func protocolViolationReason(ev jobs.ProtocolViolationEvent) string {
 	name := ev.Violation.ReportedOutcome
 	if name == "" {

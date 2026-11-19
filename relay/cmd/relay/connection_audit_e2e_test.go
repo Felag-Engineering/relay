@@ -381,3 +381,51 @@ func TestTunnelOpen_DaemonVersionBelowTheMinimumStillConnectsAndIsAudited(t *tes
 		t.Errorf("Principal = %q, want empty", recs[0].Principal)
 	}
 }
+
+func unsolicitedResult(taskID string) *relayv1.DaemonMessage {
+	return &relayv1.DaemonMessage{Body: &relayv1.DaemonMessage_TaskResult{TaskResult: &relayv1.TaskResult{
+		TaskId: taskID, Outcome: relayv1.Outcome_OUTCOME_SUCCESS,
+	}}}
+}
+
+// Proves NC-41.
+func TestTunnelOpen_UnsolicitedTaskResultsWriteOneProtocolViolationRowPerWindow(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	clk := &revokedDialClock{t: time.Date(2026, 11, 9, 12, 0, 0, 0, time.UTC)}
+	f := startRelay(t, WithControlPlane(), WithConnectionClock(clk.Now))
+	nodeID, cert, pool := connAuditEnroll(ctx, t, f)
+
+	connAuditSession(ctx, t, f, cert, pool, &relayv1.Hello{},
+		unsolicitedResult("t-1"), unsolicitedResult("t-2"), unsolicitedResult("t-3"))
+	recs := connAuditRecords(ctx, t, f, nodeID, audit.KindProtocolViolation)
+	if len(recs) != 1 || recs[0].Reason != "rule=unsolicited_result results=1" {
+		t.Fatalf("rows after three results = %+v, want one with results=1", recs)
+	}
+	if recs[0].JobID != "" || recs[0].Principal != "" {
+		t.Errorf("row names a Job or an actor: %+v", recs[0])
+	}
+
+	clk.Advance(10 * time.Minute)
+	connAuditSession(ctx, t, f, cert, pool, &relayv1.Hello{}, unsolicitedResult("t-4"))
+	recs = connAuditRecords(ctx, t, f, nodeID, audit.KindProtocolViolation)
+	if len(recs) != 2 || recs[1].Reason != "rule=unsolicited_result results=3" {
+		t.Fatalf("rows after the window = %+v, want a second with results=3", recs)
+	}
+}
+
+// Proves NC-41.
+func TestTunnelOpen_ATaskResultWithTheControlPlaneDisabledWritesAProtocolViolationRow(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	f := startRelay(t)
+	nodeID, cert, pool := connAuditEnroll(ctx, t, f)
+
+	connAuditSession(ctx, t, f, cert, pool, &relayv1.Hello{}, unsolicitedResult("t-1"))
+	recs := connAuditRecords(ctx, t, f, nodeID, audit.KindProtocolViolation)
+	if len(recs) != 1 || recs[0].Reason != "rule=unsolicited_result results=1" {
+		t.Fatalf("rows = %+v, want one with results=1", recs)
+	}
+}

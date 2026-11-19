@@ -69,8 +69,15 @@ const (
 	// NodeID is the SUBJECT: the Node that sent the impermissible report.
 	// Principal is empty — no Account did this, and the empty verified lane
 	// is what keeps any surface from rendering the Node as an authenticated
-	// actor. The Job and the Account that asked for it are one join away on
-	// job_id.
+	// actor. Where the record names a Task, the Job and the Account that asked
+	// for it are one join away on job_id.
+	//
+	// The kind has a second writer: a TaskResult no Task of the sending Node
+	// awaits (NC-41) is written with NodeID and the Relay-authored Reason
+	// "rule=unsolicited_result results=N". It has no JobID and no task_id, and
+	// is limited per Node to one per 10 minutes carrying the count (NC-39's
+	// limiter: in memory, reset on restart). A failed write's count carries
+	// into the next record.
 	//
 	// It carries no Stdout/Stderr/Truncated, on any risk class: the wire
 	// boundary discards the daemon's bytes before this record exists

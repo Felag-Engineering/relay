@@ -239,6 +239,9 @@ func TestMetrics_ProtocolViolationSeries(t *testing.T) {
 	m.IncProtocolViolation(jobs.ViolationRelayOnlyOutcome)
 	m.IncProtocolViolation(jobs.ViolationUnresolvedOutcome)
 	m.IncProtocolViolation(jobs.ViolationUnresolvedOutcome)
+	m.IncProtocolViolation(jobs.ViolationUnknownOutcome)
+	m.IncProtocolViolation(jobs.ViolationUnsolicitedResult)
+	m.IncProtocolViolation(jobs.ViolationUnsolicitedResult)
 	m.IncProtocolViolation(jobs.ViolationRule(999))
 
 	_, body := scrape(t, m)
@@ -248,6 +251,8 @@ func TestMetrics_ProtocolViolationSeries(t *testing.T) {
 	for _, want := range []string{
 		`relay_protocol_violations_total{rule="relay_only_outcome"} 1`,
 		`relay_protocol_violations_total{rule="unresolved_outcome"} 2`,
+		`relay_protocol_violations_total{rule="unknown_outcome"} 1`,
+		`relay_protocol_violations_total{rule="unsolicited_result"} 2`,
 		`relay_protocol_violations_total{rule="other"} 1`,
 	} {
 		if !strings.Contains(body, want) {
@@ -475,6 +480,8 @@ relay_auth_failures_total{surface="other",reason="rejected"} 0
 # TYPE relay_protocol_violations_total counter
 relay_protocol_violations_total{rule="relay_only_outcome"} 1
 relay_protocol_violations_total{rule="unresolved_outcome"} 0
+relay_protocol_violations_total{rule="unknown_outcome"} 0
+relay_protocol_violations_total{rule="unsolicited_result"} 0
 relay_protocol_violations_total{rule="other"} 0
 # HELP relay_protocol_violations_unrecorded_total Total protocol violations the Relay refused but could not durably record in the audit trail.
 # TYPE relay_protocol_violations_unrecorded_total counter

@@ -58,15 +58,17 @@ const nRefusalKinds = int(capability.RefusalMalformed) + 1
 // rule is ViolationNone, so slot 0 would be a series that can never
 // advance, and folding an unrecognised rule into it would label a real
 // violation "none" — the one lie this whole change is about.
-// violationSlot maps the vocabulary onto these three slots and is TOTAL;
+// violationSlot maps the vocabulary onto these five slots and is TOTAL;
 // anything it does not name, including a rule added to internal/jobs
 // later, lands in "other".
-const nViolationRules = 3
+const nViolationRules = 5
 
 const (
-	violationSlotRelayOnly  = 0
-	violationSlotUnresolved = 1
-	violationSlotOther      = 2
+	violationSlotRelayOnly   = 0
+	violationSlotUnresolved  = 1
+	violationSlotUnknown     = 2
+	violationSlotUnsolicited = 3
+	violationSlotOther       = 4
 )
 
 // ServerCertListener names a listener that presents the Relay's server
@@ -262,7 +264,7 @@ func refusalLabel(k capability.RefusalKind) string {
 	}
 }
 
-// violationSlot maps r onto one of the three relay_protocol_violations_total
+// violationSlot maps r onto one of the five relay_protocol_violations_total
 // slots (see nViolationRules). An unrecognised rule — including a future one
 // added to internal/jobs without a case here — falls back to
 // violationSlotOther rather than to slot 0, which is what keeps a real
@@ -273,6 +275,10 @@ func violationSlot(r jobs.ViolationRule) int {
 		return violationSlotRelayOnly
 	case jobs.ViolationUnresolvedOutcome:
 		return violationSlotUnresolved
+	case jobs.ViolationUnknownOutcome:
+		return violationSlotUnknown
+	case jobs.ViolationUnsolicitedResult:
+		return violationSlotUnsolicited
 	default:
 		return violationSlotOther
 	}
@@ -288,6 +294,10 @@ func violationSlotLabel(slot int) string {
 		return "relay_only_outcome"
 	case violationSlotUnresolved:
 		return "unresolved_outcome"
+	case violationSlotUnknown:
+		return "unknown_outcome"
+	case violationSlotUnsolicited:
+		return "unsolicited_result"
 	default:
 		return "other"
 	}
@@ -325,7 +335,7 @@ var refusalOrder = []capability.RefusalKind{
 // relay_protocol_violations_total series — the fallback bucket ("other")
 // last and still RENDERED, exactly like outcomeOrder's "unspecified" (a
 // counted value nothing renders is silently dropped at scrape time).
-var violationSlotOrder = []int{violationSlotRelayOnly, violationSlotUnresolved, violationSlotOther}
+var violationSlotOrder = []int{violationSlotRelayOnly, violationSlotUnresolved, violationSlotUnknown, violationSlotUnsolicited, violationSlotOther}
 
 // Metrics is the real capability.MetricsSink and enroll.EnrollmentObserver,
 // backed by lock-free atomic counters and the caller-supplied GaugeSources.

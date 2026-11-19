@@ -13,6 +13,8 @@
 package dispatch
 
 import (
+	"strconv"
+
 	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 	relayv1 "github.com/Felag-Engineering/relay/relay/internal/relay/v1"
 )
@@ -150,11 +152,12 @@ var relayOnlyOutcomes = map[relayv1.Outcome]bool{
 // result converts a wire TaskResult into the domain jobs.Result that
 // TaskRepository.Resolve persists, refusing at this single wire boundary
 // every Outcome a relay-daemon is not permitted to report:
-// relayOnlyOutcomes (the two /proto marks Relay-synthesized) and
+// relayOnlyOutcomes (the two /proto marks Relay-synthesized),
 // OUTCOME_UNSPECIFIED (the enum's own "not yet resolved" zero value — a
 // finished Task's result may never carry it; see
 // wire_outcome_contract_test.go's G2 for why unresolvedOutcomes classifies
-// it there rather than here). The second return value is the zero
+// it there rather than here) and any value outside the generated enum
+// (NC-40), which is named by its decimal number. The second return value is the zero
 // jobs.ProtocolViolation when tr was one a daemon may legitimately send.
 func result(tr *relayv1.TaskResult) (jobs.Result, jobs.ProtocolViolation) {
 	o := tr.GetOutcome()
@@ -165,10 +168,18 @@ func result(tr *relayv1.TaskResult) (jobs.Result, jobs.ProtocolViolation) {
 		rule = jobs.ViolationRelayOnlyOutcome
 	case o == relayv1.Outcome_OUTCOME_UNSPECIFIED:
 		rule = jobs.ViolationUnresolvedOutcome
+	case !knownOutcome(o):
+		rule = jobs.ViolationUnknownOutcome
 	}
 
 	if rule != jobs.ViolationNone {
-		v := jobs.ProtocolViolation{Rule: rule, ReportedOutcome: relayv1.Outcome_name[int32(o)]}
+		reported := relayv1.Outcome_name[int32(o)]
+		if rule == jobs.ViolationUnknownOutcome {
+			// The enum has no name for it; the number is Relay-rendered from an
+			// int32, so no Node-authored bytes reach the record.
+			reported = strconv.FormatInt(int64(o), 10)
+		}
+		v := jobs.ProtocolViolation{Rule: rule, ReportedOutcome: reported}
 		return jobs.Result{
 			Outcome: jobs.OutcomeFailure,
 			// ExitCode is the repo-wide no-exit-status sentinel (see
@@ -196,16 +207,18 @@ func result(tr *relayv1.TaskResult) (jobs.Result, jobs.ProtocolViolation) {
 	}, jobs.ProtocolViolation{}
 }
 
-// outcome converts a wire Outcome into its domain mirror. Called only for a
-// value result() has already let through, so OUTCOME_UNSPECIFIED never
-// reaches it from the wire path — result() refuses that value before this
-// function runs (see the dispatch package doc). An unrecognized value
-// (>= 9, e.g. a newer daemon under invariant 14: the Relay never pushes
-// binaries, so version skew is the normal state) still maps to
-// jobs.OutcomeUnspecified rather than panicking or guessing, preserving
-// forward compatibility for a value this Relay predates. The
-// OUTCOME_UNSPECIFIED case below remains only for non-wire callers of this
-// function.
+// knownOutcome reports whether the generated enum defines o.
+func knownOutcome(o relayv1.Outcome) bool {
+	_, ok := relayv1.Outcome_name[int32(o)]
+	return ok
+}
+
+// outcome converts a wire Outcome into its domain mirror. result() refuses an
+// out-of-range value as a protocol violation (NC-40), so the default branch is
+// never reached from the wire; it stays total, mapping to OutcomeUnspecified
+// for non-wire callers. A newer daemon's new outcome therefore reads as
+// `failure` until this Relay learns it. OUTCOME_UNSPECIFIED likewise never
+// arrives from the wire: result() refuses it first.
 func outcome(o relayv1.Outcome) jobs.Outcome {
 	switch o {
 	case relayv1.Outcome_OUTCOME_SUCCESS:
