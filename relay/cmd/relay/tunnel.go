@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"log/slog"
 	"math"
@@ -422,20 +421,22 @@ func (s *tunnelServer) recordHello(ctx context.Context, nodeID string, hello *re
 	// the one place that count would otherwise be attacker-controlled log
 	// volume.
 	//
-	// The key is BOUNDED BEFORE IT IS QUOTED, and the two do different jobs: %q
-	// bounds control characters and newlines, and the truncation bounds LENGTH.
-	// Quoting alone does not: a wire key is attacker-controlled up to gRPC's
+	// The key is BOUNDED HERE and ESCAPED BY THE LOG HANDLER, and the two do
+	// different jobs: the handler writes control and invisible characters as
+	// visible escapes (newLogHandler), and the truncation bounds LENGTH.
+	// Escaping alone does not: a wire key is attacker-controlled up to gRPC's
 	// 4 MiB message limit, so a reconnect-looping Node could write megabytes
 	// per connect. enroll/handler.go reached the same conclusion for its
 	// attacker-controlled TokenID and fixed it with looksLikeTokenID, exact
-	// shape validation, rather than with quoting.
+	// shape validation, rather than with escaping. The key is passed raw
+	// because a pre-quoted one would be escaped a second time.
 	//
 	// The VALUE is never logged: it is exactly the self-reported string this
 	// check just decided not to trust.
 	if len(refused) > 0 {
 		slog.Warn("refused malformed node labels", "node_id", nodeID,
 			"refused_count", len(refused),
-			"first_refused_key", fmt.Sprintf("%q", boundedLogValue(refused[0])))
+			"first_refused_key", boundedLogValue(refused[0]))
 	}
 	// A set over the per-Node cap is recorded as not reported, never
 	// truncated: keeping the previous set would serve a self-report the Node no

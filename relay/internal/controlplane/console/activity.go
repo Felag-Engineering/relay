@@ -86,6 +86,7 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/capability"
 	"github.com/Felag-Engineering/relay/relay/internal/events"
 	"github.com/Felag-Engineering/relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/relay/relay/internal/visibletext"
 )
 
 // jobPageSize, auditPageSize and exportPages bound one render.
@@ -1451,7 +1452,7 @@ func jobRowName(sum capability.JobSummary) (operation string, rawExecTier bool) 
 	case sum.OperationName == rawExecActionKind:
 		return "run_operation · " + sum.OperationName, false
 	default:
-		return sum.OperationName, false
+		return visibletext.Escape(sum.OperationName), false
 	}
 }
 
@@ -1488,7 +1489,7 @@ func eventRowFromTrail(f trailFacts) activityRow {
 		Operation:       trailName,
 		RawExecTier:     trailRawExec,
 		Args:            argsText(f),
-		Reason:          f.Reason,
+		Reason:          visibletext.Prose(f.Reason),
 		Summary:         summarize(f),
 		ApprovalID:      f.ApprovalID,
 		GrantID:         f.GrantID,

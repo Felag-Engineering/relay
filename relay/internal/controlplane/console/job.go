@@ -102,6 +102,7 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/audit"
 	"github.com/Felag-Engineering/relay/relay/internal/capability"
 	"github.com/Felag-Engineering/relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/relay/relay/internal/visibletext"
 )
 
 // outcomeInterest orders the result groups. Lower sorts first.
@@ -515,7 +516,7 @@ func identifiedByLabel(id approval.IdentifiedBy) string {
 func newJobApproval(req approval.Request, viaGrant bool, jobRequesterID, jobRequesterName string) *jobApproval {
 	a := &jobApproval{
 		Rules:    req.MatchedRules,
-		Summary:  req.Summary,
+		Summary:  visibletext.Prose(req.Summary), // stored text may predate escaping
 		ViaGrant: viaGrant,
 	}
 
@@ -998,6 +999,8 @@ func newTaskRow(t capability.TaskRow, jobReadClass bool, operation string) taskR
 		// screen whose whole claim is boundedness the cheapest way to make the
 		// Relay render 100 MiB of HTML on a refresh.
 		rule, clipped := clip(denyText(stderr, "", withheld), maxOutputBytes)
+		// Escaped after the clip so a cut never splits an escape sequence.
+		rule = visibletext.Block(rule)
 		row.Deny = &Deny{
 			NodeID:        t.NodeID,
 			OperationName: operation,
@@ -1018,6 +1021,7 @@ func newTaskRow(t capability.TaskRow, jobReadClass bool, operation string) taskR
 	}
 	if !jobReadClass && !withheld {
 		row.Output, row.Clipped = clip(combinedOutput(t.Stdout, stderr), maxOutputBytes)
+		row.Output = visibletext.Block(row.Output)
 	}
 	return row
 }

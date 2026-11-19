@@ -1607,3 +1607,89 @@ func TestRun_EveryGatedDispatchParksOnItsOwn(t *testing.T) {
 		t.Error("plan B dispatched on plan A's approval")
 	}
 }
+
+// TestPark_QuestionAndNoticeShowEscapesAndBindTheRawValue: the summary a park
+// hands the elicitation question and the webhook notice shows every hidden
+// character as a visible escape, while the plan hash still binds the raw value.
+//
+// Proves AP-97.
+func TestPark_QuestionAndNoticeShowEscapesAndBindTheRawValue(t *testing.T) {
+	vectors := []struct{ name, value, escape string }{
+		{"C1 control", "app" + string(rune(0x85)) + ".log", `app\u0085.log`},
+		{"zero-width", "app" + string(rune(0x200b)) + ".log", `app\u200b.log`},
+		{"RLO", string(rune(0x202e)) + "gol.ppa", `\u202egol.ppa`},
+		{"LRI", string(rune(0x2066)) + "app.log" + string(rune(0x2069)), `\u2066app.log\u2069`},
+		{"no-break space", "app" + string(rune(0xa0)) + ".log", `app\u00a0.log`},
+	}
+	actions := map[string]func(v string) jobs.Action{
+		"service.restart": func(v string) jobs.Action {
+			return jobs.Action{Kind: jobs.ActionOperation, OperationName: "service.restart",
+				OperationArgs: map[string]string{"unit": v}}
+		},
+		"raw exec": func(v string) jobs.Action {
+			return jobs.Action{Kind: jobs.ActionRawExec, RawExecArgv: []string{"/usr/bin/tail", "/var/log/" + v}}
+		},
+	}
+	nodes := []string{"node-a"}
+	for _, vec := range vectors {
+		for kind, mkAct := range actions {
+			t.Run(vec.name+"/"+kind, func(t *testing.T) {
+				reg := registry.NewInMemory()
+				if _, err := reg.Upsert(linuxReport("node-a")); err != nil {
+					t.Fatalf("seed registry: %v", err)
+				}
+				spy := &spyNotifier{}
+				s := build(t, seams{reg: reg,
+					authz:  &spyAuthorizer{},
+					cap:    &spyCapChecker{},
+					audit:  &spyAuditSink{},
+					freeze: &fakeFreezeStore{},
+					gate:   gateEverything(t), approvals: newMemApprovals(), approvalAuthz: &spyApprovalAuthorizer{},
+					approvalNotifier: spy,
+					now:              func() time.Time { return apNow },
+				})
+				s.disp = &spyDispatcher{jobID: "job-1"}
+
+				act, plain := mkAct(vec.value), mkAct("app.log")
+				_, err := s.Run(context.Background(), machineRequester, fleetSel, act)
+				var parked *ParkedError
+				if !errors.As(err, &parked) {
+					t.Fatalf("Run: err = %v, want a park", err)
+				}
+				if len(spy.notices) != 1 {
+					t.Fatalf("notified %d times, want 1", len(spy.notices))
+				}
+				lookalike := approval.Summarize(plain, nodes).Action
+				for where, text := range map[string]string{"question": parked.Summary, "notice": spy.notices[0].Summary} {
+					if !strings.Contains(text, vec.escape) {
+						t.Errorf("%s %q lacks the visible escape %q", where, text, vec.escape)
+					}
+					for _, r := range vec.value {
+						if (r > 0x7e || r < 0x20) && strings.ContainsRune(text, r) {
+							t.Errorf("%s %q holds the raw character %U", where, text, r)
+						}
+					}
+					if strings.Contains(text, lookalike) {
+						t.Errorf("%s %q reads as the plain lookalike %q", where, text, lookalike)
+					}
+				}
+				// The layer, not the caller, stamps the class before it hashes.
+				rawHashed, plainHashed := act, plain
+				rawHashed.RiskClass, plainHashed.RiskClass = jobs.RiskClassMutate, jobs.RiskClassMutate
+				if want := approval.HashPlan(rawHashed, nodes); parked.PlanHash != want {
+					t.Errorf("PlanHash %q, want HashPlan of the raw Action %q", parked.PlanHash, want)
+				}
+				if parked.PlanHash == approval.HashPlan(plainHashed, nodes) {
+					t.Errorf("PlanHash must differ from the lookalike's")
+				}
+				stored, err := s.Approval(context.Background(), parked.RequestID)
+				if err != nil {
+					t.Fatalf("Approval: %v", err)
+				}
+				if stored.PlanHash != parked.PlanHash {
+					t.Errorf("stored PlanHash %q != parked %q", stored.PlanHash, parked.PlanHash)
+				}
+			})
+		}
+	}
+}

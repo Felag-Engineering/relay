@@ -9,6 +9,7 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"reflect"
 
 	"github.com/Felag-Engineering/relay/relay/internal/approvalnotify"
 	"github.com/Felag-Engineering/relay/relay/internal/capability"
@@ -17,6 +18,7 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/nodestate"
 	"github.com/Felag-Engineering/relay/relay/internal/ratelimit"
 	"github.com/Felag-Engineering/relay/relay/internal/relayconfig"
+	"github.com/Felag-Engineering/relay/relay/internal/visibletext"
 )
 
 // parseArgs accepts exactly one flag, --config. Anything else is refused: the
@@ -162,7 +164,45 @@ func fromFile(rc relayconfig.Config) Config {
 	}
 }
 
-// newLogHandler renders the log as JSON at the configured level (RC-42).
+// newLogHandler renders the log as JSON at the configured level (RC-42), with
+// every string and error value passed through visibleLogAttr.
 func newLogHandler(w io.Writer, l relayconfig.Log) slog.Handler {
-	return slog.NewJSONHandler(w, &slog.HandlerOptions{Level: l.Level})
+	return slog.NewJSONHandler(w, &slog.HandlerOptions{Level: l.Level, ReplaceAttr: visibleLogAttr})
+}
+
+// visibleLogAttr writes control, invisible and bidirectional characters in a
+// log value as visible escapes (the rule in observability.md), so a Node-derived
+// string cannot rewrite what an operator reads in a terminal or log viewer.
+// It sits on the one handler constructor, so it covers every call site and
+// survives a reload.
+//
+// HANDLER INVARIANT: only strings and errors are escaped. Any other KindAny
+// value is written by encoding/json unescaped, so an untrusted string must
+// never be logged inside slog.Any.
+func visibleLogAttr(_ []string, a slog.Attr) slog.Attr {
+	switch a.Value.Kind() {
+	case slog.KindString:
+		return slog.String(a.Key, visibletext.Escape(a.Value.String()))
+	case slog.KindAny:
+		if err, ok := a.Value.Any().(error); ok {
+			return slog.String(a.Key, visibletext.Escape(errorText(err)))
+		}
+	}
+	return a
+}
+
+// errorText is err.Error() with stock slog's handling of a panic: a nil
+// pointer reads "<nil>", any other panic "!PANIC: <value>", so a logged error
+// can never crash the process.
+func errorText(err error) (text string) {
+	defer func() {
+		if r := recover(); r != nil {
+			if v := reflect.ValueOf(err); v.Kind() == reflect.Pointer && v.IsNil() {
+				text = "<nil>"
+				return
+			}
+			text = fmt.Sprintf("!PANIC: %v", r)
+		}
+	}()
+	return err.Error()
 }

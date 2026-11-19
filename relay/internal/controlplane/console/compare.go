@@ -512,7 +512,7 @@ func buildCompareView(ctx context.Context, d Deps, caller capability.Principal, 
 
 		var snap *policyview.Snapshot
 		if res.detail.PolicyReported {
-			s := res.detail.Policy
+			s := visiblePolicy(res.detail.Policy)
 			snap = &s
 			col.PolicyReported = true
 			if !s.ReportedAt.IsZero() {

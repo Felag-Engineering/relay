@@ -338,6 +338,7 @@ linters:
             - github.com/Felag-Engineering/relay/relay/internal/hostfile$
             - github.com/Felag-Engineering/relay/relay/internal/jobs$
             - github.com/Felag-Engineering/relay/relay/internal/opvocab$
+            - github.com/Felag-Engineering/relay/relay/internal/visibletext$
           deny: *domain-deny
         policyalias-imports:
           list-mode: strict
@@ -373,6 +374,17 @@ linters:
           allow:
             - context$
             - log/slog$
+
+        # The text-escaping helper is pure string work.
+        visibletext-imports:
+          list-mode: strict
+          files:
+            - "**/internal/visibletext/*.go"
+            - "!$test"
+          allow:
+            - strings$
+            - unicode$
+            - unicode/utf8$
 
         # The Harness setup renderer builds text around a live credential and never
         # reaches the CA, the store or configuration.

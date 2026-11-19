@@ -38,6 +38,7 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/capability"
 	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 	"github.com/Felag-Engineering/relay/relay/internal/opvocab"
+	"github.com/Felag-Engineering/relay/relay/internal/visibletext"
 )
 
 // trailFacts is ONE recorded event, in the fields the Console's display copy
@@ -162,7 +163,7 @@ func factsOfRow(row capability.AuditRow) trailFacts {
 // ActionKind for a record that is neither.
 func operationText(f trailFacts) string {
 	if f.OperationName != "" {
-		return f.OperationName
+		return visibletext.Escape(f.OperationName)
 	}
 	if len(f.RawExecArgv) > 0 {
 		return "raw_exec"
@@ -252,10 +253,10 @@ func readTargetName(operationName, actionKind string, args map[string]string) st
 	// different files do not collapse into one row.
 	for _, key := range audit.TargetArgKeys {
 		if v, ok := args[key]; ok && v != "" {
-			return operationName + " " + v
+			return visibletext.Escape(operationName) + " " + visibletext.Escape(v)
 		}
 	}
-	return operationName
+	return visibletext.Escape(operationName)
 }
 
 // readOutcomeAudited is the outcome word for a metadata-only read record.
@@ -500,7 +501,7 @@ const rawExecActionKind = "raw_exec"
 // denyExplanation renders what the Console can honestly say about WHY an
 // audited Task was denied. The Task lane calls denyText below directly.
 func denyExplanation(rec audit.Record) string {
-	return denyText(rec.Stderr, rec.Reason, riskOf(factsOfRecord(rec)) == jobs.RiskClassRead)
+	return visibletext.Block(denyText(rec.Stderr, rec.Reason, riskOf(factsOfRecord(rec)) == jobs.RiskClassRead))
 }
 
 // denyText is the one explanation both lanes share — the audit trail's
@@ -548,9 +549,16 @@ func denyText(stderr []byte, reason string, readClass bool) string {
 //
 // Sorted, never map order: two renders of the same dispatch that disagree
 // about the order of `unit=nginx path=/etc` read as two different dispatches.
+//
+// Every element, key and value is escaped, so a hidden character is never
+// drawn raw (the rule in audit-and-read-lane.md).
 func argsSummary(args map[string]string, argv []string) string {
 	if len(argv) > 0 {
-		return strings.Join(argv, " ")
+		shown := make([]string, len(argv))
+		for i, a := range argv {
+			shown[i] = visibletext.Escape(a)
+		}
+		return strings.Join(shown, " ")
 	}
 	if len(args) == 0 {
 		return ""
@@ -562,7 +570,7 @@ func argsSummary(args map[string]string, argv []string) string {
 	sort.Strings(keys)
 	parts := make([]string, 0, len(keys))
 	for _, k := range keys {
-		parts = append(parts, k+"="+args[k])
+		parts = append(parts, visibletext.Escape(k)+"="+visibletext.Escape(args[k]))
 	}
 	return strings.Join(parts, " ")
 }

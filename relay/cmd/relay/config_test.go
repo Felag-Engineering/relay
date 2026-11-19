@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"flag"
 	"io"
@@ -24,6 +25,7 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/nodestate"
 	"github.com/Felag-Engineering/relay/relay/internal/ratelimit"
 	"github.com/Felag-Engineering/relay/relay/internal/relayconfig"
+	"github.com/Felag-Engineering/relay/relay/internal/visibletext"
 )
 
 func writeConfigFile(t *testing.T, body string) string {
@@ -433,6 +435,100 @@ func TestLoadConfig_MalformedGateRuleRefusesStart(t *testing.T) {
 			}
 			if strings.Contains(err.Error(), "CANARY") {
 				t.Errorf("err = %v, must not echo a rule's name or value", err)
+			}
+		})
+	}
+}
+
+// TestNewLogHandler_WritesInvisibleCharactersAsEscapes: a Node-derived string in
+// a log value, an error text or a group attribute is written with its hidden
+// and bidirectional characters as visible escapes (observability.md, Logs).
+//
+// The handler escapes only strings and errors: any other KindAny value is
+// written by encoding/json unescaped, so an untrusted string must never be
+// logged inside slog.Any.
+func TestNewLogHandler_WritesInvisibleCharactersAsEscapes(t *testing.T) {
+	vectors := map[string]string{
+		"C1 control":     "app" + string(rune(0x85)) + ".log",
+		"zero-width":     "app" + string(rune(0x200b)) + ".log",
+		"RLO":            string(rune(0x202e)) + "gol.ppa",
+		"LRI":            string(rune(0x2066)) + "app.log" + string(rune(0x2069)),
+		"no-break space": "app" + string(rune(0xa0)) + ".log",
+	}
+	for name, vector := range vectors {
+		t.Run(name, func(t *testing.T) {
+			var buf bytes.Buffer
+			log := slog.New(newLogHandler(&buf, relayconfig.Log{Level: slog.LevelInfo}))
+			log.Warn("m", "key", vector, "err", errors.New(vector), slog.Group("g", "k", vector))
+
+			for _, r := range vector {
+				if r > 0x7e && strings.ContainsRune(buf.String(), r) {
+					t.Errorf("log line %q holds the raw character %U", buf.String(), r)
+				}
+			}
+			var line struct {
+				Msg string `json:"msg"`
+				Key string `json:"key"`
+				Err string `json:"err"`
+				G   struct {
+					K string `json:"k"`
+				} `json:"g"`
+			}
+			if err := json.Unmarshal(buf.Bytes(), &line); err != nil {
+				t.Fatalf("log line %q is not JSON: %v", buf.String(), err)
+			}
+			want := visibletext.Escape(vector)
+			if want == vector {
+				t.Fatalf("test vector %q has nothing to escape", vector)
+			}
+			for field, got := range map[string]string{"key": line.Key, "err": line.Err, "g.k": line.G.K} {
+				if got != want {
+					t.Errorf("%s = %q, want %q", field, got, want)
+				}
+			}
+			if line.Msg != "m" {
+				t.Errorf("msg = %q, want it unchanged", line.Msg)
+			}
+		})
+	}
+
+	var buf bytes.Buffer
+	log := slog.New(newLogHandler(&buf, relayconfig.Log{Level: slog.LevelInfo}))
+	log.Info("plain", "key", "/var/log/app.log")
+	if !strings.Contains(buf.String(), `"key":"/var/log/app.log"`) {
+		t.Errorf("an ordinary value changed: %q", buf.String())
+	}
+}
+
+type nilUnsafeError struct{ msg string }
+
+func (e *nilUnsafeError) Error() string { return e.msg }
+
+type panickingError struct{}
+
+func (panickingError) Error() string { panic("boom") }
+
+// TestNewLogHandler_ErrorThatPanicsRendersAsStockSlogDoes: a typed-nil error and
+// an error whose Error panics are written as stock slog writes them, and never
+// crash the process.
+func TestNewLogHandler_ErrorThatPanicsRendersAsStockSlogDoes(t *testing.T) {
+	var typedNil *nilUnsafeError
+	for name, err := range map[string]error{
+		"typed nil": typedNil,
+		"panics":    panickingError{},
+	} {
+		t.Run(name, func(t *testing.T) {
+			render := func(h slog.Handler, buf *bytes.Buffer) string {
+				slog.New(h).Warn("m", "err", err)
+				return buf.String()
+			}
+			var gotBuf, wantBuf bytes.Buffer
+			got := render(newLogHandler(&gotBuf, relayconfig.Log{Level: slog.LevelInfo}), &gotBuf)
+			want := render(slog.NewJSONHandler(&wantBuf, &slog.HandlerOptions{Level: slog.LevelInfo}), &wantBuf)
+			// The timestamp is the only field that differs between runs.
+			strip := func(s string) string { return s[strings.Index(s, `"level"`):] }
+			if strip(got) != strip(want) {
+				t.Errorf("log line %q, want it to match stock slog %q", got, want)
 			}
 		})
 	}
