@@ -246,7 +246,7 @@ differs from an outcome, where a Job ran and a Node failed; a cancel refusal lea
 | EX-4 | `TestPipeline_NoStageWidensALaterStage`, `TestPipeline_StagesRunInSpecOrder` | capability |
 | EX-5 | `TestExecution_ResolvesStateAgainstTheReadLanesWindow`, `TestSelectorResolve`, `TestSelectorResolve_StateIsNodeLocal`, `TestSelectorResolve_TagTermResolvesStoredTags` | capability |
 | EX-6 | `TestInvariant5_TheBlastCapRefusesBeforeAnyTaskIsStoredOrSent`, `TestResolveAction_ExcludesNodesThatDoNotReportOrHaveNoReport`, `TestRun_TemplateExcludesNonReportingNodesAndNeverSendsThem` | capability |
-| EX-7 | `TestAssertionsAreNotAnAuthorizationInput`, `TestCancelJobAuthorizesWithoutAssertions`, `TestCapabilityLayer_EveryAuthorizationCallMasksAssertions`, `TestEngageFreeze_AuthorizesWithoutAssertions`, `TestReleaseFreeze_AuthorizesWithoutAssertions` | capability |
+| EX-7 | `TestAssertionsAreNotAnAuthorizationInput`, `TestCancelJobAuthorizesWithoutAssertions`, `TestCapabilityLayer_EveryAuthorizationCallMasksAssertions`, `TestEngageFreeze_AuthorizesWithoutAssertions`, `TestReleaseFreeze_AuthorizesWithoutAssertions`, `TestRevocations_AuthorizeWithoutAssertions` | capability |
 | EX-8 | `TestInvariant13_RawExecIsMutateWhateverTheAdapterPasses`, `TestInvariant13_RawExecTakesTheMutateCap` | capability |
 | EX-9 | `TestControlAPI_ALostResponseIsRetriedSafelyWithItsIdempotencyKey`, `TestStart_KeyIsScopedToTheAccount`, `TestStart_KeyPastTheWindowDispatchesAfresh`, `TestStart_SameKeyReattachesAndDispatchesNothing` | Relay, capability |
 | EX-10 | `TestRun_GateIsConsultedAfterAuthorizationAndTheCap` | capability |

@@ -33,7 +33,7 @@ func TestControlAPI_CarriesNoPolicyAlias(t *testing.T) {
 	}
 	src := &countingAliasSource{aliases: map[string]string{fingerprint: aliasName}}
 	lane := newCapService(t, capSeams{reg: reg, audit: &fakeCapabilityAuditSink{}, now: fixedNow, aliases: src}).ReadLane
-	h := newTestHandler(Deps{NodeReader: lane, Audit: &fakeAuditor{}, Now: fixedNow})
+	h := newTestHandler(Deps{NodeReader: lane})
 
 	rec := do(t, h, http.MethodGet, "/api/v1/nodes/node-a", nil)
 	if rec.Code != http.StatusOK {

@@ -18,11 +18,11 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/relay/relay/internal/audit"
 	"github.com/Felag-Engineering/relay/relay/internal/auditsink"
+	"github.com/Felag-Engineering/relay/relay/internal/authz"
 	"github.com/Felag-Engineering/relay/relay/internal/capability"
 	"github.com/Felag-Engineering/relay/relay/internal/controlplane"
 	"github.com/Felag-Engineering/relay/relay/internal/enroll"
 	"github.com/Felag-Engineering/relay/relay/internal/registry"
-	"github.com/Felag-Engineering/relay/relay/internal/revocation"
 	"github.com/Felag-Engineering/relay/relay/internal/store"
 )
 
@@ -30,7 +30,7 @@ import (
 // Fakes for the narrow collaborator interfaces in api.go.
 // -----------------------------------------------------------------------
 
-// fakeTokenRevoker is a TokenRevoker fake that records every id it was
+// fakeTokenRevoker is the token half of a capability.Revoker fake: it records every id it was
 // called with and returns a configurable error.
 //
 // cascade, when non-empty, stands in for the Nodes revocation.Service's
@@ -40,7 +40,7 @@ import (
 // than discarding the return value is what makes mutation 4 (a recorder
 // closure that swallows the audit error) redden. cascadeErr, if set, is
 // returned from RevokeToken after the record call, standing in for
-// revocation.Service's own ErrCascadeNotRecorded return.
+// the revocation service's own cascade-not-recorded return.
 type fakeTokenRevoker struct {
 	mu         sync.Mutex
 	calledWith []string
@@ -51,7 +51,7 @@ type fakeTokenRevoker struct {
 	recordErrs []error
 }
 
-func (f *fakeTokenRevoker) RevokeToken(_ context.Context, id string, record revocation.RevocationRecorder) error {
+func (f *fakeTokenRevoker) RevokeToken(_ context.Context, id string, record func([]string) error) error {
 	f.mu.Lock()
 	f.calledWith = append(f.calledWith, id)
 	cascade := f.cascade
@@ -69,10 +69,10 @@ func (f *fakeTokenRevoker) RevokeToken(_ context.Context, id string, record revo
 	return f.err
 }
 
-// fakeNodeRevoker is a NodeRevoker fake that records every node_id it was
+// fakeNodeRevoker is the Node half of a capability.Revoker fake: it records every node_id it was
 // called with.
 //
-// This double proves only that the route hands NodeRevoker the right node_id
+// This double proves only that the layer hands the Revoker the right node_id
 // and the right recorder, and renders the recorder's own error correctly —
 // the real ordering (record before act), the Node lock, and the
 // cascade-record suppression are all proven at their actual seam in
@@ -87,7 +87,7 @@ type fakeNodeRevoker struct {
 	err error
 }
 
-func (f *fakeNodeRevoker) RevokeNodeRecorded(_ context.Context, nodeID string, record revocation.RevocationRecorder) error {
+func (f *fakeNodeRevoker) RevokeNodeRecorded(_ context.Context, nodeID string, record func([]string) error) error {
 	f.mu.Lock()
 	err := f.err
 	f.mu.Unlock()
@@ -103,6 +103,36 @@ func (f *fakeNodeRevoker) RevokeNodeRecorded(_ context.Context, nodeID string, r
 	defer f.mu.Unlock()
 	f.calledWith = append(f.calledWith, nodeID)
 	return nil
+}
+
+// revokers composes the two halves into a capability.Revoker. A half left nil
+// panics if the layer reaches it, which is the point: a test that never expects
+// a Node revoke fails loudly if one happens.
+type revokers struct {
+	tr *fakeTokenRevoker
+	nr *fakeNodeRevoker
+}
+
+func (r revokers) RevokeToken(ctx context.Context, id string, record func([]string) error) error {
+	return r.tr.RevokeToken(ctx, id, record)
+}
+
+func (r revokers) RevokeNodeRecorded(ctx context.Context, nodeID string, record func([]string) error) error {
+	return r.nr.RevokeNodeRecorded(ctx, nodeID, record)
+}
+
+// newTestRevocations builds the real capability.Revocations over the
+// production RoleGate and sink, as the composition root hands it to
+// Deps.Revocations. sink must also be a capability.RevokeRecorder.
+func newTestRevocations(sink capability.AuditSink, rv capability.Revoker) Revocations {
+	control := capability.NewControl(capability.NewRecorder(sink, nil, nil), authz.NewRoleGate(), neverFrozen{})
+	return capability.NewRevocations(control, rv)
+}
+
+// revocationsOver wires Revocations over the real audit sink writing to
+// auditor, so the tests assert on the audit.Records the trail would hold.
+func revocationsOver(auditor *fakeAuditor, tr *fakeTokenRevoker, nr *fakeNodeRevoker) Revocations {
+	return newTestRevocations(auditsink.New(auditor, auditsink.WithClock(fixedNow)), revokers{tr: tr, nr: nr})
 }
 
 // fakeCapabilityAuditSink is a minimal capability.AuditSink test double
@@ -196,13 +226,17 @@ func (f *fakeFreezer) ReleaseFreeze(ctx context.Context, p capability.Principal,
 	return f.releaseErr
 }
 
-// fakeAuditor is an Auditor fake that records every appended Record.
+// fakeAuditor is an audit.Repository fake that records every appended Record.
 //
 // appendCalls tracks only what arrived through the SINGULAR Append, kept
 // distinct from records (which also holds what AppendAll wrote) so a test can
 // assert a KindNodeRevoke row never arrives through Append — the tell for a
 // recorder closure that reverted to looping over single-record Append calls.
 type fakeAuditor struct {
+	// The embedded nil Repository lets the type satisfy audit.Repository for
+	// auditsink.New; a call to anything but Append and AppendAll panics.
+	audit.Repository
+
 	mu          sync.Mutex
 	records     []audit.Record
 	appendCalls []audit.Record
@@ -378,9 +412,8 @@ func (fakeFingerprint) Fingerprint() string { return strings.Repeat("ab", 32) }
 func TestHandleMintToken_Success(t *testing.T) {
 	repo := enroll.NewMemoryRepository()
 	tokenSvc := enroll.NewService(repo)
-	auditor := &fakeAuditor{}
 	sink := newMintSink()
-	d := Deps{Tokens: newTestEnrollmentTokensWithSink(t, tokenSvc, sink), Audit: auditor, Now: fixedNow}
+	d := Deps{Tokens: newTestEnrollmentTokensWithSink(t, tokenSvc, sink)}
 	h := newTestHandler(d)
 
 	rec := do(t, h, http.MethodPost, "/api/v1/enrollment-tokens", mintTokenRequest{
@@ -450,9 +483,6 @@ func TestHandleMintToken_Success(t *testing.T) {
 	if events[0].Principal.Account != testAdmin().Account || events[0].Principal.Role != testAdmin().Role {
 		t.Errorf("mint event Principal = %+v, want the caller %+v", events[0].Principal, testAdmin())
 	}
-	if got := auditor.all(); len(got) != 0 {
-		t.Errorf("the surface wrote %d audit records, want 0: a token_mint record is the capability layer's", len(got))
-	}
 }
 
 // Proves EN-42, EN-31.
@@ -479,16 +509,12 @@ func TestHandleMintToken_InvalidInitialTagOrTTL(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			tokenSvc := enroll.NewService(enroll.NewMemoryRepository())
-			auditor := &fakeAuditor{}
-			d := Deps{Tokens: newTestEnrollmentTokens(t, tokenSvc), Audit: auditor, Now: fixedNow}
+			d := Deps{Tokens: newTestEnrollmentTokens(t, tokenSvc)}
 			h := newTestHandler(d)
 
 			rec := do(t, h, http.MethodPost, "/api/v1/enrollment-tokens", tc.req)
 			if rec.Code != http.StatusBadRequest {
 				t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusBadRequest, rec.Body.String())
-			}
-			if len(auditor.all()) != 0 {
-				t.Errorf("audit records = %d, want 0 on a rejected mint", len(auditor.all()))
 			}
 		})
 	}
@@ -528,8 +554,7 @@ func TestHandleMintToken_UseLimit(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			repo := &countingTokenRepo{Repository: enroll.NewMemoryRepository()}
-			auditor := &fakeAuditor{}
-			d := Deps{Tokens: newTestEnrollmentTokens(t, enroll.NewService(repo)), Audit: auditor, Now: fixedNow}
+			d := Deps{Tokens: newTestEnrollmentTokens(t, enroll.NewService(repo))}
 			h := newTestHandler(d)
 
 			rec := doRaw(t, h, http.MethodPost, "/api/v1/enrollment-tokens", tc.body)
@@ -540,9 +565,6 @@ func TestHandleMintToken_UseLimit(t *testing.T) {
 			if tc.wantStatus == http.StatusBadRequest {
 				if repo.creates != 0 {
 					t.Errorf("a refused mint stored %d token(s)", repo.creates)
-				}
-				if len(auditor.all()) != 0 {
-					t.Errorf("audit records = %d, want 0 on a rejected mint", len(auditor.all()))
 				}
 				if tc.namesBoth {
 					for _, option := range []string{"max_uses", "unlimited"} {
@@ -585,7 +607,7 @@ func TestHandleMintToken_UseLimit(t *testing.T) {
 // Proves EN-42.
 func TestHandleMintToken_MalformedOrUnknownField(t *testing.T) {
 	tokenSvc := enroll.NewService(enroll.NewMemoryRepository())
-	d := Deps{Tokens: newTestEnrollmentTokens(t, tokenSvc), Audit: &fakeAuditor{}, Now: fixedNow}
+	d := Deps{Tokens: newTestEnrollmentTokens(t, tokenSvc)}
 	h := newTestHandler(d)
 
 	t.Run("malformed JSON", func(t *testing.T) {
@@ -620,8 +642,7 @@ func TestHandleMintToken_RelayLabelRefusedNamingIt(t *testing.T) {
 	for _, kind := range []accounts.Kind{accounts.KindHuman, accounts.KindMachine} {
 		t.Run(string(kind)+" admin", func(t *testing.T) {
 			tokenSvc := enroll.NewService(enroll.NewMemoryRepository())
-			auditor := &fakeAuditor{}
-			h := newRoleFixture(t, accounts.RoleAdmin, kind, Deps{Tokens: newTestEnrollmentTokens(t, tokenSvc), Audit: auditor})
+			h := newRoleFixture(t, accounts.RoleAdmin, kind, Deps{Tokens: newTestEnrollmentTokens(t, tokenSvc)})
 
 			rec := do(t, h, http.MethodPost, "/api/v1/enrollment-tokens",
 				mintTokenRequest{InitialTags: []string{"relay:env=prod"}, TTLSeconds: 3600, MaxUses: 1})
@@ -631,9 +652,6 @@ func TestHandleMintToken_RelayLabelRefusedNamingIt(t *testing.T) {
 			if !strings.Contains(rec.Body.String(), "relay:env=prod") {
 				t.Errorf("the refusal does not name the label: %s", rec.Body.String())
 			}
-			if len(auditor.all()) != 0 {
-				t.Errorf("audit records = %d, want 0 on a rejected mint", len(auditor.all()))
-			}
 		})
 	}
 }
@@ -642,10 +660,9 @@ func TestHandleMintToken_RelayLabelRefusedNamingIt(t *testing.T) {
 func TestHandleMintToken_MachineAccountInitialTags(t *testing.T) {
 	t.Run("naming a tag is refused", func(t *testing.T) {
 		repo := enroll.NewMemoryRepository()
-		auditor := &fakeAuditor{}
 		sink := newMintSink()
 		h := newRoleFixture(t, accounts.RoleAdmin, accounts.KindMachine,
-			Deps{Tokens: newTestEnrollmentTokensWithSink(t, enroll.NewService(repo), sink), Audit: auditor})
+			Deps{Tokens: newTestEnrollmentTokensWithSink(t, enroll.NewService(repo), sink)})
 
 		rec := do(t, h, http.MethodPost, "/api/v1/enrollment-tokens",
 			mintTokenRequest{InitialTags: []string{"tag:env=prod"}, TTLSeconds: 3600, MaxUses: 1})
@@ -658,15 +675,11 @@ func TestHandleMintToken_MachineAccountInitialTags(t *testing.T) {
 		if refusals := sink.refusals(); len(refusals) != 1 {
 			t.Errorf("capability refusals = %+v, want exactly one", refusals)
 		}
-		if got := auditor.all(); len(got) != 0 {
-			t.Errorf("the surface wrote %d audit records, want 0", len(got))
-		}
 	})
 
 	t.Run("naming none is minted", func(t *testing.T) {
-		auditor := &fakeAuditor{}
 		h := newRoleFixture(t, accounts.RoleAdmin, accounts.KindMachine, Deps{
-			Tokens: newTestEnrollmentTokens(t, enroll.NewService(enroll.NewMemoryRepository())), Audit: auditor})
+			Tokens: newTestEnrollmentTokens(t, enroll.NewService(enroll.NewMemoryRepository()))})
 
 		rec := do(t, h, http.MethodPost, "/api/v1/enrollment-tokens",
 			mintTokenRequest{TTLSeconds: 3600, MaxUses: 1})
@@ -690,7 +703,7 @@ func TestHandleMintToken_MachineAccountInitialTags(t *testing.T) {
 func TestHandleRevokeToken(t *testing.T) {
 	tr := &fakeTokenRevoker{}
 	auditor := &fakeAuditor{}
-	d := Deps{TokenRevoker: tr, Audit: auditor, Now: fixedNow}
+	d := Deps{Revocations: revocationsOver(auditor, tr, nil)}
 	h := newTestHandler(d)
 
 	rec := do(t, h, http.MethodDelete, "/api/v1/enrollment-tokens/tok-123", nil)
@@ -730,7 +743,7 @@ func TestHandleRevokeToken(t *testing.T) {
 func TestHandleRevokeToken_CascadeRecordsCarryPrincipalAndDerivedReason(t *testing.T) {
 	tr := &fakeTokenRevoker{cascade: []string{"node-a", "node-b"}}
 	auditor := &fakeAuditor{}
-	d := Deps{TokenRevoker: tr, Audit: auditor, Now: fixedNow}
+	d := Deps{Revocations: revocationsOver(auditor, tr, nil)}
 	h := newTestHandler(d)
 
 	// The ASSERTED lane is exercised too, not just the verified one. The two are
@@ -813,10 +826,10 @@ func TestHandleRevokeToken_CascadeRecordsCarryPrincipalAndDerivedReason(t *testi
 func TestHandleRevokeToken_UnrecordedCascadeStillRecordsTheTokenRevoke(t *testing.T) {
 	tr := &fakeTokenRevoker{
 		cascade:    []string{"node-a"},
-		cascadeErr: fmt.Errorf("wrap: %w", revocation.ErrCascadeNotRecorded),
+		cascadeErr: fmt.Errorf("wrap: %w", capability.ErrRevokeCascadeNotRecorded),
 	}
 	auditor := &fakeAuditor{}
-	d := Deps{TokenRevoker: tr, Audit: auditor, Now: fixedNow}
+	d := Deps{Revocations: revocationsOver(auditor, tr, nil)}
 	h := newTestHandler(d)
 
 	rec := do(t, h, http.MethodDelete, "/api/v1/enrollment-tokens/tok-123", nil)
@@ -843,14 +856,11 @@ func TestHandleRevokeToken_UnrecordedCascadeStillRecordsTheTokenRevoke(t *testin
 // must still be on the trail, attributed and marked incomplete.
 func TestHandleRevokeToken_IncompleteCascadeRecordsTheRevokeAndSaysNodesMayBeTrusted(t *testing.T) {
 	tr := &fakeTokenRevoker{
-		cascade: []string{"node-a"},
-		cascadeErr: &revocation.IncompleteCascade{
-			Revoked: 1, UnreadableNodeIDs: []string{"node-bad"}, UnreadableCount: 1,
-			Err: errors.New("store unavailable"),
-		},
+		cascade:    []string{"node-a"},
+		cascadeErr: fmt.Errorf("%w: store unavailable", capability.ErrRevokeCascadeIncomplete),
 	}
 	auditor := &fakeAuditor{}
-	d := Deps{TokenRevoker: tr, Audit: auditor, Now: fixedNow}
+	d := Deps{Revocations: revocationsOver(auditor, tr, nil)}
 	h := newTestHandler(d)
 
 	rec := do(t, h, http.MethodDelete, "/api/v1/enrollment-tokens/tok-123", nil)
@@ -891,7 +901,7 @@ func TestHandleRevokeToken_CascadeRecorderReportsAuditFailure(t *testing.T) {
 	auditErr := errors.New("audit store unavailable")
 	tr := &fakeTokenRevoker{cascade: []string{"node-a", "node-b"}}
 	auditor := &fakeAuditor{err: auditErr}
-	d := Deps{TokenRevoker: tr, Audit: auditor, Now: fixedNow}
+	d := Deps{Revocations: revocationsOver(auditor, tr, nil)}
 	h := newTestHandler(d)
 
 	do(t, h, http.MethodDelete, "/api/v1/enrollment-tokens/tok-123", nil)
@@ -917,7 +927,7 @@ func TestHandleRevokeToken_CascadeRecorderReportsAuditFailure(t *testing.T) {
 func TestHandleRevokeToken_CascadeRecorderWritesAllInOneCall(t *testing.T) {
 	tr := &fakeTokenRevoker{cascade: []string{"node-a", "node-b", "node-c"}}
 	auditor := &fakeAuditor{}
-	d := Deps{TokenRevoker: tr, Audit: auditor, Now: fixedNow}
+	d := Deps{Revocations: revocationsOver(auditor, tr, nil)}
 	h := newTestHandler(d)
 
 	rec := do(t, h, http.MethodDelete, "/api/v1/enrollment-tokens/tok-123", nil)
@@ -957,7 +967,7 @@ func TestHandleRevokeToken_CascadeRecorderWritesAllInOneCall(t *testing.T) {
 func TestHandleRevokeToken_RejectsUnrenderableTokenID(t *testing.T) {
 	tr := &fakeTokenRevoker{}
 	auditor := &fakeAuditor{}
-	d := Deps{TokenRevoker: tr, Audit: auditor, Now: fixedNow}
+	d := Deps{Revocations: revocationsOver(auditor, tr, nil)}
 	h := newTestHandler(d)
 
 	rec := doRaw(t, h, http.MethodDelete, "/api/v1/enrollment-tokens/tok%0Abad", "")
@@ -993,7 +1003,7 @@ func TestRevokeTokenCascade_PersistsOneRowPerNode(t *testing.T) {
 
 	cascade := []string{"node-1", "node-2", "node-3", "node-4", "node-5"}
 	tr := &fakeTokenRevoker{cascade: cascade}
-	d := Deps{TokenRevoker: tr, Audit: st.Audit(), Now: fixedNow}
+	d := Deps{Revocations: newTestRevocations(auditsink.New(st.Audit(), auditsink.WithClock(fixedNow)), revokers{tr: tr})}
 	h := newTestHandler(d)
 
 	rec := do(t, h, http.MethodDelete, "/api/v1/enrollment-tokens/tok-123", nil)
@@ -1031,7 +1041,7 @@ func TestRevokeTokenCascade_PersistsOneRowPerNode(t *testing.T) {
 func TestHandleRevokeNode(t *testing.T) {
 	nr := &fakeNodeRevoker{}
 	auditor := &fakeAuditor{}
-	d := Deps{Nodes: nr, Audit: auditor, Now: fixedNow}
+	d := Deps{Revocations: revocationsOver(auditor, nil, nr)}
 	h := newTestHandler(d)
 
 	rec := do(t, h, http.MethodPost, "/api/v1/nodes/node-abc/revoke",
@@ -1093,7 +1103,7 @@ func TestHandleRevokeNode_RefusesWithoutAUsableReason(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			nr := &fakeNodeRevoker{}
 			auditor := &fakeAuditor{}
-			h := newTestHandler(Deps{Nodes: nr, Audit: auditor, Now: fixedNow})
+			h := newTestHandler(Deps{Revocations: revocationsOver(auditor, nil, nr)})
 
 			rec := do(t, h, http.MethodPost, "/api/v1/nodes/node-abc/revoke", tc.body)
 			if rec.Code != http.StatusBadRequest {
@@ -1114,13 +1124,13 @@ func TestHandleRevokeNode_RefusesWithoutAUsableReason(t *testing.T) {
 // silently, so an audit-write failure refuses the revocation rather than
 // performing it and returning 204.
 //
-// This deliberately inverts recordLifecycle's best-effort contract, which the
-// other lifecycle actions keep — see revocation.Service.RevokeNodeRecorded
+// This deliberately inverts the token_revoke record's best-effort contract, which
+// the token revoke keeps — see revocation.Service.RevokeNodeRecorded
 // for why revoke can and they cannot.
 func TestHandleRevokeNode_RefusesWhenItCannotBeAudited(t *testing.T) {
 	nr := &fakeNodeRevoker{}
 	auditor := &fakeAuditor{err: errors.New("audit store unavailable")}
-	h := newTestHandler(Deps{Nodes: nr, Audit: auditor, Now: fixedNow})
+	h := newTestHandler(Deps{Revocations: revocationsOver(auditor, nil, nr)})
 
 	rec := do(t, h, http.MethodPost, "/api/v1/nodes/node-abc/revoke",
 		map[string]string{"reason": "compromised host"})
@@ -1144,7 +1154,7 @@ func TestHandleRevokeNode_RefusesWhenItCannotBeAudited(t *testing.T) {
 func TestHandleRevokeNode_RefusesWhenTheRevokerFails(t *testing.T) {
 	nr := &fakeNodeRevoker{err: errors.New("node lock wait: context canceled")}
 	auditor := &fakeAuditor{}
-	h := newTestHandler(Deps{Nodes: nr, Audit: auditor, Now: fixedNow})
+	h := newTestHandler(Deps{Revocations: revocationsOver(auditor, nil, nr)})
 
 	rec := do(t, h, http.MethodPost, "/api/v1/nodes/node-abc/revoke",
 		map[string]string{"reason": "compromised host"})
@@ -1166,7 +1176,7 @@ func TestHandleRevokeNode_ReasonIsTrimmedAndBounded(t *testing.T) {
 	t.Run("surrounding whitespace is trimmed before recording", func(t *testing.T) {
 		nr := &fakeNodeRevoker{}
 		auditor := &fakeAuditor{}
-		h := newTestHandler(Deps{Nodes: nr, Audit: auditor, Now: fixedNow})
+		h := newTestHandler(Deps{Revocations: revocationsOver(auditor, nil, nr)})
 
 		rec := do(t, h, http.MethodPost, "/api/v1/nodes/node-abc/revoke",
 			map[string]string{"reason": "   decommissioned   "})
@@ -1181,7 +1191,7 @@ func TestHandleRevokeNode_ReasonIsTrimmedAndBounded(t *testing.T) {
 	t.Run("exactly at the cap is accepted", func(t *testing.T) {
 		nr := &fakeNodeRevoker{}
 		auditor := &fakeAuditor{}
-		h := newTestHandler(Deps{Nodes: nr, Audit: auditor, Now: fixedNow})
+		h := newTestHandler(Deps{Revocations: revocationsOver(auditor, nil, nr)})
 
 		atCap := strings.Repeat("x", capability.MaxRevokeReasonBytes)
 		rec := do(t, h, http.MethodPost, "/api/v1/nodes/node-abc/revoke",
@@ -1203,7 +1213,7 @@ func TestHandleRevokeNode_ReasonIsTrimmedAndBounded(t *testing.T) {
 func TestHandleRevokeNode_PassesExactlyOneNodeIDToTheRecorder(t *testing.T) {
 	nr := &fakeNodeRevoker{}
 	auditor := &fakeAuditor{}
-	h := newTestHandler(Deps{Nodes: nr, Audit: auditor, Now: fixedNow})
+	h := newTestHandler(Deps{Revocations: revocationsOver(auditor, nil, nr)})
 
 	rec := do(t, h, http.MethodPost, "/api/v1/nodes/node-abc/revoke",
 		map[string]string{"reason": "compromised host"})
@@ -1232,7 +1242,7 @@ func TestHandleGetNode_StateLabels(t *testing.T) {
 			t.Fatalf("Upsert: %v", err)
 		}
 		lane := newNodeReaderLane(t, reg, &fakeCapabilityAuditSink{}, fixedNow, 0)
-		d := Deps{NodeReader: lane, Audit: &fakeAuditor{}, Now: fixedNow}
+		d := Deps{NodeReader: lane}
 		h := newTestHandler(d)
 
 		rec := do(t, h, http.MethodGet, "/api/v1/nodes/node-a", nil)
@@ -1267,7 +1277,7 @@ func TestHandleGetNode_StateLabels(t *testing.T) {
 		}
 		reg.SetConnected("node-b", true)
 		lane := newNodeReaderLane(t, reg, &fakeCapabilityAuditSink{}, fixedNow, 0)
-		d := Deps{NodeReader: lane, Audit: &fakeAuditor{}, Now: fixedNow}
+		d := Deps{NodeReader: lane}
 		h := newTestHandler(d)
 
 		rec := do(t, h, http.MethodGet, "/api/v1/nodes/node-b", nil)
@@ -1304,7 +1314,7 @@ func TestHandleGetNode_ReturnsTagsAsTheirOwnMap(t *testing.T) {
 		t.Fatalf("ApplyTagChanges: %v", err)
 	}
 	lane := newNodeReaderLane(t, reg, &fakeCapabilityAuditSink{}, fixedNow, 0)
-	h := newTestHandler(Deps{NodeReader: lane, Audit: &fakeAuditor{}, Now: fixedNow})
+	h := newTestHandler(Deps{NodeReader: lane})
 
 	read := func(id string) (nodeResponse, string) {
 		t.Helper()
@@ -1347,7 +1357,7 @@ func TestHandleGetNode_FailsClosedWhenTheReadCannotBeRecorded(t *testing.T) {
 		t.Fatalf("Upsert: %v", err)
 	}
 	lane := newNodeReaderLane(t, reg, &fakeCapabilityAuditSink{err: errors.New("the trail is unwritable")}, fixedNow, 0)
-	d := Deps{NodeReader: lane, Audit: &fakeAuditor{}, Now: fixedNow}
+	d := Deps{NodeReader: lane}
 	h := newTestHandler(d)
 
 	rec := do(t, h, http.MethodGet, "/api/v1/nodes/node-a", nil)
@@ -1368,7 +1378,7 @@ func TestHandleGetNode_AnOversizedNodeIdIsRefusedNotNotFound(t *testing.T) {
 	reg := registry.NewInMemory()
 	sink := &fakeCapabilityAuditSink{}
 	lane := newNodeReaderLane(t, reg, sink, fixedNow, 0)
-	d := Deps{NodeReader: lane, Audit: &fakeAuditor{}, Now: fixedNow}
+	d := Deps{NodeReader: lane}
 	h := newTestHandler(d)
 
 	oversized := strings.Repeat("n", 257)
@@ -1402,8 +1412,7 @@ func TestHandleGetNode_AnOversizedNodeIdIsRefusedNotNotFound(t *testing.T) {
 
 func TestHandleFreeze_EngageAndRelease(t *testing.T) {
 	fz := &fakeFreezer{}
-	auditor := &fakeAuditor{}
-	d := Deps{Freeze: fz, Audit: auditor, Now: fixedNow}
+	d := Deps{Freeze: fz}
 	h := newTestHandler(d)
 
 	engageRec := do(t, h, http.MethodPost, "/api/v1/freeze/engage", nil)
@@ -1454,13 +1463,6 @@ func TestHandleFreeze_EngageAndRelease(t *testing.T) {
 	if fz.releaseCalls[0].Reason != "incident resolved" {
 		t.Errorf("ReleaseFreeze reason = %q, want %q", fz.releaseCalls[0].Reason, "incident resolved")
 	}
-
-	// Freeze's audit trail is intrinsic to capability.Control (RecordFreeze):
-	// this package must NEVER call recordLifecycle for freeze routes, or the
-	// event would be double-audited.
-	if got := auditor.all(); len(got) != 0 {
-		t.Errorf("audit records after freeze engage/release = %d, want 0 (freeze audits intrinsically)", len(got))
-	}
 }
 
 // -----------------------------------------------------------------------
@@ -1473,7 +1475,7 @@ func TestHandleFreeze_EngageAndRelease(t *testing.T) {
 // controlplane.Server.Mux() in production, but principal() must not fail
 // open) gets a 500, never a 200.
 func TestPrincipal_MissingContext_Returns500(t *testing.T) {
-	d := Deps{Freeze: &fakeFreezer{}, Audit: &fakeAuditor{}, Now: fixedNow}
+	d := Deps{Freeze: &fakeFreezer{}}
 	mux := http.NewServeMux()
 	Register(mux, d)
 
@@ -1502,7 +1504,8 @@ func TestMintThenRevokeToken_BothProduceAuditRows(t *testing.T) {
 
 	tokenSvc := enroll.NewService(enroll.NewMemoryRepository())
 	tr := &fakeTokenRevoker{}
-	d := Deps{Tokens: newTestEnrollmentTokensWithWithdrawErr(t, tokenSvc, auditsink.New(st.Audit()), nil), TokenRevoker: tr, Audit: st.Audit(), Now: fixedNow}
+	sink := auditsink.New(st.Audit())
+	d := Deps{Tokens: newTestEnrollmentTokensWithWithdrawErr(t, tokenSvc, sink, nil), Revocations: newTestRevocations(sink, revokers{tr: tr})}
 	h := newTestHandler(d)
 
 	mintRec := do(t, h, http.MethodPost, "/api/v1/enrollment-tokens", mintTokenRequest{

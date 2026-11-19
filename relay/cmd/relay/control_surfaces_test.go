@@ -29,6 +29,7 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/policyview"
 	"github.com/Felag-Engineering/relay/relay/internal/registry"
 	"github.com/Felag-Engineering/relay/relay/internal/relaytest"
+	"github.com/Felag-Engineering/relay/relay/internal/revocation"
 )
 
 // TestDefaultControlSurfaces_MountWithoutCollision mounts every surface
@@ -337,6 +338,71 @@ func TestSurfaceDeps_NoSurfaceIsHandedTheRegistryOrACache(t *testing.T) {
 	}
 }
 
+// typeFromPackage reports the first type from pkgPath that t is built from:
+// t itself, or what it wraps as a pointer, slice, array, channel, map (key or
+// element) or function (parameter or result). A surface handed a map of
+// minters or a constructor returning one holds the machinery as surely as a
+// pointer to it.
+func typeFromPackage(t reflect.Type, pkgPath string) (reflect.Type, bool) {
+	seen := map[reflect.Type]bool{}
+	var walk func(t reflect.Type) (reflect.Type, bool)
+	walk = func(t reflect.Type) (reflect.Type, bool) {
+		if seen[t] {
+			return nil, false
+		}
+		seen[t] = true
+		if t.PkgPath() == pkgPath {
+			return t, true
+		}
+		var inner []reflect.Type
+		switch t.Kind() {
+		case reflect.Pointer, reflect.Slice, reflect.Array, reflect.Chan:
+			inner = append(inner, t.Elem())
+		case reflect.Map:
+			inner = append(inner, t.Key(), t.Elem())
+		case reflect.Func:
+			for i := 0; i < t.NumIn(); i++ {
+				inner = append(inner, t.In(i))
+			}
+			for i := 0; i < t.NumOut(); i++ {
+				inner = append(inner, t.Out(i))
+			}
+		}
+		for _, in := range inner {
+			if hit, ok := walk(in); ok {
+				return hit, true
+			}
+		}
+		return nil, false
+	}
+	return walk(t)
+}
+
+// TestTypeFromPackage_UnwrapsEveryContainer proves the guard helper sees the
+// banned type through every container a seam field could wrap it in.
+func TestTypeFromPackage_UnwrapsEveryContainer(t *testing.T) {
+	pkg := reflect.TypeOf(enroll.Minter{}).PkgPath()
+	m := enroll.Minter{}
+	for name, typ := range map[string]any{
+		"pointer":     &m,
+		"slice":       []enroll.Minter{},
+		"array":       [1]enroll.Minter{},
+		"chan":        make(chan enroll.Minter),
+		"map elem":    map[string]enroll.Minter{},
+		"map key":     map[enroll.Minter]string{},
+		"func param":  func(enroll.Minter) {},
+		"func result": func() *enroll.Minter { return nil },
+		"nested":      map[string][]func() *enroll.Minter{},
+	} {
+		if _, ok := typeFromPackage(reflect.TypeOf(typ), pkg); !ok {
+			t.Errorf("%s: banned type not found", name)
+		}
+	}
+	if _, ok := typeFromPackage(reflect.TypeOf(map[string][]int{}), pkg); ok {
+		t.Error("unrelated type reported as a hit")
+	}
+}
+
 // TestSurfaceDeps_NoSurfaceIsHandedTheEnrollmentMinter is the composition-root
 // half of the enroll.Minter guard: the root constructs the minter behind the
 // capability layer's issuer and hands no surface that package, so an adapter
@@ -348,13 +414,28 @@ func TestSurfaceDeps_NoSurfaceIsHandedTheEnrollmentMinter(t *testing.T) {
 	typ := reflect.TypeOf(surfaceDeps{})
 	for i := 0; i < typ.NumField(); i++ {
 		f := typ.Field(i)
-		elem := f.Type
-		for elem.Kind() == reflect.Pointer || elem.Kind() == reflect.Slice {
-			elem = elem.Elem()
-		}
-		if elem.PkgPath() == banned {
+		if elem, ok := typeFromPackage(f.Type, banned); ok {
 			t.Errorf("surfaceDeps.%s has type %s, whose element %s is from %s — no surface may "+
 				"be handed enrollment machinery; mint through capability.EnrollmentTokens (invariant 10)",
+				f.Name, f.Type, elem, banned)
+		}
+	}
+}
+
+// TestSurfaceDeps_NoSurfaceIsHandedTheRevocationService is the composition-root
+// half of the revocation guard: the root builds the revocation service behind
+// the capability layer's Revoker and hands no surface that package, so an
+// adapter revokes only through capability.Revocations, which authorizes, acts
+// and records together (invariant 10).
+func TestSurfaceDeps_NoSurfaceIsHandedTheRevocationService(t *testing.T) {
+	banned := reflect.TypeOf((*revocation.Service)(nil)).Elem().PkgPath()
+
+	typ := reflect.TypeOf(surfaceDeps{})
+	for i := 0; i < typ.NumField(); i++ {
+		f := typ.Field(i)
+		if elem, ok := typeFromPackage(f.Type, banned); ok {
+			t.Errorf("surfaceDeps.%s has type %s, whose element %s is from %s — no surface may "+
+				"be handed the revocation service; revoke through capability.Revocations (invariant 10)",
 				f.Name, f.Type, elem, banned)
 		}
 	}

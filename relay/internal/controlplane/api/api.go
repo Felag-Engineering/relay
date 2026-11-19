@@ -6,8 +6,8 @@
 // Authenticator.Middleware already wired there — no new listener, no new
 // auth path (invariant 10, ADR-0009).
 //
-// Every handler is a thin adapter: decode -> validate -> call existing
-// revocation/capability machinery -> render. No route reimplements
+// Every handler is a thin adapter: decode -> validate -> call the
+// capability layer -> render. No route reimplements
 // domain logic, and no route can reach Relay configuration, a blast cap, the
 // CA key, or a listener (invariant 11) — Deps below intentionally carries
 // none of those, and this package's import list is structurally capped by
@@ -22,17 +22,13 @@ package api
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"net/http"
-	"time"
 
 	"github.com/Felag-Engineering/relay/relay/internal/accounts"
-	"github.com/Felag-Engineering/relay/relay/internal/audit"
 	"github.com/Felag-Engineering/relay/relay/internal/capability"
 	"github.com/Felag-Engineering/relay/relay/internal/controlplane"
 	"github.com/Felag-Engineering/relay/relay/internal/harnesssetup"
-	"github.com/Felag-Engineering/relay/relay/internal/revocation"
 )
 
 // TokenMinter mints an Enrollment Token through the capability layer: the floor,
@@ -42,37 +38,14 @@ type TokenMinter interface {
 	MintEnrollmentToken(ctx context.Context, p capability.Principal, m capability.EnrollmentMint) (capability.MintedEnrollmentToken, error)
 }
 
-// TokenRevoker revokes an Enrollment Token by id. *revocation.Service
-// satisfies this interface (RevokeToken cascade-revokes the token's already
-// -enrolled Nodes too — see tokens.go).
-//
-// The cascade writes one KindNodeRevoke record per cascaded Node through the
-// record callback this surface supplies — revocation.Service has no
-// audit sink of its own, so tokens.go's handleRevokeToken builds the closure
-// that authors each record's Principal and reason and hands it in. A
-// returned ErrCascadeNotRecorded means the token and every Node it enrolled
-// were revoked, but the trail is incomplete for one or more of them. A
-// returned ErrCascadeIncomplete means the token was revoked but the registry
-// could not be read completely, so Nodes it enrolled may still be trusted —
-// never that every Node was revoked.
-type TokenRevoker interface {
-	RevokeToken(ctx context.Context, id string, record revocation.RevocationRecorder) error
-}
-
-// NodeRevoker revokes a single Node, tearing down its live Tunnel
-// immediately. *revocation.Service satisfies this interface.
-//
-// The recorded variant is what serialises this route against a token
-// cascade revoking the same Node: revocation.Service.RevokeNodeRecorded
-// holds the Node's lock across recording and revoking, so this interface
-// deliberately does not expose the unrecorded revocation.Service.RevokeNode
-// primitive at all — the same narrowing rationale Freezer states for
-// EngageFreezeLocal/ReleaseFreezeLocal. A returned error means the Node was
-// NOT revoked; a nil error means it is revoked and attributed, either by
-// this call's own record or by the cascade record this Relay already wrote
-// for it.
-type NodeRevoker interface {
-	RevokeNodeRecorded(ctx context.Context, nodeID string, record revocation.RevocationRecorder) error
+// Revocations revokes a Node or an Enrollment Token through the capability
+// layer. *capability.Revocations satisfies it with no adapter. The floor, the
+// reason rule, the act and its records are the layer's (invariant 10, EN-19,
+// EN-20); this surface holds no revocation service, so it cannot reach the act
+// without the gate.
+type Revocations interface {
+	RevokeNodeWithReason(ctx context.Context, p capability.Principal, nodeID, reason string) error
+	RevokeEnrollmentToken(ctx context.Context, p capability.Principal, tokenID string) error
 }
 
 // Freezer engages and releases the Relay-wide Freeze (ADR-0013).
@@ -89,30 +62,17 @@ type Freezer interface {
 	ReleaseFreeze(ctx context.Context, p capability.Principal, reason string) error
 }
 
-// ControlGate is the capability layer's authorization of the three
-// administrative acts this surface performs outside a capability service.
-// *capability.Control satisfies it. The floor, the mask (EX-7) and the
-// refusal's record are the layer's. There is one method per act and no
-// ControlAction parameter, so a route cannot ask about an act it does not
-// perform. Like Freezer, it is a narrow seam; the unauthorized levers on
+// ControlGate is the capability layer's early ask for the two routes that read
+// a request body before they can call the layer: Enrollment Token mint and Node
+// revoke. The entry point asks again. *capability.Control satisfies it. The
+// floor, the mask (EX-7) and the refusal's record are the layer's. There is one
+// method per act and no ControlAction parameter, so a route cannot ask about an
+// act it does not perform. Like Freezer, it is a narrow seam; the unauthorized levers on
 // *capability.Control stay out of reach because the astguard authorize rule
 // forbids an adapter from naming them.
 type ControlGate interface {
 	AuthorizeEnrollmentTokenMint(ctx context.Context, p capability.Principal) error
-	AuthorizeEnrollmentTokenRevoke(ctx context.Context, p capability.Principal) error
 	AuthorizeNodeRevoke(ctx context.Context, p capability.Principal) error
-}
-
-// Auditor appends a lifecycle audit.Record. audit.Repository satisfies this
-// interface.
-type Auditor interface {
-	Append(ctx context.Context, r audit.Record) error
-
-	// AppendAll persists every Record in rs atomically: on a nil error all of
-	// them were written, on a non-nil error none were (audit.Repository's
-	// contract). Used by the token-revocation cascade to record a chunk of
-	// Nodes in one commit rather than one per Node.
-	AppendAll(ctx context.Context, rs []audit.Record) error
 }
 
 // AccountAdmin is Account and API-Token administration: the identity
@@ -153,20 +113,21 @@ func (d Deps) logger() *slog.Logger {
 type Deps struct {
 	// Tokens mints through the capability layer. Nil answers the mint route
 	// with a 500, on the same unwired-gate posture as AccountAdmin and Tags.
-	Tokens       TokenMinter
-	TokenRevoker TokenRevoker
-	Nodes        NodeRevoker
-	Freeze       Freezer
-	Audit        Auditor
+	Tokens TokenMinter
+	// Revocations revokes Nodes and Enrollment Tokens through the capability
+	// layer. Nil refuses both revoke routes with a 500, on the same
+	// unwired-gate posture as AccountAdmin.
+	Revocations Revocations
+	Freeze      Freezer
 	// Logger is where this surface's operational errors go; nil means
 	// slog.Default(). Wiring, not configuration (invariant 11); context
 	// correlation comes from the handler the composition root builds.
 	Logger *slog.Logger
-	// Gate authorizes Enrollment Token mint and revoke and Node revoke in the
-	// capability layer, which records each refusal. The composition root
-	// passes the same *capability.Control the Freeze goes through. Nil refuses
-	// those three routes with a 500, the same unwired-gate posture as
-	// AccountAdmin.
+	// Gate asks the capability layer early for Enrollment Token mint and Node
+	// revoke, which read a body first; the layer records each refusal. The
+	// composition root passes the same *capability.Control the Freeze goes
+	// through. Nil refuses those two routes with a 500, the same unwired-gate
+	// posture as AccountAdmin.
 	Gate ControlGate
 	// AccountAdmin backs the identity-management routes through the
 	// capability layer. Nil refuses every identity route with a
@@ -178,9 +139,7 @@ type Deps struct {
 	// NodeReader is the capability read lane behind GET
 	// /api/v1/nodes/{node_id}: it is not a registry narrowing
 	// any more — it is the one door to the registry, which records the read
-	// before it answers (invariant 10, ADR-0025). The revoke route reaches
-	// revocation through Nodes above rather than through this seam. Nil
-	// still 500s.
+	// before it answers (invariant 10, ADR-0025). Nil still 500s.
 	NodeReader NodeReader
 	// Exec and Jobs back the execution routes. Exec is the SAME
 	// capability layer the MCP surface dispatches through — never a second
@@ -205,9 +164,6 @@ type Deps struct {
 	// data only (never the CA key), and the caller's own credential is added at
 	// mint. The zero value renders no harness_setup.
 	HarnessSetup harnesssetup.Target
-	// Now returns the current time, used to timestamp lifecycle audit
-	// Records. Defaults to time.Now().UTC() when nil.
-	Now func() time.Time
 }
 
 // Route is one /api/v1 route: its HTTP method, its path (in net/http
@@ -238,9 +194,9 @@ func (r Route) Pattern() string { return r.Method + " " + r.Path }
 func Routes() []Route {
 	return []Route{
 		// Enrollment Tokens, Node revocation, Freeze. Every route here has a
-		// role floor, and every floor is decided by the ONE authz.RoleGate: the
-		// enrollment and revocation routes consult it through Gate before they
-		// read the request (gateControl), the Freeze routes inherit it inside
+		// role floor, and every floor is decided by the ONE authz.RoleGate: mint
+		// and Node revoke consult it through Gate before they read the request
+		// (gateControl), the token-revoke and Freeze routes inherit it inside
 		// the capability layer. Which of the two applies to a given route is
 		// asserted by TestEveryRouteIsRoleClassified, so a route added to this
 		// group later cannot silently have neither.
@@ -331,9 +287,6 @@ func enableAccount(enabled bool) func(Deps) http.HandlerFunc {
 // Authenticator.Middleware in tests) — Register never constructs a listener
 // or auth wrapper of its own.
 func Register(mux *http.ServeMux, d Deps) {
-	if d.Now == nil {
-		d.Now = func() time.Time { return time.Now().UTC() }
-	}
 	for _, r := range Routes() {
 		mux.HandleFunc(r.Pattern(), r.Handler(d))
 	}
@@ -372,130 +325,18 @@ func gateControl(w http.ResponseWriter, r *http.Request, d Deps, authorize func(
 	if err == nil {
 		return true
 	}
-	// The layer always returns a join: one element once the refusal is recorded,
-	// two when the record failed too. A length check, never a
-	// FirstRefusal(err) != err comparison: comparing a non-comparable error
-	// value panics.
+	writeControlRefusal(w, r, d, err)
+	return false
+}
+
+// writeControlRefusal renders a refusal the capability layer returned. The layer
+// always returns a join: one element once the refusal is recorded, two when the
+// record failed too, which is logged and never shown. A length check, never a
+// FirstRefusal(err) != err comparison: comparing a non-comparable error value
+// panics. The detail is the first refusal, so it equals the recorded Reason.
+func writeControlRefusal(w http.ResponseWriter, r *http.Request, d Deps, err error) {
 	if joined, ok := err.(interface{ Unwrap() []error }); ok && len(joined.Unwrap()) > 1 {
 		d.logger().ErrorContext(r.Context(), "control api: control refusal not recorded", "error", err)
 	}
 	writeProblem(w, http.StatusForbidden, "forbidden", capability.FirstRefusal(err).Error())
-	return false
-}
-
-// newAuditID mints a unique audit.Record.ID. audit_id is the table's PRIMARY
-// KEY (store/migrations/0001_init.sql); every recordLifecycle call must set a
-// fresh one or the second lifecycle insert in a session fails a UNIQUE
-// constraint. A package-level var (rather than a Deps field) so it stays out
-// of the deliberately narrow Deps struct while still being overridable from
-// this package's own tests.
-//
-// Its default is the same generator relay/internal/auditsink uses,
-// audit.NewID — one implementation of the ordering property rather than two
-// copies of a shape. The ids it mints are monotonic, so the trail's
-// (ts, audit_id) tie-break orders rows by when they were appended.
-//
-// That is what recordLifecycleAllErr's AppendAll cascade needs: a
-// mass-revocation writes its whole batch of Records at one clock reading, so
-// every row in the batch shares a ts and their order IS the id order. That
-// batch is exactly what an incident reviewer reads as a sequence.
-//
-// Used unwrapped: audit.NewID already says "audit: generate record id: ...",
-// and a wrap here would announce one failure twice.
-var newAuditID = audit.NewID
-
-// recordLifecycle appends one lifecycle audit.Record (a token revoke)
-// attributed to p. A refusal is recorded by the capability layer, never here.
-// Freeze engage/release, and a refused Freeze, are audited intrinsically by
-// capability.Control (RecordFreeze) and must never call this — doing so would
-// double-audit (see freeze.go). reason must never carry an Enrollment Token
-// plaintext.
-//
-// On an audit-write failure, this logs and returns without undoing the
-// already-completed lifecycle action: the action happened; a failed audit
-// write must not be papered over by rolling it back, nor may it block the
-// caller from returning success for a mutation that already took effect.
-//
-// This is a BEST-EFFORT record, deliberately: every remaining caller has
-// already completed its act by the time it calls this, and rolling that act
-// back because the trail write failed would be worse than an incomplete
-// trail. Node revoke does not call this — it needs a fail-closed record,
-// so it goes through revocation.Service.RevokeNodeRecorded instead, the
-// one place that ordering can be atomic against a concurrent cascade for the
-// same Node.
-func recordLifecycle(ctx context.Context, d Deps, p capability.Principal, kind, nodeID, reason string) {
-	rec, err := newLifecycleRecord(ctx, d, p, kind, nodeID, reason)
-	if err != nil {
-		d.logger().ErrorContext(ctx, "control api: build lifecycle audit record", "kind", kind, "error", err)
-		return
-	}
-	if err := d.Audit.Append(ctx, rec); err != nil {
-		d.logger().ErrorContext(ctx, "control api: append lifecycle audit record", "kind", kind, "error", err)
-	}
-}
-
-// newLifecycleRecord builds one lifecycle audit.Record attributed to p,
-// carrying both the verified and asserted identity lanes and the derived
-// reason — the same construction recordLifecycle uses for a single
-// best-effort write and recordLifecycleAllErr uses for a cascaded chunk (and,
-// through it, RevokeNodeRecorded's single-Node fail-closed write). Kept in
-// one place so the attribution mapping cannot drift between the paths: a
-// second copy is what a security review would flag, and it is how a lane
-// gets dropped on one path only.
-func newLifecycleRecord(ctx context.Context, d Deps, p capability.Principal, kind, nodeID, reason string) (audit.Record, error) {
-	id, err := newAuditID()
-	if err != nil {
-		return audit.Record{}, fmt.Errorf("api: generate lifecycle audit record id: %w", err)
-	}
-	asserted := capability.AssertionsFromContext(ctx)
-	return audit.Record{
-		ID:        id,
-		Timestamp: d.Now(),
-		Kind:      kind,
-		Principal: p.Attribution(),
-		Attribution: audit.Attribution{
-			Verified: audit.Verified{
-				AccountID:   p.AccountID,
-				AccountName: p.Account,
-				Role:        p.Role,
-				TokenID:     p.TokenID,
-				Method:      string(p.AuthMethod),
-			},
-			Asserted: audit.Asserted{
-				OnBehalfOf:  asserted.OnBehalfOf,
-				Traceparent: asserted.Traceparent,
-				SessionRef:  asserted.SessionRef,
-				ChangeRef:   asserted.ChangeRef,
-			},
-		},
-		NodeID: nodeID,
-		Reason: reason,
-	}, nil
-}
-
-// recordLifecycleAllErr is the recorder-side half of RevocationRecorder's
-// all-or-nothing contract (revocation/service.go): it builds one lifecycle
-// audit.Record per Node in nodeIDs, attributed identically to
-// recordLifecycle, then writes all of them through a single
-// Auditor.AppendAll call. handleRevokeNode's single-Node RevocationRecorder
-// (nodes.go) calls this with a one-element nodeIDs, so the fail-closed
-// single-Node write and the cascade's chunked write share this one
-// construction rather than a second one.
-//
-// Every record is built with newLifecycleRecord before any write is
-// attempted, so an ID-generation failure returns before any record for this
-// chunk is persisted — keeping the all-or-nothing contract even on that path.
-func recordLifecycleAllErr(ctx context.Context, d Deps, p capability.Principal, kind string, nodeIDs []string, reason string) error {
-	recs := make([]audit.Record, len(nodeIDs))
-	for i, nodeID := range nodeIDs {
-		rec, err := newLifecycleRecord(ctx, d, p, kind, nodeID, reason)
-		if err != nil {
-			return err
-		}
-		recs[i] = rec
-	}
-	if err := d.Audit.AppendAll(ctx, recs); err != nil {
-		return fmt.Errorf("api: append lifecycle audit records: %w", err)
-	}
-	return nil
 }

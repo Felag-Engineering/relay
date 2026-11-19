@@ -24,7 +24,7 @@ func TestControlAPI_ServesNoApprovalGrantRoute(t *testing.T) {
 
 	authn := controlplane.NewAuthenticator(roleVerifier{credential: testCredential, role: accounts.RoleAdmin})
 	mux := http.NewServeMux()
-	Register(mux, Deps{Now: fixedNow})
+	Register(mux, Deps{})
 	h := authn.Middleware(mux)
 
 	for _, c := range []struct{ method, path string }{

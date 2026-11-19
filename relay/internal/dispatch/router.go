@@ -124,7 +124,7 @@ type verdictWaiter struct {
 // violationAuditBudget bounds recordViolation's call to the ViolationRecorder.
 // Matches the register reconcileDispatchTimeout uses for its own bounded
 // call on this package's dispatching path (reconcile.go:18), and the
-// revocation cascade's audit budget (controlplane/api/tokens.go,
+// revocation cascade's audit budget (capability/revocations.go,
 // cascadeAuditBudget).
 const violationAuditBudget = 5 * time.Second
 
@@ -703,7 +703,7 @@ func (r *Router) removeWaiter(taskID string, w *waiter) {
 // The context is detached and re-bounded (violationAuditBudget) because the
 // violation arrived — whether the caller's request context has since
 // expired must not decide whether the evidence is kept. Same shape as the
-// revocation cascade's audit budget (controlplane/api/tokens.go,
+// revocation cascade's audit budget (capability/revocations.go,
 // cascadeAuditBudget). It runs on the dispatching goroutine and holds no
 // lock — mu guards only the maps (Router's doc comment), and that stays
 // true here.

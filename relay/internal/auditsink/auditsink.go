@@ -29,7 +29,8 @@
 // repository can commit the change and the record together. RecordTagWrite
 // copies only the Node ID, the tag key and the old and new values, which a
 // human Account wrote and the allowlist has already bounded, and has the same
-// atomicity condition.
+// atomicity condition. The two revoke recorders copy only the Node IDs, the
+// validated reason and the token's public ID.
 //
 // Logging: Record additionally emits exactly one structured slog Info
 // "audit decision" line per call, for each of the three Kinds it persists
@@ -88,6 +89,7 @@ var (
 	_ capability.TagWriteRecorder    = (*Sink)(nil)
 
 	_ capability.EnrollmentMintRecorder = (*Sink)(nil)
+	_ capability.RevokeRecorder         = (*Sink)(nil)
 
 	_ capability.TemporaryPasswordRecorder = (*Sink)(nil)
 	_ consoleauth.PasswordChangeRecorder   = (*Sink)(nil)
@@ -666,6 +668,51 @@ func (s *Sink) RecordEnrollmentTokenMint(ctx context.Context, e capability.Enrol
 		Principal:   e.Principal.Attribution(),
 		Attribution: attribution(e.Principal, e.Asserted),
 		Reason:      "token_id=" + e.TokenID,
+	})
+}
+
+// RecordNodeRevokes implements capability.RevokeRecorder: one node_revoke record
+// per Node, all or none. Every record is built before any is written, so an id
+// failure leaves the trail untouched, and one AppendAll commits the batch. The
+// ids are monotonic, so the batch's shared timestamp still orders by append.
+func (s *Sink) RecordNodeRevokes(ctx context.Context, e capability.NodeRevokeEvent) error {
+	now := s.now()
+	recs := make([]audit.Record, len(e.NodeIDs))
+	for i, nodeID := range e.NodeIDs {
+		id, err := s.newID()
+		if err != nil {
+			return fmt.Errorf("auditsink: generate audit record id: %w", err)
+		}
+		recs[i] = audit.Record{
+			ID:          id,
+			Timestamp:   now,
+			Kind:        audit.KindNodeRevoke,
+			Principal:   e.Principal.Attribution(),
+			Attribution: attribution(e.Principal, e.Asserted),
+			NodeID:      nodeID,
+			Reason:      e.Reason,
+		}
+	}
+	if err := s.repo.AppendAll(ctx, recs); err != nil {
+		return fmt.Errorf("auditsink: record node revokes: %w", err)
+	}
+	return nil
+}
+
+// RecordEnrollmentTokenRevoke implements capability.RevokeRecorder: one
+// token_revoke record naming the token's public ID, marked when the cascade
+// could not read the registry completely.
+func (s *Sink) RecordEnrollmentTokenRevoke(ctx context.Context, e capability.EnrollmentTokenRevokeEvent) error {
+	reason := "token_id=" + e.TokenID
+	if e.CascadeIncomplete {
+		reason += " cascade=incomplete"
+	}
+	return s.append(ctx, audit.Record{
+		Timestamp:   s.now(),
+		Kind:        audit.KindTokenRevoke,
+		Principal:   e.Principal.Attribution(),
+		Attribution: attribution(e.Principal, e.Asserted),
+		Reason:      reason,
 	})
 }
 

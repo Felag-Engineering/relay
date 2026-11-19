@@ -23,6 +23,8 @@ type mintSink struct {
 	mu        sync.Mutex
 	entries   []capability.AuditEntry
 	events    []capability.EnrollmentMintEvent
+	revokes   []capability.NodeRevokeEvent
+	tokenRevs []capability.EnrollmentTokenRevokeEvent
 	recordErr error
 }
 
@@ -43,6 +45,42 @@ func (s *mintSink) RecordEnrollmentTokenMint(_ context.Context, e capability.Enr
 	}
 	s.events = append(s.events, e)
 	return nil
+}
+
+func (s *mintSink) RecordNodeRevokes(_ context.Context, e capability.NodeRevokeEvent) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.recordErr != nil {
+		return s.recordErr
+	}
+	e.NodeIDs = append([]string(nil), e.NodeIDs...)
+	s.revokes = append(s.revokes, e)
+	return nil
+}
+
+func (s *mintSink) RecordEnrollmentTokenRevoke(_ context.Context, e capability.EnrollmentTokenRevokeEvent) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.recordErr != nil {
+		return s.recordErr
+	}
+	s.tokenRevs = append(s.tokenRevs, e)
+	return nil
+}
+
+// revokeEvents is every revoke record the sink was asked to write, Node and
+// Enrollment Token alike.
+func (s *mintSink) revokeEvents() []any {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []any
+	for _, e := range s.revokes {
+		out = append(out, e)
+	}
+	for _, e := range s.tokenRevs {
+		out = append(out, e)
+	}
+	return out
 }
 
 func (s *mintSink) mintEvents() []capability.EnrollmentMintEvent {
@@ -125,8 +163,7 @@ func newTestEnrollmentTokens(t *testing.T, svc *enroll.Service) TokenMinter {
 // Proves EN-36, EN-1.
 func TestHandleMintToken_WritesOneTokenMintRecordThroughTheCapabilityLayer(t *testing.T) {
 	sink := newMintSink()
-	auditor := &fakeAuditor{}
-	d := Deps{Tokens: newTestEnrollmentTokensWithSink(t, enroll.NewService(enroll.NewMemoryRepository()), sink), Audit: auditor, Now: fixedNow}
+	d := Deps{Tokens: newTestEnrollmentTokensWithSink(t, enroll.NewService(enroll.NewMemoryRepository()), sink)}
 	h := newTestHandler(d)
 
 	rec := do(t, h, http.MethodPost, "/api/v1/enrollment-tokens", mintTokenRequest{TTLSeconds: 3600, MaxUses: 1})
@@ -142,9 +179,6 @@ func TestHandleMintToken_WritesOneTokenMintRecordThroughTheCapabilityLayer(t *te
 	if len(events) != 1 || events[0].TokenID != resp.ID || events[0].Principal.Account != testAdmin().Account {
 		t.Fatalf("capability mint events = %+v, want exactly one naming %s and the caller", events, resp.ID)
 	}
-	if got := auditor.all(); len(got) != 0 {
-		t.Errorf("the surface wrote %d audit records, want 0: the record is the capability layer's", len(got))
-	}
 }
 
 // Proves EN-4, EN-1.
@@ -154,7 +188,7 @@ func TestHandleMintToken_AnUnrecordedMintIsWithdrawnAndReturnsNothing(t *testing
 		svc := enroll.NewService(repo)
 		sink := newMintSink()
 		sink.recordErr = errors.New("audit store down")
-		h := newTestHandler(Deps{Tokens: newTestEnrollmentTokensWithSink(t, svc, sink), Audit: &fakeAuditor{}, Now: fixedNow})
+		h := newTestHandler(Deps{Tokens: newTestEnrollmentTokensWithSink(t, svc, sink)})
 
 		rec := do(t, h, http.MethodPost, "/api/v1/enrollment-tokens", mintTokenRequest{TTLSeconds: 3600, MaxUses: 1})
 		if rec.Code != http.StatusInternalServerError {
@@ -185,7 +219,7 @@ func TestHandleMintToken_AnUnrecordedMintIsWithdrawnAndReturnsNothing(t *testing
 		sink := newMintSink()
 		sink.recordErr = errors.New("audit store down")
 		tokens := newTestEnrollmentTokensWithWithdrawErr(t, svc, sink, errors.New("store down"))
-		h := newTestHandler(Deps{Tokens: tokens, Audit: &fakeAuditor{}, Now: fixedNow})
+		h := newTestHandler(Deps{Tokens: tokens})
 
 		rec := do(t, h, http.MethodPost, "/api/v1/enrollment-tokens", mintTokenRequest{TTLSeconds: 3600, MaxUses: 1})
 		if rec.Code != http.StatusInternalServerError {

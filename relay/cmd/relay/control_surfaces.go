@@ -39,7 +39,6 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/harnesssetup"
 	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 	"github.com/Felag-Engineering/relay/relay/internal/metrics"
-	"github.com/Felag-Engineering/relay/relay/internal/revocation"
 )
 
 // surfaceDeps holds every collaborator a control surface's Mount may need.
@@ -95,11 +94,12 @@ type surfaceDeps struct {
 	policyAliasAdmin *capability.PolicyAliasAdmin
 	jobs             jobs.JobRepository
 	tasks            jobs.TaskRepository
-	revocation       *revocation.Service
-	audit            audit.Repository
-	auditSink        *auditsink.Sink
-	now              func() time.Time
-	metrics          *metrics.Metrics
+	// revocations backs api.Deps.Revocations; MCP and the Console have none (EN-22).
+	revocations *capability.Revocations
+	audit       audit.Repository
+	auditSink   *auditsink.Sink
+	now         func() time.Time
+	metrics     *metrics.Metrics
 
 	// consoleAuth is the Console's sign-in service. Nil when the
 	// Console is not enabled, in which case consoleSurface is not in the
@@ -210,12 +210,12 @@ type apiSurface struct{}
 
 func (apiSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 	api.Register(mux, api.Deps{
-		Tokens:       apiEnrollmentTokensOrNil(d.enrollmentTokens),
-		Logger:       d.logger,
-		TokenRevoker: d.revocation,
-		Nodes:        d.revocation,
-		Freeze:       d.freezeControl,
-		Audit:        d.audit,
+		Tokens: apiEnrollmentTokensOrNil(d.enrollmentTokens),
+		Logger: d.logger,
+		Freeze: d.freezeControl,
+		// Node and Enrollment Token revoke: the capability layer authorizes,
+		// acts and records; this surface holds no revocation service.
+		Revocations: apiRevocationsOrNil(d.revocations),
 		// The same Control the Freeze goes through: one floor and one trail.
 		Gate: apiControlGateOrNil(d.freezeControl),
 		// Account and API-Token administration — the SAME
@@ -233,7 +233,6 @@ func (apiSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		// read before it answers and fails closed, rather than reading the
 		// registry directly.
 		NodeReader: d.readLane,
-		Now:        d.now,
 		// Execution: the SAME *capability.Execution instance the MCP
 		// surface dispatches through — one capability layer, two thin surfaces
 		// (invariant 10), so Freeze/authz/blast-cap/audit and at-most-once carry
@@ -558,6 +557,15 @@ func apiControlGateOrNil(c *capability.Control) api.ControlGate {
 		return nil
 	}
 	return c
+}
+
+// apiRevocationsOrNil returns r as an api.Revocations, or an untyped nil when r
+// is nil, for the reason consoleTagsOrNil documents.
+func apiRevocationsOrNil(r *capability.Revocations) api.Revocations {
+	if r == nil {
+		return nil
+	}
+	return r
 }
 
 // apiEnrollmentTokensOrNil returns e as an api.TokenMinter, or an untyped nil

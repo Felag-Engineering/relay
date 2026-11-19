@@ -395,7 +395,7 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 
 	// denylist and conns implement immediate Node revocation (ADR-0006).
 	// denylist.Add is reached at runtime by revocationSvc.RevokeNode (the
-	// post-enroll revocation recheck and the Control API revoke path both call
+	// post-enroll revocation recheck and the capability layer's Node revoke both call
 	// it), which now ALSO persists the revocation to the registry. The registry
 	// is the authority; the denylist is a derived cache, rehydrated from
 	// registry.RevokedNodeIDs() below so a revoked Node stays refused across a
@@ -545,6 +545,10 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 	// is mounted on that path (see the ControlEnabled==false branch's comment
 	// below).
 	freezeControl := capability.NewControl(rec, roleGate, st.Freeze())
+
+	// Node and Enrollment Token revoke: the one entry point that authorizes,
+	// acts and records. It shares Control's Recorder, RoleGate and trail.
+	revocations := capability.NewRevocations(freezeControl, revocationActs{svc: revocationSvc})
 
 	// Account and API-Token administration: the same Accounts store and
 	// TokenService the authenticator and `relay init` use, so identity
@@ -729,7 +733,7 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 			approvals:          approvals,
 			jobs:               st.Jobs(),
 			tasks:              st.Tasks(),
-			revocation:         revocationSvc,
+			revocations:        revocations,
 			audit:              st.Audit(),
 			// The read-access sink (ADR-0025), for the MCP read tools and the
 			// Control API's Job-read route. Left nil, readAuditor's defensive

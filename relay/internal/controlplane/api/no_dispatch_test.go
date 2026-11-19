@@ -39,7 +39,10 @@ import (
 // also refuses any import of internal/enroll (no adapter holds enroll.Minter)
 // and any naming of the Authorizer (astguard.ControlAuthorizationViolations): a
 // route asks the capability layer's entry point for its act, which masks
-// caller-asserted attribution and records the refusal (invariant 10, EX-7).
+// caller-asserted attribution and records the refusal (invariant 10, EX-7). It
+// also refuses any import of internal/revocation and any naming of its revoke
+// act (astguard.RevocationViolations): a route revokes through the capability
+// layer's Revocations, which authorizes, acts and records together.
 
 const (
 	capabilityImportPath = "github.com/Felag-Engineering/relay/relay/internal/capability"
@@ -106,6 +109,7 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 	violations = append(violations, policyAliasViolations(fileName, file)...)
 	violations = append(violations, astguard.EnrollMinterViolations(fileName, file)...)
 	violations = append(violations, astguard.ControlAuthorizationViolations(fileName, file)...)
+	violations = append(violations, astguard.RevocationViolations(fileName, file)...)
 	return append(violations, tagInternalWriteViolations(fileName, file)...)
 }
 
@@ -264,6 +268,36 @@ import ` + capImport + `
 type D struct{ Authz capability.ControlAuthorizer }
 `,
 			wantSubstr: "capability.ControlAuthorizer",
+		},
+		{
+			name: "holding revocation.Service is refused",
+			src: `package api
+import "github.com/Felag-Engineering/relay/relay/internal/revocation"
+type D struct{ R *revocation.Service }
+`,
+			wantSubstr: "imports internal/revocation",
+		},
+		{
+			name: "declaring RevokeNode on a seam is refused",
+			src: `package api
+type R interface{ RevokeNode(nodeID string) }
+`,
+			wantSubstr: "RevokeNode",
+		},
+		{
+			name: "calling RevokeToken is refused",
+			src: `package api
+func f(d D) { _ = d.R.RevokeToken(nil, "t", nil) }
+`,
+			wantSubstr: "RevokeToken",
+		},
+		{
+			name: "asking the capability layer's Revocations is allowed",
+			src: `package api
+import ` + capImport + `
+func f(d D, p capability.Principal) { _ = d.Revocations.RevokeEnrollmentToken(nil, p, "t") }
+`,
+			wantSubstr: "",
 		},
 		{
 			name: "asking the capability layer's entry point is allowed",

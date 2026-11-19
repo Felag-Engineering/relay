@@ -62,37 +62,27 @@ var ErrRevokeReasonMalformed = errors.New("capability: a Node-revocation reason 
 // counts as a usable reason, so every surface that grows a revoke path records
 // the same thing.
 //
-// THE LIMIT OF THE GUARANTEE, stated because the comment on
-// ErrFreezeReasonRequired promises something stronger for Freeze and the
-// difference is not obvious. ReleaseFreeze cannot be bypassed: the ACTION
-// itself is a method on Control, so a surface that skips the check does not get
-// to release the Freeze at all. Node revocation has no such method — the
-// Control API calls revocation.Service.RevokeNodeRecorded directly, and only
-// authorization routes through the capability layer — so this is a validator a
-// surface must remember to call, not a gate it cannot get past.
+// No surface can revoke without a validated reason: the act itself is
+// Revocations.RevokeNodeWithReason, so a surface that skips the check does not
+// get to revoke at all, just as ReleaseFreeze cannot be bypassed.
 //
-// What that buys, precisely: POST /api/v1/nodes/{node_id}/revoke cannot revoke
-// unattributed. revocation.Service.RevokeToken cascade-revokes every Node an
-// Enrollment Token enrolled, reached by DELETE /api/v1/enrollment-tokens/{id};
-// the cascade now records one KindNodeRevoke per cascaded Node, attributed to
-// the same Principal as the KindTokenRevoke row for the token itself, with a
-// reason from CascadeRevokeReason. revocation.Service still has no
-// audit sink of its own — it imports neither internal/audit nor
-// internal/capability (see revocation.RevocationRecorder) — so each record is
-// written by a CALLER-supplied recorder, and its content is authored at the
-// surface that authenticated the operator while the set of Nodes is decided
-// inside the cascade's re-scan, the only place that knows it.
+// The Enrollment Token revoke cascades to every Node the token enrolled. The
+// cascade records one KindNodeRevoke per cascaded Node, attributed to the same
+// Principal as the KindTokenRevoke row for the token itself, with a reason from
+// CascadeRevokeReason. revocation.Service has no audit sink of its own (it
+// imports neither internal/audit nor internal/capability), so each record is
+// written by a recorder Revocations supplies: its content is authored by
+// Revocations, from the Principal the surface authenticated, while the set of
+// Nodes is decided inside the cascade's re-scan, the only place that knows it.
 //
-// "Cannot revoke unattributed" holds on the single-Node route in one of two
-// ways: either this reason is recorded through the caller's own
-// call, or — when this Relay process already wrote a node_revoke record for
-// this Node through a cascade — the record that already exists is the one
-// that stays attributed, and RevokeNodeRecorded revokes without writing a
-// second one. Either way there is at least one record naming who ordered the
-// revocation and why — a repeat operator revoke of an already-recorded Node
-// deliberately writes a second one instead of suppressing itself, so "at
-// least one" is the guarantee, not "exactly one"; see RevokeNodeRecorded's
-// doc for the exact scope of that suppression.
+// A Node revoke always leaves at least one record naming who ordered it and
+// why: either this reason is recorded through the call's own recorder, or, when
+// this Relay process already wrote a node_revoke record for this Node through a
+// cascade, the record that already exists stays attributed and
+// RevokeNodeRecorded revokes without writing a second one. A repeat operator
+// revoke of an already-recorded Node deliberately writes a second one instead of
+// suppressing itself, so "at least one" is the guarantee, not "exactly one"; see
+// RevokeNodeRecorded's doc for the exact scope of that suppression.
 //
 // enroll.Service also revokes a just-minted identity when enrollment fails
 // partway (its own nodeDenylister, never this validator). That one is correct

@@ -54,9 +54,6 @@ func newRoleFixture(t *testing.T, role accounts.Role, kind accounts.Kind, d Deps
 	if d.Gate == nil {
 		d.Gate = newTestGate(new(fakeCapabilityAuditSink))
 	}
-	if d.Now == nil {
-		d.Now = fixedNow
-	}
 	authn := controlplane.NewAuthenticator(roleVerifier{credential: testCredential, role: role, kind: kind})
 	mux := http.NewServeMux()
 	Register(mux, d)
@@ -72,7 +69,7 @@ func newTestGate(sink capability.AuditSink) ControlGate {
 // wantLayerRefusal asserts a 403 whose body carries the gate's own reason,
 // exactly one refusal recorded by the capability layer attributed to the
 // caller, and no second record from the surface.
-func wantLayerRefusal(t *testing.T, rec *httptest.ResponseRecorder, sink *mintSink, auditor *fakeAuditor, role accounts.Role) {
+func wantLayerRefusal(t *testing.T, rec *httptest.ResponseRecorder, sink *mintSink, role accounts.Role) {
 	t.Helper()
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403; body = %s", rec.Code, rec.Body.String())
@@ -100,8 +97,8 @@ func wantLayerRefusal(t *testing.T, rec *httptest.ResponseRecorder, sink *mintSi
 	if problem.Detail != got.Reason {
 		t.Errorf("problem detail = %q, want the recorded Reason %q", problem.Detail, got.Reason)
 	}
-	if records := auditor.all(); len(records) != 0 {
-		t.Errorf("surface audit records = %+v, want none: the layer records the refusal, the surface writes no second", records)
+	if events := sink.revokeEvents(); len(events) != 0 {
+		t.Errorf("revoke events = %+v, want none: a refused caller revokes nothing", events)
 	}
 }
 
@@ -119,12 +116,11 @@ func TestMintToken_RequiresAdmin(t *testing.T) {
 	for _, role := range []accounts.Role{accounts.RoleViewer, accounts.RoleOperator} {
 		t.Run(string(role)+" is refused", func(t *testing.T) {
 			minter := newRecordingMinter(t)
-			auditor := &fakeAuditor{}
 			sink := newMintSink()
-			h := newRoleFixture(t, role, accounts.KindMachine, Deps{Tokens: minter, Audit: auditor, Gate: newTestGate(sink)})
+			h := newRoleFixture(t, role, accounts.KindMachine, Deps{Tokens: minter, Gate: newTestGate(sink)})
 
 			rec := do(t, h, http.MethodPost, "/api/v1/enrollment-tokens", body)
-			wantLayerRefusal(t, rec, sink, auditor, role)
+			wantLayerRefusal(t, rec, sink, role)
 
 			// Nothing was minted: the refusal must precede the act, not
 			// annotate it.
@@ -135,10 +131,9 @@ func TestMintToken_RequiresAdmin(t *testing.T) {
 	}
 
 	t.Run("admin is permitted", func(t *testing.T) {
-		auditor := &fakeAuditor{}
 		sink := newMintSink()
 		h := newRoleFixture(t, accounts.RoleAdmin, accounts.KindMachine, Deps{
-			Tokens: newTestEnrollmentTokensWithSink(t, enroll.NewService(enroll.NewMemoryRepository()), sink), Audit: auditor,
+			Tokens: newTestEnrollmentTokensWithSink(t, enroll.NewService(enroll.NewMemoryRepository()), sink),
 		})
 
 		rec := do(t, h, http.MethodPost, "/api/v1/enrollment-tokens", body)
@@ -147,9 +142,6 @@ func TestMintToken_RequiresAdmin(t *testing.T) {
 		}
 		if events := sink.mintEvents(); len(events) != 1 {
 			t.Errorf("capability mint events = %+v, want exactly one", events)
-		}
-		if records := auditor.all(); len(records) != 0 {
-			t.Errorf("audit records = %+v, want none from the surface", records)
 		}
 	})
 }
@@ -167,12 +159,11 @@ func TestRevokeToken_RequiresAdmin(t *testing.T) {
 	for _, role := range []accounts.Role{accounts.RoleViewer, accounts.RoleOperator} {
 		t.Run(string(role)+" is refused", func(t *testing.T) {
 			tr := &fakeTokenRevoker{}
-			auditor := &fakeAuditor{}
 			sink := newMintSink()
-			h := newRoleFixture(t, role, accounts.KindMachine, Deps{TokenRevoker: tr, Audit: auditor, Gate: newTestGate(sink)})
+			h := newRoleFixture(t, role, accounts.KindMachine, Deps{Revocations: newTestRevocations(sink, revokers{tr: tr})})
 
 			rec := do(t, h, http.MethodDelete, "/api/v1/enrollment-tokens/tok-1", nil)
-			wantLayerRefusal(t, rec, sink, auditor, role)
+			wantLayerRefusal(t, rec, sink, role)
 
 			if len(tr.calledWith) != 0 {
 				t.Errorf("TokenRevoker.RevokeToken called with %v on a refused request", tr.calledWith)
@@ -182,8 +173,7 @@ func TestRevokeToken_RequiresAdmin(t *testing.T) {
 
 	t.Run("admin is permitted", func(t *testing.T) {
 		tr := &fakeTokenRevoker{}
-		auditor := &fakeAuditor{}
-		h := newRoleFixture(t, accounts.RoleAdmin, accounts.KindMachine, Deps{TokenRevoker: tr, Audit: auditor})
+		h := newRoleFixture(t, accounts.RoleAdmin, accounts.KindMachine, Deps{Revocations: newTestRevocations(newMintSink(), revokers{tr: tr})})
 
 		rec := do(t, h, http.MethodDelete, "/api/v1/enrollment-tokens/tok-1", nil)
 		if rec.Code != http.StatusNoContent {
@@ -203,12 +193,14 @@ func TestRevokeNode_RequiresAdmin(t *testing.T) {
 	for _, role := range []accounts.Role{accounts.RoleViewer, accounts.RoleOperator} {
 		t.Run(string(role)+" is refused", func(t *testing.T) {
 			nr := &fakeNodeRevoker{}
-			auditor := &fakeAuditor{}
 			sink := newMintSink()
-			h := newRoleFixture(t, role, accounts.KindMachine, Deps{Nodes: nr, Audit: auditor, Gate: newTestGate(sink)})
+			h := newRoleFixture(t, role, accounts.KindMachine, Deps{
+				Revocations: newTestRevocations(sink, revokers{nr: nr}),
+				Gate:        newTestGate(sink),
+			})
 
 			rec := do(t, h, http.MethodPost, "/api/v1/nodes/node-abc/revoke", nil)
-			wantLayerRefusal(t, rec, sink, auditor, role)
+			wantLayerRefusal(t, rec, sink, role)
 
 			if len(nr.calledWith) != 0 {
 				t.Errorf("NodeRevoker.RevokeNodeRecorded called with %v on a refused request; the Tunnel must stay up", nr.calledWith)
@@ -218,8 +210,7 @@ func TestRevokeNode_RequiresAdmin(t *testing.T) {
 
 	t.Run("admin is permitted", func(t *testing.T) {
 		nr := &fakeNodeRevoker{}
-		auditor := &fakeAuditor{}
-		h := newRoleFixture(t, accounts.RoleAdmin, accounts.KindMachine, Deps{Nodes: nr, Audit: auditor})
+		h := newRoleFixture(t, accounts.RoleAdmin, accounts.KindMachine, Deps{Revocations: newTestRevocations(newMintSink(), revokers{nr: nr})})
 
 		rec := do(t, h, http.MethodPost, "/api/v1/nodes/node-abc/revoke",
 			map[string]string{"reason": "role gate fixture"})
@@ -241,7 +232,7 @@ func TestRevokeNode_RequiresAdmin(t *testing.T) {
 func newFreezeFixture(t *testing.T, role accounts.Role, kind accounts.Kind) (http.Handler, *fakeFreezer) {
 	t.Helper()
 	fz := &fakeFreezer{gate: authz.NewRoleGate()}
-	return newRoleFixture(t, role, kind, Deps{Freeze: fz, Audit: &fakeAuditor{}}), fz
+	return newRoleFixture(t, role, kind, Deps{Freeze: fz}), fz
 }
 
 // TestFreezeEngage_RequiresHumanOperator is the review amendment on #397: the
@@ -358,23 +349,22 @@ func TestAdministrativeRoutes_RefuseWithoutAGate(t *testing.T) {
 	}{
 		{http.MethodPost, "/api/v1/enrollment-tokens",
 			mintTokenRequest{InitialTags: []string{"tag:env=prod"}, TTLSeconds: 3600, MaxUses: 1},
-			Deps{Tokens: newTestEnrollmentTokens(t, enroll.NewService(enroll.NewMemoryRepository())), Audit: &fakeAuditor{}}},
+			Deps{Tokens: newTestEnrollmentTokens(t, enroll.NewService(enroll.NewMemoryRepository()))}},
 		{http.MethodDelete, "/api/v1/enrollment-tokens/tok-1", nil,
-			Deps{TokenRevoker: &fakeTokenRevoker{}, Audit: &fakeAuditor{}}},
+			Deps{}},
 		{http.MethodPost, "/api/v1/nodes/node-abc/revoke", nil,
-			Deps{Nodes: &fakeNodeRevoker{}, Audit: &fakeAuditor{}}},
+			Deps{Revocations: newTestRevocations(newMintSink(), revokers{nr: &fakeNodeRevoker{}})}},
 		// The identity routes (#653): a nil AccountAdmin must refuse with 500,
 		// on the same unwired-gate posture as every other administrative
 		// route here, rather than falling open now that the floor lives in
 		// the capability layer instead of a per-handler requireAdmin call.
 		{http.MethodGet, "/api/v1/accounts", nil,
-			Deps{Audit: &fakeAuditor{}}},
+			Deps{}},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
 			d := tc.deps
-			d.Now = fixedNow
 			// Explicitly NOT newRoleFixture: that helper supplies the
 			// production gate, and the point here is its absence.
 			authn := controlplane.NewAuthenticator(staticVerifier{credential: testCredential})
