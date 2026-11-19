@@ -347,6 +347,7 @@ impl DedupStore {
 /// the human reviewer in the PR description.
 fn already_processed_result(task_id: &str) -> TaskResult {
     TaskResult {
+        policy_rule: None,
         task_id: task_id.to_string(),
         outcome: Outcome::Success as i32,
         exit_code: 0,
@@ -577,6 +578,7 @@ mod tests {
     /// the benign already-processed result (which has empty stdout).
     fn make_task_result(task_id: &str) -> TaskResult {
         TaskResult {
+            policy_rule: None,
             task_id: task_id.to_string(),
             outcome: Outcome::Success as i32,
             exit_code: 0,

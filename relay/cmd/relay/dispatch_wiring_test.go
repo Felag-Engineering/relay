@@ -1170,3 +1170,90 @@ func TestDispatchWiring_AHaltClosingAfterASiblingPassedAdmitWithholdsItsSend(t *
 		t.Errorf("InFlight = %v, %v; want empty", inFlight, err)
 	}
 }
+
+// A Task the daemon's Policy denies reaches the audit trail with the pass and
+// rule reference the daemon reported, through the real store, Router, engine and
+// sink, and the chain still verifies. The Operation is read-class, so the row
+// keeps the reference and drops the Stderr.
+// Proves EX-70.
+func TestDispatchWiring_APolicyDenyReachesTheAuditTrailAndTheChainVerifies(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "relay.db")
+	st, err := store.Open(path)
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { st.Close() })
+	tasks := st.Tasks()
+	router, _, _ := newDispatchStack(tasks, nil, nil)
+
+	if _, err := st.Registry().Upsert(linuxNode("node-1")); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	router.Register("node-1", func(msg *relayv1.RelayMessage) error {
+		if task := msg.GetTask(); task != nil {
+			go router.Deliver("node-1", &relayv1.TaskResult{
+				TaskId:  task.GetTaskId(),
+				Outcome: relayv1.Outcome_OUTCOME_DENIED_BY_POLICY,
+				Stderr:  []byte("no allow rule for these arguments"),
+				PolicyRule: &relayv1.PolicyRuleRef{
+					Pass:        relayv1.PolicyPass_POLICY_PASS_DENY,
+					RuleSection: relayv1.PolicyRuleSection_POLICY_RULE_SECTION_DENY,
+					RuleIndex:   1,
+					RuleLine:    12,
+				},
+			})
+		}
+		return nil
+	})
+
+	q := auditquery.New(st.AuditQueries(), st.JobQueries())
+	capSvc := newCapService(t, capSeams{
+		reg:       st.Registry(),
+		authz:     allowAllTestAuthorizer{},
+		settings:  blastCaps(10, 10),
+		audit:     auditsink.New(st.Audit()),
+		freeze:    st.Freeze(),
+		auditQ:    q,
+		jobQ:      q,
+		jobsRepo:  st.Jobs(),
+		tasksRepo: tasks,
+		conduit:   router,
+	})
+	results, err := capSvc.Run(context.Background(), capability.Principal{Account: "devharness"}, fleetSelector(t),
+		jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(results) != 1 || results[0].Outcome != jobs.OutcomeDeniedByPolicy {
+		t.Fatalf("results = %+v, want one denied_by_policy", results)
+	}
+
+	recs, err := st.Audit().ByJob(context.Background(), results[0].JobID)
+	if err != nil {
+		t.Fatalf("ByJob: %v", err)
+	}
+	var outcome *audit.Record
+	for i := range recs {
+		if recs[i].Kind == audit.KindDispatch {
+			outcome = &recs[i]
+		}
+	}
+	if outcome == nil {
+		t.Fatalf("no dispatch outcome row among %d records", len(recs))
+	}
+	want := jobs.PolicyRuleRef{Pass: "deny", RuleSection: "deny", RuleIndex: 1, RuleLine: 12}
+	if outcome.PolicyRule != want {
+		t.Errorf("PolicyRule = %+v, want %+v", outcome.PolicyRule, want)
+	}
+	if len(outcome.Stderr) != 0 {
+		t.Errorf("a read-class row kept Stderr %q", outcome.Stderr)
+	}
+
+	verdict, err := store.VerifyAuditChain(context.Background(), path, nil)
+	if err != nil {
+		t.Fatalf("VerifyAuditChain: %v", err)
+	}
+	if !verdict.Intact() {
+		t.Errorf("verdict = %+v, want an intact chain", verdict)
+	}
+}

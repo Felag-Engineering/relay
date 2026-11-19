@@ -28,8 +28,9 @@ const insertAuditSQL = `
 	                   account_id, account_name, account_role, token_id, auth_method, verified_source,
 	                   asserted_on_behalf_of, asserted_traceparent, asserted_session_ref, asserted_change_ref,
 	                   approval_id, grant_id, approval_answer, decision_channel, plan_hash,
+	                   policy_pass, policy_rule_section, policy_rule_index, policy_rule_line,
 	                   seq, prev_hash, hash)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 // auditInsertArgs builds the ordered argument list for insertAuditSQL from r.
 //
@@ -57,12 +58,19 @@ func auditInsertArgs(r audit.Record) ([]any, error) {
 	}
 
 	v, as := r.Attribution.Verified, r.Attribution.Asserted
+	// The index and line are NULL with the group absent, and both integers
+	// (0 included) once it is set, so a group read back is the group written.
+	var ruleIndex, ruleLine any
+	if !r.PolicyRule.IsZero() {
+		ruleIndex, ruleLine = r.PolicyRule.RuleIndex, r.PolicyRule.RuleLine
+	}
 	return []any{
 		r.ID, formatAuditTime(r.Timestamp), r.Kind, r.Principal, r.Selector, r.JobID, nullIfEmpty(r.NodeID), r.ActionKind,
 		nullIfEmpty(r.OperationName), argsJSON, argvJSON, int(r.Outcome), nullIfEmpty(r.Reason), r.Stdout, r.Stderr, boolToInt(r.Truncated),
 		nullIfEmpty(v.AccountID), nullIfEmpty(v.AccountName), nullIfEmpty(v.Role), nullIfEmpty(v.TokenID), nullIfEmpty(v.Method), nullIfEmpty(v.Source),
 		nullIfEmpty(as.OnBehalfOf), nullIfEmpty(as.Traceparent), nullIfEmpty(as.SessionRef), nullIfEmpty(as.ChangeRef),
 		nullIfEmpty(r.ApprovalID), nullIfEmpty(r.GrantID), nullIfEmpty(r.ApprovalAnswer), nullIfEmpty(r.DecisionChannel), nullIfEmpty(r.PlanHash),
+		nullIfEmpty(r.PolicyRule.Pass), nullIfEmpty(r.PolicyRule.RuleSection), ruleIndex, ruleLine,
 	}, nil
 }
 
@@ -233,10 +241,24 @@ func (a *sqliteAudit) query(ctx context.Context, whereClause string, args ...any
 }
 
 // auditRecordColumns is the column list scanAuditRecord reads, in its order.
-// The readers, the migration 28 back-fill and the verifier all select it, so a
-// Record is decoded one way everywhere — which is what lets the verifier
-// re-derive exactly the bytes the writer hashed.
-const auditRecordColumns = `audit_id, ts, kind, principal, selector, job_id, node_id, action_kind, operation_name, args, raw_exec_argv, outcome, reason, stdout, stderr, truncated,
+// The readers select it. The migration 28 back-fill and the verifier select the
+// same columns in the same order, with auditPolicyRuleAbsent standing in for the
+// four policy columns where the schema may predate migration 38. That shared
+// order keeps a Record decoded one way everywhere, which is what lets the
+// verifier re-derive exactly the bytes the writer hashed.
+const auditRecordColumns = auditRecordColumnsV1 + `, ` + auditPolicyRuleColumns
+
+// auditPolicyRuleColumns are the four columns migration 0038 added, read last.
+const auditPolicyRuleColumns = `policy_pass, policy_rule_section, policy_rule_index, policy_rule_line`
+
+// auditPolicyRuleAbsent stands in for auditPolicyRuleColumns when reading a
+// schema that predates them, so the same scan decodes the row with no group.
+const auditPolicyRuleAbsent = `NULL, NULL, NULL, NULL`
+
+// auditRecordColumnsV1 is the column list as migration 28 left it, frozen: the
+// back-fill runs before 0038 on a store upgrading from before 28, when the
+// policy columns do not exist yet.
+const auditRecordColumnsV1 = `audit_id, ts, kind, principal, selector, job_id, node_id, action_kind, operation_name, args, raw_exec_argv, outcome, reason, stdout, stderr, truncated,
 	       account_id, account_name, account_role, token_id, auth_method, verified_source,
 	       asserted_on_behalf_of, asserted_traceparent, asserted_session_ref, asserted_change_ref,
 	       approval_id, grant_id, approval_answer, decision_channel, plan_hash`
@@ -260,12 +282,15 @@ func scanAuditRecord(sc interface{ Scan(...any) error }, lead ...any) (audit.Rec
 		onBehalfOf, traceparent, sessionRef, changeRef       sql.NullString
 		approvalID, grantID                                  sql.NullString
 		approvalAnswer, decisionChannel, planHash            sql.NullString
+		policyPass, policyRuleSection                        sql.NullString
+		policyRuleIndex, policyRuleLine                      sql.NullInt64
 	)
 	dest := append(lead, &id, &ts, &kind, &principal, &selector, &jobID, &nodeID, &actionKind,
 		&operationName, &argsJSON, &argvJSON, &outcome, &reason, &stdout, &stderr, &truncated,
 		&accountID, &accountName, &accountRole, &tokenID, &authMethod, &verifiedSource,
 		&onBehalfOf, &traceparent, &sessionRef, &changeRef,
-		&approvalID, &grantID, &approvalAnswer, &decisionChannel, &planHash)
+		&approvalID, &grantID, &approvalAnswer, &decisionChannel, &planHash,
+		&policyPass, &policyRuleSection, &policyRuleIndex, &policyRuleLine)
 	if err := sc.Scan(dest...); err != nil {
 		return audit.Record{}, fmt.Errorf("scan audit row: %w", err)
 	}
@@ -319,5 +344,11 @@ func scanAuditRecord(sc interface{ Scan(...any) error }, lead ...any) (audit.Rec
 		ApprovalAnswer:  approvalAnswer.String,
 		DecisionChannel: decisionChannel.String,
 		PlanHash:        planHash.String,
+		PolicyRule: jobs.PolicyRuleRef{
+			Pass:        policyPass.String,
+			RuleSection: policyRuleSection.String,
+			RuleIndex:   int(policyRuleIndex.Int64),
+			RuleLine:    int(policyRuleLine.Int64),
+		},
 	}, nil
 }

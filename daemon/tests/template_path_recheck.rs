@@ -21,7 +21,7 @@ use relay_exec::executor::ExecRequest;
 use relay_ops::operations::registry::{OpCtx, OpFuture, ResolvedOp, Runner};
 use relay_ops::operations::template::{compile, RiskClassDef, SlotDef, SlotType, TemplateDef};
 use relay_policy::Policy;
-use relay_proto::{Operation, Outcome, TaskResult};
+use relay_proto::{Operation, Outcome, PolicyPass, PolicyRuleSection, TaskResult};
 use shell_runner::path_fixtures;
 
 /// Records every request it is handed and reports success without spawning.
@@ -171,6 +171,29 @@ async fn a_symlink_to_a_denied_file_is_denied_by_policy() {
         runner.argvs().is_empty(),
         "a denied Task never reaches the runner"
     );
+}
+
+// A resolved-target denial is a Policy decision, so it reports the rule that
+// decided it, as a first-pass denial does.
+// Proves EX-70.
+#[tokio::test]
+async fn resolved_path_recheck_deny_carries_the_rule_reference() {
+    let (_guard, root) = path_fixtures("recheck-rule-ref", &["/secret"]);
+    let denied = format!("{root}/secret");
+    let link = format!("{root}/innocent-link");
+    std::os::unix::fs::symlink(&denied, &link).expect("create the symlink");
+    let policy = policy_denying(&denied);
+    let runner = Recording::default();
+
+    let r = checksum(&policy, &link, Duration::from_secs(5), &runner).await;
+    assert_eq!(r.outcome, Outcome::DeniedByPolicy as i32);
+    let rule = r
+        .policy_rule
+        .expect("a re-check denial carries policy_rule");
+    assert_eq!(rule.pass, PolicyPass::Deny as i32);
+    assert_eq!(rule.rule_section, PolicyRuleSection::Deny as i32);
+    assert_eq!(rule.rule_index, 0);
+    assert_ne!(rule.rule_line, 0);
 }
 
 #[test]

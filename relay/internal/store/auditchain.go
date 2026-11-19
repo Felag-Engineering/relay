@@ -105,8 +105,10 @@ type backfillRow struct {
 // insertion order. It fully reads and closes its Rows before returning: the
 // caller then writes on the same transaction.
 func readBackfillBatch(ctx context.Context, tx *sql.Tx, after int64) ([]backfillRow, error) {
+	// The frozen V1 projection, never auditRecordColumns: this is migration 28's
+	// step, which runs before migration 38 on a store upgrading from before 28.
 	rows, err := tx.QueryContext(ctx,
-		`SELECT rowid, `+auditRecordColumns+` FROM audit WHERE seq IS NULL AND rowid > ? ORDER BY rowid LIMIT ?`,
+		`SELECT rowid, `+auditRecordColumnsV1+`, `+auditPolicyRuleAbsent+` FROM audit WHERE seq IS NULL AND rowid > ? ORDER BY rowid LIMIT ?`,
 		after, auditChainBackfillBatch)
 	if err != nil {
 		return nil, fmt.Errorf("read audit rows to chain: %w", err)
@@ -302,7 +304,19 @@ func VerifyAuditChain(ctx context.Context, path string, anchors []audit.ChainAnc
 		return verdict, errors.New("store predates the audit chain (migration 28 not applied)")
 	}
 
-	brk, err := walkAuditChain(ctx, tx, verifier)
+	// A store with the chain but not yet migration 38 (a verifier run right after
+	// a package upgrade, before the Relay restarts) has no policy columns.
+	policyColumns := auditPolicyRuleColumns
+	var hasPolicy int
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM pragma_table_info('audit') WHERE name = 'policy_pass'`).Scan(&hasPolicy); err != nil {
+		return verdict, fmt.Errorf("inspect audit schema: %w", err)
+	}
+	if hasPolicy == 0 {
+		policyColumns = auditPolicyRuleAbsent
+	}
+
+	brk, err := walkAuditChain(ctx, tx, verifier, policyColumns)
 	if err != nil {
 		return verdict, err
 	}
@@ -344,9 +358,12 @@ func VerifyAuditChain(ctx context.Context, path string, anchors []audit.ChainAnc
 
 // walkAuditChain streams the chained rows in seq order through verifier and
 // stops at the first break.
-func walkAuditChain(ctx context.Context, tx *sql.Tx, verifier *audit.ChainVerifier) (*audit.ChainBreak, error) {
+// policyColumns is auditPolicyRuleColumns, or auditPolicyRuleAbsent on a store
+// that predates them.
+func walkAuditChain(ctx context.Context, tx *sql.Tx, verifier *audit.ChainVerifier, policyColumns string) (*audit.ChainBreak, error) {
 	rows, err := tx.QueryContext(ctx,
-		`SELECT seq, prev_hash, hash, `+auditRecordColumns+` FROM audit WHERE seq IS NOT NULL ORDER BY seq`)
+		//nolint:gosec // G202: policyColumns is one of two constant column lists, never caller input
+		`SELECT seq, prev_hash, hash, `+auditRecordColumnsV1+`, `+policyColumns+` FROM audit WHERE seq IS NOT NULL ORDER BY seq`)
 	if err != nil {
 		return nil, fmt.Errorf("read audit chain: %w", err)
 	}

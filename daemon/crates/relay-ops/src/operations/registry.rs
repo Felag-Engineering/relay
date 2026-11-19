@@ -42,6 +42,7 @@ use crate::operations::pkg_install::pkg_install;
 use crate::operations::service_restart::service_restart;
 use crate::operations::system_facts::{format_facts_as_kv, gather_facts};
 use crate::policy::{Decision, Policy, Request};
+use crate::policy_wire::policy_rule_ref;
 
 // ---------------------------------------------------------------------------
 // Handler plumbing
@@ -335,6 +336,7 @@ fn system_facts_via(gate: BlockingGate, ctx: OpCtx<'_>) -> OpFuture<'_> {
         let work = async {
             let stdout = gate.run(|| format_facts_as_kv(&gather_facts())).await;
             TaskResult {
+                policy_rule: None,
                 task_id: task_id.clone(),
                 outcome: Outcome::Success as i32,
                 exit_code: 0,
@@ -375,8 +377,12 @@ fn file_read_via(gate: BlockingGate, ctx: OpCtx<'_>) -> OpFuture<'_> {
                 positional: std::slice::from_ref(&resolved_owned),
                 path_positions: &FILE_READ_PATH_POSITIONS,
             };
-            match policy.decide(&request).decision {
-                Decision::Deny { reason, .. } => PathCheck::Denied(reason),
+            let explained = policy.decide(&request);
+            match explained.decision {
+                Decision::Deny { ref reason, .. } => PathCheck::Denied {
+                    reason: reason.clone(),
+                    rule: policy_rule_ref(&explained),
+                },
                 Decision::Allow(_) => PathCheck::Allowed,
             }
         });
@@ -506,6 +512,7 @@ pub(crate) async fn bounded_by_task_timeout<T>(
 /// no output, the time spent since `started`.
 fn timeout_result(task_id: &str, started: tokio::time::Instant) -> TaskResult {
     TaskResult {
+        policy_rule: None,
         task_id: task_id.to_string(),
         outcome: Outcome::Timeout as i32,
         exit_code: -1,
@@ -860,6 +867,7 @@ allowed_args = [["*"]]
             let task_id = req.task_id;
             Box::pin(async move {
                 TaskResult {
+                    policy_rule: None,
                     task_id,
                     outcome: Outcome::Success as i32,
                     exit_code: 0,

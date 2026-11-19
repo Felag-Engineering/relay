@@ -91,10 +91,17 @@ func ParseChainAnchor(s string) (ChainAnchor, error) {
 const canonicalTimeLayout = "2006-01-02T15:04:05.000000000Z"
 
 // CanonicalBytes is the v1 encoding of r that the chain hashes. Each of the
-// 31 fields is written as uint32be(len) followed by its bytes, in a fixed
-// order. It encodes the decoded Record, so two stored spellings of one Record
-// (NULL and ” for an empty string, two renderings of one instant) hash
-// alike; nil and empty maps, slices and byte slices are the same.
+// 31 base fields is written as uint32be(len) followed by its bytes, in a fixed
+// order. A record that carries a Policy rule reference then appends one
+// optional trailing group: the tag "policy_rule", the pass and section as
+// length-prefixed strings, and the index and line as two's-complement uint64s.
+// A record without one writes no group, so its bytes are exactly the 31 fields,
+// as they were before the group existed: that is what lets a trail written
+// before the group verify beside rows written after it. The base fields are
+// self-delimiting, so whether bytes follow PlanHash is unambiguous. It encodes
+// the decoded Record, so two stored spellings of one Record (NULL and ” for
+// an empty string, two renderings of one instant) hash alike; nil and empty
+// maps, slices and byte slices are the same.
 func CanonicalBytes(r Record) []byte {
 	var b []byte
 	field := func(s string) {
@@ -158,6 +165,14 @@ func CanonicalBytes(r Record) []byte {
 	field(r.ApprovalAnswer)
 	field(r.DecisionChannel)
 	field(r.PlanHash)
+
+	if !r.PolicyRule.IsZero() {
+		field("policy_rule")
+		field(r.PolicyRule.Pass)
+		field(r.PolicyRule.RuleSection)
+		b = binary.BigEndian.AppendUint64(b, uint64(int64(r.PolicyRule.RuleIndex))) //nolint:gosec // G115: two's-complement bits of the int64, which is the encoding
+		b = binary.BigEndian.AppendUint64(b, uint64(int64(r.PolicyRule.RuleLine)))  //nolint:gosec // G115: two's-complement bits of the int64, which is the encoding
+	}
 	return b
 }
 

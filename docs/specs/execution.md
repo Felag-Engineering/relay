@@ -1,6 +1,6 @@
 # Execution
 
-**Status:** designed, not built, as of `2026-11-18`.
+**Status:** current as of `2026-11-19`.
 **Claim prefix:** `EX`
 **Governed by:** ADR-0054, ADR-0001, ADR-0011, ADR-0012, ADR-0013, ADR-0014, ADR-0021, ADR-0025,
 ADR-0027, ADR-0042, ADR-0047, ADR-0049, ADR-0052; invariants 1, 4, 5, 10, 11, 12, 13, 14.
@@ -180,6 +180,11 @@ server, by rules kept there (its Policy), after everything here has passed.
   cap checker, the no-op audit sink or the no-op Freeze store: construction refuses each.
 - **EX-47** The capability layer imports no wire-protocol or database package; a lint rule
   enforces it.
+- **EX-70** A Task the daemon's Policy denies carries, on its `TaskResult` and on its outcome in
+  the audit trail, the stage of the daemon's decision that denied it and where the deciding rule
+  sits in the Node's Policy (section, index and line), as the daemon reported them. Display-only:
+  no Relay decision reads them (invariant 12), and `relay-audit-verify` passes over a trail mixing
+  records written before and after this.
 
 ## Refusals
 
@@ -212,12 +217,6 @@ differs from an outcome, where a Job ran and a Node failed; a cancel refusal lea
 - **EX-56** A cancel below `operator` is refused before any Task is touched. A machine Account's
   cancel of a Job it did not request, or of one with no verified requester, is refused and
   audited, and the Job continues.
-
-## Designed, not built
-
-| Claim | Statement | Milestone |
-|---|---|---|
-| EX-70 | A Task the daemon's Policy denies carries, on its `TaskResult` and on its outcome in the audit trail, the stage of the daemon's decision that denied it and where the deciding rule sits in the Node's Policy (section, index and line), as the daemon reported them. Display-only: no Relay decision reads them (invariant 12), and `relay-audit-verify` passes over a trail mixing records written before and after this. | v0.2.2 |
 
 ## Out of scope
 
@@ -309,6 +308,7 @@ differs from an outcome, where a Job ran and a Node failed; a cancel refusal lea
 | EX-66 | `TestGetJob_ReportsTheOutcomeAuditFailure`, `TestMCP_GetJobShowsAFailedOutcomeWrite`, `TestOpenAPISpec_JobsDocumentTheOutcomeAuditFailure`, `TestRenderJob_CarriesTheOutcomeAuditFailureWithTheFixedReason`, `TestRun_AFailedDispatchRecordIsRecordedOnTheJob`, `TestRun_AFailedHaltRecordIsRecordedOnTheJob`, `TestStart_AFailedDispatchRecordIsRecordedOnTheJobBeforeDoneCloses`, `TestStart_AFailedHaltRecordIsRecordedOnTheJobBeforeDoneCloses` | API, MCP, capability, control plane |
 | EX-67 | `TestCallShape_EmptyArgvFromAnOperatorIsUnauthorized`, `TestCallShape_EmptyRawExecArgvIsRefusedAuditedWithNoJob`, `TestControlAPI_CallShapeRefusalRendersIdenticallyOnBothSurfaces`, `TestMCP_ExecutionToolsInputSchemaConstraints`, `TestMCP_RawExec_EmptyArgvIsRefusedByTheLayer`, `TestRawExec_EmptyArgvReachesTheCapabilityLayer`, `TestStart_MalformedCallMatchingNoNodeIsRefusedAsNoNodesMatched` | API, MCP, Relay, capability |
 | EX-69 | `TestDispatch_MoreThanOneIdempotencyKeyIsABadRequest`, `TestMCP_ExecutionToolsInputSchemaConstraints`, `TestPlanMode_WaitSecondsOutsideItsRangeIsABadRequest` | API, MCP |
+| EX-70 | `TestAudit_PolicyRuleRoundTrips`, `TestDispatchWiring_APolicyDenyReachesTheAuditTrailAndTheChainVerifies`, `TestDispatch_ADeniedTaskCarriesTheDaemonsRuleReferenceToItsOutcomeRecord`, `TestDispatch_NoDecisionReadsThePolicyRule`, `TestMapping_AuditRowCarriesThePolicyRule`, `TestPolicyRuleRef_IsReadOnlyWhereItIsRecorded`, `TestRecordDispatch_ADeniedTaskRecordsTheRuleReferenceOnEveryRiskClass`, `TestRecordDispatch_NoRuleReferenceOnAnOutcomeThatIsNotAPolicyDeny`, `TestResult_APolicyDenyCarriesTheDaemonsRuleReference`, `TestResult_ARuleReferenceOnAnyOtherOutcomeIsDropped`, `TestResult_UnrecognisedPassAndSectionAreDropped`, `TestVerifyAuditChain_AStoreWithoutThePolicyRuleColumnsVerifies`, `TestVerifyAuditChain_ATrailMixingRowsWrittenBeforeAndAfterThePolicyRuleVerifies`, `TestVerifyAuditChain_AnEditedRuleReferenceIsNamed`, `allowed_unsupported_and_refused_results_carry_no_policy_rule`, `an_unresolvable_path_denial_carries_no_policy_rule`, `denied_task_result_carries_the_deciding_rule_reference`, `policy_query_verdict_matches_execution`, `resolved_path_recheck_deny_carries_the_rule_reference`, `resolved_target_recheck_denies_symlinked_deny_target` | Relay, auditquery, auditsink, capability, daemon, dispatch, jobs, store |
 
 Unproven: none.
 <!-- proof:end -->

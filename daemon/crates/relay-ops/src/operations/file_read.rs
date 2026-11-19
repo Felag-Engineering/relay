@@ -26,7 +26,7 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::io::AsRawFd;
 
 use super::registry::BlockingGate;
-use crate::gen::{Outcome, TaskResult};
+use crate::gen::{Outcome, PolicyRuleRef, TaskResult};
 use crate::not_executed::{denied_by_policy_result, not_executed};
 
 /// Result of the layer-2 resolved-target Policy re-check (ADR-0018): after the
@@ -35,8 +35,9 @@ use crate::not_executed::{denied_by_policy_result, not_executed};
 pub enum PathCheck {
     /// The resolved target is permitted — proceed to read.
     Allowed,
-    /// The resolved target is denied; the string is the deny reason.
-    Denied(String),
+    /// The resolved target is denied by a Policy decision: the deny reason and
+    /// the rule reference that decision reports.
+    Denied { reason: String, rule: PolicyRuleRef },
 }
 
 /// Reads at most `cap` bytes from an already-open file.
@@ -101,8 +102,8 @@ pub(crate) async fn file_read(
         Ok(opened) => opened,
         Err(result) => return result,
     };
-    if let PathCheck::Denied(reason) = recheck(&resolved) {
-        return denied_by_policy(&task_id, &reason);
+    if let PathCheck::Denied { reason, rule } = recheck(&resolved) {
+        return denied_by_policy(&task_id, &reason, Some(rule));
     }
     gate.run(move || read_opened(&task_id, &path, f, cap)).await
 }
@@ -125,12 +126,14 @@ fn open_and_resolve(task_id: &str, path: &str) -> Result<(std::fs::File, String)
     open_regular_and_resolve(path).map_err(|refusal| match refusal {
         OpenRefusal::Io(e) => read_failure(task_id, path, &e),
         OpenRefusal::NotRegularFile => not_regular_file_failure(task_id, path),
+        // No rule decided: the daemon refused because it could not check.
         OpenRefusal::Unresolvable(e) => denied_by_policy(
             task_id,
             &format!(
                 "cannot resolve opened path {path:?} for policy re-check (ADR-0018): {}",
                 crate::limits::clean_io_error(&e)
             ),
+            None,
         ),
     })
 }
@@ -188,6 +191,7 @@ pub(crate) fn open_regular_and_resolve(path: &str) -> Result<(std::fs::File, Str
 fn read_opened(task_id: &str, path: &str, f: std::fs::File, cap: usize) -> TaskResult {
     match read_capped_from(f, cap) {
         Ok((bytes, truncated)) => TaskResult {
+            policy_rule: None,
             task_id: task_id.to_string(),
             outcome: Outcome::Success as i32,
             exit_code: 0,
@@ -201,8 +205,8 @@ fn read_opened(task_id: &str, path: &str, f: std::fs::File, cap: usize) -> TaskR
 }
 
 /// `OUTCOME_DENIED_BY_POLICY` result (the shared `denied_by_policy_result`).
-fn denied_by_policy(task_id: &str, reason: &str) -> TaskResult {
-    denied_by_policy_result(task_id.to_string(), reason)
+fn denied_by_policy(task_id: &str, reason: &str, rule: Option<PolicyRuleRef>) -> TaskResult {
+    denied_by_policy_result(task_id.to_string(), reason, rule)
 }
 
 /// `OUTCOME_FAILURE` result for a path that opened but is not a regular file
@@ -422,6 +426,7 @@ mod tests {
         assert_eq!(result.stdout, content);
     }
 
+    // Proves EX-70 (the re-check's rule reference reaches the result).
     #[tokio::test]
     async fn resolved_target_recheck_denies_symlinked_deny_target() {
         use std::os::unix::fs::symlink;
@@ -460,7 +465,13 @@ mod tests {
             1024,
             |resolved| {
                 if resolved == real {
-                    PathCheck::Denied("resolved to a denied target".to_string())
+                    PathCheck::Denied {
+                        reason: "resolved to a denied target".to_string(),
+                        rule: PolicyRuleRef {
+                            rule_index: 3,
+                            ..Default::default()
+                        },
+                    }
                 } else {
                     PathCheck::Allowed
                 }
@@ -478,5 +489,7 @@ mod tests {
             result.stdout.is_empty(),
             "a denied read must not leak any file content"
         );
+        // The rule the re-check reports is the one on the result.
+        assert_eq!(result.policy_rule.map(|r| r.rule_index), Some(3));
     }
 }

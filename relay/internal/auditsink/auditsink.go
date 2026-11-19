@@ -294,6 +294,13 @@ func (s *Sink) recordDispatch(ctx context.Context, e capability.AuditEntry, base
 		rec.Kind = audit.KindDispatch
 		rec.NodeID = r.NodeID
 		rec.Outcome = r.Outcome
+		// Kept for every risk class: a location in the Policy the Node's owner
+		// authored is not a denial explanation, so it survives the read-class
+		// strip below, which still removes Stderr. Only a Policy denial carries
+		// one (EX-70), whatever the result holds.
+		if r.Outcome == jobs.OutcomeDeniedByPolicy {
+			rec.PolicyRule = r.PolicyRule
+		}
 		if retainOutput {
 			rec.Stdout = r.Stdout
 			rec.Stderr = r.Stderr

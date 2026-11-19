@@ -28,7 +28,8 @@ var _ audit.QueryRepository = (*sqliteAudit)(nil)
 const auditQueryColumns = `audit_id, ts, kind, principal, selector, job_id, node_id, action_kind, operation_name, args, raw_exec_argv, outcome, reason,
 	account_id, account_name, account_role, token_id, auth_method, verified_source,
 	asserted_on_behalf_of, asserted_traceparent, asserted_session_ref, asserted_change_ref,
-	approval_id, grant_id, approval_answer, decision_channel, plan_hash`
+	approval_id, grant_id, approval_answer, decision_channel, plan_hash,
+	policy_pass, policy_rule_section, policy_rule_index, policy_rule_line`
 
 // auditOrderDesc is the read lane's newest-first order, and the exact mirror
 // of audit.go's auditOrderAsc.
@@ -459,12 +460,15 @@ func scanAuditQueryRow(row rowScanner) (audit.Row, error) {
 		onBehalfOf, traceparent, sessionRef, changeRef       sql.NullString
 		approvalID, grantID                                  sql.NullString
 		approvalAnswer, decisionChannel, planHash            sql.NullString
+		policyPass, policyRuleSection                        sql.NullString
+		policyRuleIndex, policyRuleLine                      sql.NullInt64
 	)
 	if err := row.Scan(&id, &ts, &kind, &principal, &selector, &jobID, &nodeID, &actionKind,
 		&operationName, &argsJSON, &argvJSON, &outcome, &reason,
 		&accountID, &accountName, &accountRole, &tokenID, &authMethod, &verifiedSource,
 		&onBehalfOf, &traceparent, &sessionRef, &changeRef,
-		&approvalID, &grantID, &approvalAnswer, &decisionChannel, &planHash); err != nil {
+		&approvalID, &grantID, &approvalAnswer, &decisionChannel, &planHash,
+		&policyPass, &policyRuleSection, &policyRuleIndex, &policyRuleLine); err != nil {
 		return audit.Row{}, fmt.Errorf("scan audit query row: %w", err)
 	}
 
@@ -516,5 +520,11 @@ func scanAuditQueryRow(row rowScanner) (audit.Row, error) {
 		ApprovalAnswer:  approvalAnswer.String,
 		DecisionChannel: decisionChannel.String,
 		PlanHash:        planHash.String,
+		PolicyRule: jobs.PolicyRuleRef{
+			Pass:        policyPass.String,
+			RuleSection: policyRuleSection.String,
+			RuleIndex:   int(policyRuleIndex.Int64),
+			RuleLine:    int(policyRuleLine.Int64),
+		},
 	}, nil
 }

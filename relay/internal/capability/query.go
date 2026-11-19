@@ -105,6 +105,12 @@ type AuditRow struct {
 	ApprovalAnswer  ApprovalAnswer
 	DecisionChannel string
 	PlanHash        string
+
+	// PolicyRule is where the daemon's Policy denied the Task, on a dispatch
+	// outcome row; zero when not reported. A location, not a denial
+	// explanation, so it is supplied for every risk class. Display-only
+	// (invariant 12).
+	PolicyRule jobs.PolicyRuleRef
 }
 
 // AuditPage is one page of AuditRow, cursor-paginated newest first.

@@ -168,6 +168,7 @@ func fromAuditRow(r audit.Row) capability.AuditRow {
 		ApprovalAnswer:  capability.ApprovalAnswer(r.ApprovalAnswer),
 		DecisionChannel: r.DecisionChannel,
 		PlanHash:        r.PlanHash,
+		PolicyRule:      r.PolicyRule,
 	}
 }
 

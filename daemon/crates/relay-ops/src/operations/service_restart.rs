@@ -188,6 +188,7 @@ mod tests {
                 let task_id = req.task_id.clone();
                 async move {
                     TaskResult {
+                        policy_rule: None,
                         task_id,
                         outcome: Outcome::Success as i32,
                         exit_code: 0,
@@ -233,6 +234,7 @@ mod tests {
                 let task_id = req.task_id.clone();
                 async move {
                     TaskResult {
+                        policy_rule: None,
                         task_id,
                         outcome: Outcome::Success as i32,
                         exit_code: 0,

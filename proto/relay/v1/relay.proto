@@ -193,6 +193,9 @@ message TaskResult {
   bytes  stderr           = 5;   // size-capped
   bool   truncated        = 6;
   int64  duration_millis  = 7;
+  // Set only on OUTCOME_DENIED_BY_POLICY, by a Policy decision; absent from a
+  // daemon older than the field. Display-only on the Relay (invariant 12).
+  PolicyRuleRef policy_rule = 8;
 }
 
 enum Outcome {
@@ -382,4 +385,15 @@ message PolicyVerdict {
   uint32            rule_line    = 7;  // 1-based source line; 0 = the loader did not know it
   string            matched_on   = 8;  // the daemon's matched-on text: positions and indices, never an argument value
   PolicyRuleSection rule_section = 9;  // set exactly when a rule decided (pass DENY or ALLOW)
+}
+
+// PolicyRuleRef is where the daemon's Policy decided to deny a Task: the Policy
+// pass that denied it, and the deciding rule's section, index and line. Set only on
+// OUTCOME_DENIED_BY_POLICY. Display-only on the Relay, which never evaluates it
+// (ADR-0011, invariant 12). It carries no matched-on text and no argument value.
+message PolicyRuleRef {
+  PolicyPass        pass         = 1;
+  PolicyRuleSection rule_section = 2;  // set exactly when a rule decided
+  uint32            rule_index   = 3;  // index within rule_section; meaningful only when rule_section is set
+  uint32            rule_line    = 4;  // 1-based source line; 0 = the loader did not know it
 }

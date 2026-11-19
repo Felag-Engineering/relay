@@ -311,6 +311,7 @@ pub async fn execute(req: ExecRequest) -> TaskResult {
     };
 
     TaskResult {
+        policy_rule: None,
         task_id: req.task_id,
         outcome: outcome as i32,
         exit_code: if stopped.is_some() { -1 } else { exit_code },

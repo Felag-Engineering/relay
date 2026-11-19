@@ -58,6 +58,50 @@ func TestCanonicalBytes_Golden(t *testing.T) {
 	}
 }
 
+// policyRuleRecord is the golden record with a Policy rule reference, the one
+// optional group the encoding carries after the 31 base fields.
+func policyRuleRecord() Record {
+	r := goldenRecord()
+	r.Outcome = jobs.OutcomeDeniedByPolicy
+	r.PolicyRule = jobs.PolicyRuleRef{Pass: "deny", RuleSection: "raw_exec_deny", RuleIndex: 2, RuleLine: 14}
+	return r
+}
+
+// The group golden pins the optional trailing group: a change to its bytes
+// invalidates every hash stored over a row that carries one.
+const (
+	policyRuleGoldenSuffixHex = "0000000b706f6c6963795f72756c650000000464656e790000000d7261775f657865635f64656e790000000000000002000000000000000e"
+	policyRuleGoldenHashHex   = "6d7bb3deecd3e6c890d33b78071c968b2af9a766f4dad066a1e94f33f14c0448"
+)
+
+func TestCanonicalBytes_PolicyRuleGroupGolden(t *testing.T) {
+	got := hex.EncodeToString(CanonicalBytes(policyRuleRecord()))
+	base := hex.EncodeToString(CanonicalBytes(func() Record { r := policyRuleRecord(); r.PolicyRule = jobs.PolicyRuleRef{}; return r }()))
+	if !strings.HasPrefix(got, base) {
+		t.Fatalf("the group must be appended after the 31 base fields unchanged")
+	}
+	if suffix := strings.TrimPrefix(got, base); suffix != policyRuleGoldenSuffixHex {
+		t.Errorf("group bytes hex =\n%s\nwant\n%s", suffix, policyRuleGoldenSuffixHex)
+	}
+	if h := ComputeChainHash(1, GenesisPrevHash, policyRuleRecord()).Hex(); h != policyRuleGoldenHashHex {
+		t.Errorf("ComputeChainHash = %s, want %s", h, policyRuleGoldenHashHex)
+	}
+}
+
+// A row without a rule reference encodes exactly as it did before the group
+// existed: the 31 base fields and nothing after, so its stored hash holds.
+func TestCanonicalBytes_AnAbsentGroupLeavesTheV1Bytes(t *testing.T) {
+	r := goldenRecord()
+	r.PolicyRule = jobs.PolicyRuleRef{}
+	if got := hex.EncodeToString(CanonicalBytes(r)); got != goldenCanonicalHex {
+		t.Errorf("a record with no rule reference must keep its v1 bytes")
+	}
+	r.PolicyRule = jobs.PolicyRuleRef{Pass: "default"}
+	if reflect.DeepEqual(CanonicalBytes(r), CanonicalBytes(goldenRecord())) {
+		t.Error("a present group must change the bytes")
+	}
+}
+
 func TestCanonicalBytes_EveryRecordFieldIsCovered(t *testing.T) {
 	base := goldenRecord()
 	baseline := CanonicalBytes(base)
@@ -106,8 +150,8 @@ func TestCanonicalBytes_EveryRecordFieldIsCovered(t *testing.T) {
 	}
 	walk("", reflect.ValueOf(&base).Elem())
 
-	if leaves != 31 {
-		t.Errorf("Record has %d hashed leaf fields, want 31: a new field must be added to CanonicalBytes under a new format version", leaves)
+	if leaves != 35 {
+		t.Errorf("Record has %d hashed leaf fields, want 35: a new field is either under a new format version or in an optional group that leaves the bytes of a row without it unchanged", leaves)
 	}
 }
 

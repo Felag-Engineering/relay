@@ -27,8 +27,8 @@ use crate::config::MAX_OUTPUT_BYTES;
 use crate::dedup::DedupStore;
 use crate::executor::{execute, ExecRequest};
 use crate::gen::{
-    policy_query, task_request, Operation, Outcome, PolicyPass, PolicyQuery, PolicyRuleSection,
-    PolicyVerdict, RawExec, RiskClass, TaskRequest, TaskResult,
+    policy_query, task_request, Operation, Outcome, PolicyQuery, PolicyRuleRef, PolicyVerdict,
+    RawExec, RiskClass, TaskRequest, TaskResult,
 };
 use crate::log_field;
 use crate::not_executed::{denied_by_policy_result, not_executed, not_executed_after};
@@ -38,10 +38,11 @@ use crate::operations::registry::{self, FnRunner, OpCtx, OpRegistration, Resolve
 #[cfg(test)]
 use crate::operations::schema::{OP_ARG_NAME, OP_ARG_PATH, OP_ARG_UNIT, OP_ARG_VERSION};
 use crate::policy::decision_log::{self, argv_digest, DecisionFields, DenyDetail, Tier};
-use crate::policy::{Decision, Explained, MatchedOn, Pass, Policy, Request, RuleSection};
+use crate::policy::{Decision, Explained, MatchedOn, Policy, Request};
 use crate::scheduler::{QueuedOutcome, Scheduler};
 use crate::services::Services;
 use crate::templates::TemplateSet;
+use relay_ops::policy_wire::policy_rule_ref;
 
 // ---------------------------------------------------------------------------
 // Daemon-level v0.0.3 constants
@@ -330,46 +331,21 @@ fn operation_inputs(entry: &dyn ResolvedOp, op: &Operation) -> (Vec<String>, Vec
 /// `Explained` that `policy explain` prints, on allow and deny alike. The
 /// Raw Exec permit is dropped: a hypothetical never runs anything.
 fn decision_to_verdict(query_id: String, explained: Explained) -> PolicyVerdict {
+    let rule = policy_rule_ref(&explained);
     let (allowed, deciding_rule) = match explained.decision {
         Decision::Allow(_) => (true, String::new()),
         Decision::Deny { reason, .. } => (false, reason),
     };
-    let rule = explained.rule;
     PolicyVerdict {
         query_id,
         allowed,
         deciding_rule,
         unsupported: false,
-        pass: wire_pass(explained.pass) as i32,
-        rule_section: rule.map_or(PolicyRuleSection::Unspecified, |r| {
-            wire_rule_section(r.section)
-        }) as i32,
-        rule_index: rule.map_or(0, |r| u32::try_from(r.index).unwrap_or(u32::MAX)),
-        rule_line: rule
-            .and_then(|r| r.line)
-            .map_or(0, |l| u32::try_from(l).unwrap_or(u32::MAX)),
+        pass: rule.pass,
+        rule_section: rule.rule_section,
+        rule_index: rule.rule_index,
+        rule_line: rule.rule_line,
         matched_on: explained.matched_on.to_string(),
-    }
-}
-
-/// Exhaustive on purpose: a new `Pass` does not compile until it is mapped.
-fn wire_pass(pass: Pass) -> PolicyPass {
-    match pass {
-        Pass::Precondition => PolicyPass::Precondition,
-        Pass::Deny => PolicyPass::Deny,
-        Pass::Guard => PolicyPass::Guard,
-        Pass::Allow => PolicyPass::Allow,
-        Pass::Default => PolicyPass::Default,
-    }
-}
-
-/// Exhaustive on purpose: a new `RuleSection` does not compile until it is mapped.
-fn wire_rule_section(section: RuleSection) -> PolicyRuleSection {
-    match section {
-        RuleSection::Operation => PolicyRuleSection::Operation,
-        RuleSection::Deny => PolicyRuleSection::Deny,
-        RuleSection::RawExecAllow => PolicyRuleSection::RawExecAllow,
-        RuleSection::RawExecDeny => PolicyRuleSection::RawExecDeny,
     }
 }
 
@@ -594,14 +570,14 @@ where
         path_positions: &path_positions,
     };
     // cancel drops naturally on a deny — nothing was spawned.
-    if let Err(reason) = policy_gate(
+    if let Err((reason, rule)) = policy_gate(
         policy,
         &request,
         &fields,
         DenyDetail::Args(&positional),
         "operation denied by policy",
     ) {
-        return denied_by_policy_result(task_id, &reason);
+        return denied_by_policy_result(task_id, &reason, Some(rule));
     }
 
     let runner = FnRunner(run);
@@ -618,8 +594,9 @@ where
 }
 
 /// The apply side's one `Policy::decide` call: decide, then write the decision
-/// log. `Err` carries the Deny reason; `Ok` carries the [`Explained`] (whose
-/// Raw Exec permit, if any, is what lets Raw Exec run).
+/// log. `Err` carries the Deny reason and the rule reference the wire reports
+/// for it; `Ok` carries the [`Explained`], whose Raw Exec permit, if any, is
+/// what lets Raw Exec run.
 ///
 /// A non-canonical path is decided before any rule is read, so its log line
 /// names no rule and quotes nothing the caller chose.
@@ -629,7 +606,7 @@ fn policy_gate(
     fields: &DecisionFields<'_>,
     detail: DenyDetail<'_>,
     deny_message: &'static str,
-) -> Result<Explained, String> {
+) -> Result<Explained, (String, PolicyRuleRef)> {
     let explained = policy.decide(request);
     match &explained.decision {
         Decision::Deny { reason, rule } => {
@@ -644,7 +621,7 @@ fn policy_gate(
             } else {
                 decision_log::emit_deny(fields, rule.as_ref(), reason, detail, deny_message);
             }
-            Err(reason.clone())
+            Err((reason.clone(), policy_rule_ref(&explained)))
         }
         Decision::Allow(rule) => {
             decision_log::emit_allow(fields, rule);
@@ -694,7 +671,7 @@ where
         "raw exec denied by policy",
     ) {
         Ok(explained) => explained,
-        Err(reason) => return denied_by_policy_result(task_id, &reason),
+        Err((reason, rule)) => return denied_by_policy_result(task_id, &reason, Some(rule)),
     };
     let Some(permit) = explained.raw_exec_permit else {
         // Unreachable by construction: `decide` mints a permit on every Raw
@@ -1129,6 +1106,7 @@ allow = ["^/bin/echo hello$"]
                 let task_id = req.task_id.clone();
                 async move {
                     TaskResult {
+                        policy_rule: None,
                         task_id,
                         outcome: Outcome::Success as i32,
                         exit_code: 0,
@@ -1286,6 +1264,7 @@ allow = ["^/bin/echo hello$"]
             let task_id = req.task_id.clone();
             async move {
                 TaskResult {
+                    policy_rule: None,
                     task_id,
                     outcome: Outcome::Success as i32,
                     exit_code: 0,
@@ -1343,6 +1322,7 @@ allow = ["^/bin/echo hello$"]
             let task_id = req.task_id.clone();
             async move {
                 TaskResult {
+                    policy_rule: None,
                     task_id,
                     outcome: Outcome::Success as i32,
                     exit_code: 0,
@@ -1394,6 +1374,7 @@ allow = ["^/bin/echo hello$"]
             let task_id = req.task_id.clone();
             async move {
                 TaskResult {
+                    policy_rule: None,
                     task_id,
                     outcome: Outcome::Success as i32,
                     exit_code: 0,
@@ -1779,6 +1760,7 @@ deny = [\"secret\"]
     /// (deny-by-default, argument-level — ADR-0002). Each case is checked against
     /// BOTH the query verdict and the dispatch result so a single test enforces
     /// consistency.
+    // Proves EX-70 (the rule reference matches the verdict's on every denial).
     #[tokio::test]
     async fn policy_query_verdict_matches_execution() {
         let policy = make_query_test_policy();
@@ -1791,6 +1773,7 @@ deny = [\"secret\"]
             let task_id = req.task_id.clone();
             async move {
                 TaskResult {
+                    policy_rule: None,
                     task_id,
                     outcome: Outcome::Success as i32,
                     exit_code: 0,
@@ -1923,6 +1906,28 @@ deny = [\"secret\"]
                 label = case.label,
             );
 
+            // Plan/apply parity (ADR-0011): a denial reports on the TaskResult
+            // the pass and rule reference the verdict reports.
+            if !exec_allowed {
+                let rule = result.policy_rule.expect("a denial carries policy_rule");
+                assert_eq!(rule.pass, verdict.pass, "[{}] pass", case.label);
+                assert_eq!(
+                    rule.rule_section, verdict.rule_section,
+                    "[{}] rule_section",
+                    case.label
+                );
+                assert_eq!(
+                    rule.rule_index, verdict.rule_index,
+                    "[{}] rule_index",
+                    case.label
+                );
+                assert_eq!(
+                    rule.rule_line, verdict.rule_line,
+                    "[{}] rule_line",
+                    case.label
+                );
+            }
+
             // Deny verdicts must carry a non-empty deciding_rule.
             if !verdict.allowed {
                 assert!(
@@ -1954,6 +1959,118 @@ deny = [\"secret\"]
                 verdict.deciding_rule,
             );
         }
+    }
+
+    /// A Task the Policy denies reports the pass and the deciding rule on
+    /// `policy_rule`, the same values the Policy preflight's `PolicyVerdict` reports.
+    // Proves EX-70.
+    #[tokio::test]
+    async fn denied_task_result_carries_the_deciding_rule_reference() {
+        use crate::gen::{PolicyPass as P, PolicyRuleSection as S};
+        let policy = make_query_test_policy();
+        let state_dir = TempDir::created("policy-rule-ref");
+        let dedup = crate::dedup::DedupStore::open(state_dir.path()).expect("open dedup");
+        let services = test_services(policy, dedup);
+
+        struct Want {
+            label: &'static str,
+            task: TaskRequest,
+            pass: P,
+            section: S,
+            has_line: bool,
+        }
+        let cases = vec![
+            Want {
+                label: "explicit [[deny]]",
+                task: make_task_file_read("pr-deny", "/etc/shadow"),
+                pass: P::Deny,
+                section: S::Deny,
+                has_line: true,
+            },
+            Want {
+                label: "argument mismatch is deny-by-default",
+                task: make_task_service_restart("pr-default", "sshd"),
+                pass: P::Default,
+                section: S::Unspecified,
+                has_line: false,
+            },
+            Want {
+                label: "[raw_exec].deny",
+                task: make_task_raw_exec("pr-raw", vec!["/bin/echo".into(), "secret".into()]),
+                pass: P::Deny,
+                section: S::RawExecDeny,
+                has_line: true,
+            },
+            Want {
+                label: "non-canonical path precondition",
+                task: make_task_file_read("pr-pre", "/a/../b"),
+                pass: P::Precondition,
+                section: S::Unspecified,
+                has_line: false,
+            },
+        ];
+        for c in cases {
+            let result = dispatch(&c.task, &services, tokio::time::Instant::now(), None).await;
+            assert_eq!(
+                result.outcome,
+                Outcome::DeniedByPolicy as i32,
+                "{}",
+                c.label
+            );
+            let rule = result
+                .policy_rule
+                .unwrap_or_else(|| panic!("{}: a Policy denial carries policy_rule", c.label));
+            assert_eq!(rule.pass, c.pass as i32, "{}", c.label);
+            assert_eq!(rule.rule_section, c.section as i32, "{}", c.label);
+            assert_eq!(rule.rule_index, 0, "{}", c.label);
+            assert_eq!(rule.rule_line != 0, c.has_line, "{}", c.label);
+        }
+    }
+
+    /// Only a Policy decision sets `policy_rule`: an allowed Task, an
+    /// unsupported Operation and a protocol refusal leave it absent.
+    // Proves EX-70.
+    #[tokio::test]
+    async fn allowed_unsupported_and_refused_results_carry_no_policy_rule() {
+        let policy = make_query_test_policy();
+        let state_dir = TempDir::created("policy-rule-absent");
+        let dedup = crate::dedup::DedupStore::open(state_dir.path()).expect("open dedup");
+        let services = test_services(policy, dedup);
+
+        let mut unsupported = make_task_service_restart("pr-unsupported", "nginx");
+        unsupported.action = Some(task_request::Action::Operation(crate::gen::Operation {
+            name: "no.such.op".to_string(),
+            args: Default::default(),
+        }));
+        let mut no_action = make_task_service_restart("pr-no-action", "nginx");
+        no_action.action = None;
+        // A mutate Operation declared `read` is refused before Policy runs.
+        let mut mismatched = make_task_service_restart("pr-class-mismatch", "nginx");
+        mismatched.risk_class = RiskClass::Read as i32;
+
+        for (label, task, want) in [
+            ("unsupported", unsupported, Outcome::Unsupported),
+            ("missing action", no_action, Outcome::Failure),
+            ("class mismatch", mismatched, Outcome::Failure),
+        ] {
+            let result = dispatch(&task, &services, tokio::time::Instant::now(), None).await;
+            assert_eq!(result.outcome, want as i32, "{label}");
+            assert!(result.policy_rule.is_none(), "{label}");
+        }
+
+        let allowed = dispatch_with_runner(
+            &make_task_raw_exec("pr-allowed", vec!["/bin/echo".into(), "hi".into()]),
+            &services.policy,
+            TemplateSet::empty_static(),
+            &services.dedup,
+            |req: ExecRequest| async move {
+                not_executed(req.task_id, Outcome::Success, Vec::<u8>::new())
+            },
+            None,
+        )
+        .await;
+        assert_eq!(allowed.outcome, Outcome::Success as i32);
+        assert!(allowed.policy_rule.is_none());
     }
 
     /// Identity test (issue #186): for each Policy-deny form on the Operation
@@ -2210,6 +2327,7 @@ allow = ["^/bin/sleep [0-9]+$"]
             let task_id = req.task_id.clone();
             async move {
                 TaskResult {
+                    policy_rule: None,
                     task_id,
                     outcome: Outcome::Success as i32,
                     exit_code: 0,
@@ -2273,6 +2391,7 @@ allow = ["^/bin/sleep [0-9]+$"]
                 tokio::time::sleep(std::time::Duration::from_millis(40)).await;
                 cur.fetch_sub(1, Ordering::SeqCst);
                 TaskResult {
+                    policy_rule: None,
                     task_id,
                     outcome: Outcome::Success as i32,
                     exit_code: 0,
@@ -2400,6 +2519,7 @@ allow = ['^/bin/sh /\S+$']
             let task_id = req.task_id.clone();
             async move {
                 TaskResult {
+                    policy_rule: None,
                     task_id,
                     outcome: Outcome::Success as i32,
                     exit_code: 0,
@@ -2486,6 +2606,7 @@ allow = ['^/bin/sh /\S+$']
             let task_id = req.task_id.clone();
             async move {
                 TaskResult {
+                    policy_rule: None,
                     task_id,
                     outcome: Outcome::Success as i32,
                     exit_code: 0,
@@ -2608,6 +2729,7 @@ allow = ['^/bin/sh /\S+$']
             let task_id = req.task_id.clone();
             async move {
                 TaskResult {
+                    policy_rule: None,
                     task_id,
                     outcome: Outcome::Success as i32,
                     exit_code: 0,
@@ -2674,6 +2796,7 @@ allow = ['^/bin/sh /\S+$']
             async move {
                 tokio::time::sleep(std::time::Duration::from_secs(3)).await;
                 TaskResult {
+                    policy_rule: None,
                     task_id,
                     outcome: Outcome::Success as i32,
                     exit_code: 0,
@@ -2694,6 +2817,7 @@ allow = ['^/bin/sh /\S+$']
             let task_id = req.task_id.clone();
             async move {
                 TaskResult {
+                    policy_rule: None,
                     task_id,
                     outcome: Outcome::Success as i32,
                     exit_code: 0,
@@ -2769,6 +2893,7 @@ allow = ['^/bin/sh /\S+$']
     fn test_echo_handler(ctx: OpCtx<'_>) -> OpFuture<'_> {
         Box::pin(async move {
             TaskResult {
+                policy_rule: None,
                 task_id: ctx.task_id,
                 outcome: Outcome::Success as i32,
                 exit_code: 0,
@@ -2974,6 +3099,7 @@ allowed_args = [["{path}"]]
             let task_id = req.task_id.clone();
             async move {
                 TaskResult {
+                    policy_rule: None,
                     task_id,
                     outcome: Outcome::Success as i32,
                     exit_code: 0,
@@ -3076,6 +3202,7 @@ args = [["/etc/shadow"]]
             let task_id = req.task_id.clone();
             async move {
                 TaskResult {
+                    policy_rule: None,
                     task_id,
                     outcome: Outcome::Success as i32,
                     exit_code: 0,
@@ -3463,6 +3590,7 @@ allow = ["^/bin/true$"]
             let task_id = req.task_id.clone();
             async move {
                 TaskResult {
+                    policy_rule: None,
                     task_id,
                     outcome: Outcome::Success as i32,
                     exit_code: 0,
@@ -3581,6 +3709,7 @@ allowed_args = []
                 let task_id = req.task_id.clone();
                 async move {
                     TaskResult {
+                        policy_rule: None,
                         task_id,
                         outcome: Outcome::Success as i32,
                         exit_code: 0,
@@ -3723,6 +3852,7 @@ allowed_args = []
             let task_id = req.task_id.clone();
             async move {
                 TaskResult {
+                    policy_rule: None,
                     task_id,
                     outcome: Outcome::Success as i32,
                     exit_code: 0,
@@ -3914,6 +4044,7 @@ mod proptests {
     /// helper keeps the fake runners in this module terse.
     fn ok_result(task_id: String) -> TaskResult {
         TaskResult {
+            policy_rule: None,
             task_id,
             outcome: Outcome::Success as i32,
             exit_code: 0,
@@ -4313,6 +4444,7 @@ mod decision_log_tests {
 
     fn ok_result(req: &ExecRequest) -> TaskResult {
         TaskResult {
+            policy_rule: None,
             task_id: req.task_id.clone(),
             outcome: Outcome::Success as i32,
             exit_code: 0,
@@ -5251,6 +5383,7 @@ deny = ["--force", "^rm$"]
             let recording = |req: ExecRequest| {
                 ran.lock().unwrap().push(req.argv.clone());
                 std::future::ready(TaskResult {
+                    policy_rule: None,
                     task_id: req.task_id,
                     outcome: Outcome::Success as i32,
                     exit_code: 0,
