@@ -1256,10 +1256,10 @@ func (x *Operation) GetArgs() map[string]string {
 	return nil
 }
 
-// OperationDescriptor is the wire-visible declaration of one Operation in the
-// vocabulary: its name and its risk class. Forward-compatible — it will feed
-// list_operations in v0.0.6 (do not build that here). Field 3 onwards is
-// intentionally unassigned; earmarked for a future argument-schema description.
+// OperationDescriptor is never sent: no message carries it, and it is kept only for
+// wire compatibility. Its comment is the /proto-reviewed statement of the Native
+// vocabulary and each Native's risk class, which both binaries compile in and the
+// daemon's golden Operation schema pins (ADR-0015).
 //
 // The v1 Operation vocabulary and its classes:
 //

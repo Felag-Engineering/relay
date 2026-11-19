@@ -1,7 +1,8 @@
-// Package opvocab is a Relay-side, READ-ONLY mirror of /proto's Operation
-// vocabulary (OperationDescriptor, relay.proto:142-145): the fixed set of
-// structured Operations, each with its risk class. /proto remains the single
-// source of truth for the wire vocabulary (invariant 8) — this list is
+// Package opvocab is a Relay-side, READ-ONLY mirror of the Native Operation
+// vocabulary that /proto's OperationDescriptor comment states (relay.proto;
+// the message itself is never sent): the fixed set of structured Operations,
+// each with its risk class. /proto remains the single source of truth for the
+// Native vocabulary and classes (invariant 8) — this list is
 // hand-authored, but opvocab_test.go's TestOperations_MatchesGoldenSchema
 // hermetically cross-checks it against the daemon's own golden Operation
 // schema (testdata/operations.schema.json, ADR-0015), so a hand-authoring
@@ -12,7 +13,7 @@
 // dispatch path.
 //
 // Raw Exec is deliberately NOT listed here: it is not an Operation
-// (ADR-0003, GLOSSARY.md) and has no OperationDescriptor on the wire. It is
+// (ADR-0003, GLOSSARY.md) and is not in that vocabulary. It is
 // always risk class mutate by definition (arbitrary commands are
 // unclassifiable) and surfaces through its own tool, never this one.
 package opvocab
@@ -25,8 +26,8 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 )
 
-// Descriptor mirrors relayv1.OperationDescriptor's Name and Risk (the wire
-// contract, invariant 8/ADR-0012), plus model-facing legibility PROSE that
+// Descriptor mirrors the Name and Risk that /proto's OperationDescriptor
+// comment states (invariant 8, ADR-0012), plus model-facing legibility PROSE that
 // has no proto counterpart (central decision: NO /proto change).
 // Purpose, ArgConstraints, and Example are ADVISORY — they exist so a model
 // reader (list_operations, MCP) can pick the right Operation and build valid
@@ -55,7 +56,7 @@ type Descriptor struct {
 }
 
 // Operations returns the fixed v1 Operation vocabulary, per
-// relay.proto:142-145:
+// the OperationDescriptor comment in relay.proto:
 //
 //	system.facts     -> read    (self-reported Node facts; no state change)
 //	file.read        -> read    (reads file contents; no state change)

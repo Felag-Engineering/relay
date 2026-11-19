@@ -12,7 +12,7 @@ import (
 )
 
 // TestOperations_Membership pins the v1 vocabulary and each Operation's risk
-// class against relay.proto:142-145, so a drift between proto and this
+// class against the OperationDescriptor comment in relay.proto, so a drift between proto and this
 // mirror fails a test rather than silently rendering the wrong risk class in
 // list_operations.
 func TestOperations_Membership(t *testing.T) {

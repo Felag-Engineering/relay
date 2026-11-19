@@ -10,9 +10,9 @@
 //!   feeding both Policy evaluation and execution (ADR-0011: one mapping,
 //!   no drift between "would allow" and "actually allows");
 //! - **risk class** ([`super::risk_class`]) is a registry lookup (ADR-0012);
-//! - **vocabulary discovery** ([`super::descriptors`] and
-//!   [`super::schema::schemas`] — the ADR-0015 golden-schema source) derives
-//!   from the same entries, in the same canonical order.
+//! - **vocabulary discovery** ([`super::schema::schemas`], the ADR-0015
+//!   golden-schema source) derives from the same entries, in the same
+//!   canonical order.
 //!
 //! Adding an Operation is therefore a *registration* — one [`OpRegistration`]
 //! appended here (plus its arg-shape in `schema.rs` and, for charset-validated
