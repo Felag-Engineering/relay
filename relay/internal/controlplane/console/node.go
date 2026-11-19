@@ -45,6 +45,7 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/nodestate"
 	"github.com/Felag-Engineering/relay/relay/internal/policyview"
 	"github.com/Felag-Engineering/relay/relay/internal/registry"
+	"github.com/Felag-Engineering/relay/relay/internal/visibletext"
 )
 
 // nodeTaskRows bounds the recent-Task list. Node detail is a page about one
@@ -56,9 +57,10 @@ const nodeTaskRows = 40
 // machine, and the full record is on the audit trail.
 const nodeViolationRows = 20
 
-// nodeViolation is one protocol_violation record of the Node. Every field is
-// Relay-authored: the record's Reason is key=value text the Relay wrote, never
-// bytes the Node sent.
+// nodeViolation is one protocol_violation record of the Node. The record's
+// Reason is key=value text the Relay wrote, and Detail still renders it through
+// visibletext.Escape: it names a Task ID and a reported value, and a hidden
+// character in either must never reach the page raw (audit-and-read-lane.md).
 type nodeViolation struct {
 	When    string
 	What    string
@@ -592,7 +594,7 @@ func nodeViolationFrom(rec audit.Record) nodeViolation {
 	nv := nodeViolation{
 		When:   utcStamp(rec.Timestamp),
 		What:   violationPhrase(rec.Reason),
-		Detail: rec.Reason,
+		Detail: visibletext.Escape(rec.Reason),
 	}
 	if rec.JobID != "" {
 		nv.JobID = rec.JobID

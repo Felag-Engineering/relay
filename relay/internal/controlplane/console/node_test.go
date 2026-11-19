@@ -1569,6 +1569,25 @@ func TestNode_ProtocolViolationsAreListedBesideRecentTasks(t *testing.T) {
 	}
 }
 
+// A hidden character in a protocol-violation record's text is shown as an
+// escape on Node detail, never raw (audit-and-read-lane.md).
+func TestNode_ProtocolViolationRecordTextRendersHiddenCharactersVisibly(t *testing.T) {
+	repo := &captureRepo{}
+	appendRecords(t, repo,
+		audit.Record{Kind: audit.KindProtocolViolation, NodeID: "node-web-1",
+			Reason: "rule=unknown_outcome reported_outcome=99 task_id=task-\u202eexe", Timestamp: testNow},
+	)
+	d := fleetFixture()
+	d.Audit = repo
+	panel := violationsPanelOf(get(t, newTestHandler(d, accounts.RoleAdmin), "/console/nodes/node-web-1").Body.String())
+	if strings.Contains(panel, "\u202e") {
+		t.Fatalf("the record text reached the page with a raw bidirectional control: %q", panel)
+	}
+	if !strings.Contains(panel, `task_id=task-\u202eexe`) {
+		t.Errorf("the record text does not show the escape: %q", panel)
+	}
+}
+
 func TestNode_NoProtocolViolationPanelWhenNoneIsRecorded(t *testing.T) {
 	repo := &captureRepo{}
 	appendRecords(t, repo, audit.Record{Kind: audit.KindDispatch, NodeID: "node-web-1",
