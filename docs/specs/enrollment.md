@@ -79,11 +79,11 @@ alone, it says so.
   declared Label is not a well-formed `node:` Label, whose key is at most 63 characters and
   whose value at most 255; it never accepts a `relay:` or `tag:` Label submitted by a Node.
 - **EN-41** After a valid token is accepted, the Relay generates the `node_id`, signs the CSR
-  under that identity, creates the registry record, stamps `relay:node-id` (EN-38), writes the
-  token's initial tags on the Node, and records the token ID and the time as the Node's enrollment
-  provenance. It writes no other `relay:` label, and the CSR subject never selects the identity.
-  Once written, an initial tag is an ordinary tag: how it is written, audited and later changed is
-  `selectors-and-labels.md` (ADR-0050).
+  under that identity, creates the registry record with the issued certificate's fingerprint,
+  stamps `relay:node-id` (EN-38), writes the token's initial tags on the Node, and records the
+  token ID and the time as the Node's enrollment provenance. It writes no other `relay:` label,
+  and the CSR subject never selects the identity. Once written, an initial tag is an ordinary tag:
+  how it is written, audited and later changed is `selectors-and-labels.md` (ADR-0050).
 - **EN-13** Certificate signing and registry writes occur only after token validation. A
   rejected enrollment creates neither a certificate nor a registry record. A successful
   response carries the assigned ID, the certificate and the CA bundle.

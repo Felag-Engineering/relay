@@ -145,8 +145,10 @@ canonical path:
 
 - **Denied by Policy.** A Task Policy does not permit resolves `denied_by_policy`, distinct from
   `failure`, `unsupported` and a malformed call. The denial is a structured `/proto` contract
-  carrying, in its first pass, only:
+  carrying:
   - a reason: `no_allow` (nothing permitted it) or `denied` (a deny rule vetoed it);
+  - the stage of the decision that denied it and where the deciding rule sits (section, index,
+    line), display-only on the Relay (`execution.md`, `policy-preflight.md`);
   - human-readable text. Caller-supplied text quoted into it is truncated to a fixed budget, on
     the Raw Exec and Operation paths alike.
 - **Malformed.** An unknown argument or slot name, or a value not well-formed for its type, gets
@@ -232,8 +234,8 @@ _Not yet written._ This spec's claims are the backlog of its testing issue.
 
 Wanted, deliberately not in the first pass, and in no committed order.
 
-- **Richer denial detail** — the deciding fragment and rule, the argument that decided it, the
-  pattern that matched.
+- **Richer denial detail** — the deciding fragment, the argument that decided it, the pattern
+  that matched. The deciding rule's location is in *Refusals*.
 - **No caller text in denials or the daemon log** — a denial names the form, the index and the
   rule that decided it and never quotes what the caller sent; the same holds for the daemon's
   log of a refused or failed Task. Pulls against *richer denial detail* above, and needs ADR-0019

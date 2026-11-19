@@ -104,6 +104,12 @@ The execution of one Operation or Raw Exec on one Node, within a Job's Stage. It
 for at-most-once execution (invariant 4) and reports its own outcome. Not an **MCP task handle**.
 _Avoid_: command, unit, step; "task" unqualified in any context where MCP is also in play
 
+**Protocol violation**:
+A message from a Node that the wire contract forbids, such as a `TaskResult` with an outcome only
+the Relay writes, one outside the enum, or one no Task of that Node awaits. Never taken as
+reported; audited as `protocol_violation` (`node-connection.md`) and counted (`observability.md`).
+_Avoid_: malformed result, bad report
+
 **Idempotency key**:
 A caller-chosen key on a dispatch that makes a repeat of the same request return the existing
 Job instead of a second one (`execution.md`, ADR-0054). It guards a re-sent request one level
@@ -219,6 +225,13 @@ jittered fraction of its lifetime, with no restart. Unlike *Certificate renewal*
 leaves the Relay process; one certificate serves both listeners (ADR-0031).
 _Avoid_: server cert renewal, cert refresh
 
+**Stream replacement**:
+A stream opened on a Node's certificate while another stream for that Node is
+still live (`node-connection.md` NC-36). With the control plane enabled the old
+stream ends (NC-13); in both modes each replacement is audited within the NC-39
+limit, so two parties on one certificate show up (R54).
+_Avoid_: displacement, stream takeover, duplicate connection
+
 **Quarantine**:
 Fencing a distrusted Node off from routine work. Engaging one only ever *reduces* what may run and
 may target `relay:` or `tag:` Labels; lifting one targets `relay:` only (invariant 7). Cut from the
@@ -267,7 +280,8 @@ executor, it asks Policy a question
 The content address of one gated dispatch (ADR-0027): what an Approval commits to, so a dispatch
 that no longer hashes the same parks again (`approval.md`). Spelled `plan_hash`; the *plan* in it
 has no multi-step reading (ADR-0049).
-_Avoid_: job hash, checksum, fingerprint (reserved for the Policy, template-set and CA fingerprints)
+_Avoid_: job hash, checksum, fingerprint (reserved for the Policy, template-set, CA and certificate
+fingerprints)
 
 **Shape key**:
 A content address of *what* an approval was for, leaving out the resolved fan-out. **Relay has

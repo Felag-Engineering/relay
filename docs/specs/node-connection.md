@@ -1,6 +1,6 @@
 # Node connection
 
-**Status:** current as of `2026-11-13`.
+**Status:** designed, not built, as of `2026-11-18`.
 **Claim prefix:** `NC`
 **Governed by:** ADR-0005, ADR-0006, ADR-0014, ADR-0017, ADR-0031, ADR-0054; invariants 4, 6, 7,
 8, 11, 14.
@@ -22,7 +22,7 @@ secret distribution.
 | Node plane | `Tunnel.Open`: one mutual-TLS stream per Node, always opened by the relay-daemon. The daemon sends `Hello`, heartbeats, snapshots and Task results; the Relay sends Tasks, cancellations and Policy queries. `Enrollment.Enroll` and `Enrollment.Renew` share the listener (`enrollment.md`). |
 | relay-daemon | Dials, verifies the Relay, holds the stream, reconnects. The address it dials: `enrollment.md`. |
 | Registry reads | Connected state, `last_seen`, `outdated` and the self-reported fields (`query.md`). |
-| Audit trail | The change and replacement records below (`audit-and-read-lane.md`). |
+| Audit trail | The change, replacement and protocol-violation records below (`audit-and-read-lane.md`). |
 | Relay configuration | The certificate hostname, the minimum daemon version, and whether the control plane is enabled (NC-13); see `relay-configuration.md`. Every timing is a constant. |
 | MCP, Control API, Console | None opens, closes or reshapes a connection; revoking a Node ends its connection (`enrollment.md`). |
 
@@ -42,8 +42,9 @@ secret distribution.
 - **NC-4** On every connect the daemon verifies the Relay's certificate against the CA pinned at
   enrollment, and trusts no other root.
 - **NC-5** The daemon reads its identity from its state directory at each connect, so a renewed
-  certificate is used from the next one; nothing forces a reconnect. The registry records the
-  client-certificate fingerprint issued at enrollment, replaced by the one each connect presents.
+  certificate is used from the next one; nothing forces a reconnect. Each connect replaces the
+  registry's client-certificate fingerprint, first written at enrollment (`enrollment.md`), with
+  the one it presents.
 - **NC-35** A connect presenting a client-certificate fingerprint other than the one the
   registry holds for the Node writes one audit record with both.
 - **NC-6** The Relay presents one server certificate on both listeners and re-issues it in-process
@@ -108,8 +109,10 @@ secret distribution.
 - **NC-23** On a Node read, a `PolicySnapshot` or `TemplateSnapshot` fingerprint that fails the
   `Hello` bound is served empty.
 - **NC-24** A self-reported label outside `node:` is dropped. Nothing a Node reports writes
-  `relay:` or `tag:` labels, Policy, or any registry field beyond the self-reported ones
-  (invariant 7; R3, R51).
+  `relay:` or `tag:` labels, Policy, or any registry field beyond the self-reported ones and those
+  the Relay derives from the connection: connected state (NC-9), `last_seen` (NC-11), clock skew
+  (NC-37), the `outdated` flag (NC-26), the presented certificate's fingerprint (NC-5) and the
+  time of the Node's first connect. Invariant 7; R3, R51.
 - **NC-25** Each connect replaces the Node's self-reported fields. A Facts or `node:` label
   change is recorded, never audited.
 - **NC-33** A reported Policy fingerprint or Raw Exec state that differs from the Node's previous
@@ -119,7 +122,7 @@ secret distribution.
   record of its kind in the previous 10 minutes is written at once, so a Node that keeps changing
   its report, or two parties on one certificate, write a bounded number. The limit is held in
   memory and starts over when the Relay restarts. No record blocks a connection or a dispatch
-  (R51, R54).
+  (R51, R54, R58).
 
 ### Daemon versions
 
@@ -144,6 +147,13 @@ secret distribution.
   (`enrollment.md`), brings the Node back.
 - **NC-32** A stream whose first message is not `Hello` is refused as an invalid argument.
 
+## Designed, not built
+
+| Claim | Statement | Milestone |
+|---|---|---|
+| NC-40 | A `TaskResult` whose outcome is outside the enum is treated as one whose outcome is unspecified: its Task resolves `failure` (`execution.md`), with stderr naming the value, and one protocol-violation record is written (R59). | v0.2.2 |
+| NC-41 | A `TaskResult` that no Task of the sending Node awaits is dropped and writes a protocol-violation record, limited as NC-39 limits its records (R59). | v0.2.2 |
+
 ## Out of scope
 
 - **Certificates (issue, renew, revoke), the join string, the first-contact pin, the address
@@ -163,7 +173,7 @@ secret distribution.
 - **A company-issued certificate**: `roadmap: relay/bring-your-own-pki`.
 - **The Node plane's scale contract**: `roadmap: relay/research/spec-future-work/node-connection`.
 - **Several Relays sharing a fleet**: deferred by ADR-0005 to a future ADR.
-- **With the control plane disabled: ending a displaced stream, which stream the Node's connected
+- **With the control plane disabled: ending a replaced stream, which stream the Node's connected
   state follows; and showing on registry reads a certificate in use by more than one connection**:
   #1330.
 
