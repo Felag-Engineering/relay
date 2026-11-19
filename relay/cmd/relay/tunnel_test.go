@@ -56,10 +56,16 @@ func injectNodeIDInterceptor(nodeID string) grpc.StreamServerInterceptor {
 	}
 }
 
-// newBufconnConn starts srv on an in-memory bufconn listener and returns a
-// connected client conn. Both are cleaned up when t ends.
-func newBufconnConn(t *testing.T, srv *grpc.Server) *grpc.ClientConn {
+// tunnelStream is the client side of one Tunnel stream.
+type tunnelStream = grpc.BidiStreamingClient[relayv1.DaemonMessage, relayv1.RelayMessage]
+
+// dialTunnel serves ts on a gRPC server built with opts, over an in-memory
+// bufconn listener, and returns a client conn to it. Both are cleaned up when
+// t ends.
+func dialTunnel(t *testing.T, ts *tunnelServer, opts ...grpc.ServerOption) *grpc.ClientConn {
 	t.Helper()
+	srv := grpc.NewServer(opts...)
+	relayv1.RegisterTunnelServer(srv, ts)
 	lis := bufconn.Listen(1 << 20)
 	go srv.Serve(lis)
 	t.Cleanup(srv.Stop)
@@ -78,6 +84,24 @@ func newBufconnConn(t *testing.T, srv *grpc.Server) *grpc.ClientConn {
 	return conn
 }
 
+// dialTunnelAs is dialTunnel behind injectNodeIDInterceptor, so every stream
+// arrives authenticated as nodeID, the way the production mTLS interceptor
+// presents a verified client certificate.
+func dialTunnelAs(t *testing.T, nodeID string, ts *tunnelServer) *grpc.ClientConn {
+	t.Helper()
+	return dialTunnel(t, ts, grpc.StreamInterceptor(injectNodeIDInterceptor(nodeID)))
+}
+
+// openStream opens one Tunnel stream on conn and sends nothing on it.
+func openStream(ctx context.Context, t *testing.T, conn *grpc.ClientConn) tunnelStream {
+	t.Helper()
+	stream, err := relayv1.NewTunnelClient(conn).Open(ctx)
+	if err != nil {
+		t.Fatalf("open stream: %v", err)
+	}
+	return stream
+}
+
 // TestTunnelOpen_HelloPing verifies the Hello → Ping exchange when identity is
 // driven through an interceptor (mirroring production): receiving a Ping (not
 // Unauthenticated) proves the handler accepted the interceptor-provided
@@ -85,19 +109,14 @@ func newBufconnConn(t *testing.T, srv *grpc.Server) *grpc.ClientConn {
 func TestTunnelOpen_HelloPing(t *testing.T) {
 	const certNodeID = "cert-node-1" // injected by interceptor (authoritative)
 
-	srv := grpc.NewServer(grpc.StreamInterceptor(injectNodeIDInterceptor(certNodeID)))
-	relayv1.RegisterTunnelServer(srv, &tunnelServer{})
-	conn := newBufconnConn(t, srv)
+	conn := dialTunnelAs(t, certNodeID, &tunnelServer{})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	stream, err := relayv1.NewTunnelClient(conn).Open(ctx)
-	if err != nil {
-		t.Fatalf("open stream: %v", err)
-	}
+	stream := openStream(ctx, t, conn)
 
-	err = stream.Send(&relayv1.DaemonMessage{
+	err := stream.Send(&relayv1.DaemonMessage{
 		Body: &relayv1.DaemonMessage_Hello{
 			Hello: &relayv1.Hello{
 				DaemonVersion: "0.0.1-test",
@@ -131,19 +150,14 @@ func TestTunnelOpen_HelloPing(t *testing.T) {
 // Proves NC-3.
 func TestTunnelOpen_FailClosed(t *testing.T) {
 	// No interceptor: NodeIDFromContext will return ok==false.
-	srv := grpc.NewServer()
-	relayv1.RegisterTunnelServer(srv, &tunnelServer{})
-	conn := newBufconnConn(t, srv)
+	conn := dialTunnel(t, &tunnelServer{})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	stream, err := relayv1.NewTunnelClient(conn).Open(ctx)
-	if err != nil {
-		t.Fatalf("open stream: %v", err)
-	}
+	stream := openStream(ctx, t, conn)
 
-	if err = stream.Send(&relayv1.DaemonMessage{
+	if err := stream.Send(&relayv1.DaemonMessage{
 		Body: &relayv1.DaemonMessage_Hello{
 			Hello: forgeHelloNodeID(t, &relayv1.Hello{}, "attacker-supplied-id"),
 		},
@@ -151,7 +165,7 @@ func TestTunnelOpen_FailClosed(t *testing.T) {
 		t.Fatalf("send hello: %v", err)
 	}
 
-	_, err = stream.Recv()
+	_, err := stream.Recv()
 	if err == nil {
 		t.Fatal("expected Unauthenticated error, got Ping")
 	}
@@ -168,17 +182,12 @@ func TestTunnelOpen_RevokeTearsDownLiveStream(t *testing.T) {
 	const nodeID = "node-live"
 
 	conns := revocation.NewConnections()
-	srv := grpc.NewServer(grpc.StreamInterceptor(injectNodeIDInterceptor(nodeID)))
-	relayv1.RegisterTunnelServer(srv, &tunnelServer{conns: conns})
-	conn := newBufconnConn(t, srv)
+	conn := dialTunnelAs(t, nodeID, &tunnelServer{conns: conns})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	stream, err := relayv1.NewTunnelClient(conn).Open(ctx)
-	if err != nil {
-		t.Fatalf("open stream: %v", err)
-	}
+	stream := openStream(ctx, t, conn)
 
 	// Send Hello to advance the handler past the initial recv.
 	if err := stream.Send(&relayv1.DaemonMessage{
@@ -233,17 +242,12 @@ func TestTunnelOpen_HelloRegistersNode(t *testing.T) {
 	oldTime := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
 
 	reg := registry.NewInMemory(registry.WithClock(func() time.Time { return oldTime }))
-	srv := grpc.NewServer(grpc.StreamInterceptor(injectNodeIDInterceptor(certNodeID)))
-	relayv1.RegisterTunnelServer(srv, &tunnelServer{reg: reg})
-	conn := newBufconnConn(t, srv)
+	conn := dialTunnelAs(t, certNodeID, &tunnelServer{reg: reg})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	stream, err := relayv1.NewTunnelClient(conn).Open(ctx)
-	if err != nil {
-		t.Fatalf("open stream: %v", err)
-	}
+	stream := openStream(ctx, t, conn)
 
 	if err := stream.Send(&relayv1.DaemonMessage{
 		Body: &relayv1.DaemonMessage_Hello{
@@ -306,17 +310,12 @@ func TestOpen_MalformedNodeLabelDoesNotDropTheStream(t *testing.T) {
 	const certNodeID = "cert-node-malformed"
 
 	reg := registry.NewInMemory()
-	srv := grpc.NewServer(grpc.StreamInterceptor(injectNodeIDInterceptor(certNodeID)))
-	relayv1.RegisterTunnelServer(srv, &tunnelServer{reg: reg})
-	conn := newBufconnConn(t, srv)
+	conn := dialTunnelAs(t, certNodeID, &tunnelServer{reg: reg})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	stream, err := relayv1.NewTunnelClient(conn).Open(ctx)
-	if err != nil {
-		t.Fatalf("open stream: %v", err)
-	}
+	stream := openStream(ctx, t, conn)
 
 	if err := stream.Send(&relayv1.DaemonMessage{
 		Body: &relayv1.DaemonMessage_Hello{
@@ -363,17 +362,12 @@ func TestOpen_HostileNodeLabelCannotRenderTwoPredicates(t *testing.T) {
 	const certNodeID = "cert-node-hostile"
 
 	reg := registry.NewInMemory()
-	srv := grpc.NewServer(grpc.StreamInterceptor(injectNodeIDInterceptor(certNodeID)))
-	relayv1.RegisterTunnelServer(srv, &tunnelServer{reg: reg})
-	conn := newBufconnConn(t, srv)
+	conn := dialTunnelAs(t, certNodeID, &tunnelServer{reg: reg})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	stream, err := relayv1.NewTunnelClient(conn).Open(ctx)
-	if err != nil {
-		t.Fatalf("open stream: %v", err)
-	}
+	stream := openStream(ctx, t, conn)
 
 	if err := stream.Send(&relayv1.DaemonMessage{
 		Body: &relayv1.DaemonMessage_Hello{
@@ -429,17 +423,12 @@ func TestTunnelOpen_HeartbeatUpdatesLastSeen(t *testing.T) {
 	oldTime := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
 
 	reg := registry.NewInMemory(registry.WithClock(func() time.Time { return oldTime }))
-	srv := grpc.NewServer(grpc.StreamInterceptor(injectNodeIDInterceptor(certNodeID)))
-	relayv1.RegisterTunnelServer(srv, &tunnelServer{reg: reg})
-	conn := newBufconnConn(t, srv)
+	conn := dialTunnelAs(t, certNodeID, &tunnelServer{reg: reg})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	stream, err := relayv1.NewTunnelClient(conn).Open(ctx)
-	if err != nil {
-		t.Fatalf("open stream: %v", err)
-	}
+	stream := openStream(ctx, t, conn)
 
 	if err := stream.Send(&relayv1.DaemonMessage{
 		Body: &relayv1.DaemonMessage_Hello{
@@ -666,17 +655,12 @@ func TestTunnelOpen_PolicySnapshotCapturesIntoCache(t *testing.T) {
 	const certNodeID = "cert-node-policy"
 
 	cache := policyview.New()
-	srv := grpc.NewServer(grpc.StreamInterceptor(injectNodeIDInterceptor(certNodeID)))
-	relayv1.RegisterTunnelServer(srv, &tunnelServer{policy: cache})
-	conn := newBufconnConn(t, srv)
+	conn := dialTunnelAs(t, certNodeID, &tunnelServer{policy: cache})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	stream, err := relayv1.NewTunnelClient(conn).Open(ctx)
-	if err != nil {
-		t.Fatalf("open stream: %v", err)
-	}
+	stream := openStream(ctx, t, conn)
 
 	if err := stream.Send(&relayv1.DaemonMessage{
 		Body: &relayv1.DaemonMessage_Hello{
@@ -728,12 +712,9 @@ func TestTunnelOpen_PolicySnapshotCapturesIntoCache(t *testing.T) {
 
 // openNodeStream opens a Tunnel stream, sends Hello and waits for the Ping, so
 // the Node is registered (and marked connected) when it returns.
-func openNodeStream(ctx context.Context, t *testing.T, conn *grpc.ClientConn, nodeID string) grpc.BidiStreamingClient[relayv1.DaemonMessage, relayv1.RelayMessage] {
+func openNodeStream(ctx context.Context, t *testing.T, conn *grpc.ClientConn, nodeID string) tunnelStream {
 	t.Helper()
-	stream, err := relayv1.NewTunnelClient(conn).Open(ctx)
-	if err != nil {
-		t.Fatalf("open stream: %v", err)
-	}
+	stream := openStream(ctx, t, conn)
 	if err := stream.Send(&relayv1.DaemonMessage{
 		Body: &relayv1.DaemonMessage_Hello{Hello: &relayv1.Hello{}},
 	}); err != nil {
@@ -779,9 +760,7 @@ func TestTunnelOpen_MissedHeartbeatsMarkOfflineAndCloseStream(t *testing.T) {
 	const nodeID = "node-missed-hb"
 	oldTime := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
 	reg := registry.NewInMemory(registry.WithClock(func() time.Time { return oldTime }))
-	srv := grpc.NewServer(grpc.StreamInterceptor(injectNodeIDInterceptor(nodeID)))
-	relayv1.RegisterTunnelServer(srv, &tunnelServer{reg: reg, heartbeatDeadline: 200 * time.Millisecond})
-	conn := newBufconnConn(t, srv)
+	conn := dialTunnelAs(t, nodeID, &tunnelServer{reg: reg, heartbeatDeadline: 200 * time.Millisecond})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -814,9 +793,7 @@ func TestTunnelOpen_MissedHeartbeatsMarkOfflineAndCloseStream(t *testing.T) {
 func TestTunnelOpen_HeartbeatsWithinDeadlineKeepNodeConnected(t *testing.T) {
 	const nodeID = "node-steady-hb"
 	reg := registry.NewInMemory()
-	srv := grpc.NewServer(grpc.StreamInterceptor(injectNodeIDInterceptor(nodeID)))
-	relayv1.RegisterTunnelServer(srv, &tunnelServer{reg: reg, heartbeatDeadline: time.Second})
-	conn := newBufconnConn(t, srv)
+	conn := dialTunnelAs(t, nodeID, &tunnelServer{reg: reg, heartbeatDeadline: time.Second})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -854,9 +831,7 @@ func TestTunnelOpen_HeartbeatsWithinDeadlineKeepNodeConnected(t *testing.T) {
 func TestTunnelOpen_OnlyHeartbeatsResetTheDeadline(t *testing.T) {
 	const nodeID = "node-chatty"
 	reg := registry.NewInMemory()
-	srv := grpc.NewServer(grpc.StreamInterceptor(injectNodeIDInterceptor(nodeID)))
-	relayv1.RegisterTunnelServer(srv, &tunnelServer{reg: reg, heartbeatDeadline: 300 * time.Millisecond})
-	conn := newBufconnConn(t, srv)
+	conn := dialTunnelAs(t, nodeID, &tunnelServer{reg: reg, heartbeatDeadline: 300 * time.Millisecond})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -931,16 +906,15 @@ func TestTunnelOpen_ReplacedStreamEndDoesNotMarkLiveNodeOffline(t *testing.T) {
 		// on a delay.
 		handlerDone := make(chan struct{}, 2)
 		inject := injectNodeIDInterceptor(nodeID)
-		srv := grpc.NewServer(grpc.StreamInterceptor(func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+		intercept := grpc.StreamInterceptor(func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 			defer func() { handlerDone <- struct{}{} }()
 			return inject(srv, ss, info, handler)
-		}))
+		})
 		ts := &tunnelServer{reg: reg}
 		if sink != nil {
 			ts.sink = sink
 		}
-		relayv1.RegisterTunnelServer(srv, ts)
-		conn := newBufconnConn(t, srv)
+		conn := dialTunnel(t, ts, intercept)
 
 		ctxA, cancelA := context.WithCancel(context.Background())
 		defer cancelA()
@@ -1000,9 +974,7 @@ func TestTunnelOpen_ReconnectDuringOfflineResolutionStaysConnected(t *testing.T)
 	}))
 	sink := newRegisterSignalSink(routerSink{r: router})
 
-	srv := grpc.NewServer(grpc.StreamInterceptor(injectNodeIDInterceptor(nodeID)))
-	relayv1.RegisterTunnelServer(srv, &tunnelServer{reg: reg, sink: sink})
-	conn := newBufconnConn(t, srv)
+	conn := dialTunnelAs(t, nodeID, &tunnelServer{reg: reg, sink: sink})
 
 	ctxA, cancelA := context.WithCancel(context.Background())
 	defer cancelA()
@@ -1088,9 +1060,7 @@ func TestTunnelOpen_OldStreamEndingBeforeTheReplacementRegistersRunsNoOfflineRes
 
 	task := seedDispatchedTask(t, st, tasks, nodeID, "task-1")
 
-	srv := grpc.NewServer(grpc.StreamInterceptor(injectNodeIDInterceptor(nodeID)))
-	relayv1.RegisterTunnelServer(srv, &tunnelServer{reg: reg, sink: sink})
-	conn := newBufconnConn(t, srv)
+	conn := dialTunnelAs(t, nodeID, &tunnelServer{reg: reg, sink: sink})
 
 	ctxA, cancelA := context.WithCancel(ctx)
 	defer cancelA()
@@ -1186,14 +1156,13 @@ func TestTunnelOpen_AReplacementThatFailsBeforeRegisteringResolvesTheTasksInFlig
 	held := make(chan struct{}, 1)
 	release := make(chan struct{})
 	inject := injectNodeIDInterceptor(nodeID)
-	srv := grpc.NewServer(grpc.StreamInterceptor(func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+	intercept := grpc.StreamInterceptor(func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 		if streams.Add(1) == 2 {
 			ss = &failingPingStream{ServerStream: ss, held: held, release: release}
 		}
 		return inject(srv, ss, info, handler)
-	}))
-	relayv1.RegisterTunnelServer(srv, &tunnelServer{reg: reg, sink: sink})
-	conn := newBufconnConn(t, srv)
+	})
+	conn := dialTunnel(t, &tunnelServer{reg: reg, sink: sink}, intercept)
 
 	ctxA, cancelA := context.WithCancel(ctx)
 	defer cancelA()
@@ -1214,10 +1183,7 @@ func TestTunnelOpen_AReplacementThatFailsBeforeRegisteringResolvesTheTasksInFlig
 	}
 
 	// B claims the Node and is held in its Ping, before its registration.
-	streamB, err := relayv1.NewTunnelClient(conn).Open(ctx)
-	if err != nil {
-		t.Fatalf("open stream B: %v", err)
-	}
+	streamB := openStream(ctx, t, conn)
 	if err := streamB.Send(&relayv1.DaemonMessage{
 		Body: &relayv1.DaemonMessage_Hello{Hello: &relayv1.Hello{}},
 	}); err != nil {
@@ -1289,25 +1255,21 @@ func TestTunnelOpen_ANewStreamThatFailsBeforeRegisteringLeavesALiveNodeConnected
 	release := make(chan struct{})
 	handlerDone := make(chan struct{}, 2)
 	inject := injectNodeIDInterceptor(nodeID)
-	srv := grpc.NewServer(grpc.StreamInterceptor(func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+	intercept := grpc.StreamInterceptor(func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 		defer func() { handlerDone <- struct{}{} }()
 		if streams.Add(1) == 2 {
 			ss = &failingPingStream{ServerStream: ss, held: held, release: release}
 		}
 		return inject(srv, ss, info, handler)
-	}))
-	relayv1.RegisterTunnelServer(srv, &tunnelServer{reg: reg, sink: sink})
-	conn := newBufconnConn(t, srv)
+	})
+	conn := dialTunnel(t, &tunnelServer{reg: reg, sink: sink}, intercept)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	openNodeStream(ctx, t, conn, nodeID)
 	awaitSignal(t, "stream A to register", sink.registered)
 
-	streamB, err := relayv1.NewTunnelClient(conn).Open(ctx)
-	if err != nil {
-		t.Fatalf("open stream B: %v", err)
-	}
+	streamB := openStream(ctx, t, conn)
 	if err := streamB.Send(&relayv1.DaemonMessage{
 		Body: &relayv1.DaemonMessage_Hello{Hello: &relayv1.Hello{}},
 	}); err != nil {
@@ -1345,9 +1307,7 @@ func TestTunnelOpen_ANewerRegistrationEndsTheStreamItDisplaced(t *testing.T) {
 	sink := newRegisterSignalSink(inner)
 	reg := registry.NewInMemory()
 
-	srv := grpc.NewServer(grpc.StreamInterceptor(injectNodeIDInterceptor(nodeID)))
-	relayv1.RegisterTunnelServer(srv, &tunnelServer{reg: reg, sink: sink})
-	conn := newBufconnConn(t, srv)
+	conn := dialTunnelAs(t, nodeID, &tunnelServer{reg: reg, sink: sink})
 
 	streamA := openNodeStream(ctx, t, conn, nodeID)
 	awaitSignal(t, "stream A to register", sink.registered)
@@ -1422,17 +1382,12 @@ func openWithHelloOn(t *testing.T, reg *registry.InMemory, nodeID string, hello 
 // openWithHelloServer is one connect against ts: Hello, then the Ping.
 func openWithHelloServer(t *testing.T, ts *tunnelServer, nodeID string, hello *relayv1.Hello) {
 	t.Helper()
-	srv := grpc.NewServer(grpc.StreamInterceptor(injectNodeIDInterceptor(nodeID)))
-	relayv1.RegisterTunnelServer(srv, ts)
-	conn := newBufconnConn(t, srv)
+	conn := dialTunnelAs(t, nodeID, ts)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	stream, err := relayv1.NewTunnelClient(conn).Open(ctx)
-	if err != nil {
-		t.Fatalf("open stream: %v", err)
-	}
+	stream := openStream(ctx, t, conn)
 	if err := stream.Send(&relayv1.DaemonMessage{
 		Body: &relayv1.DaemonMessage_Hello{Hello: hello},
 	}); err != nil {
@@ -1853,9 +1808,7 @@ func TestTunnelOpen_ATaskToASilentNodeResolvesNodeOfflineAtTheHeartbeatDeadline(
 	sink := newRegisterSignalSink(inner)
 	reg := registry.NewInMemory()
 
-	srv := grpc.NewServer(grpc.StreamInterceptor(injectNodeIDInterceptor(nodeID)))
-	relayv1.RegisterTunnelServer(srv, &tunnelServer{reg: reg, sink: sink, heartbeatDeadline: 500 * time.Millisecond})
-	conn := newBufconnConn(t, srv)
+	conn := dialTunnelAs(t, nodeID, &tunnelServer{reg: reg, sink: sink, heartbeatDeadline: 500 * time.Millisecond})
 
 	stream := openNodeStream(ctx, t, conn, nodeID)
 	awaitSignal(t, "the stream to register", sink.registered)
@@ -1920,16 +1873,11 @@ func TestTunnelOpen_ALaterHelloOrPolicySnapshotOnTheSameStreamChangesNoRegistryF
 	const nodeID = "node-read-once"
 	oldTime := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
 	reg := registry.NewInMemory(registry.WithClock(func() time.Time { return oldTime }))
-	srv := grpc.NewServer(grpc.StreamInterceptor(injectNodeIDInterceptor(nodeID)))
-	relayv1.RegisterTunnelServer(srv, &tunnelServer{reg: reg})
-	conn := newBufconnConn(t, srv)
+	conn := dialTunnelAs(t, nodeID, &tunnelServer{reg: reg})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	stream, err := relayv1.NewTunnelClient(conn).Open(ctx)
-	if err != nil {
-		t.Fatalf("open stream: %v", err)
-	}
+	stream := openStream(ctx, t, conn)
 	hello := func(version, hostname, role string) *relayv1.DaemonMessage {
 		return &relayv1.DaemonMessage{Body: &relayv1.DaemonMessage_Hello{Hello: &relayv1.Hello{
 			DaemonVersion: version,
@@ -2206,16 +2154,11 @@ func TestTunnelOpen_AFirstMessageThatIsNotHelloIsRefusedAsInvalidArgument(t *tes
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			reg := registry.NewInMemory()
-			srv := grpc.NewServer(grpc.StreamInterceptor(injectNodeIDInterceptor("node-no-hello")))
-			relayv1.RegisterTunnelServer(srv, &tunnelServer{reg: reg})
-			conn := newBufconnConn(t, srv)
+			conn := dialTunnelAs(t, "node-no-hello", &tunnelServer{reg: reg})
 
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			stream, err := relayv1.NewTunnelClient(conn).Open(ctx)
-			if err != nil {
-				t.Fatalf("open stream: %v", err)
-			}
+			stream := openStream(ctx, t, conn)
 			if err := stream.Send(tt.msg); err != nil {
 				t.Fatalf("send: %v", err)
 			}
