@@ -122,7 +122,11 @@ spec is rewritten:
   reported only after the corresponding access attempt has been recorded.
 - The audit lane never supplies read-class output, a read-class denial explanation, output size,
   or a retained stream result set. A caller needing currently available Task output uses the
-  applicable Job-read surface, whose access is itself audited.
+  applicable Job-read surface, whose access is itself audited. Where a denied Task's record names
+  the deciding rule's stage and location (`execution.md`), the lane supplies it for every risk
+  class: a location your Policy authored is not a denial explanation.
+- Wherever a surface shows an argument, slot value or Node-derived string, control, invisible,
+  non-ASCII whitespace and bidirectional characters render as visible `\u` escapes, never raw.
 
 ## Governing ADRs and invariants
 

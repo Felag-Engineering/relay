@@ -80,7 +80,8 @@ level follows `RUST_LOG`.
 
 One routing-only line accompanies each audited decision, written by the same call that writes the
 audit record so the two cannot disagree about whether a decision happened. It never carries
-arguments or output.
+arguments or output. A Node-derived string in a Relay or relay-daemon log line has its control,
+invisible, non-ASCII whitespace and bidirectional characters written as `\u` escapes, never raw.
 
 **Neither Relay nor relay-daemon ever logs a token, private key, secret value, Operation
 argument, Raw Exec argv or command output.** Read output is audited but not retained (ADR-0025),

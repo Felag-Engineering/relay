@@ -1,6 +1,6 @@
 # Execution
 
-**Status:** current as of `2026-11-17`.
+**Status:** designed, not built, as of `2026-11-18`.
 **Claim prefix:** `EX`
 **Governed by:** ADR-0054, ADR-0001, ADR-0011, ADR-0012, ADR-0013, ADR-0014, ADR-0021, ADR-0025,
 ADR-0027, ADR-0042, ADR-0047, ADR-0049, ADR-0052; invariants 1, 4, 5, 10, 11, 12, 13, 14.
@@ -213,15 +213,19 @@ differs from an outcome, where a Job ran and a Node failed; a cancel refusal lea
   cancel of a Job it did not request, or of one with no verified requester, is refused and
   audited, and the Job continues.
 
+## Designed, not built
+
+| Claim | Statement | Milestone |
+|---|---|---|
+| EX-70 | A Task the daemon's Policy denies carries, on its `TaskResult` and on its outcome in the audit trail, the stage of the daemon's decision that denied it and where the deciding rule sits in the Node's Policy (section, index and line), as the daemon reported them. Display-only: no Relay decision reads them (invariant 12), and `relay-audit-verify` passes over a trail mixing records written before and after this. | v0.2.2 |
+
 ## Out of scope
 
-- **Policy, including Raw Exec's gate on the Node**: `policy.md`.
-- **The Operation vocabulary, the Template file and its slot types**: `operations-and-templates.md`.
+- **Policy and Raw Exec's gate**: `policy.md`; **the vocabulary and Templates**: `operations-and-templates.md`.
 - **Policy preflight, including `unknown(offline)`**: `policy-preflight.md`.
 - **Sequencing several dispatches**: the harness's job (ADR-0049).
 - **Approval decisions**: `approval.md`; **engaging and releasing the Freeze**: `freeze.md`.
-- **Label namespaces and the Selector grammar**: `selectors-and-labels.md`.
-- **The daemon's dedup markers**: `daemon-installation.md`.
+- **Labels and Selectors**: `selectors-and-labels.md`; **dedup markers**: `daemon-installation.md`.
 - **Querying Jobs, Tasks and the audit trail, and what a query strips**: `audit-and-read-lane.md`;
   clearing read output from Task rows after a fixed time, #1345.
 - **A per-Operation timeout, a configurable in-flight limit, failure tolerance and retries**:
