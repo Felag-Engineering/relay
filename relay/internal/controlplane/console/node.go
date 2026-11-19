@@ -464,7 +464,7 @@ func (v *nodeView) applyReportedPolicy(d Deps, detail capability.NodeDetail) {
 		return
 	}
 	n := detail.Node
-	snap := detail.Policy
+	snap := visiblePolicy(detail.Policy)
 	v.Policy = &snap
 	v.PolicyReported = true
 	if unreported(n) {

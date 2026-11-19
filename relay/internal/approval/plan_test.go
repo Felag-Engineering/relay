@@ -311,3 +311,98 @@ func TestSummaryNeverUnderstatesBlastRadius(t *testing.T) {
 		t.Errorf("summary %q must name the Operation", line)
 	}
 }
+
+// hostileVectors are path-shaped values that look like /var/log/app.log to a
+// reader and are not. Each carries one character the rule forbids drawing raw,
+// with the escape text an approver must read in its place.
+var hostileVectors = []struct{ name, value, escape string }{
+	{"C1 control", "/var/log/app" + string(rune(0x85)) + ".log", `app\u0085.log`},
+	{"zero-width", "/var/log/app" + string(rune(0x200b)) + ".log", `app\u200b.log`},
+	{"RLO", "/var/log/" + string(rune(0x202e)) + "gol.ppa", `\u202egol.ppa`},
+	{"LRI", "/var/log/" + string(rune(0x2066)) + "app.log" + string(rune(0x2069)), `\u2066app.log\u2069`},
+	{"no-break space", "/var/log/app" + string(rune(0xa0)) + ".log", `app\u00a0.log`},
+}
+
+// TestSummarize_ShowsInvisibleCharactersAsEscapesAndHashesTheRawValue: an
+// approver reads a visible escape for every hidden character, never the raw
+// character, and the plan hash still binds the raw value.
+//
+// Proves AP-97.
+func TestSummarize_ShowsInvisibleCharactersAsEscapesAndHashesTheRawValue(t *testing.T) {
+	const lookalike = "/var/log/app.log"
+	nodes := []string{"node-a"}
+	forms := map[string]func(string) jobs.Action{
+		"operation args": func(v string) jobs.Action {
+			return jobs.Action{Kind: jobs.ActionOperation, OperationName: "file.read",
+				OperationArgs: map[string]string{"path": v}, RiskClass: jobs.RiskClassRead}
+		},
+		"raw exec argv": func(v string) jobs.Action {
+			return jobs.Action{Kind: jobs.ActionRawExec,
+				RawExecArgv: []string{"/usr/bin/tail", v}, RiskClass: jobs.RiskClassMutate}
+		},
+	}
+	for _, vec := range hostileVectors {
+		for form, build := range forms {
+			t.Run(vec.name+"/"+form, func(t *testing.T) {
+				act, plain := build(vec.value), build(lookalike)
+				sum := Summarize(act, nodes)
+				line := sum.String()
+				if !strings.Contains(line, vec.escape) {
+					t.Errorf("summary %q lacks the visible escape %q", line, vec.escape)
+				}
+				for _, r := range vec.value {
+					if (r > 0x7e || r < 0x20) && strings.ContainsRune(line, r) {
+						t.Errorf("summary %q holds the raw character %U", line, r)
+					}
+				}
+				if strings.Contains(line, lookalike) {
+					t.Errorf("summary %q reads as the plain lookalike", line)
+				}
+				if !strings.Contains(Summarize(plain, nodes).String(), lookalike) {
+					t.Errorf("the plain lookalike must render as itself")
+				}
+				if sum.PlanHash != HashPlan(act, nodes) {
+					t.Errorf("PlanHash must be HashPlan of the raw Action")
+				}
+				if sum.PlanHash == HashPlan(plain, nodes) {
+					t.Errorf("PlanHash must differ from the lookalike's hash")
+				}
+			})
+		}
+	}
+}
+
+// TestSummarize_ATrailingBackslashCannotForgeAnArgumentBoundary: a value that
+// ends in a backslash, or holds a quote, renders differently from the
+// two-value reading it could otherwise imitate.
+//
+// Proves AP-97.
+func TestSummarize_ATrailingBackslashCannotForgeAnArgumentBoundary(t *testing.T) {
+	raw := func(argv ...string) string {
+		return Summarize(jobs.Action{Kind: jobs.ActionRawExec, RawExecArgv: argv,
+			RiskClass: jobs.RiskClassMutate}, []string{"n"}).String()
+	}
+	two := raw("x\\", "y")
+	one := raw(`x" "y`)
+	if want := `"x\u005c" "y"`; !strings.Contains(two, want) {
+		t.Errorf("two elements = %q, want the text %q", two, want)
+	}
+	if want := `"x\u0022 \u0022y"`; !strings.Contains(one, want) {
+		t.Errorf("one element = %q, want the text %q", one, want)
+	}
+
+	op := func(args map[string]string) string {
+		return Summarize(jobs.Action{Kind: jobs.ActionOperation, OperationName: "x.y",
+			OperationArgs: args, RiskClass: jobs.RiskClassRead}, []string{"n"}).String()
+	}
+	opTwo := op(map[string]string{"a": "x\\", "b": "y"})
+	opOne := op(map[string]string{"a": `x", b="y`})
+	if opTwo == opOne {
+		t.Errorf("distinct arguments render the same: %q", opTwo)
+	}
+	for _, line := range []string{two, one, opTwo, opOne} {
+		if strings.Contains(line, `\"`) {
+			t.Errorf("summary %q holds a backslash directly before a double quote", line)
+		}
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/Felag-Engineering/relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/relay/relay/internal/visibletext"
 )
 
 // HashPlan content-addresses what an approver is being asked to approve: the
@@ -150,6 +151,10 @@ func ParseActionKind(s string) jobs.ActionKind {
 // answer to the approval-view fidelity gap: the AI-agent chooses the Action, but
 // it does not get to choose the words describing the Action, so it cannot
 // truncate, soften, or misrepresent what it is asking for (ADR-0027).
+//
+// The text renders every hidden character as a visible escape and quotes each
+// value so none can forge an argument boundary (AP-97). PlanHash is computed
+// by HashPlan over the raw Action, never over this text.
 type PlanSummary struct {
 	Action    string
 	RiskClass string
@@ -208,16 +213,17 @@ func describeAction(act jobs.Action) string {
 		sort.Strings(keys)
 		parts := make([]string, 0, len(keys))
 		for _, k := range keys {
-			parts = append(parts, fmt.Sprintf("%s=%q", k, act.OperationArgs[k]))
+			parts = append(parts, visibletext.Escape(k)+"="+visibletext.Quote(act.OperationArgs[k]))
 		}
+		name := visibletext.Escape(act.OperationName)
 		if len(parts) == 0 {
-			return act.OperationName
+			return name
 		}
-		return act.OperationName + "(" + strings.Join(parts, ", ") + ")"
+		return name + "(" + strings.Join(parts, ", ") + ")"
 	case jobs.ActionRawExec:
 		quoted := make([]string, 0, len(act.RawExecArgv))
 		for _, a := range act.RawExecArgv {
-			quoted = append(quoted, fmt.Sprintf("%q", a))
+			quoted = append(quoted, visibletext.Quote(a))
 		}
 		return "raw exec: [" + strings.Join(quoted, " ") + "]"
 	default:

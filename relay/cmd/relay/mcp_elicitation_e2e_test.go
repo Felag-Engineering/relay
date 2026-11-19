@@ -747,3 +747,38 @@ func TestMCPElicitation_ClientThatCannotBeAskedSeesNoChange(t *testing.T) {
 		t.Errorf("Job ApprovalIDs = %v, want exactly {%q, %q}", gotApprovalIDs, requestIDA, requestIDB)
 	}
 }
+
+// TestMCPElicitation_QuestionShowsInvisibleCharactersAsEscapes: the question an
+// approver is asked renders every hidden character as a visible escape, and the
+// stored approval carries the same text.
+//
+// Proves AP-97.
+func TestMCPElicitation_QuestionShowsInvisibleCharactersAsEscapes(t *testing.T) {
+	f, token, _ := startElicitingRelay(t)
+	session := connectEliciting(t, f, token)
+
+	hostile := "app" +
+		string(rune(0x85)) + string(rune(0x200b)) + string(rune(0x202e)) +
+		string(rune(0x2066)) + string(rune(0xa0))
+	args := restartNginxArgs()
+	args["args"] = map[string]string{"unit": hostile}
+
+	q, qid, requestID, _ := askApproval(t, session, args)
+	params := q.InputRequests[qid].(*sdkmcp.ElicitParams)
+
+	want := "app" + "\\u0085" + "\\u200b" + "\\u202e" + "\\u2066" + "\\u00a0"
+	if !strings.Contains(params.Message, want) {
+		t.Errorf("question %q lacks the visible escapes %q", params.Message, want)
+	}
+	for _, r := range hostile[len("app"):] {
+		if strings.ContainsRune(params.Message, r) {
+			t.Errorf("question %q holds the raw character %U", params.Message, r)
+		}
+	}
+	if strings.Contains(params.Message, `"app"`) {
+		t.Errorf("question %q reads as the plain lookalike", params.Message)
+	}
+	if got := fetchApproval(t, f, requestID).Summary; got != params.Message {
+		t.Errorf("stored summary %q differs from the question %q", got, params.Message)
+	}
+}
