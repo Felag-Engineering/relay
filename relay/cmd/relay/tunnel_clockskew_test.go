@@ -14,10 +14,9 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 	"github.com/Felag-Engineering/relay/relay/internal/registry"
 	relayv1 "github.com/Felag-Engineering/relay/relay/internal/relay/v1"
-	"google.golang.org/grpc"
 )
 
-func sendHeartbeat(t *testing.T, stream grpc.BidiStreamingClient[relayv1.DaemonMessage, relayv1.RelayMessage], unixMillis int64) {
+func sendHeartbeat(t *testing.T, stream tunnelStream, unixMillis int64) {
 	t.Helper()
 	if err := stream.Send(&relayv1.DaemonMessage{
 		Body: &relayv1.DaemonMessage_Heartbeat{Heartbeat: &relayv1.Heartbeat{UnixMillis: unixMillis}},
@@ -85,9 +84,7 @@ func TestTunnelOpen_HeartbeatFiveMinutesOutRecordsAboutThatSkew(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			const nodeID = "node-skew"
 			reg := registry.NewInMemory()
-			srv := grpc.NewServer(grpc.StreamInterceptor(injectNodeIDInterceptor(nodeID)))
-			relayv1.RegisterTunnelServer(srv, &tunnelServer{reg: reg})
-			conn := newBufconnConn(t, srv)
+			conn := dialTunnelAs(t, nodeID, &tunnelServer{reg: reg})
 
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
@@ -125,9 +122,7 @@ func TestTunnelOpen_NonPositiveHeartbeatTimestampRecordsSkewNotMeasured(t *testi
 		t.Run(tc.name, func(t *testing.T) {
 			const nodeID = "node-no-timestamp"
 			reg := registry.NewInMemory()
-			srv := grpc.NewServer(grpc.StreamInterceptor(injectNodeIDInterceptor(nodeID)))
-			relayv1.RegisterTunnelServer(srv, &tunnelServer{reg: reg})
-			conn := newBufconnConn(t, srv)
+			conn := dialTunnelAs(t, nodeID, &tunnelServer{reg: reg})
 
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
@@ -165,9 +160,7 @@ func TestTunnelOpen_NodeYearsOutKeepsItsStreamAndAnswersATask(t *testing.T) {
 			router := dispatch.NewRouter(nil, nil)
 			sink := newRegisterSignalSink(routerSink{r: router})
 			reg := registry.NewInMemory()
-			srv := grpc.NewServer(grpc.StreamInterceptor(injectNodeIDInterceptor(nodeID)))
-			relayv1.RegisterTunnelServer(srv, &tunnelServer{reg: reg, sink: sink})
-			conn := newBufconnConn(t, srv)
+			conn := dialTunnelAs(t, nodeID, &tunnelServer{reg: reg, sink: sink})
 
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
@@ -250,12 +243,10 @@ func TestTunnelOpen_FailedHeartbeatWriteIsLoggedAndTheDeadlineStillResets(t *tes
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
 	inner := registry.NewInMemory()
-	srv := grpc.NewServer(grpc.StreamInterceptor(injectNodeIDInterceptor(nodeID)))
-	relayv1.RegisterTunnelServer(srv, &tunnelServer{
+	conn := dialTunnelAs(t, nodeID, &tunnelServer{
 		reg:               failingHeartbeatRegistry{inner},
 		heartbeatDeadline: 500 * time.Millisecond,
 	})
-	conn := newBufconnConn(t, srv)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
