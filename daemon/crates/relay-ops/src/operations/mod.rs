@@ -39,23 +39,6 @@ pub use relay_policy::natives::{FILE_READ, PKG_INSTALL, SERVICE_RESTART, SYSTEM_
 // name→(handler, arg-shape, risk class) table; ADR-0012, ADR-0021).
 // ---------------------------------------------------------------------------
 
-/// Returns all v1 Operation descriptors in canonical order, derived from
-/// [`registry::REGISTRY`] — the one place a reviewer verifies the full
-/// name→class mapping; misclassification is security-relevant (ADR-0012).
-///
-/// Only referenced in tests; the dispatch pipeline resolves entries from the
-/// same registry directly. Compiled only under test.
-#[cfg(test)]
-pub fn descriptors() -> Vec<crate::gen::OperationDescriptor> {
-    registry::REGISTRY
-        .iter()
-        .map(|e| crate::gen::OperationDescriptor {
-            name: e.name.to_string(),
-            risk_class: e.risk as i32,
-        })
-        .collect()
-}
-
 /// Returns the [`RiskClass`] for a named Operation, or `None` if the name is
 /// not in the v1 vocabulary — a [`registry::lookup`] view.
 ///
@@ -98,27 +81,6 @@ pub enum OperationError {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn descriptors_returns_four_in_order() {
-        let descs = descriptors();
-        assert_eq!(descs.len(), 4);
-
-        assert_eq!(descs[0].name, SYSTEM_FACTS);
-        assert_eq!(descs[1].name, FILE_READ);
-        assert_eq!(descs[2].name, SERVICE_RESTART);
-        assert_eq!(descs[3].name, PKG_INSTALL);
-
-        // Pin raw i32 values against the proto contract.
-        assert_eq!(descs[0].risk_class, RiskClass::Read as i32);
-        assert_eq!(descs[0].risk_class, 1); // RISK_CLASS_READ
-        assert_eq!(descs[1].risk_class, RiskClass::Read as i32);
-        assert_eq!(descs[1].risk_class, 1); // RISK_CLASS_READ
-        assert_eq!(descs[2].risk_class, RiskClass::Mutate as i32);
-        assert_eq!(descs[2].risk_class, 2); // RISK_CLASS_MUTATE
-        assert_eq!(descs[3].risk_class, RiskClass::Mutate as i32);
-        assert_eq!(descs[3].risk_class, 2); // RISK_CLASS_MUTATE
-    }
 
     #[test]
     fn risk_class_lookup() {

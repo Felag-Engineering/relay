@@ -209,9 +209,8 @@ type CertificateOutput struct {
 // Relay-side in opvocab.Descriptor, never on the wire (invariant 8). This is what makes list_operations legible
 // enough that a model chooses the right Operation, and builds valid args for
 // it, without trial-and-error. Raw Exec is deliberately absent from this
-// list: it is not an Operation (ADR-0003, GLOSSARY.md) and has no
-// OperationDescriptor on the wire; it surfaces through its own tool
-// and is always risk class mutate.
+// list: it is not an Operation (ADR-0003, GLOSSARY.md); it surfaces
+// through its own tool and is always risk class mutate.
 type OperationItem struct {
 	Name           string            `json:"name"`
 	RiskClass      string            `json:"risk_class"`
