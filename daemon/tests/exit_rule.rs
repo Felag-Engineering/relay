@@ -16,12 +16,15 @@
 #![allow(clippy::disallowed_methods)]
 
 mod common;
+#[path = "common/spawned_daemon.rs"]
+mod spawned_daemon;
 
 use common::TempDir;
+use spawned_daemon::{seed_identity, seed_identity_files, wait_bounded};
 use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
-use std::process::{Child, Command, ExitStatus, Output, Stdio};
+use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
 /// A well-formed join string, so a test can tell "the join string was ignored"
@@ -48,29 +51,6 @@ fn run<V: AsRef<OsStr>>(state: &Path, extra: &[(&str, V)]) -> Output {
         cmd.env(k, v);
     }
     cmd.output().expect("spawn relay-daemon")
-}
-
-/// A self-signed identity in the on-disk layout `load_identity` expects; with
-/// `only` set, just those of the four files.
-fn seed_identity(dir: &Path, only: Option<&[&str]>) {
-    std::fs::create_dir_all(dir).expect("create state dir");
-    let kp = rcgen::KeyPair::generate().expect("keygen");
-    let cert = rcgen::CertificateParams::new(vec!["test-node".to_string()])
-        .expect("params")
-        .self_signed(&kp)
-        .expect("self-signed")
-        .pem();
-    let files = [
-        ("key.pem", kp.serialize_pem()),
-        ("cert.pem", cert.clone()),
-        ("ca_bundle.pem", cert),
-        ("node_id", "test-node-id".to_string()),
-    ];
-    for (name, body) in files {
-        if only.is_none_or(|o| o.contains(&name)) {
-            std::fs::write(dir.join(name), body).expect("write identity file");
-        }
-    }
 }
 
 // Proves EN-33, DI-25.
@@ -147,7 +127,7 @@ fn relay_join_is_refused_by_name() {
         for (label, value) in &values {
             let state = TempDir::new("exit-relay-join");
             if enrolled {
-                seed_identity(state.path(), None);
+                seed_identity(state.path());
             } else {
                 std::fs::create_dir_all(state.path()).expect("create state dir");
             }
@@ -189,7 +169,7 @@ fn names(dir: &Path) -> Vec<String> {
 #[test]
 fn partial_identity_exits_nonzero() {
     let state = TempDir::new("exit-partial-identity");
-    seed_identity(state.path(), Some(&["key.pem", "node_id"]));
+    seed_identity_files(state.path(), &["key.pem", "node_id"]);
     let out = run(state.path(), &[("RELAY_ADDRESS", "https://127.0.0.1:1")]);
     assert!(!out.status.success(), "got {:?}", out.status);
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -204,7 +184,7 @@ fn partial_identity_exits_nonzero() {
 #[test]
 fn identity_without_address_exits_nonzero() {
     let state = TempDir::new("exit-no-address");
-    seed_identity(state.path(), None);
+    seed_identity(state.path());
     // Neither RELAY_ADDRESS nor a persisted address.
     let out = run(state.path(), &[] as &[(&str, &str)]);
     assert!(
@@ -221,7 +201,7 @@ fn an_untrusted_state_dir_exits_nonzero_naming_it() {
     use std::os::unix::fs::PermissionsExt;
 
     let state = TempDir::new("exit-untrusted-state-dir");
-    seed_identity(state.path(), None);
+    seed_identity(state.path());
     std::fs::set_permissions(state.path(), std::fs::Permissions::from_mode(0o777))
         .expect("loosen the state dir");
     let out = run(state.path(), &[("RELAY_ADDRESS", "https://127.0.0.1:1")]);
@@ -260,28 +240,6 @@ fn daemon_cmd(state: &Path, extra: &[(&str, String)]) -> Command {
     cmd
 }
 
-/// Waits for `child` to exit; past `deadline` it is killed. The status is `None` when it
-/// had to be killed. Returns the status, stdout and stderr, and always reaps.
-fn wait_bounded(mut child: Child, deadline: Duration) -> (Option<ExitStatus>, String, String) {
-    let start = Instant::now();
-    let exited = loop {
-        if child.try_wait().expect("poll the daemon").is_some() {
-            break true;
-        }
-        if start.elapsed() >= deadline {
-            let _ = child.kill();
-            break false;
-        }
-        std::thread::sleep(Duration::from_millis(25));
-    };
-    let out = child.wait_with_output().expect("reap the daemon");
-    (
-        exited.then_some(out.status),
-        String::from_utf8_lossy(&out.stdout).into_owned(),
-        String::from_utf8_lossy(&out.stderr).into_owned(),
-    )
-}
-
 fn no_connection(listener: &std::net::TcpListener) -> bool {
     matches!(
         listener.accept(),
@@ -305,7 +263,7 @@ fn local_listener() -> (std::net::TcpListener, String) {
 fn unopenable_identity_or_dedup_store_refuses_start() {
     {
         let state = TempDir::new("exit-di19-control");
-        seed_identity(state.path(), None);
+        seed_identity(state.path());
         let (listener, addr) = local_listener();
         let mut child = daemon_cmd(state.path(), &[("RELAY_ADDRESS", addr)])
             .spawn()
@@ -351,7 +309,7 @@ fn unopenable_identity_or_dedup_store_refuses_start() {
     ];
     for (label, sabotage, stderr_says) in cases {
         let state = TempDir::new("exit-di19-case");
-        seed_identity(state.path(), None);
+        seed_identity(state.path());
         sabotage(state.path());
         let (listener, addr) = local_listener();
         let before = names(state.path());

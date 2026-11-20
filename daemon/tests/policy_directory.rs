@@ -14,11 +14,14 @@
 #![allow(clippy::disallowed_methods)]
 
 mod common;
+#[path = "common/spawned_daemon.rs"]
+mod spawned_daemon;
 
 use common::TempDir;
+use spawned_daemon::{seed_identity, stop, wait_bounded};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, ExitStatus, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
 const ALLOW_NGINX: &str = "\
@@ -36,28 +39,6 @@ const DENY_PHP: &str = "\
 name = \"service.restart\"
 args = [[\"php-fpm\"]]
 ";
-
-/// A self-signed identity in the on-disk layout `load_identity` expects. The
-/// same layout `exit_rule.rs` seeds; kept local because a shared copy in
-/// `common` would be dead code in every other test crate that declares it.
-fn seed_identity(dir: &Path) {
-    std::fs::create_dir_all(dir).expect("create state dir");
-    let kp = rcgen::KeyPair::generate().expect("keygen");
-    let cert = rcgen::CertificateParams::new(vec!["test-node".to_string()])
-        .expect("params")
-        .self_signed(&kp)
-        .expect("self-signed")
-        .pem();
-    let files = [
-        ("key.pem", kp.serialize_pem()),
-        ("cert.pem", cert.clone()),
-        ("ca_bundle.pem", cert),
-        ("node_id", "test-node-id".to_string()),
-    ];
-    for (name, body) in files {
-        std::fs::write(dir.join(name), body).expect("write identity file");
-    }
-}
 
 fn set_mode(path: &Path, mode: u32) {
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).expect("chmod");
@@ -115,7 +96,7 @@ fn a_symlinked_policy_fragment_refuses_start() {
     std::os::unix::fs::symlink(node.policy(), node.dir().join("evil.toml")).unwrap();
 
     // A closed port: a daemon that did not refuse would retry the dial for ever.
-    let mut child = Command::new(env!("CARGO_BIN_EXE_relay-daemon"))
+    let child = Command::new(env!("CARGO_BIN_EXE_relay-daemon"))
         .env_clear()
         .env("RELAY_STATE_DIR", state.path())
         .env("RELAY_ADDRESS", "https://127.0.0.1:1")
@@ -127,25 +108,9 @@ fn a_symlinked_policy_fragment_refuses_start() {
         .spawn()
         .expect("spawn relay-daemon");
 
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let status = loop {
-        if let Some(status) = child.try_wait().expect("poll the daemon") {
-            break status;
-        }
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            panic!("the daemon kept running with a symlinked Policy fragment");
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    };
-
-    let out = child.wait_with_output().expect("collect the output");
-    let all = format!(
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
+    let (status, stdout, stderr) = wait_bounded(child, Duration::from_secs(10));
+    let status = status.expect("the daemon kept running with a symlinked Policy fragment");
+    let all = format!("{stdout}{stderr}");
     assert!(
         !status.success(),
         "must exit non-zero, got {status:?}: {all}"
@@ -235,11 +200,6 @@ fn check_dir(node: &Node, extra: &[&str]) -> (Option<i32>, String, String) {
 /// The value of the `fingerprint:` line `policy check` printed, if any.
 fn printed_fingerprint(stdout: &str) -> Option<&str> {
     stdout.lines().find_map(|l| l.strip_prefix("fingerprint: "))
-}
-
-fn stop(mut child: Child) {
-    let _ = child.kill();
-    let _ = child.wait();
 }
 
 /// Starts the daemon on `node`'s Policy, against a closed port so it never

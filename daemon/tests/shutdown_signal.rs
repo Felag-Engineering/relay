@@ -13,56 +13,14 @@
 #![allow(clippy::disallowed_methods)]
 
 mod common;
+#[path = "common/spawned_daemon.rs"]
+mod spawned_daemon;
 
 use common::TempDir;
-use std::io::Write;
-use std::os::unix::fs::OpenOptionsExt;
+use spawned_daemon::{seed_identity, wait_bounded};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
-
-fn write_file(path: PathBuf, content: &str, mode: u32) {
-    let mut f = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(mode)
-        .open(&path)
-        .unwrap_or_else(|e| panic!("open {path:?}: {e}"));
-    f.write_all(content.as_bytes())
-        .unwrap_or_else(|e| panic!("write {path:?}: {e}"));
-}
-
-/// Writes a self-signed rcgen identity to `dir` in the same on-disk layout
-/// `identity::load_identity` expects (`key.pem`, `cert.pem`, `ca_bundle.pem`,
-/// `node_id`).
-///
-/// Replicated here rather than reusing `identity::persist_identity` because
-/// that function is `pub(crate)` and this is a separate integration-test
-/// crate for a bin-only package with no lib target to share it. With this
-/// identity pre-seeded the startup plan is `Enrolled`: no enrollment endpoint is
-/// dialled.
-fn seed_identity(dir: &Path) {
-    std::fs::create_dir_all(dir).expect("create state dir");
-
-    let kp = rcgen::KeyPair::generate().expect("keygen");
-    let cert = rcgen::CertificateParams::new(vec!["test-node".to_string()])
-        .expect("cert params")
-        .self_signed(&kp)
-        .expect("self-signed cert");
-
-    let key_pem = kp.serialize_pem();
-    let cert_pem = cert.pem();
-
-    write_file(dir.join("key.pem"), &key_pem, 0o600);
-    write_file(dir.join("cert.pem"), &cert_pem, 0o644);
-    // Self-signed: the cert doubles as its own CA bundle. This daemon never
-    // reaches a real handshake in this test (connect is refused before TLS),
-    // so the bundle's content is not itself exercised — only its presence,
-    // which `load_identity` requires.
-    write_file(dir.join("ca_bundle.pem"), &cert_pem, 0o644);
-    write_file(dir.join("node_id"), "test-node-id", 0o644);
-}
 
 /// Spawns the compiled `relay-daemon` binary pointed at an unreachable Relay
 /// (`127.0.0.1:1` — nothing listens there, so TCP connect is refused
@@ -100,7 +58,7 @@ fn daemon_log_path(state_dir: &Path) -> PathBuf {
 ///
 /// Duplicated as a literal because the daemon is a bin-only crate with no lib
 /// target for an integration test to import from (see the module header, and
-/// `seed_identity` above for the same constraint). `daemon/src/shutdown.rs`
+/// `spawned_daemon::seed_identity` for the same constraint). `daemon/src/shutdown.rs`
 /// owns the real constant, `HANDLERS_INSTALLED_MSG`, and a test asserting
 /// through it would fail loudly here if the two ever drift.
 const HANDLERS_INSTALLED_MSG: &str = "signal handlers installed; graceful shutdown armed";
@@ -132,21 +90,6 @@ fn wait_for_signal_handlers(state_dir: &Path, bound: Duration) {
     }
 }
 
-/// Polls `child` until it exits or `bound` elapses; panics on timeout.
-fn wait_for_exit(child: &mut std::process::Child, bound: Duration) -> std::process::ExitStatus {
-    let start = Instant::now();
-    loop {
-        if let Some(status) = child.try_wait().expect("try_wait") {
-            return status;
-        }
-        assert!(
-            start.elapsed() < bound,
-            "daemon did not exit within {bound:?}"
-        );
-        std::thread::sleep(Duration::from_millis(20));
-    }
-}
-
 /// DoD item 2 / correction #2: SIGTERM while idle and reconnecting to an
 /// unreachable Relay must produce an immediate clean exit (code 0) instead of
 /// blocking on the unbounded, `connect_timeout`-less `connect()` call or on a
@@ -157,7 +100,7 @@ fn sigterm_while_idle_reconnecting_exits_zero_immediately() {
     let state_dir = TempDir::new("idle");
     seed_identity(state_dir.path());
 
-    let mut child = spawn_idle_daemon(state_dir.path());
+    let child = spawn_idle_daemon(state_dir.path());
 
     // Wait for the daemon to state that its signal handlers are installed,
     // rather than sleeping and hoping. Everything this test is about happens
@@ -178,7 +121,9 @@ fn sigterm_while_idle_reconnecting_exits_zero_immediately() {
 
     // Comfortably under the grace period (default 30s): an idle daemon must
     // not wait on the grace timer at all.
-    let status = wait_for_exit(&mut child, Duration::from_secs(3));
+    let bound = Duration::from_secs(3);
+    let (status, _, _) = wait_bounded(child, bound);
+    let status = status.unwrap_or_else(|| panic!("daemon did not exit within {bound:?}"));
 
     assert!(
         status.success(),
