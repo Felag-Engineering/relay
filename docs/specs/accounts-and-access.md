@@ -263,7 +263,7 @@ Claims above with **no row**, and so nothing checking them:
 
 - That an Account's authority is applied consistently across the Control API, MCP, and the
   Console. Each surface proves its own gate; no cross-surface authorization-parity test
-  asserts that they agree — the same gap `query.md` records for the read floor.
+  asserts that they agree; `query.md`'s read floor (QRY-15) has the same gap.
 - That the privilege-granting Console acts require a fresh step-up, and privilege-reducing acts
   do not. The Console write routes consult the step-up window and have tests; no row cites
   them yet.

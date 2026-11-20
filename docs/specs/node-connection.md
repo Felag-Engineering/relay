@@ -65,8 +65,10 @@ secret distribution.
 - **NC-11** `last_seen` is the time of the Node's last heartbeat or `Hello`. Connected is never
   derived from it.
 - **NC-37** The Relay measures each heartbeat's timestamp against its own clock and records the
-  difference on the Node's registry record as its clock skew: Relay-measured, kept apart from the
-  self-reported Facts, and never a reason to refuse a connection or a dispatch.
+  difference, the Node's time minus the Relay's receive time (positive when the Node is ahead),
+  on the Node's registry record as its clock skew, with the time it was measured. A heartbeat
+  without a usable timestamp records it as not measured. Clock skew is Relay-measured, kept apart
+  from the self-reported Facts, and never a reason to refuse a connection or a dispatch.
 - **NC-12** No message acknowledges a Task and no `unacknowledged` outcome exists: a Task sent
   to a silently dead Node waits out NC-9 (R52).
 

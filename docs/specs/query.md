@@ -1,34 +1,33 @@
 # Query
 
-**Status:** designed, not built, as of `2026-10-27`.
+**Status:** designed, not built, as of `2026-11-19`.
 **Claim prefix:** `QRY`
+**Governed by:** ADR-0002, ADR-0006, ADR-0007, ADR-0009, ADR-0011, ADR-0014, ADR-0015, ADR-0020,
+ADR-0021, ADR-0025, ADR-0034, ADR-0050, ADR-0051; invariants 2, 7, 8, 9, 10, 12.
 
 ## Purpose
 
-Query lets an authenticated Account inspect the fleet information Relay holds without
-dispatching an Operation: Nodes in the registry, one Node's recorded identity and state, the
-daemon-reported Policy view, and the Operation vocabulary. It answers what Relay knows and what
-a Node last reported; it does not make a Policy decision, change a Node, or infer a desired
-state.
+Query lets a signed-in Account see what Relay knows about the fleet without running anything:
+which Nodes exist, one Node's identity and state, the Policy (the rules a Node runs by) each
+Node reported when it last connected, and the Operations a Node offers. It never makes a Policy
+decision, changes a Node, or says what a Node ought to be.
 
-It also holds one write, which only names what it reads: a **Policy alias**, a human-readable
-name a human `admin` gives a Policy fingerprint. An alias changes how a
-fingerprint is displayed and nothing else.
+Its one write is a **Policy alias**: a readable name a human `admin` gives a Policy fingerprint
+(its hash), which changes only how that hash is displayed.
 
-Read means the call cannot change Node state, not that its contents are harmless to disclose.
-Registry data includes fleet shape, Labels, Facts, identity provenance and Policy information, so
-access is attributable and auditable.
+Read means a call cannot change a Node, not that the answer is harmless: fleet shape, Labels,
+identity and Policy are sensitive, so every read is attributed and recorded.
 
 ## Surfaces
 
 | Surface | Query capability today |
 |---|---|
-| **MCP** | `list_nodes` lists registry Nodes, optionally resolved against a Selector. `describe_node` returns one Node's registry data, certificate provenance, the Policy view, and the reported Template Operation vocabulary. `list_operations` returns the frozen Native vocabulary and, given a Node ID, that Node's last-reported Template Operations. |
+| **MCP** | `list_nodes` lists registry Nodes, optionally resolved against a Selector. `describe_node` returns one Node's registry data, certificate provenance, the Policy view, and the reported Template Operation vocabulary. `list_operations` returns the frozen Native vocabulary and, given a Node ID, the Template Operations that Node reported at the start of its latest stream. |
 | **Control API** | `GET /api/v1/nodes/{node_id}` returns one Node's registry data and certificate provenance. No fleet enumeration, Policy-view or vocabulary route (QRY-1). |
-| **Admin Console** | The Fleet view and Node detail read the registry through the capability read lane. Node detail renders the Policy view — read from the display-only cache directly — with its receipt time, and the template-set fingerprint; it does not render the Template vocabulary (QRY-14). The Compare screen reads through the lane and is recorded like every other read (QRY-28). |
+| **Admin Console** | The Fleet view and Node detail read the registry through the capability read lane. Node detail renders the Policy view, read through the same lane, with its receipt time, and the template-set fingerprint; it does not render the Template vocabulary (QRY-14). The Compare screen reads through the lane and is recorded like every other read (QRY-28). |
 
-Policy aliases are built (QRY-29 … QRY-38; QRY-39 is After MVP): the Console reads and writes them;
-the Control API and MCP carry none (QRY-36, *Future work*).
+Policy aliases (QRY-29 … QRY-38) are read and written on the Console only; the Control API and
+MCP carry none (QRY-36).
 
 No surface exposes a general registry search, a way to refresh a daemon snapshot, or any way
 to query, author or alter Policy over the wire; a live hypothetical is `policy-preflight.md`.
@@ -46,7 +45,7 @@ to query, author or alter Policy over the wire; a live hypothetical is `policy-p
 - **QRY-5** The capability read lane's Node detail, as rendered by the Console, reports how many
   registry Nodes share the Node's non-empty Policy fingerprint and template-set fingerprint.
   These counts are observation for rollout and drift visibility, never evidence of Policy
-  equivalence or trust. MCP `describe_node` does not report them today (*Future work*).
+  equivalence or trust. MCP `describe_node` does not report them.
 - **QRY-6** `describe_node` and `list_operations(node_id)` distinguish an absent
   template-vocabulary report from an empty reported vocabulary: a missing report is not
   evidence that a Node has no Template Operations.
@@ -58,15 +57,16 @@ to query, author or alter Policy over the wire; a live hypothetical is `policy-p
   when it exists; and `state:` Labels evaluated at Selector-resolution time, rendered in Selector
   syntax, never stored.
 - **QRY-41** `list_nodes` accepts an empty Selector or one in the `node:`, `relay:`, `tag:` and
-  `state:` namespaces, resolves it against the registry at one evaluation instant, and returns the
-  matches in Node-ID order with `state:` Labels from that same instant.
+  `state:` namespaces, resolves it against the registry at one evaluation instant, and returns
+  every match, never paged or truncated, in Node-ID order with `state:` Labels from that same
+  instant.
 
 ### Policy view
 
 - **QRY-7** MCP `describe_node` and the Console Node detail render the Policy view: a
-  display-only copy of the effective Policy the relay-daemon previously reported. When none has
-  been captured the result says so, never representing absence as an unrestricted or empty
-  Policy.
+  display-only copy of the effective Policy the relay-daemon reported at the start of its latest
+  stream. When none has been captured the result says so, never representing absence as an
+  unrestricted or empty Policy.
 - **QRY-8** The Policy view is a report, not a live query: its receipt time is Relay-stamped
   (the wire carries no timestamp), and an offline Node cannot be refreshed through this
   capability.
@@ -75,27 +75,27 @@ to query, author or alter Policy over the wire; a live hypothetical is `policy-p
   view neither grants permission nor predicts whether a Task will run.
 - **QRY-10** The view shows the whole reported Policy — raw patterns, allowed Operations,
   operation and deny rules, the fingerprint, and (on MCP) whether Raw Exec is enabled — and
-  never a Template command body: no RPC carries one as Template metadata (ADR-0021, amended
-  2026-10-16; see *Future work*). A `file.read` result may return a Template file where Policy
-  allows it (`daemon-installation.md`, R37).
+  never a Template command body: no RPC carries one as Template metadata (ADR-0021). A
+  `file.read` result may return a Template file where Policy allows it (`daemon-installation.md`,
+  R37).
 
 ### Operation-vocabulary discovery
 
 - **QRY-11** The Native Operation vocabulary is frozen and fleet-wide; `list_operations` reports
   each Native's name, risk class, purpose, argument constraints and an example.
 - **QRY-12** With no Node ID, `list_operations` reports Natives only. With a Node ID it adds the
-  Template Operations that Node last reported — names, risk classes and typed slots — and never
-  a template body.
+  Template Operations that Node reported at the start of its latest stream — names, risk classes
+  and typed slots — and never a template body.
 - **QRY-13** Raw Exec is not an Operation and is never listed as one.
 - **QRY-14** The Console Node detail shows the template-set fingerprint and never the reported
-  Template vocabulary (*Future work*).
+  Template vocabulary.
 
 ### Access and recording
 
 - **QRY-15** Every query surface requires an authenticated Account, and the read floor is
   `viewer` on MCP, the Control API and the Console alike; no narrower role gate applies.
 - **QRY-16** On the capability read lane, on the MCP tools and on the Control API Node read, a
-  read is recorded before content is returned. The record identifies the authenticated caller
+  read is recorded before content is returned. The record identifies the Principal
   and the target: an enumeration records its Selector, a single-Node read records the requested
   Node ID, including one that does not exist.
 - **QRY-17** On the capability read lane and the MCP tools, if the access record cannot be
@@ -125,7 +125,7 @@ to query, author or alter Policy over the wire; a live hypothetical is `policy-p
   capability read lane, and the Console offers the write to a human `admin` only, from the Fleet
   view's fingerprint facet and Node detail's Fingerprints panel.
 - **QRY-36** The Control API and MCP carry no alias, on any read, and expose no alias write.
-- **QRY-37** Setting, renaming or clearing an alias takes no step-up: an alias gates nothing.
+- **QRY-37** Setting, renaming or clearing an alias takes no step-up: an alias gates nothing (R39).
 
 ## Refusals
 
@@ -140,15 +140,15 @@ to query, author or alter Policy over the wire; a live hypothetical is `policy-p
   before recording.
 - **QRY-23** A missing Policy or Template snapshot is represented as not reported on MCP, and a
   missing Policy view as not reported on the Console. The Console's template panel does not
-  distinguish "never reported" from "none installed" today.
+  distinguish "never reported" from "none installed".
 - **QRY-24** No query surface can set Labels, modify Policy, load Templates, refresh a daemon
   snapshot, issue a Policy verdict or dispatch an Operation: each adapter's structural guard
   forbids the write and dispatch seams, and the read seams expose reads alone.
 - **QRY-26** `list_operations` with a well-formed Node ID not in the registry is refused as "no
   such Node", and the refused read is recorded with the probed ID, exactly as `describe_node`
-  does (#680).
+  does.
 - **QRY-27** MCP `describe_node` refuses a missing or oversized Node ID before recording
-  anything, as the capability read lane does (#680).
+  anything, as the capability read lane does.
 - **QRY-38** An alias write is refused, with a reason naming the rule, to an unauthenticated
   caller, to a machine Account of any role and to a human Account below `admin`; and for a
   fingerprint that is not well-formed, an alias that after trimming is empty or longer than 64
@@ -156,107 +156,14 @@ to query, author or alter Policy over the wire; a live hypothetical is `policy-p
   bidirectional overrides), or an alias another fingerprint already carries. Clearing an alias
   that is not set is not an error.
 
-## Governing ADRs and invariants
-
-- **Invariant 2 and ADR-0002** — Policy is locally rooted and remotely immutable. Query may show
-  a daemon report, but no surface can write Policy or Template Operations over the wire (QRY-24).
-  A Policy alias is a name the Relay holds for a fingerprint and never sends to a Node: setting
-  one writes no Policy (QRY-31).
-- **Invariant 7, ADR-0006, ADR-0020, ADR-0034 and ADR-0050** — Label namespaces stay separate:
-  `node:`, `relay:` and `tag:` are returned as separate maps (QRY-40), `state:` is derived, and
-  Selectors resolve all four (QRY-41). A Tag is written by a human Account through its own
-  capability action, never by a query (ADR-0050). A query has no Label-write authority.
-- **Invariant 8 and ADR-0007** — wire-reported data follows the protocol contract; a query surface
-  never invents a second wire vocabulary. Both *Future work* items change what the daemon
-  reports and start in `/proto`.
-- **Invariant 10 and ADR-0009** — MCP, the Control API and the Console are adapters over the
-  capability layer and may narrow only. Every registry, Policy-view and vocabulary read on all
-  three goes through the capability read lane; no adapter holds a reader of its own (QRY-28).
-  An alias write is decided in the capability layer, and the Console only exposes it (QRY-29,
-  QRY-35).
-- **Invariant 9 and ADR-0051** — an alias names a fingerprint and never records which Nodes
-  should carry it (QRY-32). The Relay stores no cohort arrangement: an alias attaches to a
-  fingerprint only, never to a Node, Label, Selector or group, so it describes no desired state.
-- **Invariant 12 and ADR-0011** — only the relay-daemon's live engine evaluates Policy. Displaying
-  a snapshot never becomes a Relay-side verdict (QRY-9); a hypothetical is `policy-preflight.md`.
-- **ADR-0014** — `outdated` is a registry observation and a dispatch gate; a query neither
-  asserts Policy drift nor authorises an upgrade.
-- **ADR-0015 and ADR-0021** — the Native vocabulary is golden-guarded and frozen; Template
-  vocabulary is local, per-Node and report-only (QRY-11, QRY-12). ADR-0021 decides that the
-  template-set fingerprint travels and the templates do not (QRY-40, QRY-10); both *Future work*
-  items below would amend it and land only after that amendment.
-- **ADR-0025** — query access is audited, records what it was aimed at, and fails closed when it
-  cannot be recorded (QRY-16, QRY-17, QRY-26, QRY-28). Retention and output rules are
-  `audit-and-read-lane.md`'s.
-
-## Seams and proof
-
-The capability read lane holds the registry-query methods for enumeration and the single-Node
-read, with their access-recording requirement; every surface reads through it (QRY-28). The Policy
-view and the Template vocabulary are read from caches only the Tunnel handler fills. `make verify`
-is sufficient for every claim here; a change to what the daemon reports starts in `/proto` and
-needs the proto gates.
-
-### What proves each claim
-
-| Claim | Proven by | Seam |
-|---|---|---|
-| QRY-1 | `TestQueryRoutes_TheControlAPIServesNoEnumerationPolicyOrVocabularyRead` (the negative half only, over the Control API's own route table rather than the composed mux, by a route-name heuristic; the positive half rests on QRY-41's, QRY-7's and QRY-11's rows) | API |
-| QRY-4 | `Connected_IsNotInferredFromLastSeen` in the shared registry conformance suite, run as `TestRepositoryConformance` (in-memory) and `TestSQLiteRegistryConformance` (SQLite store) | registry, store |
-| QRY-5 | `TestDescribeNode_CountsFingerprintPeersAndSkipsEmptyFingerprints` (the lane's arithmetic and empty-fingerprint skip); `TestNode_FingerprintPanelReportsThePeerCounts` (a real lane's counts reach the Node-detail screen); `TestMCP_DescribeNode_ReportsNoFingerprintPeerCounts` (pins today's MCP gap, which is *Future work*, not a prohibition) | capability, Console, MCP |
-| QRY-6 | `TestMCP_ListOperations_PerNode`, `TestMCP_DescribeNode` | MCP |
-| QRY-7 | `TestMCP_DescribeNode` | MCP |
-| QRY-8 | `TestNode_PolicyPanelCarriesTheReceiptTime`, `TestNode_OfflineNodePolicyCannotBeRefreshed` | Console |
-| QRY-9 | `TestCompare_MarksDifferencesAndNeverAdjudicatesThem` | Console |
-| QRY-10 | `TestMCP_DescribeNode` | MCP |
-| QRY-11 | `TestMCP_ListOperations` | MCP |
-| QRY-12 | `TestMCP_ListOperations_PerNode`; body half `TestMCP_ListOperations_NeverCarriesATemplateBody` (keys on the field name `body` only; nothing pins the descriptor's field set in `/proto`) | MCP |
-| QRY-13 | `TestMCP_ListOperations` | MCP |
-| QRY-14 | `TestNode_DetailShowsTheTemplateFingerprintAndNeverTheTemplateVocabulary` (this screen only; pins today's *Future work* gap, not a permanent ban) | Console |
-| QRY-15 | `TestMCP_RequiresCredential`; Control API and Console halves `TestQueryReadFloor_IsViewerOnMCPTheControlAPIAndTheConsole` (one `viewer` Account reaches each hand-listed query read on all three adapters; as `viewer` is the lowest role, it cannot tell "no narrower gate" from "no gate") | MCP, e2e |
-| QRY-16 | `TestListNodes_RecordsTheEnumeration`, `TestDescribeNode_RecordsTheNodeItWasAimedAt` | capability |
-| QRY-17 | `TestRegistryLane_FailsClosedWhenTheReadCannotBeAudited`, `TestRegistryLane_RefusesWithoutARealAuditSink`, `TestHandleGetNode_FailsClosedWhenTheReadCannotBeRecorded` | capability, API |
-| QRY-19 | `TestMCP_RequiresCredential`, `TestConsole_UnauthenticatedIsRefused` | MCP, Console |
-| QRY-21 | `TestDescribeNode_RecordsAProbeForAMissingNode` | capability |
-| QRY-22 | `TestDescribeNode_BoundsTheNodeIdBeforeRecordingIt` | capability |
-| QRY-23 | `TestMCP_DescribeNode` | MCP |
-| QRY-24 | `TestNoDispatchConstruction`, `TestConsole_NoDispatchOutsideCapabilityLayer` | compile-time |
-| QRY-26 | `TestListOperations_RefusesAnUnknownNodeAndRecordsTheProbe`, `TestMCP_ListOperations_UnknownNodeIsRefusedNotAnEmptyVocabulary` | capability, MCP |
-| QRY-27 | `TestMCP_DescribeNode_BoundsTheNodeIdBeforeRecordingIt` | MCP |
-| QRY-28 | `TestDispatchViolations_Fixtures` (MCP, API, Console), `TestNoDispatchConstruction`, `TestConsole_NoDispatchOutsideCapabilityLayer`, `TestSurfaceDeps_NoSurfaceIsHandedTheRegistryOrACache`, `TestMCP_ReadToolsRecordThroughTheRealLane`, `TestHandleGetNode_FailsClosedWhenTheReadCannotBeRecorded`, `TestCompare_RecordsOneReadPerPinnedNode`, `TestMCP_ListNodes_SelectorIsResolvedByTheLane` | compile-time, MCP, API, Console |
-| QRY-30 | `TestPolicyAliasAdmin_RecordsTheActorFingerprintOldAndNewValue`, `TestRecordPolicyAlias_ReasonCarriesFingerprintOldAndNew`, `TestPolicyAliasAdmin_ChangeIsNotMadeWhenItsRecordCannotBeWritten`, `TestAppendWithPolicyAlias_AnUnwritableRecordLeavesTheAliasUnchanged`, `TestAppendWithPolicyAlias_SetRenameClearWriteOneRecordEach` | capability, audit sink, store |
-| QRY-31 | `TestPolicyAliases_ReachOnlyTheAliasAdminAndTheReadLane`, `TestPolicyAlias_NoWireOrResolutionPackageImportsIt`, `TestPolicyAlias_IsNeverASelectorTerm`, `TestPolicyAliasAdmin_NoChangeRecordsNothing` (the last asserts no decision input changes) | capability, compile-time |
-| QRY-32 | `TestPolicyAliasShapes_NameNoNodeLabelOrSelector`, `TestPolicyAliases_TableHoldsAFingerprintAndANameOnly`, `TestPolicyAliasAdmin_SetsAnAliasForAFingerprintNoNodeReports` | capability, store |
-| QRY-33 | `TestPolicyAliases_EveryAliasIsDrawnBesideItsFullFingerprint` (Fleet headline, facet and table, Node detail and Compare: every alias directly before its full hash, no well-formed fingerprint drawn short); supporting: `TestPolicyAliases_UnaliasedFingerprintsTakeLettersInOrderOfFirstAppearance`, `TestCompare_AFingerprintCarriesOneLetterInEveryColumn`, `TestPolicyAliases_NoLetterOrAliasCarriesColourOrRanking`, `TestPolicyAliases_AMachinePrincipalIsDrawnNoAliasName` (the letter, which stands for an alias where none is set, is also drawn beside the full hash), `TestPolicyAliases_FiltersAndLinksCarryTheHashNeverTheAlias` (links name the hash, never the alias) | Console |
-| QRY-34 | `TestAppendWithPolicyAlias_OneAliasPerFingerprint`, `TestAppendWithPolicyAlias_OneFingerprintPerAlias`, `TestPolicyAliases_SurviveARestart`, `TestPolicyAliases_StayAttachedWithNoNodeReportingTheFingerprint` | store |
-| QRY-35 | Read half: `TestPolicyAliases_FleetNodeDetailAndCompareReadThroughTheRecordedLane`, `TestPolicyAliases_AnUnrecordableAliasReadRefusesThePage`, `TestPolicyAliases_ReadsOnlyWhenTheyAreDrawn`. Offer half: `TestPolicyAliases_TheEditControlIsOfferedToAHumanAdminOnly` (a human `admin`; not a viewer, operator, machine or unrecognised-kind Account; Fleet facet and Node detail only, never the headline, table or Compare), `TestPolicyAliasesOffered_RequiresAWiredWriterAHumanAndTheAdminRoute`, `TestPolicyAliases_TheEditorCarriesWhatTheWriteNeeds`, `TestFleet_EveryPolicyFingerprintCarriesItsEditorAtScale`. End to end through the real composition root: `TestConsolePolicyAliases_AHumanAdminSetsRenamesAndClearsThroughTheRealCapabilityLayer` | Console, capability, e2e |
-| QRY-36 | `TestMCP_CarriesNoPolicyAlias`, `TestControlAPI_CarriesNoPolicyAlias`; write half structural: `TestDispatchViolations_Fixtures` (MCP, API: flags any selector naming a Policy alias) | MCP, API |
-| QRY-37 | `TestPolicyAliasAdmin_TakesNoStepUp`, `TestAuthorizeControl_PolicyAliasIsAdminAndHumanOnly` | capability, authz |
-| QRY-38 | `TestPolicyAliasAdmin_Refusals`, `TestAuthorizeControl_PolicyAliasIsAdminAndHumanOnly`, `TestSetPolicyAlias_StoresTheTrimmedValueAndAcceptsTheLengthBoundary`, `TestClearPolicyAlias_NotSetIsNotAnError`, `TestValidPolicyFingerprint`, `TestNormalizePolicyAlias`, `TestAppendWithPolicyAlias_RefusesAMalformedCall` | capability, authz, store |
-| QRY-40 | `TestMCP_ListNodes_All`, `TestMCP_ListNodes_StateLabels`, `TestHandleGetNode_StateLabels`; the `tag:` map as its own map, empty when a Node has none: `TestMCP_NodeReads_ReturnTagsAsTheirOwnMap`, `TestHandleGetNode_ReturnsTagsAsTheirOwnMap` | MCP, API |
-| QRY-41 | Ordering half, empty Selector only: `TestListNodes_ReturnsMatchesInNodeIdOrder` (lane) and `TestMCP_ListNodes_ReturnsMatchesInNodeIdOrder` (MCP, seeded out of ID order). Rest of the claim: `TestMCP_ListNodes_SelectorFilter`, `TestMCP_ListNodes_All`. The `tag:` namespace, which resolves against tag-space alone: `TestListNodes_ResolvesATagSelector` (lane; also pins Node-ID order under a `tag:` Selector), `TestMCP_ListNodes_TagSelectorResolves`, `TestSelectorMatchesTagReadsOnlyTagLabels` | capability, MCP |
-| QRY-42 | `TestMCP_ListNodes_SelectorFilter` (bare key, unknown `state:` key), `TestMCP_ListNodes_RefusesMalformedBareAndUnknownStateTerms` (malformed, bare, unknown `state:` and unknown-namespace terms, each refused with no read record) | MCP |
-
-Claims with **no row**, and so nothing checking them:
-
-- **QRY-41**, ordering under a *filtered* Selector — Node-ID order is now asserted at the lane and
-  at MCP, but for the empty Selector only; nothing checks that a Selector-filtered resolution
-  preserves it (#681).
-
-### Performance
-
-| Characteristic | Contract | Measured by |
-|---|---|---|
-| Node enumeration | Returns every Node matching the Selector, sorted by Node ID; never silently pages or truncates | *(none)* |
-| Single-Node detail | Reads one Node and computes its fingerprint-peer counts without the caller enumerating the fleet | *(none)* |
-| Vocabulary discovery | A fleet-wide request returns Natives only; per-Node Template vocabulary needs an exact Node ID until QRY-25 | *(none)* |
-
 ## Designed, not built
 
 | Claim | Statement | Milestone |
 |---|---|---|
-| QRY-25 | `list_operations` takes a Selector and reports each Operation reachable across the matched Nodes — description, typed slots and allowed values, risk class, and which Nodes report it; a single Node ID is the one-Node case. Retires the Node-ID-only half of QRY-12 and the vocabulary row in *Performance*. | After MVP |
+| QRY-25 | `list_operations` takes a Selector and reports each Operation reachable across the matched Nodes — description, typed slots and allowed values, risk class, and which Nodes report it; a single Node ID is the one-Node case. Retires the Node-ID-only half of QRY-12. | After MVP |
 | QRY-39 | No query surface can set Labels, modify Policy, load Templates, refresh a daemon snapshot, issue a Policy verdict or dispatch an Operation: each adapter's structural guard forbids every write seam but the alias write (QRY-29), and every dispatch seam. Replaces QRY-24 when promoted. | After MVP |
+| QRY-43 | `describe_node`, the Control API Node read and the Console Node detail show the Node's clock skew as `node-connection.md` records it: a signed number of milliseconds with the time it was measured, or "not measured". It is shown apart from the self-reported Facts and never as a warning: no threshold, badge or `state:` term. | v0.2.2 |
+| QRY-44 | `describe_node`, the Control API Node read and the Console Node detail show when the Node first connected, beside its certificate provenance (QRY-40), or that it has never connected. | v0.2.2 |
 
 ## Out of scope
 
@@ -266,56 +173,43 @@ Claims with **no row**, and so nothing checking them:
   capability only displays what a Node already reported.
 - Any write but a Policy alias. Policy authoring, Template loading or distribution, Label
   writes (a Tag is written through its own capability action, even where the Console offers it
-  beside a query view — `selectors-and-labels.md`, ADR-0050), Node enrollment and revocation, Account administration, and dispatch.
-- Fleet health monitoring, metrics, desired-state reconciliation, configuration management,
-  daemon upgrades, and an unbounded remote shell.
+  beside a query view — `selectors-and-labels.md`, ADR-0050), Node enrollment and revocation
+  (`enrollment.md`), Account administration (`accounts-and-access.md`), and dispatch
+  (`execution.md`).
+- Fleet health monitoring and metrics (`observability.md`); desired-state reconciliation,
+  configuration management, daemon upgrades and a remote shell (`AGENTS.md`, out of realm).
+- Template bodies on the wire, retiring the template-set fingerprint, Control API query routes,
+  peer counts on MCP, the Template vocabulary on the Console, aliases beyond the Console, Raw
+  Exec state on the Control API and Console reads, and roles tighter than `viewer`:
+  `roadmap: relay/research/spec-future-work/query`.
 
-## Future work
+## Proof
 
-The owner decided the first two in principle (`2026-09-14`, `2026-09-21`), but they cannot be
-Designed here: each reverses a decision in ADR-0021 (and ADR-0034), so that amendment lands first,
-when `policy.md` migrates, with the threat model and `GLOSSARY.md` as its consumers.
+<!-- proof:begin -->
+| Claim | Proven by | Seam |
+|---|---|---|
+| QRY-1 | `TestQueryRoutes_TheControlAPIServesNoEnumerationPolicyOrVocabularyRead` | API |
+| QRY-5 | `TestDescribeNode_CountsFingerprintPeersAndSkipsEmptyFingerprints`, `TestMCP_DescribeNode_ReportsNoFingerprintPeerCounts`, `TestNode_FingerprintPanelReportsThePeerCounts` | Console, MCP, capability |
+| QRY-7 | `TestDescribeNode_AnUnwiredCacheReportsNotReportedNotAnEmptyPolicy`, `TestQueryRoutes_TheControlAPIServesNoEnumerationPolicyOrVocabularyRead` | API, capability |
+| QRY-11 | `TestQueryRoutes_TheControlAPIServesNoEnumerationPolicyOrVocabularyRead` | API |
+| QRY-12 | `TestListOperations_WithNoNodeIdRecordsTheToolAndNoTarget`, `TestMCP_ListOperations_NeverCarriesATemplateBody` | MCP, capability |
+| QRY-14 | `TestNode_DetailShowsTheTemplateFingerprintAndNeverTheTemplateVocabulary` | Console |
+| QRY-15 | `TestQueryReadFloor_IsViewerOnMCPTheControlAPIAndTheConsole` | Relay |
+| QRY-16 | `TestListNodes_RecordsTheEnumeration` | capability |
+| QRY-17 | `TestHandleGetNode_FailsClosedWhenTheReadCannotBeRecorded` | API |
+| QRY-22 | `TestDescribeNode_BoundsTheNodeIdBeforeRecordingIt`, `TestMCP_DescribeNode_BoundsTheNodeIdBeforeRecordingIt` | MCP, capability |
+| QRY-26 | `TestListOperations_RefusesAnUnknownNodeAndRecordsTheProbe`, `TestMCP_ListOperations_UnknownNodeIsRefusedNotAnEmptyVocabulary` | MCP, capability |
+| QRY-27 | `TestDescribeNode_BoundsTheNodeIdBeforeRecordingIt`, `TestMCP_DescribeNode_BoundsTheNodeIdBeforeRecordingIt` | MCP, capability |
+| QRY-28 | `TestHandleGetNode_FailsClosedWhenTheReadCannotBeRecorded`, `TestMCP_ListNodes_SelectorIsResolvedByTheLane`, `TestMCP_ReadToolsRecordThroughTheRealLane` | API, MCP |
+| QRY-33 | `TestCompare_AFingerprintCarriesOneLetterInEveryColumn`, `TestPolicyAliases_AMachinePrincipalIsDrawnNoAliasName`, `TestPolicyAliases_EveryAliasIsDrawnBesideItsFullFingerprint`, `TestPolicyAliases_FiltersAndLinksCarryTheHashNeverTheAlias`, `TestPolicyAliases_NoLetterOrAliasCarriesColourOrRanking`, `TestPolicyAliases_UnaliasedFingerprintsTakeLettersInOrderOfFirstAppearance` | Console |
+| QRY-35 | `TestFleet_EveryPolicyFingerprintCarriesItsEditorAtScale`, `TestPolicyAliasesOffered_RequiresAWiredWriterAHumanAndTheAdminRoute`, `TestPolicyAliases_AnUnreadableAliasReadIsNamedAsTheAliases`, `TestPolicyAliases_AnUnrecordableAliasReadRefusesThePage`, `TestPolicyAliases_FleetNodeDetailAndCompareReadThroughTheRecordedLane`, `TestPolicyAliases_ReadsOnlyWhenTheyAreDrawn`, `TestPolicyAliases_TheEditControlIsOfferedToAHumanAdminOnly`, `TestPolicyAliases_TheEditorCarriesWhatTheWriteNeeds` | Console |
+| QRY-36 | `TestControlAPI_CarriesNoPolicyAlias`, `TestMCP_CarriesNoPolicyAlias` | API, MCP |
+| QRY-40 | `TestHandleGetNode_ReturnsTagsAsTheirOwnMap`, `TestMCP_NodeReads_ReturnTagsAsTheirOwnMap` | API, MCP |
+| QRY-41 | `TestListNodes_ResolvesATagSelector`, `TestListNodes_ReturnsMatchesInNodeIdOrder`, `TestMCP_ListNodes_ReturnsMatchesInNodeIdOrder`, `TestMCP_ListNodes_TagSelectorResolves`, `TestQueryRoutes_TheControlAPIServesNoEnumerationPolicyOrVocabularyRead`, `TestSelectorMatchesTagReadsOnlyTagLabels` | API, MCP, capability |
+| QRY-42 | `TestListNodes_ResolvesTheSelectorAndRecordsItsCanonicalForm`, `TestMCP_ListNodes_RefusesMalformedBareAndUnknownStateTerms` | MCP, capability |
 
-- **Template command bodies cross the wire.** The relay-daemon reports each Template Operation's
-  body with its descriptor, and the Policy view shows it verbatim: a Node tells the Relay what it
-  can and cannot do. The bound that must travel with it: the Relay displays a body and never
-  substitutes slot values into it or executes a rendered command — substitution happens only on
-  the daemon, inside the structure the Template's author fixed (invariant 1, ADR-0021), and no
-  verdict is derived from a body (invariant 12). Reverses ADR-0021's "drift visibility without
-  the templates traveling"; a `/proto` change; a threat-model row for what a hostile Node's body
-  discloses into a `viewer`'s and the AI-agent's context.
-- **The template-set fingerprint is retired.** From every Node read and from the `state:`
-  vocabulary (`state:template-fingerprint=`, `state:template-unloadable`); a Node read shows the
-  Policy fingerprint, whether the Policy is valid, and whether it enables Raw Exec, with "valid"
-  defined by `policy.md`. Amends ADR-0021 and ADR-0034.
-- **Control API query routes** — fleet enumeration, the Policy view and vocabulary discovery.
-  Each would adapt the capability read lane, never add a reader of its own.
-- **Peer counts on MCP `describe_node`** — the lane computes them; the tool does not surface them.
-- **Template vocabulary on the Console Node detail**, distinguishing "never reported" from "none
-  installed".
-- **Policy aliases beyond the Console.** The alias on Control API and MCP reads, and a Control API
-  write. Either would hand an AI-agent — a machine Account on both surfaces (ADR-0010) — an
-  `admin`'s prose name for a Policy, an assertion it could reason from in place of the
-  fingerprint it targets by. That is a decision, not an adapter's to make alone.
-- **Roles tighter than `viewer`** for sensitive fleet data, if a tenant, delegated-access or
-  data-classification need appears.
-
-## Accepted residual risk
-
-- **A hijacked human `admin` session can rename aliases to mislead.** Without the Account's
-  password, it can name an unhardened fingerprint "web-hardened" and steer the humans who judge a
-  rollout by name. Accepted by the owner on `2026-10-18` (Console D23) in taking no step-up for an
-  alias; the compensating controls are QRY-33 (the fingerprint is always beside the name) and
-  QRY-30 (every change is audited with its old and new value). Threat model **R39**.
-
-## Open questions
-
-None of this capability's own. Neighbours that state one of today's decisions the other way and
-adopt this spec at their migration: `operations-and-templates.md` (states Selector-scoped
-`list_operations` as current; it is QRY-25), `policy.md` (states template bodies in the Policy view
-as current; see *Future work*), `audit-and-read-lane.md` (says MCP `describe_node` returns peer
-counts; QRY-5). `audit-and-read-lane.md` lists the audit kinds and does not yet name the
-alias-change record (QRY-30); it adopts it at its migration.
+Unproven: QRY-4, QRY-6, QRY-8, QRY-9, QRY-10, QRY-13, QRY-19, QRY-21, QRY-23, QRY-24, QRY-29, QRY-30, QRY-31, QRY-32, QRY-34, QRY-37, QRY-38.
+<!-- proof:end -->
 
 ## Retired
 
