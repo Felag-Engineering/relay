@@ -75,6 +75,8 @@ func fingerprintPanelOf(body string) string {
 // a string slice of rendered HTML, so a markup rename breaks the test rather
 // than the property. It proves the lane's numbers reach the panel; it does not
 // prove the panel's prose is correct English for every n beyond 0 and 1.
+//
+// Proves QRY-5, QRY-23.
 func TestNode_FingerprintPanelReportsThePeerCounts(t *testing.T) {
 	policyFP := strings.Repeat("a", 64)
 	templateFP := strings.Repeat("e", 64)

@@ -53,6 +53,7 @@ func policyAliasRecords(t *testing.T, repo audit.Repository) []audit.Record {
 	return out
 }
 
+// Proves QRY-30.
 func TestRecordPolicyAlias_ReasonCarriesFingerprintOldAndNew(t *testing.T) {
 	st, repo, path := openSinkStore(t)
 	sink := New(repo, WithNewID(sequentialIDs("audit-")), WithClock(func() time.Time { return time.Date(2026, 10, 18, 9, 0, 0, 0, time.UTC) }))
@@ -96,6 +97,7 @@ func TestRecordPolicyAlias_ReasonCarriesFingerprintOldAndNew(t *testing.T) {
 	}
 }
 
+// Proves QRY-30.
 func TestPolicyAliasAdmin_ChangeIsNotMadeWhenItsRecordCannotBeWritten(t *testing.T) {
 	st, repo, _ := openSinkStore(t)
 	ctx := context.Background()

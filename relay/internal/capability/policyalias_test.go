@@ -88,6 +88,7 @@ func aliasFixture(t *testing.T, seed map[string]string, nodes ...registry.Report
 
 var aliasAdmin = Principal{AccountID: "acct-1", Account: "alice", Role: "admin", Kind: PrincipalKindHuman, AuthMethod: AuthMethodConsoleSession}
 
+// Proves QRY-29.
 func TestPolicyAliasAdmin_HumanAdminSetsRenamesAndClears(t *testing.T) {
 	svc, _, _ := aliasFixture(t, nil)
 	ctx := context.Background()
@@ -120,6 +121,7 @@ func TestPolicyAliasAdmin_HumanAdminSetsRenamesAndClears(t *testing.T) {
 	}
 }
 
+// Proves QRY-30.
 func TestPolicyAliasAdmin_RecordsTheActorFingerprintOldAndNewValue(t *testing.T) {
 	svc, store, _ := aliasFixture(t, nil)
 	ctx := WithAssertions(context.Background(), Assertions{OnBehalfOf: "bob"})
@@ -194,6 +196,7 @@ func TestPolicyAliasAdmin_StoreConflicts(t *testing.T) {
 	})
 }
 
+// Proves QRY-34.
 func TestPolicyAliasAdmin_SetsAnAliasForAFingerprintNoNodeReports(t *testing.T) {
 	svc, _, _ := aliasFixture(t, nil)
 	if err := svc.SetPolicyAlias(context.Background(), aliasAdmin, aliasFPa, "retired-baseline"); err != nil {
@@ -205,6 +208,7 @@ func TestPolicyAliasAdmin_SetsAnAliasForAFingerprintNoNodeReports(t *testing.T) 
 	}
 }
 
+// Proves QRY-31.
 func TestPolicyAlias_IsNeverASelectorTerm(t *testing.T) {
 	node := registry.Report{NodeID: "node-1", PolicyFingerprint: aliasFPa}
 	svc, store, _ := aliasFixture(t, map[string]string{aliasFPa: "web-hardened"}, node)
@@ -237,6 +241,7 @@ func TestPolicyAlias_IsNeverASelectorTerm(t *testing.T) {
 	}
 }
 
+// Proves QRY-32.
 func TestPolicyAliasShapes_NameNoNodeLabelOrSelector(t *testing.T) {
 	var fields []string
 	typ := reflect.TypeOf(PolicyAliasEvent{})
@@ -357,6 +362,7 @@ func TestNewPolicyAliasAdmin_PanicsOnAnUnsafeComposition(t *testing.T) {
 	}
 }
 
+// Proves QRY-38.
 func TestValidPolicyFingerprint(t *testing.T) {
 	cases := map[string]bool{
 		aliasFPa:                              true,
@@ -375,6 +381,7 @@ func TestValidPolicyFingerprint(t *testing.T) {
 	}
 }
 
+// Proves QRY-38.
 func TestNormalizePolicyAlias(t *testing.T) {
 	cases := []struct {
 		name string

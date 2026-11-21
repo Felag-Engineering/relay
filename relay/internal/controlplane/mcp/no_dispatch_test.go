@@ -263,7 +263,7 @@ func nonTestGoFiles(t *testing.T) (dir string, names []string) {
 // JobResultReader. This test is defense in depth that catches the mistake at
 // `go test` time with an explicit message, rather than an opaque compiler
 // error or runtime panic.
-// Proves EX-1.
+// Proves EX-1, QRY-24.
 func TestNoDispatchConstruction(t *testing.T) {
 	dir, names := nonTestGoFiles(t)
 	fset := token.NewFileSet()

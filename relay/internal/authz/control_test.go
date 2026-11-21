@@ -299,6 +299,8 @@ func TestAuthorizeControl_TemporaryPasswordIsAdminAndHumanOnly(t *testing.T) {
 // TestAuthorizeControl_PolicyAliasIsAdminAndHumanOnly pins the alias write's
 // floor: admin, and a human Account. A machine admin is refused it, with the
 // human-only reason rather than a role one.
+//
+// Proves QRY-38.
 func TestAuthorizeControl_PolicyAliasIsAdminAndHumanOnly(t *testing.T) {
 	gate := NewRoleGate()
 	ctx := context.Background()

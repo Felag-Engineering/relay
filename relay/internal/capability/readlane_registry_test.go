@@ -110,7 +110,9 @@ func TestListNodes_RecordsTheEnumeration(t *testing.T) {
 // halves of ListNodes' new shape (#680): it actually resolves selector
 // against the registry (not just enumerates), and what lands on the trail is
 // the CANONICAL Selector form, not the caller's raw bytes — the same
-// precedent NoNodesMatchedError sets (QRY-42).
+// precedent NoNodesMatchedError sets.
+//
+// Proves QRY-16, QRY-41.
 func TestListNodes_ResolvesTheSelectorAndRecordsItsCanonicalForm(t *testing.T) {
 	svc, sink := registryLaneFixture(t,
 		registry.Report{NodeID: "node-1"}.WithNodeLabels(map[string]string{"role": "web"}),
@@ -309,6 +311,8 @@ func TestDescribeNode_CountsFingerprintPeersAndSkipsEmptyFingerprints(t *testing
 // what an audited read surface exists to make visible, and a trail that
 // recorded only the lookups that found something would record only the
 // successful half of a scan.
+//
+// Proves QRY-21.
 func TestDescribeNode_RecordsAProbeForAMissingNode(t *testing.T) {
 	svc, sink := registryLaneFixture(t, registry.Report{NodeID: "node-1"})
 
@@ -442,7 +446,7 @@ func TestNewReadLaneAcceptsRealAuditSink(t *testing.T) {
 // caller-controlled and would land in the append-only trail, so an oversized
 // one is refused BEFORE anything is written rather than stored and truncated.
 //
-// This is QRY-22's proof row, at the capability seam. QRY-27's own proof
+// Proves QRY-22 at the capability seam. The MCP-seam proof
 // (mcp_test.go's TestMCP_DescribeNode_BoundsTheNodeIdBeforeRecordingIt) is
 // deliberately separate: this test proves the LANE's ordering, that one
 // proves the MCP surface actually goes through it.
@@ -532,6 +536,8 @@ func TestListOperations_RecordsTheNodeItWasAimedAt(t *testing.T) {
 // lane-seam proof: a well-formed but unknown Node ID is refused as
 // ErrNodeNotFound, and the refused read is recorded with the probed id —
 // written BEFORE the registry lookup, so the probe itself is never lost.
+//
+// Proves QRY-21, QRY-26.
 func TestListOperations_RefusesAnUnknownNodeAndRecordsTheProbe(t *testing.T) {
 	svc, sink := registryLaneFixtureWithViews(t, fakePolicyView{}, fakeTemplateVocab{}, registry.Report{NodeID: "node-1"})
 

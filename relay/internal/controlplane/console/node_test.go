@@ -57,6 +57,8 @@ func policyPanelOf(body string) string {
 // while the snapshot does not, so rendering LastSeen here would overstate the
 // Policy view's freshness by hours, which is precisely the confusion this
 // criterion exists to prevent.
+//
+// Proves QRY-8.
 func TestNode_PolicyPanelCarriesTheReceiptTime(t *testing.T) {
 	d := fleetFixture()
 	d = withPolicy(d, map[string]policyview.Snapshot{"node-web-1": reportedSnapshot(policyview.Snapshot{
@@ -105,6 +107,8 @@ func TestNode_PolicyPanelWithNoReceiptTimeSaysSo(t *testing.T) {
 // TestNode_OfflineNodePolicyCannotBeRefreshed is spec 02's offline state: the
 // panel renders the last thing the engine said and states that nothing can
 // re-ask it, rather than presenting a stale answer as a live one.
+//
+// Proves QRY-8.
 func TestNode_OfflineNodePolicyCannotBeRefreshed(t *testing.T) {
 	d := fleetFixture() // node-db-1 is the fixture's offline Node.
 	d = withPolicy(d, map[string]policyview.Snapshot{"node-db-1": reportedSnapshot(policyview.Snapshot{
@@ -799,6 +803,8 @@ func TestCompare_ResolvesOnlyThePinnedNodesAndNeverEnumeratesTheFleet(t *testing
 // screen: it states that two daemons reported different things. It never says
 // what either would do with a Task, because that is Policy evaluation and it
 // happens in the daemon's engine.
+//
+// Proves QRY-9.
 func TestCompare_MarksDifferencesAndNeverAdjudicatesThem(t *testing.T) {
 	d := renderableDeps()
 	d = withFleet(d, []registry.Node{

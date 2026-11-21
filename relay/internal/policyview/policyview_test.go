@@ -51,6 +51,8 @@ func TestCache_SetGet_RoundTrip(t *testing.T) {
 // which is ultimately a Node's report crossing the transport — cannot supply
 // one. A daemon-chosen timestamp would be self-reported like a Fact, and a
 // compromised Node could make a stale Policy view look a second old.
+//
+// Proves QRY-8.
 func TestCache_Set_StampsTheRelaysOwnClock(t *testing.T) {
 	c := New(WithClock(func() time.Time { return fixedClock }))
 	injected := time.Date(1999, 1, 1, 0, 0, 0, 0, time.UTC)

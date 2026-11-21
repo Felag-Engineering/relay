@@ -719,6 +719,9 @@ func TestPolicyAliases_AMachineAdminsPostReachesTheCapabilityLayerUndecided(t *t
 // A set passes the alias exactly as typed and a clear passes only the
 // fingerprint; the form's origin decides where the redirect goes and the
 // request's query string decides nothing.
+//
+// Neither request carries a password: an alias write takes no step-up.
+// Proves QRY-37.
 func TestPolicyAliases_AWriteReachesTheCapabilityLayerAndReturnsToWhereItWasMade(t *testing.T) {
 	post := func(form url.Values, target string) (*httptest.ResponseRecorder, *fakeAliasWriter) {
 		d, _, w := aliasDeps(nil, aliasNode("node-1", fpA, true))

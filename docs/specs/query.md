@@ -189,28 +189,45 @@ to query, author or alter Policy over the wire; a live hypothetical is `policy-p
 | Claim | Proven by | Seam |
 |---|---|---|
 | QRY-1 | `TestQueryRoutes_TheControlAPIServesNoEnumerationPolicyOrVocabularyRead` | API |
+| QRY-4 | `TestHandleGetNode_ADisconnectedNodeIsReadFromItsLastRecordAndConnectedIsNotLastSeen`, `TestMCP_DescribeNode_ADisconnectedNodeIsReadFromItsLastRecord` | API, MCP |
 | QRY-5 | `TestDescribeNode_CountsFingerprintPeersAndSkipsEmptyFingerprints`, `TestMCP_DescribeNode_ReportsNoFingerprintPeerCounts`, `TestNode_FingerprintPanelReportsThePeerCounts` | Console, MCP, capability |
-| QRY-7 | `TestDescribeNode_AnUnwiredCacheReportsNotReportedNotAnEmptyPolicy`, `TestQueryRoutes_TheControlAPIServesNoEnumerationPolicyOrVocabularyRead` | API, capability |
-| QRY-11 | `TestQueryRoutes_TheControlAPIServesNoEnumerationPolicyOrVocabularyRead` | API |
+| QRY-6 | `TestMCP_TemplateVocabulary_AnAbsentReportIsNotAnEmptyOne` | MCP |
+| QRY-7 | `TestDescribeNode_AnUnwiredCacheReportsNotReportedNotAnEmptyPolicy` | capability |
+| QRY-8 | `TestCache_Set_StampsTheRelaysOwnClock`, `TestNode_OfflineNodePolicyCannotBeRefreshed`, `TestNode_PolicyPanelCarriesTheReceiptTime`, `TestWire_PolicySnapshotCarriesNoTimestamp` | Console, policyview |
+| QRY-9 | `TestCompare_MarksDifferencesAndNeverAdjudicatesThem`, `TestNode_ReportedPolicyComesFromTheDaemonsOwnEngine` | Console |
+| QRY-10 | `TestMCP_DescribeNode_ThePolicyViewIsTheWholeReportAndNoTemplateBody` | MCP |
+| QRY-11 | `TestMCP_ListOperations` | MCP |
 | QRY-12 | `TestListOperations_WithNoNodeIdRecordsTheToolAndNoTarget`, `TestMCP_ListOperations_NeverCarriesATemplateBody` | MCP, capability |
+| QRY-13 | `TestMCP_ListOperations` | MCP |
 | QRY-14 | `TestNode_DetailShowsTheTemplateFingerprintAndNeverTheTemplateVocabulary` | Console |
 | QRY-15 | `TestQueryReadFloor_IsViewerOnMCPTheControlAPIAndTheConsole` | Relay |
-| QRY-16 | `TestListNodes_RecordsTheEnumeration` | capability |
+| QRY-16 | `TestListNodes_RecordsTheEnumeration`, `TestListNodes_ResolvesTheSelectorAndRecordsItsCanonicalForm` | capability |
 | QRY-17 | `TestHandleGetNode_FailsClosedWhenTheReadCannotBeRecorded` | API |
+| QRY-19 | `TestConsole_UnauthenticatedIsRefused`, `TestHandleGetNode_AnUnauthenticatedCallerReceivesNoNode`, `TestMCP_RequiresCredential` | API, Console, MCP |
+| QRY-21 | `TestDescribeNode_RecordsAProbeForAMissingNode`, `TestHandleGetNode_AnUnknownNodeIsNoSuchNodeAndTheProbeIsRecorded`, `TestListOperations_RefusesAnUnknownNodeAndRecordsTheProbe`, `TestMCP_DescribeNode_AnUnknownNodeIsRefusedAndTheProbeIsRecorded`, `TestMCP_ListOperations_UnknownNodeIsRefusedNotAnEmptyVocabulary` | API, MCP, capability |
 | QRY-22 | `TestDescribeNode_BoundsTheNodeIdBeforeRecordingIt`, `TestMCP_DescribeNode_BoundsTheNodeIdBeforeRecordingIt` | MCP, capability |
+| QRY-23 | `TestMCP_TemplateVocabulary_AnAbsentReportIsNotAnEmptyOne`, `TestNode_FactsAppearHereAndPolicySaysWhenItIsUnknown`, `TestNode_FingerprintPanelReportsThePeerCounts`, `TestNode_TemplatePanelDoesNotDistinguishNeverReportedFromNoneInstalled` | Console, MCP |
+| QRY-24 | `TestConsole_NoDispatchOutsideCapabilityLayer`, `TestNoDispatchConstruction` | API, Console, MCP |
 | QRY-26 | `TestListOperations_RefusesAnUnknownNodeAndRecordsTheProbe`, `TestMCP_ListOperations_UnknownNodeIsRefusedNotAnEmptyVocabulary` | MCP, capability |
-| QRY-27 | `TestDescribeNode_BoundsTheNodeIdBeforeRecordingIt`, `TestMCP_DescribeNode_BoundsTheNodeIdBeforeRecordingIt` | MCP, capability |
+| QRY-27 | `TestMCP_DescribeNode_BoundsTheNodeIdBeforeRecordingIt` | MCP |
 | QRY-28 | `TestHandleGetNode_FailsClosedWhenTheReadCannotBeRecorded`, `TestMCP_ListNodes_SelectorIsResolvedByTheLane`, `TestMCP_ReadToolsRecordThroughTheRealLane` | API, MCP |
+| QRY-29 | `TestConsolePolicyAliases_AHumanAdminSetsRenamesAndClearsThroughTheRealCapabilityLayer`, `TestPolicyAliasAdmin_HumanAdminSetsRenamesAndClears` | Relay, capability |
+| QRY-30 | `TestAppendWithPolicyAlias_AnUnwritableRecordLeavesTheAliasUnchanged`, `TestAppendWithPolicyAlias_SetRenameClearWriteOneRecordEach`, `TestConsolePolicyAliases_AHumanAdminSetsRenamesAndClearsThroughTheRealCapabilityLayer`, `TestPolicyAliasAdmin_ChangeIsNotMadeWhenItsRecordCannotBeWritten`, `TestPolicyAliasAdmin_RecordsTheActorFingerprintOldAndNewValue`, `TestRecordPolicyAlias_ReasonCarriesFingerprintOldAndNew` | Relay, auditsink, capability, store |
+| QRY-31 | `TestPolicyAlias_IsNeverASelectorTerm`, `TestPolicyAlias_NoWireOrResolutionPackageImportsIt`, `TestPolicyAliases_ReachOnlyTheAliasAdminAndTheReadLane` | capability, policyalias |
+| QRY-32 | `TestPolicyAliasShapes_NameNoNodeLabelOrSelector`, `TestPolicyAliases_TableHoldsAFingerprintAndANameOnly` | capability, store |
 | QRY-33 | `TestCompare_AFingerprintCarriesOneLetterInEveryColumn`, `TestPolicyAliases_AMachinePrincipalIsDrawnNoAliasName`, `TestPolicyAliases_EveryAliasIsDrawnBesideItsFullFingerprint`, `TestPolicyAliases_FiltersAndLinksCarryTheHashNeverTheAlias`, `TestPolicyAliases_NoLetterOrAliasCarriesColourOrRanking`, `TestPolicyAliases_UnaliasedFingerprintsTakeLettersInOrderOfFirstAppearance` | Console |
+| QRY-34 | `TestAppendWithPolicyAlias_OneAliasPerFingerprint`, `TestAppendWithPolicyAlias_OneFingerprintPerAlias`, `TestPolicyAliasAdmin_SetsAnAliasForAFingerprintNoNodeReports`, `TestPolicyAliases_StayAttachedWithNoNodeReportingTheFingerprint`, `TestPolicyAliases_SurviveARestart` | capability, store |
 | QRY-35 | `TestFleet_EveryPolicyFingerprintCarriesItsEditorAtScale`, `TestPolicyAliasesOffered_RequiresAWiredWriterAHumanAndTheAdminRoute`, `TestPolicyAliases_AnUnreadableAliasReadIsNamedAsTheAliases`, `TestPolicyAliases_AnUnrecordableAliasReadRefusesThePage`, `TestPolicyAliases_FleetNodeDetailAndCompareReadThroughTheRecordedLane`, `TestPolicyAliases_ReadsOnlyWhenTheyAreDrawn`, `TestPolicyAliases_TheEditControlIsOfferedToAHumanAdminOnly`, `TestPolicyAliases_TheEditorCarriesWhatTheWriteNeeds` | Console |
 | QRY-36 | `TestControlAPI_CarriesNoPolicyAlias`, `TestMCP_CarriesNoPolicyAlias` | API, MCP |
+| QRY-37 | `TestPolicyAliasAdmin_TakesNoStepUp`, `TestPolicyAliases_AWriteReachesTheCapabilityLayerAndReturnsToWhereItWasMade` | Console, capability |
+| QRY-38 | `TestAppendWithPolicyAlias_RefusesAMalformedCall`, `TestAuthorizeControl_PolicyAliasIsAdminAndHumanOnly`, `TestClearPolicyAlias_NotSetIsNotAnError`, `TestNormalizePolicyAlias`, `TestPolicyAliasAdmin_Refusals`, `TestSetPolicyAlias_StoresTheTrimmedValueAndAcceptsTheLengthBoundary`, `TestValidPolicyFingerprint` | authz, capability, store |
 | QRY-40 | `TestHandleGetNode_ReturnsTagsAsTheirOwnMap`, `TestMCP_NodeReads_ReturnTagsAsTheirOwnMap` | API, MCP |
-| QRY-41 | `TestListNodes_ResolvesATagSelector`, `TestListNodes_ReturnsMatchesInNodeIdOrder`, `TestMCP_ListNodes_ReturnsMatchesInNodeIdOrder`, `TestMCP_ListNodes_TagSelectorResolves`, `TestQueryRoutes_TheControlAPIServesNoEnumerationPolicyOrVocabularyRead`, `TestSelectorMatchesTagReadsOnlyTagLabels` | API, MCP, capability |
-| QRY-42 | `TestListNodes_ResolvesTheSelectorAndRecordsItsCanonicalForm`, `TestMCP_ListNodes_RefusesMalformedBareAndUnknownStateTerms` | MCP, capability |
+| QRY-41 | `TestListNodes_ResolvesATagSelector`, `TestListNodes_ResolvesTheSelectorAndRecordsItsCanonicalForm`, `TestListNodes_ReturnsMatchesInNodeIdOrder`, `TestMCP_ListNodes_ReturnsMatchesInNodeIdOrder`, `TestMCP_ListNodes_TagSelectorResolves`, `TestSelectorMatchesTagReadsOnlyTagLabels` | MCP, capability |
+| QRY-42 | `TestMCP_ListNodes_RefusesMalformedBareAndUnknownStateTerms` | MCP |
 | QRY-43 | `TestHandleGetNode_ShowsTheMeasuredClockSkewApartFromTheFacts`, `TestMCP_DescribeNode_ShowsTheMeasuredClockSkewApartFromTheFacts`, `TestNode_DetailShowsTheMeasuredClockSkewOutsideTheFactsPanel` | API, Console, MCP |
 | QRY-44 | `TestHandleGetNode_ShowsTheFirstConnectOrThatTheNodeNeverConnected`, `TestMCP_DescribeNode_ShowsTheFirstConnectOrThatTheNodeNeverConnected`, `TestNode_DetailShowsTheFirstConnectBesideTheCertificateProvenance` | API, Console, MCP |
 
-Unproven: QRY-4, QRY-6, QRY-8, QRY-9, QRY-10, QRY-13, QRY-19, QRY-21, QRY-23, QRY-24, QRY-29, QRY-30, QRY-31, QRY-32, QRY-34, QRY-37, QRY-38.
+Unproven: none.
 <!-- proof:end -->
 
 ## Retired
