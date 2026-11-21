@@ -1,0 +1,10 @@
+�[[template]]
+name = "fuzz.redteam"
+risk_class = "read"
+body = "cat {{p}}"
+
+[[template.slots]]
+name = "p"
+type = "enum"
+values = ["/tmp/a‮b"]
+/tmp/a‮b

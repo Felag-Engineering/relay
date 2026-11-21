@@ -1,0 +1,1 @@
+echo $(echo x) {{p}} "$(echo y)"/etc/hostname

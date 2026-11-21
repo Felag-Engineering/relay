@@ -1,0 +1,53 @@
+€[[template]]
+name = "fuzz.fixture"
+risk_class = "read"
+body = "f {{a12}} {{a11}} {{a10}} {{a9}} {{a8}} {{a7}} {{a6}} {{a5}} {{a4}} {{a3}} {{a2}} {{a1}}"
+
+[[template.slots]]
+name = "a1"
+type = "path"
+
+[[template.slots]]
+name = "a2"
+type = "path"
+
+[[template.slots]]
+name = "a3"
+type = "path"
+
+[[template.slots]]
+name = "a4"
+type = "path"
+
+[[template.slots]]
+name = "a5"
+type = "path"
+
+[[template.slots]]
+name = "a6"
+type = "path"
+
+[[template.slots]]
+name = "a7"
+type = "path"
+
+[[template.slots]]
+name = "a8"
+type = "path"
+
+[[template.slots]]
+name = "a9"
+type = "path"
+
+[[template.slots]]
+name = "a10"
+type = "path"
+
+[[template.slots]]
+name = "a11"
+type = "path"
+
+[[template.slots]]
+name = "a12"
+type = "path"
+/etc/hostname/etc/hostname/etc/hostname/etc/hostname/etc/hostname/etc/hostname/etc/hostname/etc/hostname/etc/hostname/etc/hostname/etc/hostname/etc/hostname

@@ -1,0 +1,1 @@
+f() { echo {{p}} ; }/etc/hostname

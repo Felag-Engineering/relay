@@ -1,0 +1,4 @@
+cat <<E
+x\{{p}}
+E
+echo {{p}}/tmp/$(reboot)

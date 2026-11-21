@@ -1,0 +1,5 @@
+€[[template]]
+name = "file.read"
+risk_class = "read"
+body = "uptime"
+/etc/hostnamenginx10start

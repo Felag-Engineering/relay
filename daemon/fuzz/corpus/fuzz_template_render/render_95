@@ -1,0 +1,9 @@
+€[[template]]
+name = "fuzz.fixture"
+risk_class = "read"
+body = "{ echo {{p}} ; }"
+
+[[template.slots]]
+name = "p"
+type = "path"
+/etc/hostname

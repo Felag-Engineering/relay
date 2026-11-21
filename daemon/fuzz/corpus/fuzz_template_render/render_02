@@ -1,0 +1,5 @@
+€[[templates]]
+name = "x.y"
+risk_class = "read"
+body = "uptime"
+/etc/hostnamenginx10start
