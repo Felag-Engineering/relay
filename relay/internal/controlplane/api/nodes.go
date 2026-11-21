@@ -121,6 +121,9 @@ type nodeResponse struct {
 
 	Certificate nodeCertificate `json:"certificate"`
 
+	ClockSkew    nodeClockSkew    `json:"clock_skew"`
+	FirstConnect nodeFirstConnect `json:"first_connect"`
+
 	// StateLabels are the `state:` namespace (ADR-0034): Relay-derived,
 	// evaluated at read time, set by nobody. Rendered in Selector syntax with
 	// the state: prefix — targetable verbatim in RunOperationRequest.selector
@@ -149,6 +152,22 @@ type nodeCertificate struct {
 	EnrolledAt    string `json:"enrolled_at,omitempty"`
 	RenewalCount  int    `json:"renewal_count"`
 	LastRenewedAt string `json:"last_renewed_at,omitempty"`
+}
+
+// nodeClockSkew is the clock skew the Relay measured, apart from the Facts.
+//
+// Measured gates the rest, and SkewMs is a pointer so a measured zero is
+// emitted while "not measured" carries no value at all. Never a warning.
+type nodeClockSkew struct {
+	Measured   bool   `json:"measured"`
+	SkewMs     *int64 `json:"skew_ms,omitempty"`
+	MeasuredAt string `json:"measured_at,omitempty"`
+}
+
+// nodeFirstConnect is when the Node first connected. EverConnected gates At.
+type nodeFirstConnect struct {
+	EverConnected bool   `json:"ever_connected"`
+	At            string `json:"at,omitempty"`
 }
 
 // handleGetNode implements GET /api/v1/nodes/{node_id}. The empty-nodeID 400
@@ -221,6 +240,8 @@ func nodeResponseFrom(n registry.Node, ev capability.StateEval) nodeResponse {
 		Outdated:               n.Outdated,
 		Revoked:                !n.RevokedAt.IsZero(),
 		Certificate:            nodeCertificate(controlplane.RenderCertificate(n)),
+		ClockSkew:              nodeClockSkew(controlplane.RenderClockSkew(n)),
+		FirstConnect:           nodeFirstConnect(controlplane.RenderFirstConnect(n)),
 		StateLabels:            controlplane.StateLabels(n, ev),
 	}
 	if out.NodeLabels == nil {

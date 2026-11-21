@@ -1,6 +1,6 @@
 # Query
 
-**Status:** designed, not built, as of `2026-11-19`.
+**Status:** designed, not built, as of `2026-11-20`.
 **Claim prefix:** `QRY`
 **Governed by:** ADR-0002, ADR-0006, ADR-0007, ADR-0009, ADR-0011, ADR-0014, ADR-0015, ADR-0020,
 ADR-0021, ADR-0025, ADR-0034, ADR-0050, ADR-0051; invariants 2, 7, 8, 9, 10, 12.
@@ -56,6 +56,8 @@ to query, author or alter Policy over the wire; a live hypothetical is `policy-p
   `outdated` (a field on the Control API, a `state:` Label on MCP); recorded certificate provenance
   when it exists; and `state:` Labels evaluated at Selector-resolution time, rendered in Selector
   syntax, never stored.
+- **QRY-43** `describe_node`, the Control API Node read and the Console Node detail show the Node's clock skew as `node-connection.md` records it: a signed number of milliseconds with the time it was measured, or "not measured". It is shown apart from the self-reported Facts and never as a warning: no threshold, badge or `state:` term.
+- **QRY-44** `describe_node`, the Control API Node read and the Console Node detail show when the Node first connected, beside its certificate provenance (QRY-40), or that it has never connected.
 - **QRY-41** `list_nodes` accepts an empty Selector or one in the `node:`, `relay:`, `tag:` and
   `state:` namespaces, resolves it against the registry at one evaluation instant, and returns
   every match, never paged or truncated, in Node-ID order with `state:` Labels from that same
@@ -162,8 +164,6 @@ to query, author or alter Policy over the wire; a live hypothetical is `policy-p
 |---|---|---|
 | QRY-25 | `list_operations` takes a Selector and reports each Operation reachable across the matched Nodes — description, typed slots and allowed values, risk class, and which Nodes report it; a single Node ID is the one-Node case. Retires the Node-ID-only half of QRY-12. | After MVP |
 | QRY-39 | No query surface can set Labels, modify Policy, load Templates, refresh a daemon snapshot, issue a Policy verdict or dispatch an Operation: each adapter's structural guard forbids every write seam but the alias write (QRY-29), and every dispatch seam. Replaces QRY-24 when promoted. | After MVP |
-| QRY-43 | `describe_node`, the Control API Node read and the Console Node detail show the Node's clock skew as `node-connection.md` records it: a signed number of milliseconds with the time it was measured, or "not measured". It is shown apart from the self-reported Facts and never as a warning: no threshold, badge or `state:` term. | v0.2.2 |
-| QRY-44 | `describe_node`, the Control API Node read and the Console Node detail show when the Node first connected, beside its certificate provenance (QRY-40), or that it has never connected. | v0.2.2 |
 
 ## Out of scope
 
@@ -224,6 +224,8 @@ to query, author or alter Policy over the wire; a live hypothetical is `policy-p
 | QRY-40 | `TestHandleGetNode_ReturnsTagsAsTheirOwnMap`, `TestMCP_NodeReads_ReturnTagsAsTheirOwnMap` | API, MCP |
 | QRY-41 | `TestListNodes_ResolvesATagSelector`, `TestListNodes_ResolvesTheSelectorAndRecordsItsCanonicalForm`, `TestListNodes_ReturnsMatchesInNodeIdOrder`, `TestMCP_ListNodes_ReturnsMatchesInNodeIdOrder`, `TestMCP_ListNodes_TagSelectorResolves`, `TestSelectorMatchesTagReadsOnlyTagLabels` | MCP, capability |
 | QRY-42 | `TestMCP_ListNodes_RefusesMalformedBareAndUnknownStateTerms` | MCP |
+| QRY-43 | `TestHandleGetNode_ShowsTheMeasuredClockSkewApartFromTheFacts`, `TestMCP_DescribeNode_ShowsTheMeasuredClockSkewApartFromTheFacts`, `TestNode_DetailShowsTheMeasuredClockSkewOutsideTheFactsPanel` | API, Console, MCP |
+| QRY-44 | `TestHandleGetNode_ShowsTheFirstConnectOrThatTheNodeNeverConnected`, `TestMCP_DescribeNode_ShowsTheFirstConnectOrThatTheNodeNeverConnected`, `TestNode_DetailShowsTheFirstConnectBesideTheCertificateProvenance` | API, Console, MCP |
 
 Unproven: none.
 <!-- proof:end -->
