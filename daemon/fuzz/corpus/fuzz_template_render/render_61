@@ -1,0 +1,1 @@
+true && echo {{p}} || echo {{p}} ; echo/etc/hostname

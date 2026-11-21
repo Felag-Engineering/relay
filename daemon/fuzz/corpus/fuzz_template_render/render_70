@@ -1,0 +1,1 @@
+echo a\ {{p}}/tmp/$(reboot)

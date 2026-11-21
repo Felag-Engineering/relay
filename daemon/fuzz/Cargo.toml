@@ -17,6 +17,11 @@
 # validators a Task's arguments reach, against their advertised schema. None of
 # them opens a file or spawns a process, and none reaches Template render.
 #
+# One target, fuzz_template_render, reaches Template render through
+# ResolvedOp::invoke with a recording Runner. It never spawns a process. The only
+# file it opens is its own executable, read-only, as a path-slot value. It never
+# opens a path the fuzzer chose.
+#
 # Message types come from the daemon workspace's relay-proto crate, which
 # generates them once from /proto (the single source of truth, ADR-0007) — never
 # hand-copied and never hand-edited.
@@ -25,7 +30,7 @@ name = "relay-daemon-fuzz"
 version = "0.0.0"
 publish = false
 edition = "2021"
-description = "cargo-fuzz targets over the relay-daemon's prost wire-decode surface, the Raw Exec argv gate and the canonical-path precondition, Policy compose/lint, Template file parsing/compilation and the Native Operation argument validators."
+description = "cargo-fuzz targets over the relay-daemon's prost wire-decode surface, the Raw Exec argv gate and the canonical-path precondition, Policy compose/lint, Template file parsing/compilation and the Native Operation argument validators, and Template render through ResolvedOp::invoke with a recording Runner."
 license = "BUSL-1.1"
 
 [package.metadata]
@@ -42,11 +47,17 @@ relay-proto = { path = "../crates/relay-proto" }
 # are not the production gate) and never ban-probe.
 relay-policy = { path = "../crates/relay-policy" }
 # The Operation vocabulary, used for Template compile and the Native argument
-# validators. No features, so never test-util. relay-exec and tokio come in
-# transitively and the fuzz crate never names them, so the executor is
-# unreachable from here. Never add relay-transport or relay-test-support, which
-# both write files.
+# validators. No features, so never test-util. relay-exec and tokio are named
+# only by fuzz_template_render: ExecRequest for its recording Runner, and the
+# runtime that drives invoke. No target calls the executor. Never add
+# relay-transport or relay-test-support, which both write files.
 relay-ops = { path = "../crates/relay-ops" }
+# Only the ExecRequest type, for the recording Runner. Never call executor::execute.
+relay-exec = { path = "../crates/relay-exec" }
+# The current_thread runtime ResolvedOp::invoke runs on. A path slot resolves on the
+# blocking pool under the Task's timeout. relay-ops already enables these features,
+# so nothing new is unified.
+tokio = { version = "1", default-features = false, features = ["rt", "time"] }
 # They back the mirror of the loader's private `[[template]]` file struct in
 # src/template_oracle.rs; same specs as daemon/Cargo.toml's workspace dependencies.
 serde = { version = "1", features = ["derive"] }
@@ -111,6 +122,13 @@ bench = false
 [[bin]]
 name = "fuzz_operation_args"
 path = "fuzz_targets/fuzz_operation_args.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_template_render"
+path = "fuzz_targets/fuzz_template_render.rs"
 test = false
 doc = false
 bench = false

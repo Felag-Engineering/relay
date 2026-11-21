@@ -1,0 +1,4 @@
+cat <<EOF
+{{p}}
+EOF
+/etc/hostname

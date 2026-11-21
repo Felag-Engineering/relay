@@ -851,6 +851,11 @@ fuzz-relay:
 # reach, against their advertised schema (ADR-0015). None opens a file, spawns a
 # process or reaches Template render.
 #
+# Also Template render, through ResolvedOp::invoke with a recording Runner (EX-18): values
+# verbatim after the fixed script, the script independent of the values, and a value its
+# slot's validator refuses never rendered. It spawns no process and opens only its own
+# executable.
+#
 # REQUIRES the NIGHTLY Rust toolchain plus cargo-fuzz
 # (`rustup toolchain install nightly` then
 #  `cargo install cargo-fuzz --version 0.13.2 --locked`).
@@ -879,11 +884,12 @@ FUZZ_FLAGS      := -max_total_time=$(FUZZ_TOTAL_TIME) -rss_limit_mb=$(FUZZ_RSS_M
 # and writes new inputs only to <dir>/<target> — libFuzzer adds to the FIRST corpus
 # directory — so a persisted corpus never overwrites or pollutes the committed seeds.
 FUZZ_GROWN_CORPUS ?=
-FUZZ_DAEMON_TARGETS := fuzz_relay_message_decode fuzz_enroll_response_decode fuzz_renew_response_decode fuzz_raw_exec_gate fuzz_path_canonical fuzz_policy_compose fuzz_template_compile fuzz_operation_args
+FUZZ_DAEMON_TARGETS := fuzz_relay_message_decode fuzz_enroll_response_decode fuzz_renew_response_decode fuzz_raw_exec_gate fuzz_path_canonical fuzz_policy_compose fuzz_template_compile fuzz_operation_args fuzz_template_render
 fuzz_corpus = $(if $(FUZZ_GROWN_CORPUS),$(FUZZ_GROWN_CORPUS)/$(1) $(CURDIR)/daemon/fuzz/corpus/$(1))
 #
-# One recipe line per FUZZ_DAEMON_TARGETS entry (the foreach ends each with a newline), so the
-# list above is the only place a target is named and make still stops at the first crasher.
+# One recipe line per FUZZ_DAEMON_TARGETS entry (the foreach ends each with a
+# newline), so the list above is the only place a target is named and make
+# still stops at the first crasher.
 define fuzz_daemon_newline
 
 
