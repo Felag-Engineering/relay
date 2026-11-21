@@ -184,6 +184,10 @@ func registerNodeTools(srv *sdkmcp.Server, lane ReadLane) {
 			"markers state:offline, state:outdated, state:template-unloadable, state:cert-expiring, " +
 			"and the facts state:daemon-version=, state:policy-fingerprint=, state:template-fingerprint= " +
 			"— set by nobody, targetable verbatim in a list_nodes/run_operation/raw_exec selector. " +
+			"clock_skew is the Relay-computed difference between the Node's clock and the Relay's " +
+			"(positive when the Node is ahead) from the Node's heartbeat timestamp, so a compromised " +
+			"Node can choose it, or measured=false; it is informational, never a warning. " +
+			"first_connect says when the Node first connected, or ever_connected=false. " +
 			"A missing or oversized node_id is refused before anything is read or recorded.",
 	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in describeNodeInput) (*sdkmcp.CallToolResult, DescribeNodeOutput, error) {
 		desc, err := lane.DescribeNode(ctx, in.NodeID)
@@ -206,8 +210,10 @@ func registerNodeTools(srv *sdkmcp.Server, lane ReadLane) {
 		}
 
 		out := DescribeNodeOutput{
-			NodeItem:    nodeItemFromNode(desc.Node, desc.Eval),
-			Certificate: CertificateOutput(controlplane.RenderCertificate(desc.Node)),
+			NodeItem:     nodeItemFromNode(desc.Node, desc.Eval),
+			Certificate:  CertificateOutput(controlplane.RenderCertificate(desc.Node)),
+			ClockSkew:    ClockSkewOutput(controlplane.RenderClockSkew(desc.Node)),
+			FirstConnect: FirstConnectOutput(controlplane.RenderFirstConnect(desc.Node)),
 		}
 		out.TemplateVocabulary = templateVocabularyOutput(desc.Templates, desc.TemplatesReported)
 		if desc.PolicyReported {
