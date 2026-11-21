@@ -1023,14 +1023,16 @@ body = "echo {{missing}}"
             ("echo $(echo {{p}})", "PlaceholderNotTopLevel"),
             ("eval {{p}}", "PlaceholderInCodePosition"),
             ("echo \\{{p}} {{p}}", "DoubleBraceNotAPlaceholder"),
+            ("cat <<\"a\\b\"\nab\necho {{p}}\na\\b", "BodyNotAnalysable"),
         ];
         for (body, variant) in cases {
             let dir = TempDir::new("misplaced");
             dir.write("good.toml", DISK);
             dir.write(
                 "bad.toml",
+                // A multi-line literal string: a body may not hold `'''` or end in `'`.
                 &format!(
-                    "[[template]]\nname = \"bad.placement\"\nrisk_class = \"read\"\nbody = '{body}'\n\
+                    "[[template]]\nname = \"bad.placement\"\nrisk_class = \"read\"\nbody = '''{body}'''\n\
                      [[template.slots]]\nname = \"p\"\ntype = \"identifier\"\n"
                 ),
             );

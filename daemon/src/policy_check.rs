@@ -980,17 +980,22 @@ body = "cat /etc/hostname"
         );
     }
 
+    // The body is a multi-line literal string: it may not hold `'''` or end in `'`.
     fn path_template(body: &str) -> String {
         format!(
-            "[[template]]\nname = \"code.position\"\nrisk_class = \"read\"\nbody = '{body}'\n\n\
+            "[[template]]\nname = \"code.position\"\nrisk_class = \"read\"\nbody = '''{body}'''\n\n\
              [[template.slots]]\nname = \"path\"\ntype = \"path\"\n"
         )
     }
 
     fn check_template_body(tag: &str, body: &str, extra: &[&str]) -> i32 {
+        check_template_toml(tag, &path_template(body), extra)
+    }
+
+    fn check_template_toml(tag: &str, toml: &str, extra: &[&str]) -> i32 {
         let policy = TempFile::new(&format!("{tag}-policy"), "");
         let root = TempDir::created(tag);
-        root.write("x.toml", &path_template(body));
+        root.write("x.toml", toml);
         let dir = root.path_str();
         let mut args = vec!["--templates", dir.as_str()];
         args.extend_from_slice(extra);
@@ -1007,6 +1012,47 @@ body = "cat /etc/hostname"
             assert_eq!(
                 check_template_body("tmpl-code-err", body, &[]),
                 EXIT_INVALID
+            );
+        }
+    }
+
+    /// A here-document delimiter the shells read differently from the lexer
+    /// makes the set unloadable beside a slot, with or without `--strict`.
+    // Proves EX-19.
+    #[test]
+    fn templates_a_non_plain_here_document_delimiter_beside_a_slot_is_invalid() {
+        for body in [
+            "cat <<\"a\\b\"\nab\necho {{path}}\na\\b",
+            "cat <<\"a\\b\"\nx\na\\b\neval \"$1\"\nab\necho {{path}}",
+            "cat <<$'a'\nx\na\neval \"$1\"\n$a\necho {{path}}",
+            "shopt -s extglob\ncat <<@(x)\n@\necho {{path}} '\n@(x)\neval \"$1\"\n'\n:",
+        ] {
+            assert_eq!(
+                check_template_body("tmpl-heredoc-delim", body, &[]),
+                EXIT_INVALID,
+                "{body:?}"
+            );
+            assert_eq!(
+                check_template_body("tmpl-heredoc-delim-strict", body, &["--strict"]),
+                EXIT_INVALID,
+                "{body:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn templates_a_quoted_here_document_delimiter_without_a_slot_is_clean_under_strict() {
+        for body in [
+            "cat <<'EOF'\n$HOME stays literal\nEOF",
+            "cat <<\"a\\b\"\nab\na\\b",
+        ] {
+            let toml = format!(
+                "[[template]]\nname = \"heredoc.quoted\"\nrisk_class = \"read\"\nbody = '''{body}'''\n"
+            );
+            assert_eq!(
+                check_template_toml("tmpl-heredoc-free", &toml, &["--strict"]),
+                EXIT_VALID,
+                "{body:?}"
             );
         }
     }

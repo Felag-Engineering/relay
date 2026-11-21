@@ -21,8 +21,10 @@
 //! than guess: an unterminated construct, a backquote substitution (its own
 //! backslash removal is not modelled; use `$( )`), a `case` inside a `$( )` or
 //! `( )` (its pattern `)` would end the frame early), a `$((` that is not
-//! arithmetic, and a backslash-newline inside a nested construct or a word
-//! (the shell joins it before reading keywords and operators). A placeholder
+//! arithmetic, a backslash-newline inside a nested construct or a word
+//! (the shell joins it before reading keywords and operators), and a
+//! here-document delimiter that is not a plain word (quoted, escaped, or
+//! holding `$` or a backquote). A placeholder
 //! inside arithmetic is refused outright.
 //!
 //! A slot is accepted only as a plain word of the top-level command list (a
@@ -294,6 +296,24 @@ impl<'a> Lexer<'a> {
         self.at(0) == Some('{') && self.at(1) == Some('{')
     }
 
+    /// Whether the word from the cursor to the next blank or operator holds `{{`.
+    fn word_holds_placeholder(&self) -> bool {
+        let mut k = 0;
+        while let Some(c) = self.at(k) {
+            if matches!(
+                c,
+                ' ' | '\t' | '\n' | ';' | '&' | '|' | '<' | '>' | '(' | ')'
+            ) {
+                return false;
+            }
+            if c == '{' && self.at(k + 1) == Some('{') {
+                return true;
+            }
+            k += 1;
+        }
+        false
+    }
+
     fn here(&self) -> usize {
         self.off[self.i]
     }
@@ -327,8 +347,8 @@ impl<'a> Lexer<'a> {
     /// The shell joins `\`+newline before it reads keywords and operators, so
     /// inside any nested frame a continuation can split `case`, `$(` or `<<`
     /// where this lexer sees two tokens. A body with a placeholder may not hold
-    /// one there. Single quotes, ANSI-C strings and quoted here-documents take
-    /// the backslash literally and are exempt.
+    /// one there. Single quotes and ANSI-C strings take the backslash literally
+    /// and are exempt.
     fn refuse_nested_continuation(&self) -> Result<(), TemplateError> {
         if !self.has_placeholder
             || self.stack.len() == 1
@@ -339,7 +359,6 @@ impl<'a> Lexer<'a> {
         }
         match self.stack.last() {
             Some(Frame::SingleQuote | Frame::AnsiC) => Ok(()),
-            Some(Frame::Heredoc(h)) if h.quoted => Ok(()),
             _ => Err(self.not_analysable("a line continuation inside a nested construct")),
         }
     }
@@ -795,9 +814,20 @@ impl<'a> Lexer<'a> {
         Ok(())
     }
 
-    /// Read the here-document delimiter word, quote-removed. It is quoted if any
-    /// part of the word was quoted or escaped.
+    /// Read the here-document delimiter word. Beside a placeholder it must be a
+    /// plain word: only `[A-Za-z0-9_.-]`, not followed by `(`. Shells disagree
+    /// with each other and with this lexer on how any other shape reads (quotes,
+    /// escapes, `$`, backquote, and an extglob such as `@(x)` under
+    /// `shopt -s extglob`), which decides where the here-document ends and
+    /// whether its body expands, so a placeholder or an own-positional read
+    /// could hide in text the lexer takes for something else (EX-19).
+    ///
+    /// A body without a placeholder keeps any delimiter; the word is then
+    /// quote-removed, and it is quoted if any part of it was quoted or escaped.
     fn heredoc_delimiter(&mut self) -> Result<(Vec<char>, bool), TemplateError> {
+        if self.has_placeholder {
+            self.require_plain_delimiter()?;
+        }
         let mut delim = Vec::new();
         let mut quoted = false;
         while let Some(c) = self.at(0) {
@@ -818,6 +848,8 @@ impl<'a> Lexer<'a> {
                     quoted = true;
                     self.copy(1);
                     while let Some(inner) = self.at(0) {
+                        // Unreachable beside a placeholder, where a quoted
+                        // delimiter is refused up front; kept fail-closed.
                         if self.at_placeholder() {
                             return Err(self.not_expanded("a here-document delimiter"));
                         }
@@ -844,6 +876,34 @@ impl<'a> Lexer<'a> {
         Ok((delim, quoted))
     }
 
+    /// Refuse a delimiter that is not a plain word. A `{{` inside it still
+    /// reports a placeholder that is not expanded.
+    fn require_plain_delimiter(&self) -> Result<(), TemplateError> {
+        let mut k = 0;
+        let mut plain = true;
+        while let Some(c) = self.at(k) {
+            if matches!(c, ' ' | '\t' | '\n' | ';' | '&' | '|' | '<' | '>' | ')') {
+                break;
+            }
+            if !(c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-')) {
+                plain = false;
+            }
+            k += 1;
+        }
+        if self.at(k) == Some('(') {
+            plain = false;
+        }
+        if plain {
+            return Ok(());
+        }
+        if self.word_holds_placeholder() {
+            return Err(self.not_expanded("a here-document delimiter"));
+        }
+        Err(self.not_analysable(
+            "a here-document delimiter that is not a plain word (letters, digits, `_`, `.` and `-` only)",
+        ))
+    }
+
     // -- here-document bodies -------------------------------------------------
 
     fn heredoc(&mut self) -> Result<(), TemplateError> {
@@ -861,6 +921,8 @@ impl<'a> Lexer<'a> {
                 return Ok(());
             }
         }
+        // Unreachable beside a placeholder, where a quoted delimiter is refused;
+        // kept so a quoted here-document can never expand one.
         if self.heredoc_mut().quoted {
             if self.at_placeholder() {
                 return Err(self.not_expanded("a quoted here-document"));
@@ -1133,8 +1195,6 @@ mod tests {
             "echo $'x {{p}}'",
             "echo ${x:- {{p}} }",
             "echo ${{p}}",
-            "cat <<'EOF'\n{{p}}\nEOF",
-            "cat <<\\EOF\n{{p}}\nEOF",
             "cat << {{p}}\nx\n{{p}}",
             "cat <<'{{p}}'\n",
         ] {
@@ -1288,6 +1348,68 @@ mod tests {
         );
     }
 
+    // Proves EX-19.
+    #[test]
+    fn a_here_document_delimiter_beside_a_placeholder_is_a_plain_word() {
+        for body in [
+            "cat <<\"a\\b\"\nab\necho {{p}}\na\\b",
+            "cat <<$'a'\n$a\necho {{p}}\na",
+            "cat <<'EOF'\n{{p}}\nEOF",
+            "cat <<\\EOF\n{{p}}\nEOF",
+            "cat <<\"EOF\"\nx\nEOF\necho {{p}}",
+            "cat <<E\"O\"F\nx\nEOF\necho {{p}}",
+            "cat <<E\\OF\nx\nEOF\necho {{p}}",
+            "cat <<$EOF\nx\n$EOF\necho {{p}}",
+            "cat <<E$F\nx\nE$F\necho {{p}}",
+            "cat <<`EOF`\nx\n`EOF`\necho {{p}}",
+            "cat <<-'EOF'\n\tx\n\tEOF\necho {{p}}",
+            "cat << 'EOF'\nx\nEOF\necho {{p}}",
+            "cat <<A <<'B'\nx\nA\ny\nB\necho {{p}}",
+            "echo {{p}}\ncat <<'EOF'\nx\nEOF",
+            "cat <<$\"a\"\nx\na\necho {{p}}",
+            "shopt -s extglob\ncat <<@(x)\n@\necho {{p}} '\n@(x)\neval \"$1\"\n'\n:",
+            "cat <<?(x)\nx\n?(x)\necho {{p}}",
+            "cat <<+(x)\nx\n+(x)\necho {{p}}",
+            "cat <<!(x)\nx\n!(x)\necho {{p}}",
+            "cat <<EOF(x)\nx\nEOF\necho {{p}}",
+        ] {
+            not_analysable(body);
+        }
+        for body in [
+            "cat <<EOF\nx\nEOF\necho {{p}}",
+            "cat <<-EOF\n\tx\n\tEOF\necho {{p}}",
+            "cat << E-O_F.1\nx\nE-O_F.1\necho {{p}}",
+        ] {
+            assert_eq!(script(body), body.replace("{{p}}", "\"$1\""), "{body:?}");
+        }
+        // A placeholder inside the delimiter word is still reported as such.
+        assert!(matches!(
+            error("cat <<a{{p}}\nx"),
+            TemplateError::PlaceholderNotExpanded { .. }
+        ));
+        assert!(matches!(
+            error("cat <<'{{p}}'\n"),
+            TemplateError::PlaceholderNotExpanded { .. }
+        ));
+    }
+
+    #[test]
+    fn a_body_without_a_placeholder_keeps_any_here_document_delimiter() {
+        for body in [
+            "cat <<'EOF'\n$1 $HOME\nEOF",
+            "cat <<\\EOF\nx\nEOF",
+            "cat <<\"a\\b\"\nab\na\\b",
+            "cat <<$'a'\na\n$a",
+            "cat <<`E`\nx\n`E`",
+            "cat <<@(x)\n@\n@(x)",
+        ] {
+            let a =
+                analyse(body, &slots(&[])).unwrap_or_else(|e| panic!("{body:?} should lex: {e}"));
+            assert_eq!(a.script, body);
+            assert!(a.warnings.is_empty(), "{body:?}");
+        }
+    }
+
     #[test]
     fn unterminated_constructs_are_refused_only_with_a_placeholder() {
         for open in [
@@ -1411,13 +1533,9 @@ mod tests {
             not_analysable(body);
         }
         // Between words, after a blank, a continuation is inert; single quotes
-        // and quoted here-documents take the backslash literally.
+        // take the backslash literally.
         assert_eq!(script("echo a \\\n{{p}}"), "echo a \\\n\"$1\"");
         assert_eq!(script("echo 'a\\\nb' {{p}}"), "echo 'a\\\nb' \"$1\"");
-        assert_eq!(
-            script("cat <<'E'\na\\\nb\nE\necho {{p}}"),
-            "cat <<'E'\na\\\nb\nE\necho \"$1\""
-        );
         assert!(analyse("echo $(echo \\\n) x", &slots(&[])).is_ok());
     }
 
@@ -1435,9 +1553,48 @@ mod tests {
 
         fn token() -> impl Strategy<Value = &'static str> {
             proptest::sample::select(vec![
-                "{{p}}", "{{", "}}", "$(", ")", "`", "$[", "]", "\\\n", "'", "\"", "\\", "<<EOF\n",
-                "<<-X\n", "EOF\n", "X\n", "#", "$((", "))", "((", "${", "}", " ", "\t", "\n", "\r",
-                "x", ";", "|", "&", "<", "<<<", ">", "case ", "(", "$'", "$", "\u{c}", "é",
+                "{{p}}",
+                "{{",
+                "}}",
+                "$(",
+                ")",
+                "`",
+                "$[",
+                "]",
+                "\\\n",
+                "'",
+                "\"",
+                "\\",
+                "<<EOF\n",
+                "<<'EOF'\n",
+                "<<\"E\"\n",
+                "<<$'E'\n",
+                "<<-X\n",
+                "EOF\n",
+                "X\n",
+                "#",
+                "$((",
+                "))",
+                "((",
+                "${",
+                "}",
+                " ",
+                "\t",
+                "\n",
+                "\r",
+                "x",
+                ";",
+                "|",
+                "&",
+                "<",
+                "<<<",
+                ">",
+                "case ",
+                "(",
+                "$'",
+                "$",
+                "\u{c}",
+                "é",
             ])
         }
 

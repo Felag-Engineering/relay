@@ -1282,8 +1282,35 @@ mod tests {
             "set -e ; echo {{p}}",
             "echo '$1' {{p}}",
             "echo $HOME $0 $# {{p}}",
-            "cat <<'EOF' > /dev/null\n$1\nEOF\necho {{p}}",
         ]);
+    }
+
+    // Proves EX-19.
+    #[test]
+    fn own_positional_parameters_cannot_hide_behind_a_here_document_delimiter() {
+        for body in [
+            "cat <<\"a\\b\"\nx\na\\b\neval \"$1\"\nab\necho {{p}}",
+            "cat <<$'a'\nx\na\neval \"$1\"\n$a\necho {{p}}",
+            "shopt -s extglob\ncat <<@(x)\n@\necho {{p}} '\n@(x)\neval \"$1\"\n'\n:",
+            "shopt -s extglob\ncat <<EOF(x)\n@\necho {{p}} '\nEOF(x)\neval \"$1\"\n'\n:",
+        ] {
+            assert!(
+                matches!(
+                    analyse(body, &slots()),
+                    Err(TemplateError::BodyNotAnalysable { .. })
+                ),
+                "{body:?}"
+            );
+        }
+        // The same program with a plain delimiter, which every shell reads
+        // alike, draws the warning.
+        assert_warning(
+            WarningKind::OwnPositional,
+            &["cat <<ab\nx\nab\neval \"$1\"\necho {{p}}"],
+        );
+        // Without a placeholder nothing is classified.
+        let a = analyse("cat <<\"a\\b\"\nx\na\\b\neval \"$1\"\nab", &[]).expect("loads");
+        assert!(a.warnings.is_empty());
     }
 
     #[test]

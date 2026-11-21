@@ -95,7 +95,10 @@ The loader enforces these rules; each is a refusal at load time:
   them the way every shell does: backquote substitutions (write `$( )`), a `$((` that is not
   arithmetic, an unterminated construct, `case`, and a backslash-newline inside a nested
   construct or in the middle of a word. A backslash-newline between words, after a blank, is
-  allowed. Bodies without a slot are not affected.
+  allowed. A here-document delimiter that is not a plain word is refused too: write a plain
+  `EOF`. A plain word is letters, digits, `_`, `.` and `-` only, not followed by `(`, so
+  `'EOF'`, `\EOF`, `"EOF"`, `$'EOF'` and `@(x)` are refused. Bodies without a slot are not
+  affected.
 - **A `path` slot admits plain filenames only.** The value must be an absolute canonical path
   with no whitespace (ASCII or Unicode), no control character, and none of
   `` $ ` \ " ' ; | & < > ( ) { } [ ] * ? ! # ~ = ``. Letters of any script, digits and

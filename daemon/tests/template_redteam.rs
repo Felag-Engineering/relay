@@ -421,3 +421,56 @@ async fn retired_splicing_reproduces_each_row_that_was_real() {
         ));
     }
 }
+
+/// A here-document delimiter that the shells read differently from the lexer
+/// hides a placeholder, or an `eval "$1"`, from the load-time checks. Each row
+/// reproduces under the script `compile` emits with the refusal removed, so the
+/// refusal is not vacuous (a regression of #1395).
+// Proves EX-19.
+#[tokio::test]
+async fn a_here_document_delimiter_the_shells_read_differently_is_refused_at_load() {
+    /// Whether `defect` holds under at least one shell, for the script the old
+    /// compile emitted (`{{p}}` as `"$1"`) run with `value` as `$1`.
+    async fn reproduces(
+        body: &str,
+        value: &str,
+        defect: impl Fn(&relay_proto::TaskResult) -> bool,
+    ) -> bool {
+        for shell in shells() {
+            let runner = ShellRunner::new(&shell);
+            let argv = [
+                "/bin/sh",
+                "-c",
+                &body.replace("{{p}}", "\"$1\""),
+                "relay-template",
+                value,
+            ]
+            .map(str::to_string)
+            .to_vec();
+            if defect(&run_sh_argv(&runner, argv).await) {
+                return true;
+            }
+        }
+        false
+    }
+
+    // The lexer reads the delimiter as `ab`, the shell as `a\b`, so the shell
+    // evaluates `eval "$1"`. The `$'a'` shape ends at `a` under bash only.
+    for body in [
+        "cat <<\"a\\b\"\nx\na\\b\neval \"$1\"\nab\necho {{p}}",
+        "cat <<$'a'\nx\na\neval \"$1\"\n$a\necho {{p}}",
+        // Under bash with extglob the delimiter is the whole `@(x)`.
+        "shopt -s extglob\ncat <<@(x)\n@\necho {{p}} '\n@(x)\neval \"$1\"\n'\n:",
+    ] {
+        assert!(
+            reproduces(body, "echo PW\"\"NED", |r| stdout(r).contains("PWNED")).await,
+            "{body:?}"
+        );
+        assert_not_analysable(body);
+    }
+
+    // The placeholder sits in a here-document the shell does not expand.
+    let body = "cat <<\"a\\b\"\nab\necho {{p}}\na\\b";
+    assert!(reproduces(body, "x", |r| stdout(r).contains("echo \"$1\"")).await);
+    assert_not_analysable(body);
+}
