@@ -1,6 +1,6 @@
 # Execution
 
-**Status:** current as of `2026-11-19`.
+**Status:** designed, not built, as of `2026-11-21`.
 **Claim prefix:** `EX`
 **Governed by:** ADR-0054, ADR-0001, ADR-0011, ADR-0012, ADR-0013, ADR-0014, ADR-0021, ADR-0025,
 ADR-0027, ADR-0042, ADR-0047, ADR-0049, ADR-0052; invariants 1, 4, 5, 10, 11, 12, 13, 14.
@@ -218,23 +218,24 @@ differs from an outcome, where a Job ran and a Node failed; a cancel refusal lea
   cancel of a Job it did not request, or of one with no verified requester, is refused and
   audited, and the Job continues.
 
+## Designed, not built
+
+| Claim | Statement | Milestone |
+|---|---|---|
+| EX-71 | On restart the Relay re-sends each Task `Dispatched` without a result, for its result, except a halted Job's (EX-28), when the Task's Node connects, and only if the Task was marked `Dispatched` (EX-30) no more than 10 minutes earlier by the Relay's clock, a built-in constant checked immediately before each send. No Task is sent for its result later than that, whatever prompts the send. One past the limit is never sent and resolves as EX-62's does, halt included; until its Node connects it stays `Dispatched`. Replaces EX-31 when promoted. | v0.2.2 |
+
 ## Out of scope
 
 - **Policy and Raw Exec's gate**: `policy.md`; **the vocabulary and Templates**: `operations-and-templates.md`.
-- **Policy preflight, including `unknown(offline)`**: `policy-preflight.md`.
-- **Sequencing several dispatches**: the harness's job (ADR-0049).
+- **Policy preflight, including `unknown(offline)`**: `policy-preflight.md`; **sequencing several dispatches**: the harness's job (ADR-0049).
 - **Approval decisions**: `approval.md`; **engaging and releasing the Freeze**: `freeze.md`.
 - **Labels and Selectors**: `selectors-and-labels.md`; **dedup markers**: `daemon-installation.md`.
-- **Querying Jobs, Tasks and the audit trail, and what a query strips**: `audit-and-read-lane.md`;
-  clearing read output from Task rows after a fixed time, #1345.
+- **Querying Jobs, Tasks and the audit trail, and what a query strips**: `audit-and-read-lane.md`; clearing read output from Task rows after a fixed time, #1345.
 - **A per-Operation timeout, a configurable in-flight limit, failure tolerance and retries**:
   `roadmap: relay/failure-policy-and-retries`. A retry would be a new Task with a new ID.
-- **An acknowledgement deadline and an `unacknowledged` outcome**:
-  `roadmap: relay/fast-failure-and-fleet-admission`.
-- **Quarantine and a `quarantined` outcome**: `roadmap: relay/quarantine`.
-- **MCP task handles for long-running Jobs**: `roadmap: relay/mcp-tasks-for-long-running-jobs`.
-- **Editing the caps in the Console**: `roadmap: relay/settings-in-the-console`.
-- **Executing from the Console**: `roadmap: relay/console-execution-for-skills`.
+- **An acknowledgement deadline and an `unacknowledged` outcome**: `roadmap: relay/fast-failure-and-fleet-admission`.
+- **Quarantine and a `quarantined` outcome**: `roadmap: relay/quarantine`; **MCP task handles for long-running Jobs**: `roadmap: relay/mcp-tasks-for-long-running-jobs`.
+- **Editing the caps in the Console**: `roadmap: relay/settings-in-the-console`; **executing from the Console**: `roadmap: relay/console-execution-for-skills`.
 - **Getting a secret onto a Node, protecting one a caller passes by mistake, and a measured
   fan-out rate**: `roadmap: relay/research/spec-future-work/execution`.
 
