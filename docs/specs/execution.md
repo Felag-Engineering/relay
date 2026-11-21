@@ -222,7 +222,7 @@ differs from an outcome, where a Job ran and a Node failed; a cancel refusal lea
 
 | Claim | Statement | Milestone |
 |---|---|---|
-| EX-71 | On restart, and on a Node's reconnect, the Relay re-sends a Task `Dispatched` without a result, for its result, only within 10 minutes of dispatching it: a built-in constant, measured on the Relay's clock, and far shorter than the time a daemon keeps a dedup marker (`daemon-installation.md`). An older one is never re-sent: it resolves as EX-62's does, `failure` with exit code -1 and stderr saying whether it ran is unknown (R56), and the outcome is audited. A halted Job's Tasks stay EX-28's. Replaces EX-31 when promoted. | v0.2.2 |
+| EX-71 | On restart the Relay re-sends each Task `Dispatched` without a result, for its result, except a halted Job's (EX-28), when the Task's Node connects, and only if the Task was marked `Dispatched` (EX-30) no more than 10 minutes earlier by the Relay's clock, a built-in constant checked immediately before each send. No Task is sent for its result later than that, whatever prompts the send. One past the limit is never sent and resolves as EX-62's does, halt included; until its Node connects it stays `Dispatched`. Replaces EX-31 when promoted. | v0.2.2 |
 
 ## Out of scope
 
