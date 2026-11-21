@@ -61,6 +61,7 @@ func TestPolicyAliases_ListIsEmptyAndNeverNil(t *testing.T) {
 	}
 }
 
+// Proves QRY-32.
 func TestPolicyAliases_TableHoldsAFingerprintAndANameOnly(t *testing.T) {
 	st, _ := openTestStore(t)
 	rows, err := st.db.Query(`SELECT name FROM pragma_table_info('policy_aliases')`)
@@ -82,6 +83,7 @@ func TestPolicyAliases_TableHoldsAFingerprintAndANameOnly(t *testing.T) {
 	}
 }
 
+// Proves QRY-34.
 func TestPolicyAliases_SurviveARestart(t *testing.T) {
 	st, path := openTestStore(t)
 	if err := appendAlias(t, st, "aud-1", policyalias.Change{Fingerprint: aliasFPa, To: "web"}); err != nil {
@@ -100,6 +102,7 @@ func TestPolicyAliases_SurviveARestart(t *testing.T) {
 	}
 }
 
+// Proves QRY-30.
 func TestAppendWithPolicyAlias_SetRenameClearWriteOneRecordEach(t *testing.T) {
 	st, _ := openTestStore(t)
 	steps := []struct {
@@ -125,6 +128,7 @@ func TestAppendWithPolicyAlias_SetRenameClearWriteOneRecordEach(t *testing.T) {
 	}
 }
 
+// Proves QRY-34.
 func TestAppendWithPolicyAlias_OneAliasPerFingerprint(t *testing.T) {
 	st, _ := openTestStore(t)
 	for i, c := range []policyalias.Change{
@@ -141,6 +145,7 @@ func TestAppendWithPolicyAlias_OneAliasPerFingerprint(t *testing.T) {
 	}
 }
 
+// Proves QRY-34.
 func TestAppendWithPolicyAlias_OneFingerprintPerAlias(t *testing.T) {
 	st, _ := openTestStore(t)
 	if err := appendAlias(t, st, "aud-1", policyalias.Change{Fingerprint: aliasFPa, To: "web"}); err != nil {
@@ -177,6 +182,7 @@ func TestAppendWithPolicyAlias_RefusesAStaleFrom(t *testing.T) {
 	}
 }
 
+// Proves QRY-30.
 func TestAppendWithPolicyAlias_AnUnwritableRecordLeavesTheAliasUnchanged(t *testing.T) {
 	st, _ := openTestStore(t)
 	if err := appendAlias(t, st, "aud-dup", policyalias.Change{Fingerprint: aliasFPa, To: "web"}); err != nil {
@@ -202,6 +208,7 @@ func TestAppendWithPolicyAlias_AnUnwritableRecordLeavesTheAliasUnchanged(t *test
 	}
 }
 
+// Proves QRY-38.
 func TestAppendWithPolicyAlias_RefusesAMalformedCall(t *testing.T) {
 	st, _ := openTestStore(t)
 	app := st.Audit().(audit.PolicyAliasAppender)
@@ -231,6 +238,7 @@ func TestAppendWithPolicyAlias_RefusesAMalformedCall(t *testing.T) {
 	}
 }
 
+// Proves QRY-34.
 func TestPolicyAliases_StayAttachedWithNoNodeReportingTheFingerprint(t *testing.T) {
 	st, _ := openTestStore(t)
 	if err := appendAlias(t, st, "aud-1", policyalias.Change{Fingerprint: aliasFPa, To: "retired"}); err != nil {

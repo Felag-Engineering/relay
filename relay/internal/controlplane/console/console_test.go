@@ -421,6 +421,8 @@ func TestConsole_NoMutatingGet(t *testing.T) {
 // TestConsole_UnauthenticatedIsRefused: the Console is behind the same
 // Authenticator as every other control-plane surface, and this asserts the
 // harness has not accidentally mounted it outside one.
+//
+// Proves QRY-19.
 func TestConsole_UnauthenticatedIsRefused(t *testing.T) {
 	h := newTestHandler(renderableDeps(), accounts.RoleAdmin)
 	req := httptest.NewRequest(http.MethodGet, "/console/", nil)

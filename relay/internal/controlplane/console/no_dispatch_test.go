@@ -533,7 +533,7 @@ func policyAliasInternalWriteViolations(fileName string, file *ast.File) []strin
 }
 
 // Every non-test Console file passes the dispatch guard: it names no dispatch entry point.
-// Proves EX-2.
+// Proves EX-2, QRY-24.
 func TestConsole_NoDispatchOutsideCapabilityLayer(t *testing.T) {
 	entries, err := os.ReadDir(".")
 	if err != nil {

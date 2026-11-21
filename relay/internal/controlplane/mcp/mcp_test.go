@@ -1235,6 +1235,8 @@ func TestMCP_ListOperations_BoundsTheNodeIdBeforeRecordingIt(t *testing.T) {
 // MCP-seam proof: a well-formed but unknown node_id is refused as "no such
 // Node" — not answered with a successful, empty (templates_reported=false)
 // result — and the refused probe is recorded with the id it asked about.
+//
+// Proves QRY-21, QRY-26.
 func TestMCP_ListOperations_UnknownNodeIsRefusedNotAnEmptyVocabulary(t *testing.T) {
 	ts := newTestServer(t)
 	session := ts.connect(t)
@@ -1437,6 +1439,11 @@ func TestMCP_ListOperations_PerNode(t *testing.T) {
 	})
 }
 
+// TestMCP_ListOperations proves the fleet-wide vocabulary: every frozen Native
+// with its name, risk class, purpose, argument constraints and example, and
+// Raw Exec never listed as an Operation.
+//
+// Proves QRY-11, QRY-13.
 func TestMCP_ListOperations(t *testing.T) {
 	ts := newTestServer(t)
 	session := ts.connect(t)
@@ -1517,6 +1524,8 @@ func TestMCP_ListOperations(t *testing.T) {
 // reached only through the same Authenticator.Middleware #115 proved with
 // the now-removed /mcp placeholder: no credential and a wrong credential
 // both fail with 401.
+//
+// Proves QRY-19.
 func TestMCP_RequiresCredential(t *testing.T) {
 	ts := newTestServer(t)
 

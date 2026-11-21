@@ -78,6 +78,7 @@ func principal(role, kind string) capability.Principal {
 
 var humanAdmin = principal("admin", capability.PrincipalKindHuman)
 
+// Proves QRY-38.
 func TestPolicyAliasAdmin_Refusals(t *testing.T) {
 	type call func(*capability.PolicyAliasAdmin) error
 	set := func(p capability.Principal, fp, name string) call {
@@ -152,6 +153,7 @@ func TestPolicyAliasAdmin_Refusals(t *testing.T) {
 	}
 }
 
+// Proves QRY-38.
 func TestSetPolicyAlias_StoresTheTrimmedValueAndAcceptsTheLengthBoundary(t *testing.T) {
 	long := strings.Repeat("é", 64)
 	cases := map[string]string{
@@ -175,6 +177,7 @@ func TestSetPolicyAlias_StoresTheTrimmedValueAndAcceptsTheLengthBoundary(t *test
 	}
 }
 
+// Proves QRY-37.
 func TestPolicyAliasAdmin_TakesNoStepUp(t *testing.T) {
 	admin, trail := newAliasAdmin(t, nil)
 	ctx := context.Background() // no step-up evidence of any kind
@@ -192,6 +195,7 @@ func TestPolicyAliasAdmin_TakesNoStepUp(t *testing.T) {
 	}
 }
 
+// Proves QRY-38.
 func TestClearPolicyAlias_NotSetIsNotAnError(t *testing.T) {
 	admin, trail := newAliasAdmin(t, nil)
 	if err := admin.ClearPolicyAlias(context.Background(), humanAdmin, refFPa); err != nil {

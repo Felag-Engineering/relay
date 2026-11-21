@@ -99,13 +99,15 @@ func violatesQRY1(r Route) string {
 //
 // Residual: this is api.Routes(), not the composed mux — controlplane.New
 // registers GET /api/v1/ping straight on the mux and net/http.ServeMux cannot
-// be enumerated (the identical residual PF-1's row carries). The three
-// predicates are a NAME HEURISTIC: a route disclosing registry, Policy-view or
-// vocabulary data under a name matching none of those tokens and not under
-// /api/v1/nodes is not caught. QRY-1's positive half — that fleet enumeration,
+// be enumerated (the identical residual the Policy preflight's route-table
+// proof carries). The three predicates are a NAME HEURISTIC: a route
+// disclosing registry, Policy-view or vocabulary data under a name matching
+// none of those tokens and not under /api/v1/nodes is not caught. QRY-1's positive half — that fleet enumeration,
 // the Policy view and vocabulary discovery are MCP and Console only — is not
-// asserted here; the MCP and Console presence rests on QRY-41's, QRY-7's and
-// QRY-11's own rows.
+// asserted here; the MCP and Console presence rests on the proofs of the
+// list_nodes, Policy-view and Native-vocabulary claims.
+//
+// Proves QRY-1.
 func TestQueryRoutes_TheControlAPIServesNoEnumerationPolicyOrVocabularyRead(t *testing.T) {
 	// Armed: each of violatesQRY1's three branches is breached by at least one
 	// control route below — not one branch each, since the policy route

@@ -32,6 +32,8 @@ func aliasReason(fingerprint, old, next string) string {
 // refusal record; a human operator is offered no control and finds the route
 // absent; and a machine Account at admin is drawn no alias name and no
 // control, only the letter and the full fingerprint.
+//
+// Proves QRY-29, QRY-30.
 func TestConsolePolicyAliases_AHumanAdminSetsRenamesAndClearsThroughTheRealCapabilityLayer(t *testing.T) {
 	f := startRelay(t, WithControlPlane(), WithConfig(func(c *Config) { c.ConsoleEnabled = true }))
 	fpA, fpB := strings.Repeat("a", 64), strings.Repeat("b", 64)

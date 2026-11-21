@@ -12,6 +12,8 @@ import (
 // TestPolicyAlias_NoWireOrResolutionPackageImportsIt proves a Policy alias is
 // never sent to a Node and never part of resolution: none of the packages that
 // speak the wire protocol or resolve a Selector imports internal/policyalias.
+//
+// Proves QRY-31.
 func TestPolicyAlias_NoWireOrResolutionPackageImportsIt(t *testing.T) {
 	const aliasPath = "github.com/Felag-Engineering/relay/relay/internal/policyalias"
 	for _, dir := range []string{

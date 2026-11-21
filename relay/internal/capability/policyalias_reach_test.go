@@ -19,6 +19,8 @@ import (
 //
 // It scans this package's non-test source only. The test files reference these
 // identifiers by design; the guard is about shipped decision code.
+//
+// Proves QRY-31.
 func TestPolicyAliases_ReachOnlyTheAliasAdminAndTheReadLane(t *testing.T) {
 	allowed := map[string]bool{"policyalias.go": true, "seams.go": true, "readlane_registry.go": true}
 	idents := map[string]bool{

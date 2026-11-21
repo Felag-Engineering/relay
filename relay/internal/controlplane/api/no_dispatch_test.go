@@ -199,7 +199,7 @@ func policyAliasViolations(fileName string, file *ast.File) []string {
 // depth over the interface boundary — Deps.Exec is an Executor, so the compiler
 // already refuses a Service today — catching a future widening at `go test`
 // time with a message that names the rule.
-// Proves EX-1.
+// Proves EX-1, QRY-24.
 func TestNoDispatchConstruction(t *testing.T) {
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {

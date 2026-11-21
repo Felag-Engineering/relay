@@ -530,6 +530,8 @@ func TestFleet_StateFilterResolvesLikeAnyOtherNamespace(t *testing.T) {
 
 // TestNode_FactsAppearHereAndPolicySaysWhenItIsUnknown covers the two halves of
 // spec 02 that are easy to get subtly wrong.
+//
+// Proves QRY-23.
 func TestNode_FactsAppearHereAndPolicySaysWhenItIsUnknown(t *testing.T) {
 	body := get(t, newTestHandler(fleetFixture(), accounts.RoleAdmin), "/console/nodes/node-web-1").Body.String()
 
@@ -1853,6 +1855,8 @@ func TestFleet_RevokedIsDeclaredInTheFacetToo(t *testing.T) {
 // seam: only the "has not reported" branch was covered, so the panel that
 // actually renders a Node's Policy — the showpiece of the whole screen — was
 // never once exercised.
+//
+// Proves QRY-9.
 func TestNode_ReportedPolicyComesFromTheDaemonsOwnEngine(t *testing.T) {
 	d := fleetFixture()
 	d = withPolicy(d, map[string]policyview.Snapshot{"node-web-1": policyview.Snapshot{
