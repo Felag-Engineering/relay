@@ -1022,6 +1022,7 @@ body = "echo {{missing}}"
             ("echo \"{{p}}\"", "PlaceholderInQuotedContext"),
             ("echo $(echo {{p}})", "PlaceholderNotTopLevel"),
             ("eval {{p}}", "PlaceholderInCodePosition"),
+            ("echo \\{{p}} {{p}}", "DoubleBraceNotAPlaceholder"),
         ];
         for (body, variant) in cases {
             let dir = TempDir::new("misplaced");
@@ -1044,6 +1045,50 @@ body = "echo {{missing}}"
             assert_eq!(set.len(), 0, "a partial vocabulary is never served");
             assert_eq!(set.fingerprint(), UNLOADABLE_FINGERPRINT);
         }
+    }
+
+    // Proves EX-19.
+    #[test]
+    fn an_escaped_placeholder_is_a_lint_error_like_every_misplaced_placeholder() {
+        let block = |name: &str, body: &str| {
+            format!(
+                "[[template]]\nname = \"{name}\"\nrisk_class = \"read\"\nbody = '{body}'\n\
+                 [[template.slots]]\nname = \"p\"\ntype = \"identifier\"\n"
+            )
+        };
+        let dir = TempDir::new("lint-escaped");
+        dir.write(
+            "x.toml",
+            &format!(
+                "{}{}",
+                block("bad.quoted", "echo \"{{p}}\""),
+                block("bad.escaped", "echo \\{{p}} {{p}}")
+            ),
+        );
+
+        let report = lint_dir(&dir.path);
+
+        assert_eq!(report.findings.len(), 2, "{:?}", report.findings);
+        assert!(report
+            .findings
+            .iter()
+            .all(|f| f.severity == LintSeverity::Error));
+        assert_eq!(
+            report.findings[0].location,
+            "x.toml: [[template]] #0 (name=\"bad.quoted\")"
+        );
+        assert_eq!(
+            report.findings[1].location,
+            "x.toml: [[template]] #1 (name=\"bad.escaped\")"
+        );
+        assert_eq!(
+            report.findings[1].message,
+            TemplateError::DoubleBraceNotAPlaceholder {
+                name: "bad.escaped".to_string()
+            }
+            .to_string()
+        );
+        assert!(report.names.is_empty(), "{:?}", report.names);
     }
 
     /// No slot type holds a secret: the declared type set is closed, and a
