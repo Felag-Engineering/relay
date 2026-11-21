@@ -15,10 +15,10 @@
 //!
 //! Limits. The script model has no lexer: it reads a body as plain text with
 //! placeholders in it, so it gives no independent evidence about which shell
-//! contexts compile refuses (arithmetic, `eval`, `sh -c`, here-document
-//! delimiters). Bodies in those contexts stay in the seeds so the refusals stay
-//! exercised. Oracle (a) sees a Path position only as this binary's own path:
-//! a fuzzer-chosen path is judged by the validator model and never rendered.
+//! contexts compile refuses (arithmetic, `eval`, `sh -c`, here-documents). Bodies
+//! in those contexts stay in the seeds so the refusals stay exercised. Oracle (a)
+//! sees a Path position only as this binary's own path: a fuzzer-chosen path is
+//! judged by the validator model and never rendered.
 //!
 //! Input: byte 0 is `sel`; the rest is UTF-8, split on U+001F. With bit 7 of
 //! `sel` set, field 0 is a template file parsed through the loader's own serde

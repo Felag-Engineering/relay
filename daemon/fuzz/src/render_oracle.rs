@@ -281,8 +281,8 @@ pub const RENDER_BODY_SEEDS: &[(u8, &str, bool)] = &[
     (0x01, "echo $'\\{{p}}' {{p}}", true),
     (0x01, "echo ${x:-\\{{p}}} {{p}}", true),
     (0x01, "cat <<E\nx\\{{p}}\nE\necho {{p}}", true),
-    // A here-document that compiles.
-    (0x01, "cat <<E\nx\nE\necho {{p}}", false),
+    // A here-document beside a placeholder: refused (EX-19).
+    (0x01, "cat <<E\nx\nE\necho {{p}}", true),
     // Fourteen slots, so the last five are referenced as `${10}` to `${14}`.
     (
         0x2f,

@@ -125,6 +125,10 @@ async fn nested_placements_are_refused_at_load() {
         "cat <<EOF\n{{p}}\nEOF",
         "sh <<EOF\necho {{p}}\nEOF",
         "cat <<< {{p}}",
+    ] {
+        assert_not_analysable(body);
+    }
+    for body in [
         "echo $(echo {{p}})",
         "(echo {{p}})",
         "find $(dirname {{p}}) -maxdepth 0 -print",
@@ -152,12 +156,12 @@ async fn backquotes_are_refused_at_load() {
 
 #[tokio::test]
 async fn arithmetic_brackets_and_case_are_refused_at_load() {
-    for body in ["(( {{p}} ))", "echo $[ 1 {{p}} ]", "echo \"$(( {{p}} ))\""] {
-        assert!(
-            matches!(refusal(body), TemplateError::PlaceholderInArithmetic { .. }),
-            "{body:?}"
-        );
-    }
+    assert!(matches!(
+        refusal("echo \"$(( {{p}} ))\""),
+        TemplateError::PlaceholderInArithmetic { .. }
+    ));
+    assert_not_analysable("(( {{p}} ))");
+    assert_not_analysable("echo $[ 1 {{p}} ]");
     assert_not_analysable("echo {{p}} $[ 1 + 2");
     // A `case` pattern's `)` ends the `$(` early, so the value would be split.
     assert_not_analysable("echo \"$(case x in x) printf '<%s>' \" {{p}} \" ;; esac)\"");
@@ -392,7 +396,7 @@ async fn retired_splicing_reproduces_each_row_that_was_real() {
     // Here-document: the substitution in the value ran. The body is refused now.
     let body = "cat <<EOF\n{{p}}\nEOF";
     assert!(reproduces(body, CANARIES[0], |r| stderr(r).contains("PWNED")).await);
-    assert_not_top_level(body);
+    assert_not_analysable(body);
 
     // Backquote: the value's backquote ended the outer substitution, so the
     // output is not the value (a syntax error under dash). Refused at load.
@@ -422,6 +426,100 @@ async fn retired_splicing_reproduces_each_row_that_was_real() {
     }
 }
 
+/// Whether `defect` holds under at least one shell, for the script a compile
+/// without the refusal emitted (`{{p}}` as `"$1"`) run with `value` as `$1`.
+async fn reproduces_rendered(
+    body: &str,
+    value: &str,
+    defect: impl Fn(&relay_proto::TaskResult) -> bool,
+) -> bool {
+    for shell in shells() {
+        let runner = ShellRunner::new(&shell);
+        let argv = [
+            "/bin/sh",
+            "-c",
+            &body.replace("{{p}}", "\"$1\""),
+            "relay-template",
+            value,
+        ]
+        .map(str::to_string)
+        .to_vec();
+        if defect(&run_sh_argv(&runner, argv).await) {
+            return true;
+        }
+    }
+    false
+}
+
+/// The value every shape below tries to run: it prints `PWNED` only if a
+/// command substitution ran.
+const SHAPE_VALUE: &str = "$(echo PW\"\"NED)";
+
+async fn assert_shape_runs_the_value_and_is_refused(body: &str) {
+    assert!(
+        reproduces_rendered(body, SHAPE_VALUE, |r| stdout(r).contains("PWNED")).await,
+        "{body:?}"
+    );
+    assert_not_analysable(body);
+}
+
+/// dash and bash both start a pending here-document after the line that closes
+/// a `$(`, not at a newline inside it.
+// Proves EX-19.
+#[tokio::test]
+async fn a_here_document_pending_across_a_command_substitution_newline_is_refused_at_load() {
+    assert_shape_runs_the_value_and_is_refused("sh <<E $(:\nE\n)\necho {{p}}\nE\n").await;
+}
+
+/// dash closes the `$( )` on the line of a pending here-document.
+// Proves EX-19.
+#[tokio::test]
+async fn a_command_substitution_closing_beside_a_pending_here_document_is_refused_at_load() {
+    assert_shape_runs_the_value_and_is_refused("x=$(cat <<E)\neval \"\nE\necho {{p}}\n\"  # \"\n")
+        .await;
+}
+
+/// bash ends a here-document at its delimiter line even after a `${` in the body.
+// Proves EX-19.
+#[tokio::test]
+async fn an_expansion_inside_a_here_document_body_is_refused_at_load() {
+    assert_shape_runs_the_value_and_is_refused(
+        "cat <<E\n${\nE\necho }\neval \"\nE\necho {{p}}\n\"  # \"\n",
+    )
+    .await;
+}
+
+/// dash reads a top-level `((` as two nested subshells, bash as arithmetic.
+// Proves EX-19.
+#[tokio::test]
+async fn a_top_level_double_paren_is_refused_at_load() {
+    assert_shape_runs_the_value_and_is_refused(
+        "((: #\"\neval \"\n#))\necho {{p}}\n\"  # \"\n) )\n",
+    )
+    .await;
+}
+
+/// `( (` and an arithmetic `$(( ( ) ))` beside a slot load and run as written.
+#[tokio::test]
+async fn nested_subshells_and_arithmetic_beside_a_slot_run_inertly() {
+    for body in ["( (true) ) ; echo {{p}}", "echo $(( (1) )) {{p}}"] {
+        every_canary_is_inert(body, None).await;
+    }
+}
+
+/// dash reads `$[` as text, so a here-document or a quote inside it is read
+/// differently from the lexer, which hides the value from the load-time checks.
+// Proves EX-19.
+#[tokio::test]
+async fn a_legacy_arithmetic_bracket_beside_a_slot_is_refused_at_load() {
+    for body in [
+        "cat $[ <<E ]\n\"\nE\neval \"\necho {{p}}\n\" #\"",
+        "echo $[ # \"\neval \"]\necho {{p}}\n\" # \"",
+    ] {
+        assert_shape_runs_the_value_and_is_refused(body).await;
+    }
+}
+
 /// A here-document delimiter that the shells read differently from the lexer
 /// hides a placeholder, or an `eval "$1"`, from the load-time checks. Each row
 /// reproduces under the script `compile` emits with the refusal removed, so the
@@ -429,31 +527,6 @@ async fn retired_splicing_reproduces_each_row_that_was_real() {
 // Proves EX-19.
 #[tokio::test]
 async fn a_here_document_delimiter_the_shells_read_differently_is_refused_at_load() {
-    /// Whether `defect` holds under at least one shell, for the script the old
-    /// compile emitted (`{{p}}` as `"$1"`) run with `value` as `$1`.
-    async fn reproduces(
-        body: &str,
-        value: &str,
-        defect: impl Fn(&relay_proto::TaskResult) -> bool,
-    ) -> bool {
-        for shell in shells() {
-            let runner = ShellRunner::new(&shell);
-            let argv = [
-                "/bin/sh",
-                "-c",
-                &body.replace("{{p}}", "\"$1\""),
-                "relay-template",
-                value,
-            ]
-            .map(str::to_string)
-            .to_vec();
-            if defect(&run_sh_argv(&runner, argv).await) {
-                return true;
-            }
-        }
-        false
-    }
-
     // The lexer reads the delimiter as `ab`, the shell as `a\b`, so the shell
     // evaluates `eval "$1"`. The `$'a'` shape ends at `a` under bash only.
     for body in [
@@ -463,7 +536,7 @@ async fn a_here_document_delimiter_the_shells_read_differently_is_refused_at_loa
         "shopt -s extglob\ncat <<@(x)\n@\necho {{p}} '\n@(x)\neval \"$1\"\n'\n:",
     ] {
         assert!(
-            reproduces(body, "echo PW\"\"NED", |r| stdout(r).contains("PWNED")).await,
+            reproduces_rendered(body, "echo PW\"\"NED", |r| stdout(r).contains("PWNED")).await,
             "{body:?}"
         );
         assert_not_analysable(body);
@@ -471,6 +544,6 @@ async fn a_here_document_delimiter_the_shells_read_differently_is_refused_at_loa
 
     // The placeholder sits in a here-document the shell does not expand.
     let body = "cat <<\"a\\b\"\nab\necho {{p}}\na\\b";
-    assert!(reproduces(body, "x", |r| stdout(r).contains("echo \"$1\"")).await);
+    assert!(reproduces_rendered(body, "x", |r| stdout(r).contains("echo \"$1\"")).await);
     assert_not_analysable(body);
 }
