@@ -142,6 +142,10 @@ func launchDaemon(t *testing.T, policyPath, joinString, hostname string) *exec.C
 	return handle.Cmd()
 }
 
+// daemonPollInterval is how often the real-daemon suites re-read state that a
+// relay-daemon subprocess changes: connecting, and reporting what it holds.
+const daemonPollInterval = 200 * time.Millisecond
+
 // waitForConnectedNodes polls deps.dispatch.ConnectedNodes() (the live
 // Tunnel registry, dispatch.Router's whole reason for existing per the plan)
 // until at least n Nodes are connected, or fails the test at deadline.
@@ -151,19 +155,15 @@ func launchDaemon(t *testing.T, policyPath, joinString, hostname string) *exec.C
 // deps.dispatch-driven).
 func waitForConnectedNodes(t *testing.T, deps *appDeps, n int, deadline time.Duration) []string {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), deadline)
-	defer cancel()
-	for {
-		connected := deps.dispatch.ConnectedNodes()
-		if len(connected) >= n {
-			return connected
-		}
-		select {
-		case <-ctx.Done():
-			t.Fatalf("timeout: only %d/%d Nodes connected within %s: %v", len(connected), n, deadline, connected)
-		case <-time.After(200 * time.Millisecond):
-		}
+	var connected []string
+	enough := func() bool {
+		connected = deps.dispatch.ConnectedNodes()
+		return len(connected) >= n
 	}
+	if !pollUntil(deadline, daemonPollInterval, enough) {
+		t.Fatalf("timeout: only %d/%d Nodes connected within %s: %v", len(connected), n, deadline, connected)
+	}
+	return connected
 }
 
 // pollDescribeReported calls describe_node for nodeID until
@@ -175,21 +175,17 @@ func waitForConnectedNodes(t *testing.T, deps *appDeps, n int, deadline time.Dur
 // papered over by loosening this poll into a single non-retried call.
 func pollDescribeReported(t *testing.T, session *sdkmcp.ClientSession, nodeID string, deadline time.Duration) mcp.DescribeNodeOutput {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), deadline)
-	defer cancel()
-	for {
+	var out mcp.DescribeNodeOutput
+	reported := func() bool {
 		res := relaytest.CallTool(t, session, "describe_node", map[string]any{"node_id": nodeID})
-		var out mcp.DescribeNodeOutput
+		out = mcp.DescribeNodeOutput{}
 		relaytest.DecodeToolJSON(t, res, &out)
-		if out.EffectivePolicy.Reported {
-			return out
-		}
-		select {
-		case <-ctx.Done():
-			t.Fatalf("timeout: describe_node(%s) never reached effective_policy.reported==true within %s", nodeID, deadline)
-		case <-time.After(200 * time.Millisecond):
-		}
+		return out.EffectivePolicy.Reported
 	}
+	if !pollUntil(deadline, daemonPollInterval, reported) {
+		t.Fatalf("timeout: describe_node(%s) never reached effective_policy.reported==true within %s", nodeID, deadline)
+	}
+	return out
 }
 
 // dialNodeTCP opens a *grpc.ClientConn against a real TCP node-plane

@@ -390,19 +390,17 @@ func TestDispatchWiring_ARestartSendsNoPendingUnreachableOrVersionRefusedTask(t 
 		t.Fatal("timeout waiting for every registration's reconcile to finish")
 	}
 
-	deadline := time.Now().Add(5 * time.Second)
-	for {
+	var controlState jobs.DispatchState
+	controlResolved := func() bool {
 		got, err := tasks.Get(ctx, "task-control")
 		if err != nil {
 			t.Fatalf("Get(control): %v", err)
 		}
-		if got.State == jobs.DispatchStateResolved {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("the control Task is %v, want Resolved by its reconcile", got.State)
-		}
-		time.Sleep(10 * time.Millisecond)
+		controlState = got.State
+		return controlState == jobs.DispatchStateResolved
+	}
+	if !pollUntil(5*time.Second, 10*time.Millisecond, controlResolved) {
+		t.Fatalf("the control Task is %v, want Resolved by its reconcile", controlState)
 	}
 
 	mu.Lock()

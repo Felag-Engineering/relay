@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"sync"
 	"testing"
@@ -90,21 +89,29 @@ func (d *dispatcher) deliverVerdict(nodeID string, verdict *relayv1.PolicyVerdic
 // Used as the startup sync point: ensures the daemon's Hello→Ping handshake is
 // complete before the test dispatches Tasks.
 func (d *dispatcher) waitForNode(nodeID string, deadline time.Duration) error {
-	ctx, cancel := context.WithTimeout(context.Background(), deadline)
-	defer cancel()
-	for {
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("waitForNode(%q): timeout after %v", nodeID, deadline)
-		case <-time.After(5 * time.Millisecond):
-			d.mu.Lock()
-			_, ok := d.senders[nodeID]
-			d.mu.Unlock()
-			if ok {
-				return nil
-			}
-		}
+	if !pollUntil(deadline, pollInterval, func() bool { return d.hasSender(nodeID) }) {
+		return fmt.Errorf("waitForNode(%q): timeout after %v", nodeID, deadline)
 	}
+	return nil
+}
+
+// hasSender reports whether nodeID has a registered sender right now.
+func (d *dispatcher) hasSender(nodeID string) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	_, ok := d.senders[nodeID]
+	return ok
+}
+
+// anySender returns the node_id of a registered sender, or "" when none is
+// registered. With more than one registered, which one it returns is unspecified.
+func (d *dispatcher) anySender() string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for id := range d.senders {
+		return id
+	}
+	return ""
 }
 
 // Dispatch sends a RelayMessage to the node identified by nodeID. Returns an
@@ -238,6 +245,24 @@ func TestDispatcher_WaitForNodeTimeout(t *testing.T) {
 	err := d.waitForNode("node-absent", 50*time.Millisecond)
 	if err == nil {
 		t.Fatal("expected timeout error, got nil")
+	}
+}
+
+func TestDispatcher_WaitForNodeReturnsOnceRegistered(t *testing.T) {
+	d := newDispatcher()
+	if got := d.anySender(); got != "" {
+		t.Fatalf("anySender with nothing registered = %q, want empty", got)
+	}
+	unregister := d.register("node-a", func(*relayv1.RelayMessage) error { return nil })
+	if err := d.waitForNode("node-a", time.Second); err != nil {
+		t.Fatalf("waitForNode after register: %v", err)
+	}
+	if got := d.anySender(); got != "node-a" {
+		t.Errorf("anySender = %q, want node-a", got)
+	}
+	unregister()
+	if d.hasSender("node-a") {
+		t.Error("hasSender still true after unregister")
 	}
 }
 

@@ -121,7 +121,6 @@ func startDaemonNode(t *testing.T, policyTOML string) *e2eNode {
 		relaytest.SkipMissingBin(t, "RELAY_DAEMON_BIN not set; skipping real-daemon e2e (run via make test-integration)")
 	}
 
-	ctx := context.Background()
 	addr, deps := startTCPServer(t)
 
 	disp := newDispatcher()
@@ -140,21 +139,14 @@ func startDaemonNode(t *testing.T, policyTOML string) *e2eNode {
 
 	// Wait for the daemon to complete Hello→Ping handshake (registry sync).
 	// Poll the dispatcher until the node appears, with a 30 s deadline. We
-	// don't know the Relay-assigned node_id yet, so watch disp.senders directly.
+	// don't know the Relay-assigned node_id yet, so watch for any registered sender.
 	var nodeID string
-	regCtx, regCancel := context.WithTimeout(ctx, 30*time.Second)
-	defer regCancel()
-	for nodeID == "" {
-		select {
-		case <-regCtx.Done():
-			t.Fatalf("timeout: daemon did not complete Hello→Ping handshake within 30 s")
-		case <-time.After(100 * time.Millisecond):
-		}
-		disp.mu.Lock()
-		for id := range disp.senders {
-			nodeID = id
-		}
-		disp.mu.Unlock()
+	registered := func() bool {
+		nodeID = disp.anySender()
+		return nodeID != ""
+	}
+	if !pollUntil(30*time.Second, 100*time.Millisecond, registered) {
+		t.Fatalf("timeout: daemon did not complete Hello→Ping handshake within 30 s")
 	}
 	if err := disp.waitForNode(nodeID, 5*time.Second); err != nil {
 		t.Fatalf("waitForNode: %v", err)
@@ -176,20 +168,9 @@ func startDaemonNode(t *testing.T, policyTOML string) *e2eNode {
 		// Wait for the dispatcher to deregister the old sender before
 		// relaunching, so the re-registration poll below cannot spuriously
 		// observe the stale (pre-restart) registration.
-		deregCtx, deregCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer deregCancel()
-		for {
-			disp.mu.Lock()
-			_, present := disp.senders[nodeID]
-			disp.mu.Unlock()
-			if !present {
-				break
-			}
-			select {
-			case <-deregCtx.Done():
-				t.Fatalf("timeout: dispatcher did not deregister %q after kill", nodeID)
-			case <-time.After(10 * time.Millisecond):
-			}
+		deregistered := func() bool { return !disp.hasSender(nodeID) }
+		if !pollUntil(5*time.Second, 10*time.Millisecond, deregistered) {
+			t.Fatalf("timeout: dispatcher did not deregister %q after kill", nodeID)
 		}
 
 		node.handle.Launch()
