@@ -67,6 +67,45 @@ func RenderCertificate(n registry.Node) RenderedCertificate {
 	return out
 }
 
+// RenderedClockSkew is the clock skew the Relay measured for a Node, before a
+// surface tags it.
+type RenderedClockSkew struct {
+	Measured   bool
+	SkewMs     *int64
+	MeasuredAt string
+}
+
+// RenderClockSkew renders n's measured clock skew, signed as the registry
+// records it: the Node's time minus the Relay's receive time, positive when the
+// Node is ahead (NC-37).
+//
+// Measured gates the value. A Node the Relay has not measured renders no
+// SkewMs at all, so "not measured" is never a zero skew, and a measured zero
+// stays visible as 0. The skew is information, never a warning (QRY-43).
+func RenderClockSkew(n registry.Node) RenderedClockSkew {
+	if !n.ClockSkewKnown() {
+		return RenderedClockSkew{}
+	}
+	ms := n.ClockSkew.Milliseconds()
+	return RenderedClockSkew{Measured: true, SkewMs: &ms, MeasuredAt: RFC3339(n.ClockSkewMeasuredAt)}
+}
+
+// RenderedFirstConnect is when a Node first connected, before a surface tags
+// it.
+type RenderedFirstConnect struct {
+	EverConnected bool
+	At            string
+}
+
+// RenderFirstConnect renders when n first connected. EverConnected gates At,
+// so a Node that has never connected carries no time rather than a 1970 one.
+func RenderFirstConnect(n registry.Node) RenderedFirstConnect {
+	return RenderedFirstConnect{
+		EverConnected: !n.FirstConnectedAt.IsZero(),
+		At:            RFC3339(n.FirstConnectedAt),
+	}
+}
+
 // StateLabels renders n's Relay-derived state: labels (nodestate.Labels) as
 // strings, never nil. ev must be the SAME StateEval the caller resolved its
 // Selector against — one instant, one cert-expiring window per response — so

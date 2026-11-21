@@ -498,8 +498,9 @@ paths:
       summary: Read one Node
       description: |
         Everything the registry holds about one Node: its Facts, both label
-        namespaces, reported fingerprints, and the certificate provenance the
-        Relay issued.
+        namespaces, reported fingerprints, the certificate provenance the
+        Relay issued, when it first connected, and the clock skew the Relay
+        measured.
 
         `connected` is whether the Node holds a live Tunnel **right now**, and is
         not inferable from `last_seen`: a Node that reported seconds ago and then
@@ -1286,6 +1287,45 @@ components:
             last_renewed_at:
               type: string
               format: date-time
+        clock_skew:
+          type: object
+          description: |
+            Computed by the Relay from the timestamp the Node reports in its
+            heartbeat, so a compromised Node can choose the value, including
+            0. Never part of `facts`. Informational only: no threshold, and
+            never a reason to refuse a connection or a dispatch.
+          properties:
+            measured:
+              type: boolean
+              description: |
+                **Read this first.** False means not measured; `skew_ms` and
+                `measured_at` are then absent — never a zero skew.
+            skew_ms:
+              type: integer
+              format: int64
+              description: |
+                The Node's clock minus the Relay's receive time of its last
+                heartbeat, in milliseconds; positive when the Node is ahead.
+                Present, possibly 0, only when `measured` is true.
+            measured_at:
+              type: string
+              format: date-time
+              description: When the Relay measured it.
+        first_connect:
+          type: object
+          description: Relay-authored, beside the certificate provenance.
+          properties:
+            ever_connected:
+              type: boolean
+              description: |
+                False means the Node has never connected; `at` is then absent.
+                Not `connected`, which is whether it holds a live Tunnel now.
+            at:
+              type: string
+              format: date-time
+              description: |
+                When the Node first connected. For a Node that connected before
+                this was recorded, an upper bound: it connected at or before it.
 
     Problem:
       type: object

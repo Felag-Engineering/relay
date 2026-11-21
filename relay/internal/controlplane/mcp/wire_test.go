@@ -83,7 +83,7 @@ func TestDescribeNodeOutput_JSONShapeIsFlattened(t *testing.T) {
 		`"deny_rules":[{"name":"file.read","args":[["/etc/shadow"]]}]},` +
 		`"template_vocabulary":{"template_set_fingerprint":"sha256:node-a-template-set","reported":true,` +
 		`"templates":[{"name":"log.tail","risk_class":"read",` +
-		`"slots":[{"name":"lines","type":"integer","enum_values":[]}]}]},"certificate":{"recorded":false,"renewal_count":0}}`
+		`"slots":[{"name":"lines","type":"integer","enum_values":[]}]}]},"certificate":{"recorded":false,"renewal_count":0},"clock_skew":{"measured":false},"first_connect":{"ever_connected":false}}`
 
 	if string(got) != want {
 		t.Errorf("json.Marshal(DescribeNodeOutput) =\n%s\nwant\n%s\n(NodeItem's fields must flatten into the "+

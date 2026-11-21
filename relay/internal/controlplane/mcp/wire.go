@@ -170,6 +170,31 @@ type DescribeNodeOutput struct {
 	// describe_node: it is per-Node detail, and list_nodes is deliberately a
 	// fleet-shaped view.
 	Certificate CertificateOutput `json:"certificate"`
+
+	// ClockSkew and FirstConnect are kept apart from the
+	// self-reported Facts; the skew is computed from a Node-reported
+	// timestamp. Present only on describe_node, like Certificate.
+	ClockSkew    ClockSkewOutput    `json:"clock_skew"`
+	FirstConnect FirstConnectOutput `json:"first_connect"`
+}
+
+// ClockSkewOutput is the clock skew the Relay measured for a Node. It is
+// Relay-computed from the Node's heartbeat timestamp, so a compromised Node
+// can choose it; never a Fact, and never a warning.
+//
+// Measured is the field to read FIRST: when false, skew_ms and measured_at are
+// absent, so "not measured" cannot be mistaken for a clock that agrees.
+type ClockSkewOutput struct {
+	Measured   bool   `json:"measured" jsonschema:"False when the Relay has not measured this Node's clock: skew_ms and measured_at are then absent, never a zero skew."`
+	SkewMs     *int64 `json:"skew_ms,omitempty" jsonschema:"The Node's clock minus the Relay's receive time of its last heartbeat, in milliseconds; positive when the Node is ahead. Computed by the Relay from the timestamp the Node reports in its heartbeat, so a compromised Node can choose it; not a Fact. Informational only: no threshold applies and it never refuses a connection or a dispatch."`
+	MeasuredAt string `json:"measured_at,omitempty" jsonschema:"When the Relay measured it (RFC 3339, Relay clock)."`
+}
+
+// FirstConnectOutput is when a Node first connected to this Relay: Relay-
+// authored, never Node-reported.
+type FirstConnectOutput struct {
+	EverConnected bool   `json:"ever_connected" jsonschema:"False when the Node has never connected to this Relay. Not the same as connected, which is whether it holds a live Tunnel now."`
+	At            string `json:"at,omitempty" jsonschema:"When the Node first connected (RFC 3339). For a Node that connected before this was recorded it is an upper bound: the Node connected at or before it."`
 }
 
 // CertificateOutput is what the Relay knows about the identity it issued to a

@@ -36,7 +36,9 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Felag-Engineering/relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/relay/relay/internal/audit"
@@ -136,6 +138,17 @@ type nodeView struct {
 	// nothing recorded for this Node — not that it is fine — so the panel says
 	// which, because a missing "expires" row reads as the reassuring answer.
 	CertProvenanceKnown bool
+
+	// FirstConnectedAt is when the Node first connected, "" when it never has.
+	// Shown beside the certificate provenance (QRY-44) whether or not that
+	// provenance is recorded.
+	FirstConnectedAt string
+	// ClockSkewMeasured gates ClockSkew and ClockSkewMeasuredAt: false is "not
+	// measured", never a clock that agrees with the Relay's (NC-37). The skew is
+	// never styled as a warning (QRY-43).
+	ClockSkewMeasured   bool
+	ClockSkew           string // "+1234 ms", "-2500 ms", "0 ms"
+	ClockSkewMeasuredAt string
 
 	PolicyFingerprint   string
 	TemplateFingerprint string
@@ -383,6 +396,7 @@ func buildNodeView(d Deps, r *http.Request, detail capability.NodeDetail, pins [
 		v.RevokedAt = utcStamp(n.RevokedAt)
 	}
 	v.applyCertProvenance(d, n)
+	v.applyConnectionObservations(n)
 	v.applyFingerprintLinks(in)
 
 	v.applyPins(n.NodeID, pins, resolve)
@@ -420,6 +434,32 @@ func (v *nodeView) applyCertProvenance(d Deps, n registry.Node) {
 	if !n.LastRenewedAt.IsZero() {
 		v.LastRenewedAt = utcStamp(n.LastRenewedAt)
 	}
+}
+
+// applyConnectionObservations fills the first-connect time and the clock skew.
+// The Relay formats both, yet every string goes through visibletext.Escape, so
+// the rule that a value shown from a Node's record is drawn through the helper
+// holds without proving the text safe.
+func (v *nodeView) applyConnectionObservations(n registry.Node) {
+	if !n.FirstConnectedAt.IsZero() {
+		v.FirstConnectedAt = visibletext.Escape(utcStamp(n.FirstConnectedAt))
+	}
+	if n.ClockSkewKnown() {
+		v.ClockSkewMeasured = true
+		v.ClockSkew = visibletext.Escape(clockSkewText(n.ClockSkew))
+		v.ClockSkewMeasuredAt = visibletext.Escape(utcStamp(n.ClockSkewMeasuredAt))
+	}
+}
+
+// clockSkewText renders d in whole milliseconds with an explicit sign, so a Node
+// ahead of the Relay reads "+1234 ms" and one behind "-1234 ms" (NC-37's sign).
+func clockSkewText(d time.Duration) string {
+	ms := d.Milliseconds()
+	s := strconv.FormatInt(ms, 10)
+	if ms > 0 {
+		s = "+" + s
+	}
+	return s + " ms"
 }
 
 // applyFingerprintLinks sets the fingerprint Selector links, built from
@@ -769,6 +809,9 @@ var nodeTmpl = newScreen("node", `
       {{else}}
       <p class="gap"><b>This Node's certificate provenance is not recorded</b>, so its expiry is unknown until its next renewal.</p>
       {{end}}
+      <dl class="kv">
+        <dt>first connected</dt><dd>{{if .FirstConnectedAt}}{{.FirstConnectedAt}}{{else}}<span class="dim">never connected</span>{{end}}</dd>
+      </dl>
     </section>
 
     <section class="panel">
@@ -785,6 +828,13 @@ var nodeTmpl = newScreen("node", `
         {{else if .TemplateFingerprint}}{{with .TemplateFingerprintHref}}<a href="{{.}}">{{end}}<code title="{{.TemplateFingerprint}}">{{short .TemplateFingerprint}}</code>{{if .TemplateFingerprintHref}}</a>{{end}}
           <span class="dim">{{.TemplateShared}} {{plural .TemplateShared "Node reports" "Nodes report"}} this</span>
         {{else}}<span class="dim">no templates installed</span>{{end}}</dd>
+      </dl>
+    </section>
+
+    <section class="panel">
+      <h3>Clock <span class="phint">Relay-measured</span></h3>
+      <dl class="kv">
+        <dt>Node minus Relay</dt><dd>{{if .ClockSkewMeasured}}{{.ClockSkew}} <span class="dim">measured {{.ClockSkewMeasuredAt}}</span>{{else}}<span class="dim">not measured</span>{{end}}</dd>
       </dl>
     </section>
 
