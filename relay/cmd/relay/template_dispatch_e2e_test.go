@@ -125,17 +125,16 @@ func TestTemplateDispatchE2E_RunOperationByName(t *testing.T) {
 // vocabulary report has reached the Relay.
 func pollTemplatesReported(t *testing.T, session *sdkmcp.ClientSession, nodeID string, deadline time.Duration) {
 	t.Helper()
-	end := time.Now().Add(deadline)
-	for time.Now().Before(end) {
+	reported := func() bool {
 		res := relaytest.CallTool(t, session, "describe_node", map[string]any{"node_id": nodeID})
-		if !res.IsError {
-			var out mcp.DescribeNodeOutput
-			relaytest.DecodeToolJSON(t, res, &out)
-			if out.TemplateVocabulary.Reported {
-				return
-			}
+		if res.IsError {
+			return false
 		}
-		time.Sleep(200 * time.Millisecond)
+		var out mcp.DescribeNodeOutput
+		relaytest.DecodeToolJSON(t, res, &out)
+		return out.TemplateVocabulary.Reported
 	}
-	t.Fatalf("Node %s never reported its Template vocabulary within %s", nodeID, deadline)
+	if !pollUntil(deadline, daemonPollInterval, reported) {
+		t.Fatalf("Node %s never reported its Template vocabulary within %s", nodeID, deadline)
+	}
 }
