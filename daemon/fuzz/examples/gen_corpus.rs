@@ -8,10 +8,10 @@
 //! cargo run --example gen_corpus
 //! ```
 //!
-//! The two Policy targets (`fuzz_raw_exec_gate`, `fuzz_path_canonical`) and the
+//! The two Policy targets (`fuzz_raw_exec_gate`, `fuzz_path_canonical`), the
 //! three parser targets (`fuzz_policy_compose`, `fuzz_template_compile`,
-//! `fuzz_operation_args`) are text-framed rather than prost-encoded; their seeds
-//! are byte-stable.
+//! `fuzz_operation_args`) and the render target (`fuzz_template_render`) are
+//! text-framed rather than prost-encoded; their seeds are byte-stable.
 //!
 //! All field values are fixed, so re-running is byte-stable except for one
 //! caveat: prost encodes `map` fields in HashMap iteration order, so the
@@ -30,7 +30,11 @@ use relay_daemon_fuzz::pb::{
     RawExec, RelayMessage, RenewResponse, RiskClass, TaskCancel, TaskRequest,
 };
 use relay_daemon_fuzz::policy_oracle::SEP;
+use relay_daemon_fuzz::render_oracle::{
+    redteam_seeds, render_def, template_toml, PROPTEST_FIXTURES, RENDER_BODY_SEEDS, VALIDATOR_SEEDS,
+};
 use relay_daemon_fuzz::template_oracle::{BODY_SEEDS, FILE_SEEDS};
+use relay_ops::operations::template::{SlotDef, SlotType};
 
 fn write_seed(dir: &Path, name: &str, bytes: &[u8]) {
     fs::create_dir_all(dir).expect("create corpus dir");
@@ -152,7 +156,38 @@ fn argv_seed(sel: u8, argv: &[&str]) -> Vec<u8> {
     out
 }
 
-/// Seeds for the three parser targets. Byte-stable.
+/// Values that fit `slots`, or hostile ones that each slot type's validator
+/// refuses: a Path with a command substitution, an option-looking Identifier, a
+/// negative Integer and an Enum member that is not in the list.
+fn render_values(slots: &[SlotDef], hostile: bool) -> Vec<String> {
+    slots
+        .iter()
+        .map(|s| {
+            match (&s.ty, hostile) {
+                (SlotType::Path, false) => "/etc/hostname",
+                (SlotType::Path, true) => "/tmp/$(reboot)",
+                (SlotType::Identifier, false) if s.name.starts_with('w') => "w",
+                (SlotType::Identifier, false) => "nginx",
+                (SlotType::Identifier, true) => "--force",
+                (SlotType::Integer, false) => "10",
+                (SlotType::Integer, true) => "-1",
+                (SlotType::Enum(_), false) => "start",
+                (SlotType::Enum(_), true) => "restart",
+            }
+            .to_string()
+        })
+        .collect()
+}
+
+/// A `fuzz_template_render` seed: the selector, then the body (or template file)
+/// and the values, joined with `SEP`.
+fn render_seed(sel: u8, field0: &str, values: &[String]) -> Vec<u8> {
+    let mut fields: Vec<&str> = vec![field0];
+    fields.extend(values.iter().map(String::as_str));
+    argv_seed(sel, &fields)
+}
+
+/// Seeds for the three parser targets and the render target. Byte-stable.
 fn write_parse_seeds(root: &Path) {
     // --- fuzz_policy_compose ------------------------------------------------
     // sel 1: the first field is the Policy file; sel 0: fragments only.
@@ -217,6 +252,74 @@ fn write_parse_seeds(root: &Path) {
     let dir = root.join("fuzz_template_compile");
     for (i, row) in rows.iter().enumerate() {
         write_seed(&dir, &format!("template_{i:02}"), row);
+    }
+
+    // --- fuzz_template_render -----------------------------------------------
+    // Byte 0 bit 7: file mode (field 0 is a template file); clear: body mode
+    // (field 0 is the body of render_def(sel, ..)). The remaining fields are the
+    // slot values.
+    let mut rows: Vec<Vec<u8>> = Vec::new();
+    for file in [
+        include_str!("../../packaging/templates.d/relay-read/catalog.toml"),
+        include_str!("../../templates.example.toml"),
+    ]
+    .into_iter()
+    .chain(FILE_SEEDS.iter().copied())
+    {
+        // Values that fit the slots of the shipped catalogs and the hand-written
+        // files; a file that does not parse or compile is a refusal seed.
+        let values = ["/etc/hostname", "nginx", "10", "start"].map(String::from);
+        rows.push(render_seed(0x80, file, &values));
+    }
+    for (sel, body) in BODY_SEEDS
+        .iter()
+        .copied()
+        .chain(RENDER_BODY_SEEDS.iter().map(|&(sel, body, _)| (sel, body)))
+    {
+        let slots = render_def(sel, body).slots;
+        for hostile in [false, true] {
+            rows.push(render_seed(sel, body, &render_values(&slots, hostile)));
+        }
+    }
+    // The six fixtures of relay-ops' `fixtures()` invariance property.
+    for (body, names, _golden) in PROPTEST_FIXTURES {
+        let slots: Vec<SlotDef> = names
+            .iter()
+            .map(|n| SlotDef {
+                name: n.to_string(),
+                ty: SlotType::Path,
+            })
+            .collect();
+        let file = template_toml("fuzz.fixture", body, &slots);
+        rows.push(render_seed(0x80, &file, &render_values(&slots, false)));
+    }
+    // The rows of relay-ops' red-team table (`redteam_rows()`): one slot of the
+    // row's type, and the row's value.
+    for (ty, value, _must_refuse) in redteam_seeds() {
+        let slots = vec![SlotDef {
+            name: "p".to_string(),
+            ty,
+        }];
+        let file = template_toml("fuzz.redteam", "cat {{p}}", &slots);
+        rows.push(render_seed(0x80, &file, &[value.to_string()]));
+    }
+    // Values a slot type's validator refuses, in body mode.
+    for (sel, values) in VALIDATOR_SEEDS {
+        let body = format!(
+            "cat {}",
+            render_def(*sel, "x")
+                .slots
+                .iter()
+                .map(|s| format!("{{{{{}}}}}", s.name))
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+        let values: Vec<String> = values.iter().map(|v| v.to_string()).collect();
+        rows.push(render_seed(*sel, &body, &values));
+    }
+    let dir = root.join("fuzz_template_render");
+    for (i, row) in rows.iter().enumerate() {
+        write_seed(&dir, &format!("render_{i:02}"), row);
     }
 
     // --- fuzz_operation_args ------------------------------------------------

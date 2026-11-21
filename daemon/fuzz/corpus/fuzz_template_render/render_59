@@ -1,0 +1,1 @@
+echo {{p}} | cat -n {{p}}/etc/hostname

@@ -1,0 +1,9 @@
+€[[template]]
+name = "fuzz.redteam"
+risk_class = "read"
+body = "cat {{p}}"
+
+[[template.slots]]
+name = "p"
+type = "path"
+/tmp/$(reboot)

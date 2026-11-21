@@ -672,10 +672,12 @@ version = "0.0.0"
 dependencies = [
  "libfuzzer-sys",
  "prost",
+ "relay-exec",
  "relay-ops",
  "relay-policy",
  "relay-proto",
  "serde",
+ "tokio",
  "toml",
 ]
 

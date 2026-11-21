@@ -1,0 +1,2 @@
+echo a \
+{{p}}/etc/hostname

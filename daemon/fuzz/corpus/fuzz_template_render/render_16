@@ -1,0 +1,1 @@
+cmd {{p}} {{n}} {{i}} {{e}}/tmp/$(reboot)--force-1restart

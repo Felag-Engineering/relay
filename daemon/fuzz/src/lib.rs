@@ -32,6 +32,10 @@
 //! spawns a process or reaches Template render. Their helpers live in
 //! [`policy_oracle`], [`template_oracle`] and [`arg_oracle`].
 //!
+//! `fuzz_template_render` reaches Template render through `ResolvedOp::invoke`
+//! with a recording Runner. It spawns no process and opens only its own
+//! executable, as a path-slot value. Its models live in [`render_oracle`].
+//!
 //! Only failure modes are asserted (panic / crash / OOM / roundtrip
 //! inconsistency); a plain `Err` from `decode` is the correct outcome for
 //! malformed bytes and is never a finding.
@@ -42,6 +46,7 @@ pub use relay_proto as pb;
 
 pub mod arg_oracle;
 pub mod policy_oracle;
+pub mod render_oracle;
 pub mod template_oracle;
 
 use prost::Message;
@@ -71,4 +76,104 @@ where
         msg, redecoded,
         "decode(encode(m)) must reproduce the identical message"
     );
+}
+
+/// The fuzz crate names relay-exec for the `ExecRequest` type only, and nothing
+/// here may run a process: invariant 1 is the property under test, so the
+/// harness must never execute. This scans every source file of the crate for a
+/// code line that calls the executor or spawns a process, and fails when a source
+/// file is added without being listed, so a new target cannot dodge the scan.
+#[cfg(test)]
+mod no_process_guard {
+    const SOURCES: &[(&str, &str)] = &[
+        ("src/arg_oracle.rs", include_str!("arg_oracle.rs")),
+        ("src/lib.rs", include_str!("lib.rs")),
+        ("src/policy_oracle.rs", include_str!("policy_oracle.rs")),
+        ("src/render_oracle.rs", include_str!("render_oracle.rs")),
+        ("src/template_oracle.rs", include_str!("template_oracle.rs")),
+        (
+            "examples/gen_corpus.rs",
+            include_str!("../examples/gen_corpus.rs"),
+        ),
+        (
+            "fuzz_targets/fuzz_enroll_response_decode.rs",
+            include_str!("../fuzz_targets/fuzz_enroll_response_decode.rs"),
+        ),
+        (
+            "fuzz_targets/fuzz_operation_args.rs",
+            include_str!("../fuzz_targets/fuzz_operation_args.rs"),
+        ),
+        (
+            "fuzz_targets/fuzz_path_canonical.rs",
+            include_str!("../fuzz_targets/fuzz_path_canonical.rs"),
+        ),
+        (
+            "fuzz_targets/fuzz_policy_compose.rs",
+            include_str!("../fuzz_targets/fuzz_policy_compose.rs"),
+        ),
+        (
+            "fuzz_targets/fuzz_raw_exec_gate.rs",
+            include_str!("../fuzz_targets/fuzz_raw_exec_gate.rs"),
+        ),
+        (
+            "fuzz_targets/fuzz_relay_message_decode.rs",
+            include_str!("../fuzz_targets/fuzz_relay_message_decode.rs"),
+        ),
+        (
+            "fuzz_targets/fuzz_renew_response_decode.rs",
+            include_str!("../fuzz_targets/fuzz_renew_response_decode.rs"),
+        ),
+        (
+            "fuzz_targets/fuzz_template_compile.rs",
+            include_str!("../fuzz_targets/fuzz_template_compile.rs"),
+        ),
+        (
+            "fuzz_targets/fuzz_template_render.rs",
+            include_str!("../fuzz_targets/fuzz_template_render.rs"),
+        ),
+    ];
+
+    // Split so that this file does not match its own scan.
+    const FORBIDDEN: [&str; 3] = [
+        concat!("executor", "::execute"),
+        concat!("std", "::process"),
+        concat!("Command", "::new"),
+    ];
+
+    #[test]
+    fn no_source_runs_a_process() {
+        for (path, text) in SOURCES {
+            for (n, line) in text.lines().enumerate() {
+                if line.trim_start().starts_with("//") {
+                    continue;
+                }
+                for pat in FORBIDDEN {
+                    assert!(
+                        !line.contains(pat),
+                        "{path}:{}: `{pat}` in a fuzz crate source",
+                        n + 1
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn every_source_file_is_scanned() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut on_disk = Vec::new();
+        for dir in ["src", "fuzz_targets", "examples"] {
+            for entry in std::fs::read_dir(root.join(dir)).expect("read source dir") {
+                let name = entry.expect("dir entry").file_name();
+                let name = name.to_string_lossy();
+                if name.ends_with(".rs") {
+                    on_disk.push(format!("{dir}/{name}"));
+                }
+            }
+        }
+        on_disk.sort();
+        let mut listed: Vec<String> = SOURCES.iter().map(|(p, _)| p.to_string()).collect();
+        listed.sort();
+        assert_eq!(on_disk, listed, "list every source file in SOURCES");
+    }
 }
