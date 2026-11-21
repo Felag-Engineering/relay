@@ -1328,9 +1328,21 @@ mod tests {
     // Proves EX-19.
     #[test]
     fn compile_refuses_an_escaped_placeholder_in_a_here_document_delimiter() {
-        // The delimiter reads as `{{p}}`, and the line `{{p}}` ends the
-        // here-document, so the lexer reaches the end of the body.
-        assert_double_brace_refused("cat <<\\{{p}}\nx\n{{p}}\necho {{p}}", id_slot());
+        // The delimiter is not a plain word, which a body holding a placeholder
+        // may not use; the placeholder in it is what the refusal names.
+        assert!(matches!(
+            compile(&def(
+                "t.esc",
+                "cat <<\\{{p}}\nx\n{{p}}\necho {{p}}",
+                id_slot()
+            ))
+            .unwrap_err(),
+            TemplateError::PlaceholderNotExpanded { .. }
+        ));
+        assert!(matches!(
+            compile(&def("t.esc", "cat <<\\E\nx\nE\necho {{p}}", id_slot())).unwrap_err(),
+            TemplateError::BodyNotAnalysable { .. }
+        ));
     }
 
     // Proves EX-19.
