@@ -200,7 +200,7 @@ pub struct TemplateDef {
     pub body: String,
     /// The declared parameter slots. Every slot must be referenced by the body
     /// exactly as `{{name}}`, and every `{{name}}` in the body must resolve to
-    /// a declared slot.
+    /// a declared slot; the body holds no other `{{`.
     #[serde(default)]
     pub slots: Vec<SlotDef>,
 }
@@ -275,6 +275,13 @@ pub enum TemplateError {
 
     #[error("a placeholder near byte {at} is malformed: {detail}")]
     MalformedPlaceholder { at: usize, detail: &'static str },
+
+    #[error(
+        "template {name:?} holds a '{{{{' that is not a placeholder (one that follows a \
+         backslash, or sits in a here-document delimiter or terminator line, is never filled \
+         in); a body may hold '{{{{' only as a placeholder"
+    )]
+    DoubleBraceNotAPlaceholder { name: String },
 
     #[error(
         "template body has unbalanced quoting (an unterminated ' or \" or a trailing backslash)"
@@ -689,6 +696,8 @@ impl ResolvedOp for TemplateOp {
 /// - every `{{slot}}` is a **standalone, whitespace-delimited word in an
 ///   unquoted context** and resolves to a declared slot;
 /// - no placeholder stands where its value would be executed (`template_code`);
+/// - once placeholders are replaced, no `{{` remains in the script: a body
+///   holds `{{` only as a placeholder (EX-19);
 /// - every declared slot is referenced.
 pub fn compile(def: &TemplateDef) -> Result<TemplateOp, TemplateError> {
     // --- name ---
@@ -748,6 +757,18 @@ pub fn compile(def: &TemplateDef) -> Result<TemplateOp, TemplateError> {
         referenced,
         warnings,
     } = template_body::analyse(&def.body, &slots)?;
+
+    // --- no `{{` survives substitution (EX-19) ---
+    // The lexer never reads a placeholder in two places: it copies a backslash
+    // and the char after it as a pair, and it copies a here-document
+    // terminator line verbatim. A `{{` reached either way would stay in the
+    // script unfilled and unchecked. A positional reference cannot form `{{`,
+    // so any left is body text. There is no escape syntax for a literal `{{`.
+    if script.contains("{{") {
+        return Err(TemplateError::DoubleBraceNotAPlaceholder {
+            name: def.name.clone(),
+        });
+    }
 
     // --- every declared slot must actually be used ---
     for (idx, slot) in slots.iter().enumerate() {
@@ -1254,6 +1275,81 @@ mod tests {
             compile(&def("t.empty", "", vec![])).unwrap_err(),
             TemplateError::EmptyBody
         );
+    }
+
+    // -- a `{{` that is not a placeholder -------------------------------------
+
+    fn id_slot() -> Vec<SlotDef> {
+        vec![slot("p", SlotType::Identifier)]
+    }
+
+    fn assert_double_brace_refused(body: &str, slots: Vec<SlotDef>) {
+        assert_eq!(
+            compile(&def("t.esc", body, slots)).unwrap_err(),
+            TemplateError::DoubleBraceNotAPlaceholder {
+                name: "t.esc".to_string()
+            },
+            "body {body:?}"
+        );
+    }
+
+    // Proves EX-19.
+    #[test]
+    fn compile_refuses_an_escaped_placeholder_in_the_top_level_list() {
+        assert_double_brace_refused(r"echo \{{p}} {{p}}", id_slot());
+        assert_double_brace_refused(r"echo \{{q}} {{p}}", id_slot());
+        assert_double_brace_refused(r"echo \{{p}}", id_slot());
+    }
+
+    // Proves EX-19.
+    #[test]
+    fn compile_refuses_an_escaped_placeholder_in_double_quotes() {
+        assert_double_brace_refused(r#"echo "\{{p}}" {{p}}"#, id_slot());
+    }
+
+    // Proves EX-19.
+    #[test]
+    fn compile_refuses_an_escaped_placeholder_in_ansi_c_quotes() {
+        assert_double_brace_refused(r"echo $'\{{p}}' {{p}}", id_slot());
+    }
+
+    // Proves EX-19.
+    #[test]
+    fn compile_refuses_an_escaped_placeholder_in_a_parameter_expansion() {
+        assert_double_brace_refused(r"echo ${x:-\{{p}}} {{p}}", id_slot());
+    }
+
+    // Proves EX-19.
+    #[test]
+    fn compile_refuses_an_escaped_placeholder_in_a_here_document() {
+        assert_double_brace_refused("cat <<E\nx\\{{p}}\nE\necho {{p}}", id_slot());
+    }
+
+    // Proves EX-19.
+    #[test]
+    fn compile_refuses_an_escaped_placeholder_in_a_here_document_delimiter() {
+        // The delimiter reads as `{{p}}`, and the line `{{p}}` ends the
+        // here-document, so the lexer reaches the end of the body.
+        assert_double_brace_refused("cat <<\\{{p}}\nx\n{{p}}\necho {{p}}", id_slot());
+    }
+
+    // Proves EX-19.
+    #[test]
+    fn compile_refuses_an_escaped_placeholder_in_arithmetic() {
+        assert_double_brace_refused(r"echo $(( 1 \{{p}} )) {{p}}", id_slot());
+    }
+
+    #[test]
+    fn compile_refuses_a_literal_double_brace() {
+        // There is no escape syntax for a literal double brace.
+        assert_double_brace_refused(r"echo \{{x}}", vec![]);
+        assert_double_brace_refused(r"echo x\{{", vec![]);
+        let msg = TemplateError::DoubleBraceNotAPlaceholder {
+            name: "t.esc".to_string(),
+        }
+        .to_string();
+        assert!(msg.contains("\"t.esc\""), "{msg}");
+        assert!(msg.contains("'{{'"), "{msg}");
     }
 
     // -----------------------------------------------------------------------

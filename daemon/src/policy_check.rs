@@ -1011,6 +1011,19 @@ body = "cat /etc/hostname"
         }
     }
 
+    /// An escaped placeholder is never filled in, so it is a decidable refusal
+    /// with or without `--strict`.
+    // Proves EX-19.
+    #[test]
+    fn templates_an_escaped_placeholder_is_invalid() {
+        let body = "echo \\{{path}} {{path}}";
+        assert_eq!(check_template_body("tmpl-escaped", body, &[]), EXIT_INVALID);
+        assert_eq!(
+            check_template_body("tmpl-escaped", body, &["--strict"]),
+            EXIT_INVALID
+        );
+    }
+
     /// An undecidable code position loads and passes a plain check; `--strict`
     /// fails it.
     // Proves EX-19.

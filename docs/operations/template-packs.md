@@ -87,6 +87,10 @@ The loader enforces these rules; each is a refusal at load time:
   tab and newline are blanks: a slot glued to an operator (`>{{path}}`, `;{{path}}`), after an
   escaped space (`a\ {{path}}`), or next to a form feed or carriage return is refused. Keep
   bodies on LF line endings: a CRLF-saved file puts a carriage return after the slot.
+- **`{{` is only ever a slot.** A body may not hold `{{` anywhere else: not after a backslash
+  (`\{{path}}`), not in a body without slots, and not as literal text. There is no escape
+  syntax. Such a body makes the whole template set fail to load, and `policy check` reports it
+  as an error.
 - **Some constructs are refused when the body holds a slot**, because the daemon cannot read
   them the way every shell does: backquote substitutions (write `$( )`), a `$((` that is not
   arithmetic, an unterminated construct, `case`, and a backslash-newline inside a nested
