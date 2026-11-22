@@ -85,6 +85,8 @@ server, by rules kept there (its Policy), after everything here has passed.
 - **EX-19** A placeholder may stand only as a whole word of a top-level command. One in quotes,
   nested, or in a code-running position decidable from the body makes the whole Template set
   unloadable; an undecidable one is a `policy check` warning and an error under `--strict`.
+  A body holding a placeholder holds no here-document, here-string, `((` or `$[` either: one
+  that does makes the whole set unloadable.
 - **EX-20** Raw Exec runs the caller's argv with no shell, so the caller chooses which binary
   runs, not what runs after it. Its gate on the Node is `policy.md`'s.
 - **EX-21** Arguments and Raw Exec argv are the record of what was done and are audited
@@ -231,13 +233,11 @@ differs from an outcome, where a Job ran and a Node failed; a cancel refusal lea
 - **Approval decisions**: `approval.md`; **engaging and releasing the Freeze**: `freeze.md`.
 - **Labels and Selectors**: `selectors-and-labels.md`; **dedup markers**: `daemon-installation.md`.
 - **Querying Jobs, Tasks and the audit trail, and what a query strips**: `audit-and-read-lane.md`; clearing read output from Task rows after a fixed time, #1345.
-- **A per-Operation timeout, a configurable in-flight limit, failure tolerance and retries**:
-  `roadmap: relay/failure-policy-and-retries`. A retry would be a new Task with a new ID.
+- **A per-Operation timeout, a configurable in-flight limit, failure tolerance and retries**: `roadmap: relay/failure-policy-and-retries`. A retry would be a new Task with a new ID.
 - **An acknowledgement deadline and an `unacknowledged` outcome**: `roadmap: relay/fast-failure-and-fleet-admission`.
 - **Quarantine and a `quarantined` outcome**: `roadmap: relay/quarantine`; **MCP task handles for long-running Jobs**: `roadmap: relay/mcp-tasks-for-long-running-jobs`.
 - **Editing the caps in the Console**: `roadmap: relay/settings-in-the-console`; **executing from the Console**: `roadmap: relay/console-execution-for-skills`.
-- **Getting a secret onto a Node, protecting one a caller passes by mistake, and a measured
-  fan-out rate**: `roadmap: relay/research/spec-future-work/execution`.
+- **Getting a secret onto a Node, protecting one a caller passes by mistake, and a measured fan-out rate**: `roadmap: relay/research/spec-future-work/execution`.
 
 ## Proof
 
