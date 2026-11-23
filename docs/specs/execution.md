@@ -85,8 +85,8 @@ server, by rules kept there (its Policy), after everything here has passed.
 - **EX-19** A placeholder may stand only as a whole word of a top-level command. One in quotes,
   nested, or in a code-running position decidable from the body makes the whole Template set
   unloadable; an undecidable one is a `policy check` warning and an error under `--strict`.
-  A body holding a placeholder holds no here-document, here-string, `((` or `$[` either: one
-  that does makes the whole set unloadable.
+  A body holding a placeholder holds no here-document, here-string, `((`, `$((`, `$[` or `#`
+  straight after `)` either: one that does makes the whole set unloadable.
 - **EX-20** Raw Exec runs the caller's argv with no shell, so the caller chooses which binary
   runs, not what runs after it. Its gate on the Node is `policy.md`'s.
 - **EX-21** Arguments and Raw Exec argv are the record of what was done and are audited
