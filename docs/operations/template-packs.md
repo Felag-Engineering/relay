@@ -91,17 +91,19 @@ The loader enforces these rules; each is a refusal at load time:
   (`\{{path}}`), not in a body without slots, and not as literal text. There is no escape
   syntax. Such a body makes the whole template set fail to load, and `policy check` reports it
   as an error.
-- **A body with a slot holds no here-document and no `((` command.** If a body holds a slot,
-  any here-document or here-string (`<<`, `<<-`, `<<<`), whatever its delimiter, and any `((`
-  that starts a command (`(( … ))`, `for ((`, also inside `$( )` or `( )`)
+- **A body with a slot holds no here-document, no `((` command, no `$((` and no `)#`.** If a
+  body holds a slot, any here-document or here-string (`<<`, `<<-`, `<<<`), whatever its
+  delimiter, any `((` that starts a command (`(( … ))`, `for ((`, also inside `$( )` or
+  `( )`), any `$((`, arithmetic expansion included, and any `#` written immediately after a `)`
   makes the whole template set fail to load, and `policy check` reports it as an error with or
-  without `--strict`. Shells disagree on where these end (dash reads `((` as two subshells), so
-  the daemon cannot tell where a slot would sit. Arithmetic expansion `$(( ))` is not affected.
-  Pipe input in with `printf` instead, and write `( (` for nested subshells. Bodies without a
-  slot are not affected.
+  without `--strict`. These two are refused anywhere in the body, even inside quotes or a
+  comment. Shells disagree on where these end (dash reads `((` as two subshells, and after a
+  subshell's `)` a `#` starts a comment), so the daemon cannot tell where a slot would sit.
+  Pipe input in with `printf` instead, write `( (` for nested subshells, put a blank between
+  `)` and `#`, and use `expr` for arithmetic. Bodies without a slot are not affected.
 - **Some constructs are refused when the body holds a slot**, because the daemon cannot read
-  them the way every shell does: backquote substitutions (write `$( )`), a `$((` that is not
-  arithmetic, a `$[` expansion (write `$(( ))`), an unterminated construct, `case`, and a
+  them the way every shell does: backquote substitutions (write `$( )`), a `$[` expansion
+  (use `expr`), an unterminated construct, `case`, and a
   backslash-newline inside a nested construct or in the middle of a word. A backslash-newline between words, after a blank, is
   allowed. Bodies without a slot are not affected.
 - **A `path` slot admits plain filenames only.** The value must be an absolute canonical path

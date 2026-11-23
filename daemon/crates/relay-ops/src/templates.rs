@@ -1027,6 +1027,8 @@ body = "echo {{missing}}"
             ("cat <<E\nx\nE\necho {{p}}", "BodyNotAnalysable"),
             ("cat <<< x ; echo {{p}}", "BodyNotAnalysable"),
             ("((1))\necho {{p}}", "BodyNotAnalysable"),
+            ("(true)# x\necho {{p}}", "BodyNotAnalysable"),
+            ("echo $((1)) {{p}}", "BodyNotAnalysable"),
         ];
         for (body, variant) in cases {
             let dir = TempDir::new("misplaced");

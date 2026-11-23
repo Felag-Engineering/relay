@@ -1070,6 +1070,50 @@ body = "cat /etc/hostname"
         }
     }
 
+    /// A `#` right after `)` and a `$((` are refused beside a slot, with or without
+    /// `--strict`.
+    // Proves EX-19.
+    #[test]
+    fn templates_a_comment_after_a_paren_or_an_arithmetic_expansion_beside_a_slot_is_invalid() {
+        for body in [
+            "(true)# \"\neval \"\necho {{path}}\n\" # \"",
+            "(true)#\"\ncat <<E\n\" ; eval \"\nE\neval \"\necho {{path}}\n\" #\"",
+            "echo $((1 + 2)) {{path}}",
+            "echo {{path}} \"$(( 1 ))\"",
+        ] {
+            assert_eq!(
+                check_template_body("tmpl-paren-comment", body, &[]),
+                EXIT_INVALID,
+                "{body:?}"
+            );
+            assert_eq!(
+                check_template_body("tmpl-paren-comment-strict", body, &["--strict"]),
+                EXIT_INVALID,
+                "{body:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn templates_a_comment_after_a_paren_or_an_arithmetic_expansion_without_a_slot_is_clean_under_strict(
+    ) {
+        for body in [
+            "(true)# note",
+            "(true)# \"\neval \"\necho x\n\" # \"",
+            "echo $((1 + 2))",
+            "x=$(( (1) ))",
+        ] {
+            let toml = format!(
+                "[[template]]\nname = \"paren.comment\"\nrisk_class = \"read\"\nbody = '''{body}'''\n"
+            );
+            assert_eq!(
+                check_template_toml("tmpl-paren-comment-free", &toml, &["--strict"]),
+                EXIT_VALID,
+                "{body:?}"
+            );
+        }
+    }
+
     /// An escaped placeholder is never filled in, so it is a decidable refusal
     /// with or without `--strict`.
     // Proves EX-19.

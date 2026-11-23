@@ -1353,7 +1353,12 @@ mod tests {
     // Proves EX-19.
     #[test]
     fn compile_refuses_an_escaped_placeholder_in_arithmetic() {
-        assert_double_brace_refused(r"echo $(( 1 \{{p}} )) {{p}}", id_slot());
+        // A body holding `{{` may hold no `$((`, so the opener is refused before the
+        // escaped placeholder is reached.
+        assert!(matches!(
+            compile(&def("t.esc", r"echo $(( 1 \{{p}} )) {{p}}", id_slot())).unwrap_err(),
+            TemplateError::BodyNotAnalysable { .. }
+        ));
     }
 
     #[test]
