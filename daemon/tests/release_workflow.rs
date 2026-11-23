@@ -31,32 +31,14 @@ use regex::Regex;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
+#[path = "common/repo_text.rs"]
+mod repo_text;
+
+use repo_text::{code, re, read, repo};
+
 type Jobs = BTreeMap<String, String>;
 
 const IMAGE: &str = "ghcr.io/felag-engineering/relay";
-
-fn repo() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("daemon/ has a parent")
-        .to_path_buf()
-}
-
-fn read(path: &Path) -> String {
-    std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
-}
-
-fn re(pattern: &str) -> Regex {
-    Regex::new(pattern).unwrap_or_else(|e| panic!("regex {pattern}: {e}"))
-}
-
-/// The file without its full-line `#` comments.
-fn code(text: &str) -> String {
-    text.lines()
-        .filter(|l| !l.trim_start().starts_with('#'))
-        .map(|l| format!("{l}\n"))
-        .collect()
-}
 
 /// The lines of `text`, each backslash continuation joined to the line it continues.
 fn logical(text: &str) -> Vec<String> {

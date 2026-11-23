@@ -16,15 +16,17 @@ mod maintainer_scripts;
 
 use maintainer_scripts::{
     assert_prerm_stops_and_disables_on_removal_only, assert_unit_matchers_tell_the_verbs_apart, at,
-    body, case_arms, commands, enables_a_unit, first_install_gate_end, re, read_text,
-    regular_entries, script_commands, starts_a_unit, writers, writes_to,
+    body, case_arms, commands, enables_a_unit, first_install_gate_end, regular_entries,
+    script_commands, starts_a_unit, writers, writes_to,
 };
 
+#[path = "common/repo_text.rs"]
+mod repo_text;
+
+use repo_text::{re, read, repo};
+
 fn relay_packaging() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("daemon/ has a parent")
-        .join("relay/packaging")
+    repo().join("relay/packaging")
 }
 
 // ---- structural readers for maintainer scripts, manifests and baselines ----
@@ -63,7 +65,7 @@ fn lines_of<'a>(scripts: &'a [(&'static str, Vec<String>)], name: &str) -> &'a [
 
 /// The manifest's `src`/`dst` lines, `- ` markers dropped.
 fn manifest_lines(packaging: &Path) -> Vec<String> {
-    commands(&read_text(&packaging.join("nfpm/relay.yaml")))
+    commands(&read(&packaging.join("nfpm/relay.yaml")))
         .iter()
         .map(|l| l.trim_start_matches("- ").to_string())
         .collect()
@@ -105,7 +107,7 @@ fn the_relay_package_installs_its_account_unit_and_guide_and_only_enables_it() {
 
     // (a) The payload, in both packages and in the manifest.
     for baseline in ["relay.deb.files", "relay.rpm.files"] {
-        let entries = regular_entries(&read_text(&packaging.join("expected").join(baseline)));
+        let entries = regular_entries(&read(&packaging.join("expected").join(baseline)));
         for want in [
             "/usr/bin/relay",
             "/usr/lib/systemd/system/relay.service",
@@ -147,7 +149,7 @@ fn the_relay_package_installs_its_account_unit_and_guide_and_only_enables_it() {
 
     // (b) The account definition is one system user, with its group.
     assert_eq!(
-        commands(&read_text(&packaging.join("relay.sysusers.conf"))),
+        commands(&read(&packaging.join("relay.sysusers.conf"))),
         ["u relay - \"Relay fleet-administration control plane\" - -"]
     );
 
@@ -164,7 +166,7 @@ fn the_relay_package_installs_its_account_unit_and_guide_and_only_enables_it() {
             "`{later}` runs only after the account exists"
         );
     }
-    let postinst_text = read_text(&packaging.join("scripts/postinst.sh"));
+    let postinst_text = read(&packaging.join("scripts/postinst.sh"));
     let ensure = body(&postinst_text, "ensure_account() {");
     at(&ensure, "systemd-sysusers \"$SYSUSERS\" || true");
     assert!(ensure.iter().any(|l| l.starts_with("useradd --system ")));
@@ -191,7 +193,7 @@ fn the_relay_package_installs_its_account_unit_and_guide_and_only_enables_it() {
         .collect();
     assert_eq!(prints.len(), 1, "postinst prints the guide once");
     assert!(prints[0] > gate_end);
-    let guide = read_text(&packaging.join("configuration-guide.txt"));
+    let guide = read(&packaging.join("configuration-guide.txt"));
     let guide = guide.split_whitespace().collect::<Vec<_>>().join(" ");
     assert!(guide.contains("relay init"), "the guide names `relay init`");
     let imaging = re(
@@ -304,7 +306,7 @@ fn the_relay_package_writes_its_configuration_once_and_never_owns_it() {
     let packaging = relay_packaging();
     let scripts = script_commands(&packaging.join("scripts"));
     let postinst = lines_of(&scripts, "postinst");
-    let postinst_text = read_text(&packaging.join("scripts/postinst.sh"));
+    let postinst_text = read(&packaging.join("scripts/postinst.sh"));
 
     // (a) One call, past the gate; the function keeps a file that exists.
     at(postinst, "CONFIG=\"$ETC/relay.toml\"");
@@ -359,13 +361,13 @@ fn the_relay_package_writes_its_configuration_once_and_never_owns_it() {
                 .starts_with(r#"sed "s|^hostname = \"@FQDN@\"\$|$line|" "$SHARE/relay.toml.in""#)),
         "the template's hostname line is the one replaced: {place:?}"
     );
-    let template = commands(&read_text(&packaging.join("relay.toml.in")));
+    let template = commands(&read(&packaging.join("relay.toml.in")));
     let hostname = at(&template, "hostname = \"@FQDN@\"");
     assert_eq!(template[hostname - 1], "[tls]");
 
     // (d) Nothing under /etc is package-owned.
     for baseline in ["relay.deb.files", "relay.rpm.files"] {
-        let text = read_text(&packaging.join("expected").join(baseline));
+        let text = read(&packaging.join("expected").join(baseline));
         assert!(
             !text.contains("/etc/") && !text.contains(" ./etc"),
             "{baseline} lists something under /etc"
@@ -409,7 +411,7 @@ fn purge_moves_the_ca_and_store_aside_together_and_deletes_only_what_the_package
     let packaging = relay_packaging();
     let scripts = script_commands(&packaging.join("scripts"));
     let postrm = lines_of(&scripts, "postrm");
-    let postrm_text = read_text(&packaging.join("scripts/postrm.sh"));
+    let postrm_text = read(&packaging.join("scripts/postrm.sh"));
 
     // (a) The deletions are four lines, none of them the state directory.
     let deleting = re(DELETING);
@@ -588,7 +590,7 @@ fn purge_moves_the_ca_and_store_aside_together_and_deletes_only_what_the_package
 
     // (g) The CA and the store live inside the state directory, so one move takes both.
     at(postrm, "STATE=/var/lib/relay");
-    let template = commands(&read_text(&packaging.join("relay.toml.in")));
+    let template = commands(&read(&packaging.join("relay.toml.in")));
     for (section, line) in [
         ("[ca]", "dir = \"/var/lib/relay/ca\""),
         ("[store]", "path = \"/var/lib/relay/relay.db\""),
