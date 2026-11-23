@@ -15,17 +15,19 @@
 //! blank before or after a placeholder.
 //!
 //! Known limits: the lexer models POSIX `sh` plus the bash forms that change
-//! where quotes end (`$'…'`, `$(( ))`, `$[ ]`, `${ }`). It does not model `case`
+//! where quotes end (`$'…'`, `$(( ))`, `${ }`, and `$[ ]` only in a body without a
+//! placeholder). It does not model `case`
 //! patterns, `[[ ]]`, `&>`, aliases or functions. Where it cannot tell how a
 //! shell would read a body that holds a placeholder, it refuses the body rather
 //! than guess: an unterminated construct, a backquote substitution (its own
 //! backslash removal is not modelled; use `$( )`), a `case` inside a `$( )` or
 //! `( )` (its pattern `)` would end the frame early), a `$((` that is not
-//! arithmetic, a backslash-newline inside a nested construct or a word
-//! (the shell joins it before reading keywords and operators), and a
-//! here-document delimiter that is not a plain word (quoted, escaped, or
-//! holding `$` or a backquote). A placeholder
-//! inside arithmetic is refused outright.
+//! arithmetic, a `$[ ]` expansion (dash reads it as text), a backslash-newline
+//! inside a nested construct or a word
+//! (the shell joins it before reading keywords and operators), any
+//! here-document or here-string (`<<`, `<<-`, `<<<`), and any `((` that opens
+//! a command (dash reads it as two subshells, bash as arithmetic). A
+//! placeholder inside arithmetic is refused outright.
 //!
 //! A slot is accepted only as a plain word of the top-level command list (a
 //! simple command, pipeline or `;`/`&&`/`||`/newline list, including a `{ …; }`
@@ -296,24 +298,6 @@ impl<'a> Lexer<'a> {
         self.at(0) == Some('{') && self.at(1) == Some('{')
     }
 
-    /// Whether the word from the cursor to the next blank or operator holds `{{`.
-    fn word_holds_placeholder(&self) -> bool {
-        let mut k = 0;
-        while let Some(c) = self.at(k) {
-            if matches!(
-                c,
-                ' ' | '\t' | '\n' | ';' | '&' | '|' | '<' | '>' | '(' | ')'
-            ) {
-                return false;
-            }
-            if c == '{' && self.at(k + 1) == Some('{') {
-                return true;
-            }
-            k += 1;
-        }
-        false
-    }
-
     fn here(&self) -> usize {
         self.off[self.i]
     }
@@ -513,6 +497,11 @@ impl<'a> Lexer<'a> {
                 self.push(Frame::CmdSubst, Prev::Open);
             }
             (Some('['), _) => {
+                // dash reads `$[` as text, so a here-document or quote inside
+                // it is read differently from this lexer.
+                if self.has_placeholder {
+                    return Err(self.not_analysable("a `$[` expansion, which dash reads as text"));
+                }
                 self.copy(2);
                 self.push(
                     Frame::Arith {
@@ -645,13 +634,14 @@ impl<'a> Lexer<'a> {
             }
             '$' => self.dollar(false)?,
             '(' => {
+                if self.at(1) == Some('(') && self.has_placeholder {
+                    return Err(
+                        self.not_analysable("a `((` command, which dash reads as two subshells")
+                    );
+                }
                 if top {
                     self.end_word();
-                    self.toks.push(if self.at(1) == Some('(') {
-                        Tok::Sep
-                    } else {
-                        Tok::Open
-                    });
+                    self.toks.push(Tok::Open);
                 }
                 if self.at(1) == Some('(') {
                     self.copy(2);
@@ -772,23 +762,27 @@ impl<'a> Lexer<'a> {
     }
 
     fn less_than(&mut self) -> Result<(), TemplateError> {
+        let heredoc = self.at(1) == Some('<');
+        // Shells disagree with each other and with this lexer on where a
+        // here-document or here-string starts and ends, so beside a placeholder
+        // its role is not decidable from the body (EX-19).
+        if heredoc && self.has_placeholder {
+            return Err(self.not_analysable(if self.at(2) == Some('<') {
+                "a here-string"
+            } else {
+                "a here-document"
+            }));
+        }
         if self.at_top() {
             self.end_word_before_redirect();
-            // A here-document delimiter is read by this lexer, so only the
-            // other forms leave a target word.
-            if self.at(1) != Some('<') {
-                self.toks.push(Tok::Redir);
-            }
+            self.toks.push(Tok::Redir);
         }
-        if self.at(1) != Some('<') {
+        if !heredoc {
             self.copy_as(Prev::Operator);
             return Ok(());
         }
         // `<<<` is a here-string, not a here-document.
         if self.at(2) == Some('<') {
-            if self.has_placeholder {
-                return Err(self.not_top_level_here("a here-string"));
-            }
             self.copy(3);
             self.prev = Prev::Operator;
             return Ok(());
@@ -814,20 +808,11 @@ impl<'a> Lexer<'a> {
         Ok(())
     }
 
-    /// Read the here-document delimiter word. Beside a placeholder it must be a
-    /// plain word: only `[A-Za-z0-9_.-]`, not followed by `(`. Shells disagree
-    /// with each other and with this lexer on how any other shape reads (quotes,
-    /// escapes, `$`, backquote, and an extglob such as `@(x)` under
-    /// `shopt -s extglob`), which decides where the here-document ends and
-    /// whether its body expands, so a placeholder or an own-positional read
-    /// could hide in text the lexer takes for something else (EX-19).
-    ///
-    /// A body without a placeholder keeps any delimiter; the word is then
-    /// quote-removed, and it is quoted if any part of it was quoted or escaped.
+    /// Read the here-document delimiter word. Reached only in a body without
+    /// `{{`: beside one, `less_than` refuses every here-document first (EX-19).
+    /// The word is quote-removed, and it is quoted if any part of it was quoted
+    /// or escaped.
     fn heredoc_delimiter(&mut self) -> Result<(Vec<char>, bool), TemplateError> {
-        if self.has_placeholder {
-            self.require_plain_delimiter()?;
-        }
         let mut delim = Vec::new();
         let mut quoted = false;
         while let Some(c) = self.at(0) {
@@ -848,8 +833,8 @@ impl<'a> Lexer<'a> {
                     quoted = true;
                     self.copy(1);
                     while let Some(inner) = self.at(0) {
-                        // Unreachable beside a placeholder, where a quoted
-                        // delimiter is refused up front; kept fail-closed.
+                        // Unreachable beside a placeholder, which refuses every
+                        // here-document at its operator; kept fail-closed.
                         if self.at_placeholder() {
                             return Err(self.not_expanded("a here-document delimiter"));
                         }
@@ -876,34 +861,6 @@ impl<'a> Lexer<'a> {
         Ok((delim, quoted))
     }
 
-    /// Refuse a delimiter that is not a plain word. A `{{` inside it still
-    /// reports a placeholder that is not expanded.
-    fn require_plain_delimiter(&self) -> Result<(), TemplateError> {
-        let mut k = 0;
-        let mut plain = true;
-        while let Some(c) = self.at(k) {
-            if matches!(c, ' ' | '\t' | '\n' | ';' | '&' | '|' | '<' | '>' | ')') {
-                break;
-            }
-            if !(c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-')) {
-                plain = false;
-            }
-            k += 1;
-        }
-        if self.at(k) == Some('(') {
-            plain = false;
-        }
-        if plain {
-            return Ok(());
-        }
-        if self.word_holds_placeholder() {
-            return Err(self.not_expanded("a here-document delimiter"));
-        }
-        Err(self.not_analysable(
-            "a here-document delimiter that is not a plain word (letters, digits, `_`, `.` and `-` only)",
-        ))
-    }
-
     // -- here-document bodies -------------------------------------------------
 
     fn heredoc(&mut self) -> Result<(), TemplateError> {
@@ -921,9 +878,9 @@ impl<'a> Lexer<'a> {
                 return Ok(());
             }
         }
-        // Unreachable beside a placeholder, where a quoted delimiter is refused;
-        // kept so a quoted here-document can never expand one.
         if self.heredoc_mut().quoted {
+            // Unreachable beside a placeholder, which refuses every
+            // here-document at its operator; kept fail-closed.
             if self.at_placeholder() {
                 return Err(self.not_expanded("a quoted here-document"));
             }
@@ -1195,8 +1152,6 @@ mod tests {
             "echo $'x {{p}}'",
             "echo ${x:- {{p}} }",
             "echo ${{p}}",
-            "cat << {{p}}\nx\n{{p}}",
-            "cat <<'{{p}}'\n",
         ] {
             assert!(
                 matches!(error(body), TemplateError::PlaceholderNotExpanded { .. }),
@@ -1232,18 +1187,11 @@ mod tests {
             "sh <<EOF\necho {{p}}\nEOF",
             "cat <<EOF\n$(( 1 $(echo {{p}}) ))\nEOF",
             "cat <<< {{p}}",
+            "cat <<A <<B\nx\nA\ny\nB\necho {{p}}",
+            "cat <<EOF\nx\nEOF\necho x{{p}}",
         ] {
-            assert!(
-                matches!(error(body), TemplateError::PlaceholderNotTopLevel { .. }),
-                "{body:?}"
-            );
+            not_analysable(body);
         }
-        // After the delimiter line the body is over; the top level is back.
-        assert_eq!(
-            script("cat <<A <<B\nx\nA\ny\nB\necho {{p}}"),
-            "cat <<A <<B\nx\nA\ny\nB\necho \"$1\""
-        );
-        not_standalone("cat <<EOF\nx\nEOF\necho x{{p}}");
         // Slot-free here-documents and here-strings still load.
         assert!(analyse("cat <<EOF\nhi\nEOF\ncat <<< x", &slots(&[])).is_ok());
     }
@@ -1323,12 +1271,7 @@ mod tests {
 
     #[test]
     fn a_placeholder_in_arithmetic_is_refused() {
-        for body in [
-            "echo $(( {{p}} + 1 ))",
-            "(( {{p}} ))",
-            "for (( i = {{p}} ; ; )) ; do :; done",
-            "echo \"$(( {{p}} ))\"",
-        ] {
+        for body in ["echo $(( {{p}} + 1 ))", "echo \"$(( {{p}} ))\""] {
             assert!(
                 matches!(error(body), TemplateError::PlaceholderInArithmetic { .. }),
                 "{body:?}"
@@ -1350,7 +1293,7 @@ mod tests {
 
     // Proves EX-19.
     #[test]
-    fn a_here_document_delimiter_beside_a_placeholder_is_a_plain_word() {
+    fn a_here_document_beside_a_placeholder_is_refused() {
         for body in [
             "cat <<\"a\\b\"\nab\necho {{p}}\na\\b",
             "cat <<$'a'\n$a\necho {{p}}\na",
@@ -1372,29 +1315,69 @@ mod tests {
             "cat <<+(x)\nx\n+(x)\necho {{p}}",
             "cat <<!(x)\nx\n!(x)\necho {{p}}",
             "cat <<EOF(x)\nx\nEOF\necho {{p}}",
+            "cat <<EOF\nx\nEOF\necho {{p}}",
+            "cat <<-EOF\n\tx\n\tEOF\necho {{p}}",
+            "cat << E-O_F.1\nx\nE-O_F.1\necho {{p}}",
+            "echo {{p}}\ncat <<EOF\nx\nEOF",
+            "echo $(cat <<E\nx\nE\n) {{p}}",
+            "(cat <<E\nx\nE\n) ; echo {{p}}",
+            "cat <<a{{p}}\nx",
+            "cat <<'{{p}}'\n",
+            "sh <<E $(:\nE\n)\necho {{p}}\nE\n",
+            "x=$(cat <<E)\neval \"\nE\necho {{p}}\n\"  # \"\n",
+            "cat <<E\n${\nE\necho }\neval \"\nE\necho {{p}}\n\"  # \"\n",
+        ] {
+            not_analysable(body);
+        }
+    }
+
+    // Proves EX-19.
+    #[test]
+    fn a_here_string_beside_a_placeholder_is_refused() {
+        for body in [
+            "cat <<< x ; echo {{p}}",
+            "cat <<<{{p}}",
+            "cat <<< {{p}}",
+            "echo {{p}} ; cat <<< x",
+            "echo $(cat <<< x) {{p}}",
+        ] {
+            not_analysable(body);
+        }
+    }
+
+    // Proves EX-19.
+    #[test]
+    fn a_double_paren_command_beside_a_placeholder_is_refused() {
+        for body in [
+            "(( 1 )) ; echo {{p}}",
+            "((x=1))\necho {{p}}",
+            "echo {{p}} ; ((1))",
+            "(( {{p}} ))",
+            "for (( i = {{p}} ; ; )) ; do :; done",
+            "for ((i=0; i<1; i++)); do echo {{p}}; done",
+            "echo $( ((1)) ) {{p}}",
+            "( ((1)) ) ; echo {{p}}",
+            "(\\\n(1)) ; echo {{p}}",
+            "cat <((true)) {{p}}",
+            "((: #\"\neval \"\n#))\necho {{p}}\n\"  # \"\n) )\n",
         ] {
             not_analysable(body);
         }
         for body in [
-            "cat <<EOF\nx\nEOF\necho {{p}}",
-            "cat <<-EOF\n\tx\n\tEOF\necho {{p}}",
-            "cat << E-O_F.1\nx\nE-O_F.1\necho {{p}}",
+            "echo $((1 + (2))) {{p}}",
+            "echo $(( (1) )) {{p}}",
+            "echo $(( 1 << 2 )) {{p}}",
+            "( (true) ) ; echo {{p}}",
+            "echo '(( ' {{p}}",
+            "echo \"<<\" {{p}}",
+            "true # (( <<\necho {{p}}",
         ] {
             assert_eq!(script(body), body.replace("{{p}}", "\"$1\""), "{body:?}");
         }
-        // A placeholder inside the delimiter word is still reported as such.
-        assert!(matches!(
-            error("cat <<a{{p}}\nx"),
-            TemplateError::PlaceholderNotExpanded { .. }
-        ));
-        assert!(matches!(
-            error("cat <<'{{p}}'\n"),
-            TemplateError::PlaceholderNotExpanded { .. }
-        ));
     }
 
     #[test]
-    fn a_body_without_a_placeholder_keeps_any_here_document_delimiter() {
+    fn a_body_without_a_placeholder_keeps_here_documents_and_double_parens() {
         for body in [
             "cat <<'EOF'\n$1 $HOME\nEOF",
             "cat <<\\EOF\nx\nEOF",
@@ -1402,6 +1385,15 @@ mod tests {
             "cat <<$'a'\na\n$a",
             "cat <<`E`\nx\n`E`",
             "cat <<@(x)\n@\n@(x)",
+            "cat <<EOF\nx\nEOF",
+            "cat <<-E\n\tx\n\tE",
+            "cat <<< x",
+            "((x=1))",
+            "for ((i=0; i<1; i++)); do :; done",
+            "sh <<E $(:\nE\n)\necho x\nE\n",
+            "x=$(cat <<E)\neval \"\nE\necho x\n\"  # \"\n",
+            "cat <<E\n${\nE\necho }\neval \"\nE\necho x\n\"  # \"\n",
+            "((: #\"\neval \"\n#))\necho x\n\"  # \"\n) )\n",
         ] {
             let a =
                 analyse(body, &slots(&[])).unwrap_or_else(|e| panic!("{body:?} should lex: {e}"));
@@ -1473,24 +1465,23 @@ mod tests {
     }
 
     #[test]
-    fn a_legacy_arithmetic_bracket_is_arithmetic() {
+    fn a_legacy_arithmetic_bracket_is_refused_beside_a_placeholder() {
+        // Beside a placeholder dash reads `$[` as text, so it is refused.
         for body in [
             "echo $[ 1 {{p}} ]",
             "echo \"$[ 1 + {{p}} ]\"",
             "echo $[ a[1] + {{p}} ]",
+            "echo {{p}} $[ 1 + 2",
+            "echo $[ 1 + 2 ] {{p}}",
+            "cat $[ <<E ]\n\"\nE\neval \"\necho {{p}}\n\" #\"",
+            "echo $[ # \"\neval \"]\necho {{p}}\n\" # \"",
         ] {
-            assert!(
-                matches!(error(body), TemplateError::PlaceholderInArithmetic { .. }),
-                "{body:?}"
-            );
+            not_analysable(body);
         }
-        // Unterminated, with a placeholder elsewhere.
-        not_analysable("echo {{p}} $[ 1 + 2");
-        // A closed one elsewhere in the body is fine.
-        assert_eq!(
-            script("echo $[ a[1] + 2 ] {{p}}"),
-            "echo $[ a[1] + 2 ] \"$1\""
-        );
+        // A lone `$[` in quotes is text, so the placeholder beside it is fine.
+        assert!(analyse("echo '$[' {{p}}", &slots(&["p"])).is_ok());
+        // Without a placeholder it is still arithmetic.
+        assert!(analyse("echo $[ a[1] + 2 ]", &slots(&[])).is_ok());
         assert!(analyse("echo $[ 1", &slots(&[])).is_ok());
     }
 
@@ -1541,10 +1532,12 @@ mod tests {
 
     #[test]
     fn stacked_here_documents_each_check_their_own_delimiter() {
-        assert_eq!(
-            script("cat <<A <<B\nA-ish\nA\nB-ish\nB\necho {{p}}"),
-            "cat <<A <<B\nA-ish\nA\nB-ish\nB\necho \"$1\""
-        );
+        // Each body holds one odd quote of a different kind. The quotes balance
+        // only if each here-document ends at its own delimiter: dropping or
+        // misreading either leaves a quote open.
+        let body = "cat <<A <<B\nA's\nA\nB\"s\nB\necho x";
+        let a = analyse(body, &slots(&[])).expect("placeholder-free body analyses");
+        assert_eq!(a.script, body);
     }
 
     mod never_panics {

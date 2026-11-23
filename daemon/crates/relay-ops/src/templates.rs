@@ -1024,6 +1024,9 @@ body = "echo {{missing}}"
             ("eval {{p}}", "PlaceholderInCodePosition"),
             ("echo \\{{p}} {{p}}", "DoubleBraceNotAPlaceholder"),
             ("cat <<\"a\\b\"\nab\necho {{p}}\na\\b", "BodyNotAnalysable"),
+            ("cat <<E\nx\nE\necho {{p}}", "BodyNotAnalysable"),
+            ("cat <<< x ; echo {{p}}", "BodyNotAnalysable"),
+            ("((1))\necho {{p}}", "BodyNotAnalysable"),
         ];
         for (body, variant) in cases {
             let dir = TempDir::new("misplaced");

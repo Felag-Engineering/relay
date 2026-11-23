@@ -85,6 +85,8 @@ server, by rules kept there (its Policy), after everything here has passed.
 - **EX-19** A placeholder may stand only as a whole word of a top-level command. One in quotes,
   nested, or in a code-running position decidable from the body makes the whole Template set
   unloadable; an undecidable one is a `policy check` warning and an error under `--strict`.
+  A body holding a placeholder holds no here-document, here-string, `((` or `$[` either: one
+  that does makes the whole set unloadable.
 - **EX-20** Raw Exec runs the caller's argv with no shell, so the caller chooses which binary
   runs, not what runs after it. Its gate on the Node is `policy.md`'s.
 - **EX-21** Arguments and Raw Exec argv are the record of what was done and are audited
@@ -231,13 +233,11 @@ differs from an outcome, where a Job ran and a Node failed; a cancel refusal lea
 - **Approval decisions**: `approval.md`; **engaging and releasing the Freeze**: `freeze.md`.
 - **Labels and Selectors**: `selectors-and-labels.md`; **dedup markers**: `daemon-installation.md`.
 - **Querying Jobs, Tasks and the audit trail, and what a query strips**: `audit-and-read-lane.md`; clearing read output from Task rows after a fixed time, #1345.
-- **A per-Operation timeout, a configurable in-flight limit, failure tolerance and retries**:
-  `roadmap: relay/failure-policy-and-retries`. A retry would be a new Task with a new ID.
+- **A per-Operation timeout, a configurable in-flight limit, failure tolerance and retries**: `roadmap: relay/failure-policy-and-retries`. A retry would be a new Task with a new ID.
 - **An acknowledgement deadline and an `unacknowledged` outcome**: `roadmap: relay/fast-failure-and-fleet-admission`.
 - **Quarantine and a `quarantined` outcome**: `roadmap: relay/quarantine`; **MCP task handles for long-running Jobs**: `roadmap: relay/mcp-tasks-for-long-running-jobs`.
 - **Editing the caps in the Console**: `roadmap: relay/settings-in-the-console`; **executing from the Console**: `roadmap: relay/console-execution-for-skills`.
-- **Getting a secret onto a Node, protecting one a caller passes by mistake, and a measured
-  fan-out rate**: `roadmap: relay/research/spec-future-work/execution`.
+- **Getting a secret onto a Node, protecting one a caller passes by mistake, and a measured fan-out rate**: `roadmap: relay/research/spec-future-work/execution`.
 
 ## Proof
 
@@ -262,7 +262,7 @@ differs from an outcome, where a Job ran and a Node failed; a cancel refusal lea
 | EX-16 | `TestDeps_HasNoConfigField`, `TestNewBlastCapClampsNonPositiveToDefaults`, `TestNoRouteWritesConfiguration`, `TestNoToolWritesConfiguration` | API, MCP, capability |
 | EX-17 | `invariant_1_a_native_operation_reaches_the_executor_as_its_fixed_argv` | daemon |
 | EX-18 | `invariant_1_a_template_slot_value_is_never_part_of_the_text_its_shell_parses`, `parsed_text_is_invariant_across_values` | daemon |
-| EX-19 | `a_here_document_delimiter_beside_a_placeholder_is_a_plain_word`, `a_here_document_delimiter_the_shells_read_differently_is_refused_at_load`, `a_misplaced_placeholder_fails_the_whole_set`, `a_placeholder_in_quotes_is_refused`, `a_placeholder_is_accepted_only_at_the_top_level`, `a_placeholder_must_be_a_whole_word`, `an_escaped_placeholder_is_a_lint_error_like_every_misplaced_placeholder`, `code_positions_are_refused_at_load`, `compile_refuses_an_escaped_placeholder_in_a_here_document`, `compile_refuses_an_escaped_placeholder_in_a_here_document_delimiter`, `compile_refuses_an_escaped_placeholder_in_a_parameter_expansion`, `compile_refuses_an_escaped_placeholder_in_ansi_c_quotes`, `compile_refuses_an_escaped_placeholder_in_arithmetic`, `compile_refuses_an_escaped_placeholder_in_double_quotes`, `compile_refuses_an_escaped_placeholder_in_the_top_level_list`, `nested_placements_are_refused_at_load`, `own_positional_parameters_cannot_hide_behind_a_here_document_delimiter`, `templates_a_non_plain_here_document_delimiter_beside_a_slot_is_invalid`, `templates_a_slot_in_a_code_position_is_invalid`, `templates_an_escaped_placeholder_is_invalid`, `templates_an_undecidable_code_position_fails_only_under_strict`, `undecidable_programs_warn` | daemon |
+| EX-19 | `a_command_substitution_closing_beside_a_pending_here_document_is_refused_at_load`, `a_double_paren_command_beside_a_placeholder_is_refused`, `a_here_document_beside_a_placeholder_is_refused`, `a_here_document_delimiter_the_shells_read_differently_is_refused_at_load`, `a_here_document_pending_across_a_command_substitution_newline_is_refused_at_load`, `a_here_string_beside_a_placeholder_is_refused`, `a_legacy_arithmetic_bracket_beside_a_slot_is_refused_at_load`, `a_misplaced_placeholder_fails_the_whole_set`, `a_placeholder_in_quotes_is_refused`, `a_placeholder_is_accepted_only_at_the_top_level`, `a_placeholder_must_be_a_whole_word`, `a_top_level_double_paren_is_refused_at_load`, `an_escaped_placeholder_is_a_lint_error_like_every_misplaced_placeholder`, `an_expansion_inside_a_here_document_body_is_refused_at_load`, `code_positions_are_refused_at_load`, `compile_refuses_an_escaped_placeholder_in_a_here_document`, `compile_refuses_an_escaped_placeholder_in_a_here_document_delimiter`, `compile_refuses_an_escaped_placeholder_in_a_parameter_expansion`, `compile_refuses_an_escaped_placeholder_in_ansi_c_quotes`, `compile_refuses_an_escaped_placeholder_in_arithmetic`, `compile_refuses_an_escaped_placeholder_in_double_quotes`, `compile_refuses_an_escaped_placeholder_in_the_top_level_list`, `nested_placements_are_refused_at_load`, `own_positional_parameters_cannot_hide_behind_a_here_document_delimiter`, `templates_a_here_document_or_double_paren_beside_a_slot_is_invalid`, `templates_a_slot_in_a_code_position_is_invalid`, `templates_an_escaped_placeholder_is_invalid`, `templates_an_undecidable_code_position_fails_only_under_strict`, `undecidable_programs_warn` | daemon |
 | EX-20 | `invariant_1_raw_exec_reaches_the_executor_as_its_argv_with_no_shell` | daemon |
 | EX-21 | `TestMCP_ListOperationsSaysArgumentsAreAuditedVerbatim`, `TestRecordDispatchDecisionLineExcludesOperationArgs`, `TestRecordDispatch_ArgumentsAndRawExecArgvAreStoredVerbatim`, `no_slot_type_is_for_a_secret` | MCP, auditsink, daemon |
 | EX-22 | `TestEngineOneTaskPerNodePersistedBeforeDispatch`, `TestFromFile_DispatchConcurrencyIsSixteen`, `TestJobEngine_FanOutNeverExceedsTheBound` | Relay, capability |

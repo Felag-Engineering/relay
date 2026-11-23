@@ -759,11 +759,11 @@ pub fn compile(def: &TemplateDef) -> Result<TemplateOp, TemplateError> {
     } = template_body::analyse(&def.body, &slots)?;
 
     // --- no `{{` survives substitution (EX-19) ---
-    // The lexer never reads a placeholder in two places: it copies a backslash
-    // and the char after it as a pair, and it copies a here-document
-    // terminator line verbatim. A `{{` reached either way would stay in the
-    // script unfilled and unchecked. A positional reference cannot form `{{`,
-    // so any left is body text. There is no escape syntax for a literal `{{`.
+    // There is one place the lexer never reads a placeholder: it copies a
+    // backslash and the char after it as a pair. A `{{` reached that way would
+    // stay in the script unfilled and unchecked. A positional reference cannot
+    // form `{{`, so any left is body text. There is no escape syntax for a
+    // literal `{{`.
     if script.contains("{{") {
         return Err(TemplateError::DoubleBraceNotAPlaceholder {
             name: def.name.clone(),
@@ -1322,14 +1322,19 @@ mod tests {
     // Proves EX-19.
     #[test]
     fn compile_refuses_an_escaped_placeholder_in_a_here_document() {
-        assert_double_brace_refused("cat <<E\nx\\{{p}}\nE\necho {{p}}", id_slot());
+        // A body holding `{{` may hold no here-document, so the operator is
+        // refused before the escaped placeholder is reached.
+        assert!(matches!(
+            compile(&def("t.esc", "cat <<E\nx\\{{p}}\nE\necho {{p}}", id_slot())).unwrap_err(),
+            TemplateError::BodyNotAnalysable { .. }
+        ));
     }
 
     // Proves EX-19.
     #[test]
     fn compile_refuses_an_escaped_placeholder_in_a_here_document_delimiter() {
-        // The delimiter is not a plain word, which a body holding a placeholder
-        // may not use; the placeholder in it is what the refusal names.
+        // A body holding `{{` may hold no here-document, so the operator is
+        // refused before the delimiter is read.
         assert!(matches!(
             compile(&def(
                 "t.esc",
@@ -1337,7 +1342,7 @@ mod tests {
                 id_slot()
             ))
             .unwrap_err(),
-            TemplateError::PlaceholderNotExpanded { .. }
+            TemplateError::BodyNotAnalysable { .. }
         ));
         assert!(matches!(
             compile(&def("t.esc", "cat <<\\E\nx\nE\necho {{p}}", id_slot())).unwrap_err(),

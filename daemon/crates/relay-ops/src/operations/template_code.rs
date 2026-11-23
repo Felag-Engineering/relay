@@ -1302,12 +1302,11 @@ mod tests {
                 "{body:?}"
             );
         }
-        // The same program with a plain delimiter, which every shell reads
-        // alike, draws the warning.
-        assert_warning(
-            WarningKind::OwnPositional,
-            &["cat <<ab\nx\nab\neval \"$1\"\necho {{p}}"],
-        );
+        // Beside a placeholder no here-document loads, plain delimiter or not.
+        assert!(matches!(
+            analyse("cat <<ab\nx\nab\neval \"$1\"\necho {{p}}", &slots()),
+            Err(TemplateError::BodyNotAnalysable { .. })
+        ));
         // Without a placeholder nothing is classified.
         let a = analyse("cat <<\"a\\b\"\nx\na\\b\neval \"$1\"\nab", &[]).expect("loads");
         assert!(a.warnings.is_empty());
@@ -1373,7 +1372,6 @@ mod tests {
             "for f in {{p}} ; do echo $f ; done",
             "while read x ; do echo {{p}} ; done < /dev/null",
             "A=1 echo {{p}}",
-            "cat <<EOF > /dev/null\nx\nEOF\necho {{p}}",
             "echo \"a b\" 'c' {{p}}",
             "echo $(date) {{p}}",
             "systemctl show --no-pager -- {{p}}",

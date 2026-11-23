@@ -1016,16 +1016,24 @@ body = "cat /etc/hostname"
         }
     }
 
-    /// A here-document delimiter the shells read differently from the lexer
-    /// makes the set unloadable beside a slot, with or without `--strict`.
+    /// Any here-document, here-string or `((` command makes the set unloadable
+    /// beside a slot, with or without `--strict`.
     // Proves EX-19.
     #[test]
-    fn templates_a_non_plain_here_document_delimiter_beside_a_slot_is_invalid() {
+    fn templates_a_here_document_or_double_paren_beside_a_slot_is_invalid() {
         for body in [
             "cat <<\"a\\b\"\nab\necho {{path}}\na\\b",
             "cat <<\"a\\b\"\nx\na\\b\neval \"$1\"\nab\necho {{path}}",
             "cat <<$'a'\nx\na\neval \"$1\"\n$a\necho {{path}}",
             "shopt -s extglob\ncat <<@(x)\n@\necho {{path}} '\n@(x)\neval \"$1\"\n'\n:",
+            "cat <<EOF\nx\nEOF\necho {{path}}",
+            "cat <<-EOF\n\tx\n\tEOF\necho {{path}}",
+            "cat <<< x ; echo {{path}}",
+            "((1)) ; echo {{path}}",
+            "sh <<E $(:\nE\n)\necho {{path}}\nE\n",
+            "x=$(cat <<E)\neval \"\nE\necho {{path}}\n\"  # \"\n",
+            "cat <<E\n${\nE\necho }\neval \"\nE\necho {{path}}\n\"  # \"\n",
+            "((: #\"\neval \"\n#))\necho {{path}}\n\"  # \"\n) )\n",
         ] {
             assert_eq!(
                 check_template_body("tmpl-heredoc-delim", body, &[]),
@@ -1041,10 +1049,15 @@ body = "cat /etc/hostname"
     }
 
     #[test]
-    fn templates_a_quoted_here_document_delimiter_without_a_slot_is_clean_under_strict() {
+    fn templates_a_here_document_or_double_paren_without_a_slot_is_clean_under_strict() {
         for body in [
             "cat <<'EOF'\n$HOME stays literal\nEOF",
             "cat <<\"a\\b\"\nab\na\\b",
+            "cat <<EOF\nx\nEOF",
+            "cat <<-E\n\tx\n\tE",
+            "cat <<< x",
+            "((x=1))",
+            "for ((i=0; i<1; i++)); do :; done",
         ] {
             let toml = format!(
                 "[[template]]\nname = \"heredoc.quoted\"\nrisk_class = \"read\"\nbody = '''{body}'''\n"
