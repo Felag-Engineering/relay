@@ -156,10 +156,7 @@ async fn backquotes_are_refused_at_load() {
 
 #[tokio::test]
 async fn arithmetic_brackets_and_case_are_refused_at_load() {
-    assert!(matches!(
-        refusal("echo \"$(( {{p}} ))\""),
-        TemplateError::PlaceholderInArithmetic { .. }
-    ));
+    assert_not_analysable("echo \"$(( {{p}} ))\"");
     assert_not_analysable("(( {{p}} ))");
     assert_not_analysable("echo $[ 1 {{p}} ]");
     assert_not_analysable("echo {{p}} $[ 1 + 2");
@@ -499,11 +496,47 @@ async fn a_top_level_double_paren_is_refused_at_load() {
     .await;
 }
 
-/// `( (` and an arithmetic `$(( ( ) ))` beside a slot load and run as written.
+/// `( (` and a comment after `) ` beside a slot load and run as written.
 #[tokio::test]
-async fn nested_subshells_and_arithmetic_beside_a_slot_run_inertly() {
-    for body in ["( (true) ) ; echo {{p}}", "echo $(( (1) )) {{p}}"] {
+async fn nested_subshells_beside_a_slot_run_inertly() {
+    for body in ["( (true) ) ; echo {{p}}", "(true) # note\necho {{p}}"] {
         every_canary_is_inert(body, None).await;
+    }
+}
+
+/// dash and bash read a `#` right after a subshell's `)` as a comment, so the
+/// lexer and the shell disagree on where a quote opens.
+// Proves EX-19.
+#[tokio::test]
+async fn a_comment_after_a_subshell_hides_a_quote_and_is_refused_at_load() {
+    assert_shape_runs_the_value_and_is_refused("(true)# \"\neval \"\necho {{p}}\n\" # \"").await;
+}
+
+/// The same comment hides a here-document operator from the lexer, so the shell
+/// skips lines that the lexer reads as code.
+// Proves EX-19.
+#[tokio::test]
+async fn a_comment_after_a_subshell_hides_a_here_document_and_is_refused_at_load() {
+    assert_shape_runs_the_value_and_is_refused(
+        "(true)#\"\ncat <<E\n\" ; eval \"\nE\neval \"\necho {{p}}\n\" #\"",
+    )
+    .await;
+}
+
+/// An arithmetic expansion beside a slot is refused outright, quoted or not: a
+/// shell may read `$((` as `$( (`, and no local shell reproduces that, so this is
+/// a load-time check only.
+// Proves EX-19.
+#[tokio::test]
+async fn an_arithmetic_expansion_beside_a_slot_is_refused_at_load() {
+    for body in [
+        "echo $((1 + 2)) {{p}}",
+        "echo $(( (1) )) {{p}}",
+        "echo {{p}} \"$(( 1 ))\"",
+        "echo $(( {{p}} ))",
+        "echo '$((' {{p}}",
+    ] {
+        assert_not_analysable(body);
     }
 }
 

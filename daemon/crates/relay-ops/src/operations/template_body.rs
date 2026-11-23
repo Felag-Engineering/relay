@@ -15,19 +15,22 @@
 //! blank before or after a placeholder.
 //!
 //! Known limits: the lexer models POSIX `sh` plus the bash forms that change
-//! where quotes end (`$'…'`, `$(( ))`, `${ }`, and `$[ ]` only in a body without a
-//! placeholder). It does not model `case`
+//! where quotes end (`$'…'`, `${ }`, and `$(( ))` and `$[ ]` only in a body without
+//! a placeholder). It does not model `case`
 //! patterns, `[[ ]]`, `&>`, aliases or functions. Where it cannot tell how a
 //! shell would read a body that holds a placeholder, it refuses the body rather
 //! than guess: an unterminated construct, a backquote substitution (its own
 //! backslash removal is not modelled; use `$( )`), a `case` inside a `$( )` or
-//! `( )` (its pattern `)` would end the frame early), a `$((` that is not
-//! arithmetic, a `$[ ]` expansion (dash reads it as text), a backslash-newline
-//! inside a nested construct or a word
+//! `( )` (its pattern `)` would end the frame early), a `$[ ]` expansion (dash
+//! reads it as text), a backslash-newline inside a nested construct or a word
 //! (the shell joins it before reading keywords and operators), any
 //! here-document or here-string (`<<`, `<<-`, `<<<`), and any `((` that opens
-//! a command (dash reads it as two subshells, bash as arithmetic). A
-//! placeholder inside arithmetic is refused outright.
+//! a command (dash reads it as two subshells, bash as arithmetic).
+//!
+//! It also refuses any `$((` and any `#` right after a `)`, anywhere in the
+//! body, with continuations joined first (the shells may read the first as
+//! `$( (`, and the second as a comment). A placeholder inside arithmetic is
+//! refused outright.
 //!
 //! A slot is accepted only as a plain word of the top-level command list (a
 //! simple command, pipeline or `;`/`&&`/`||`/newline list, including a `{ …; }`
@@ -50,6 +53,7 @@ pub(super) struct BodyAnalysis {
 
 pub(super) fn analyse(body: &str, slots: &[Slot]) -> Result<BodyAnalysis, TemplateError> {
     let mut lx = Lexer::new(body, slots);
+    lx.refuse_text_the_shells_read_differently()?;
     while lx.i < lx.chars.len() {
         lx.step()?;
     }
@@ -91,7 +95,8 @@ enum Frame {
     ParamExp {
         in_double: bool,
     },
-    /// `$((`, `((` (closed by `))`) or the legacy `$[` (closed by `]`).
+    /// `$((`, `((` (closed by `))`) or the legacy `$[` (closed by `]`); only ever
+    /// pushed in a body without a placeholder.
     Arith {
         depth: u32,
         bracket: bool,
@@ -347,6 +352,50 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    /// Beside a placeholder, `)#` and `$((` are refused wherever they stand, quoted or
+    /// not, before the body is lexed (EX-19). After a subshell's `)` the shells read a
+    /// `#` as a comment where this lexer reads a word, and a shell may read `$((` as
+    /// `$( (` where this lexer reads arithmetic. The scan runs over the body's text with
+    /// every backslash-newline pair removed, as a shell joins a continuation, so a pair
+    /// that forms `)#` or `$((` is refused whatever quote state this lexer believes it
+    /// is in. It over-refuses a body whose continuation sits in a quote and is literal
+    /// there, which is the safe direction. The reported offset is into the original body.
+    fn refuse_text_the_shells_read_differently(&self) -> Result<(), TemplateError> {
+        if !self.has_placeholder {
+            return Ok(());
+        }
+        let mut joined: Vec<(char, usize)> = Vec::with_capacity(self.chars.len());
+        let mut k = 0;
+        while k < self.chars.len() {
+            if self.chars[k] == '\\' && self.chars.get(k + 1) == Some(&'\n') {
+                k += 2;
+                continue;
+            }
+            joined.push((self.chars[k], k));
+            k += 1;
+        }
+        let text: Vec<char> = joined.iter().map(|(c, _)| *c).collect();
+        let comment = text.windows(2).position(|w| w == [')', '#']).map(|k| {
+            (
+                joined[k + 1].1,
+                "a `#` right after `)`, which a shell may read as a comment",
+            )
+        });
+        let arith = text.windows(3).position(|w| w == ['$', '(', '(']).map(|k| {
+            (
+                joined[k].1,
+                "a `$((`, which a shell may read as a command substitution",
+            )
+        });
+        match comment.into_iter().chain(arith).min_by_key(|(k, _)| *k) {
+            Some((k, reason)) => Err(TemplateError::BodyNotAnalysable {
+                at: self.off[k],
+                reason,
+            }),
+            None => Ok(()),
+        }
+    }
+
     /// Backquote substitutions apply their own backslash removal before the
     /// shell re-reads the text, which this lexer does not model: authors use
     /// `$( )` in a body that holds a placeholder.
@@ -482,6 +531,7 @@ impl<'a> Lexer<'a> {
     fn dollar(&mut self, quoted: bool) -> Result<(), TemplateError> {
         self.note_dollar();
         match (self.at(1), self.at(2)) {
+            // Reached only in a body without `{{`, where `$((` is not refused.
             (Some('('), Some('(')) => {
                 self.copy(3);
                 self.push(
@@ -532,6 +582,8 @@ impl<'a> Lexer<'a> {
     }
 
     fn arith(&mut self) -> Result<(), TemplateError> {
+        // Unreachable beside a placeholder, where every arithmetic opener is refused
+        // (EX-19); kept fail-closed.
         if self.at_placeholder() {
             return Err(TemplateError::PlaceholderInArithmetic { at: self.here() });
         }
@@ -554,7 +606,9 @@ impl<'a> Lexer<'a> {
                     self.pop();
                 } else {
                     // A lone `)` means bash read `$((` as a command substitution
-                    // wrapping a subshell, not as arithmetic.
+                    // wrapping a subshell, not as arithmetic. Unreachable beside a
+                    // placeholder, where every arithmetic opener is refused (EX-19);
+                    // kept fail-closed.
                     if self.at(1) != Some(')') && self.has_placeholder {
                         return Err(self.not_analysable("a `$((` that is not arithmetic"));
                     }
@@ -1271,17 +1325,15 @@ mod tests {
 
     #[test]
     fn a_placeholder_in_arithmetic_is_refused() {
-        for body in ["echo $(( {{p}} + 1 ))", "echo \"$(( {{p}} ))\""] {
-            assert!(
-                matches!(error(body), TemplateError::PlaceholderInArithmetic { .. }),
-                "{body:?}"
-            );
+        // A body holding `{{` holds no `$((`, so a placeholder in arithmetic is refused
+        // at the opener.
+        for body in [
+            "echo $(( {{p}} + 1 ))",
+            "echo \"$(( {{p}} ))\"",
+            "echo $(( $(echo {{p}}) + 1 ))",
+        ] {
+            not_analysable(body);
         }
-        // So is a command substitution inside arithmetic.
-        assert!(matches!(
-            error("echo $(( $(echo {{p}}) + 1 ))"),
-            TemplateError::PlaceholderNotTopLevel { .. }
-        ));
     }
 
     fn not_analysable(body: &str) {
@@ -1364,9 +1416,6 @@ mod tests {
             not_analysable(body);
         }
         for body in [
-            "echo $((1 + (2))) {{p}}",
-            "echo $(( (1) )) {{p}}",
-            "echo $(( 1 << 2 )) {{p}}",
             "( (true) ) ; echo {{p}}",
             "echo '(( ' {{p}}",
             "echo \"<<\" {{p}}",
@@ -1452,9 +1501,73 @@ mod tests {
     fn a_double_paren_that_is_not_arithmetic_is_refused() {
         not_analysable("echo \"$((echo a) ; printf '<%s>' \" {{p}} \")\"");
         assert!(analyse("echo $((echo a) ; echo b)", &slots(&[])).is_ok());
+        assert!(analyse("echo $((1 + (2)))", &slots(&[])).is_ok());
+    }
+
+    // Proves EX-19.
+    #[test]
+    fn a_comment_after_a_closing_paren_beside_a_placeholder_is_refused() {
+        for body in [
+            "(true)# \"\neval \"\necho {{p}}\n\" # \"",
+            "(true)#\"\ncat <<E\n\" ; eval \"\nE\neval \"\necho {{p}}\n\" #\"",
+            "(true)# x\necho {{p}}",
+            "echo {{p}} ; (true)#",
+            "echo $(true)# {{p}}",
+            "echo ')#' {{p}}",
+            "true # )#\necho {{p}}",
+            // The continuation-aware scan joins this into `)#`.
+            "(true)\\\n# x\necho {{p}}",
+            "(true)\\\n\\\n# x\necho {{p}}",
+            "echo $'\\'' '\n(true)\\\n# x \\' ; echo {{p}}",
+        ] {
+            not_analysable(body);
+        }
+        // The rule needs the `)` immediately before the `#`.
+        assert_eq!(script("(true) # x\necho {{p}}"), "(true) # x\necho \"$1\"");
+        match error("(true)# x\necho {{p}}") {
+            TemplateError::BodyNotAnalysable { at, .. } => assert_eq!(at, 6),
+            e => panic!("expected BodyNotAnalysable, got {e:?}"),
+        }
+    }
+
+    // Proves EX-19.
+    #[test]
+    fn an_arithmetic_expansion_beside_a_placeholder_is_refused() {
+        for body in [
+            "echo $((1 + (2))) {{p}}",
+            "echo $(( (1) )) {{p}}",
+            "echo $(( 1 << 2 )) {{p}}",
+            "echo \"$(( 1 ))\" {{p}}",
+            "echo {{p}} $((1))",
+            "x=$((1))\necho {{p}}",
+            "echo '$((' {{p}}",
+            "true # $((\necho {{p}}",
+            "echo ${x:-$((1))} {{p}}",
+            "echo $\\\n((1)) {{p}}",
+            "echo $(\\\n(1)) {{p}}",
+        ] {
+            not_analysable(body);
+        }
+    }
+
+    #[test]
+    fn a_body_without_a_placeholder_keeps_comments_after_parens_and_arithmetic() {
+        for body in [
+            "(true)# note",
+            "(true)# \"\neval \"\necho x\n\" # \"",
+            "echo $((1 + (2)))",
+            "x=$(( (1) ))",
+            "echo $(true)#x",
+        ] {
+            let a = analyse(body, &slots(&[])).unwrap_or_else(|e| panic!("{body:?}: {e}"));
+            assert_eq!(a.script, body);
+            assert!(a.warnings.is_empty(), "{body:?}");
+        }
+        // Without a placeholder the lexer reads a `#` after `)` as a word, as it always
+        // has, so the apostrophe opens a quote that never closes.
         assert_eq!(
-            script("echo $((1 + (2))) {{p}}"),
-            "echo $((1 + (2))) \"$1\""
+            analyse("(true)# it's", &slots(&[])).err(),
+            Some(TemplateError::UnbalancedQuotes)
         );
     }
 
@@ -1567,6 +1680,7 @@ mod tests {
                 "X\n",
                 "#",
                 "$((",
+                ")#",
                 "))",
                 "((",
                 "${",
