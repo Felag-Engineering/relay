@@ -26,7 +26,7 @@
 //! rule.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 #[path = "common/maintainer_scripts.rs"]
 mod maintainer_scripts;
@@ -40,7 +40,25 @@ use maintainer_scripts::{
 #[path = "common/source_walk.rs"]
 mod source_walk;
 
-use source_walk::{files_under, rust_files_in, workspace_src_roots};
+use source_walk::{daemon, files_under, rust_files_in, workspace_src_roots};
+
+/// `daemon/packaging/`, the source of everything the daemon package ships.
+fn packaging() -> PathBuf {
+    daemon().join("packaging")
+}
+
+/// The text of a shipped file under `daemon/packaging/`. Its panic says the file is part of the
+/// shipped surface, so a moved file moves its test rather than deleting it.
+fn read_shipped(rel: &str) -> String {
+    let path = packaging().join(rel);
+    std::fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!(
+            "read {}: {e} — this file is part of the shipped surface; \
+             if it moved, move this test with it rather than deleting it",
+            path.display()
+        )
+    })
+}
 
 /// `RELAY_*` name PREFIXES deliberately absent from the operator-facing sample.
 ///
@@ -103,17 +121,8 @@ fn relay_names(text: &str) -> BTreeSet<String> {
 // Proves DI-7.
 #[test]
 fn env_example_covers_the_config_surface() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-
-    let sample_path = root.join("packaging/relay-daemon.env.example");
-    let sample = std::fs::read_to_string(&sample_path).unwrap_or_else(|e| {
-        panic!(
-            "read {}: {e} — the sample config is part of the shipped surface; \
-             if it moved, move this test with it rather than deleting it",
-            sample_path.display()
-        )
-    });
-    let documented = relay_names(&sample);
+    let root = daemon();
+    let documented = relay_names(&read_shipped("relay-daemon.env.example"));
 
     let files = rust_files_in(&workspace_src_roots());
     assert!(
@@ -186,9 +195,7 @@ fn exemptions_are_real() {
 // Proves DI-43.
 #[test]
 fn env_example_has_no_join_line() {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("packaging/relay-daemon.env.example");
-    let sample =
-        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let sample = read_shipped("relay-daemon.env.example");
     let offending: Vec<&str> = sample
         .lines()
         .map(str::trim)
@@ -212,15 +219,7 @@ fn env_example_has_no_join_line() {
 /// installs it.
 #[test]
 fn unit_execstart_is_usr_bin() {
-    let unit_path =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("packaging/relay-daemon.service");
-    let unit = std::fs::read_to_string(&unit_path).unwrap_or_else(|e| {
-        panic!(
-            "read {}: {e} — the unit is part of the shipped surface; \
-             if it moved, move this test with it rather than deleting it",
-            unit_path.display()
-        )
-    });
+    let unit = read_shipped("relay-daemon.service");
 
     let execstart: Vec<&str> = unit
         .lines()
@@ -244,11 +243,8 @@ fn unit_execstart_is_usr_bin() {
 // Proves DI-36.
 #[test]
 fn install_creates_the_policy_directory_empty_and_never_writes_into_it() {
-    let packaging = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("packaging");
-    let read = |path: &Path| {
-        std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
-    };
-    let postinst = read(&packaging.join("scripts/postinst.sh"));
+    let packaging = packaging();
+    let postinst = read_shipped("scripts/postinst.sh");
 
     // (d) Floor against a vacuous pass: the script does name the directory.
     assert!(
@@ -302,7 +298,7 @@ fn install_creates_the_policy_directory_empty_and_never_writes_into_it() {
                 continue;
             }
             checked += 1;
-            for (n, line) in read(&path).lines().enumerate() {
+            for (n, line) in read_text(&path).lines().enumerate() {
                 assert!(
                     !under.is_match(line),
                     "{}:{} names a path under the Policy directory, which the install must \
@@ -328,10 +324,7 @@ fn install_creates_the_policy_directory_empty_and_never_writes_into_it() {
 // Proves DI-29.
 #[test]
 fn the_daemon_package_carries_the_catalog_as_plain_package_files() {
-    let packaging = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("packaging");
-    let read = |path: PathBuf| {
-        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
-    };
+    let packaging = packaging();
     let names = |dir: &str| -> Vec<String> {
         let mut out: Vec<String> = std::fs::read_dir(packaging.join(dir))
             .unwrap()
@@ -357,7 +350,7 @@ fn the_daemon_package_carries_the_catalog_as_plain_package_files() {
         ("expected/relay-daemon.deb.files", catalog_deb, "./etc/"),
         ("expected/relay-daemon.rpm.files", catalog_rpm, "/etc/"),
     ] {
-        let listing = read(packaging.join(file));
+        let listing = read_shipped(file);
         assert!(
             listing.lines().any(|l| l == line),
             "{file} must list the catalog as {line:?}"
@@ -379,7 +372,7 @@ fn the_daemon_package_carries_the_catalog_as_plain_package_files() {
     }
 
     // The manifest sources the catalog from the repository and declares nothing as configuration.
-    let manifest = read(packaging.join("nfpm/relay-daemon.yaml"));
+    let manifest = read_shipped("nfpm/relay-daemon.yaml");
     let lines: Vec<&str> = manifest.lines().map(str::trim).collect();
     let src = lines
         .iter()
@@ -402,11 +395,8 @@ fn the_daemon_package_carries_the_catalog_as_plain_package_files() {
 /// package to these baselines.
 #[test]
 fn the_daemon_package_replaces_and_conflicts_with_the_retired_catalog_package() {
-    let expected = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("packaging/expected");
     let lines_of = |file: &str| -> Vec<String> {
-        let path = expected.join(file);
-        std::fs::read_to_string(&path)
-            .unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
+        read_shipped(&format!("expected/{file}"))
             .lines()
             .map(str::to_owned)
             .collect()
@@ -437,17 +427,11 @@ fn the_daemon_package_replaces_and_conflicts_with_the_retired_catalog_package() 
 // Proves DI-50.
 #[test]
 fn removing_the_daemon_package_takes_its_payload_and_keeps_configuration_and_state() {
-    let packaging = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("packaging");
-    let read = |rel: &str| {
-        let path = packaging.join(rel);
-        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
-    };
-
     for file in [
         "expected/relay-daemon.deb.files",
         "expected/relay-daemon.rpm.files",
     ] {
-        let listing = read(file);
+        let listing = read_shipped(file);
         for owned in [
             "/usr/bin/relay-daemon",
             "/usr/lib/systemd/system/relay-daemon.service",
@@ -474,7 +458,7 @@ fn removing_the_daemon_package_takes_its_payload_and_keeps_configuration_and_sta
         }
     }
 
-    let postrm = read("scripts/postrm.sh");
+    let postrm = read_shipped("scripts/postrm.sh");
     for literal in [
         "ETC=/etc/relay-daemon",
         "STATE=/var/lib/relay-daemon",
@@ -563,14 +547,8 @@ fn removing_the_daemon_package_takes_its_payload_and_keeps_configuration_and_sta
 // Proves DI-50.
 #[test]
 fn purge_keeps_the_policy_file_while_the_policy_directory_holds_a_fragment() {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("packaging/scripts/postrm.sh");
-    let postrm =
-        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
-    let lines: Vec<&str> = postrm
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty() && !l.starts_with('#'))
-        .collect();
+    let postrm = read_shipped("scripts/postrm.sh");
+    let lines = commands(&postrm);
 
     let delete_file = lines
         .iter()
@@ -626,15 +604,7 @@ fn purge_keeps_the_policy_file_while_the_policy_directory_holds_a_fragment() {
 /// directive that re-opens a path in or above `/etc/relay-daemon` for writing.
 #[test]
 fn unit_keeps_the_policy_directory_read_only() {
-    let unit_path =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("packaging/relay-daemon.service");
-    let unit = std::fs::read_to_string(&unit_path)
-        .unwrap_or_else(|e| panic!("read {}: {e}", unit_path.display()));
-    let lines: Vec<&str> = unit
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.starts_with('#'))
-        .collect();
+    let lines = commands(&read_shipped("relay-daemon.service"));
 
     let strict = lines
         .iter()
@@ -681,7 +651,7 @@ fn unit_keeps_the_policy_directory_read_only() {
 // Proves DI-25.
 #[test]
 fn the_daemon_package_installs_its_unit_never_starts_it_and_enables_it_only_on_a_first_install() {
-    let packaging = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("packaging");
+    let packaging = packaging();
 
     // (a) The binary and the unit are regular files of both packages; nothing watches.
     for baseline in ["relay-daemon.deb.files", "relay-daemon.rpm.files"] {
@@ -877,7 +847,7 @@ fn assert_place_never_overwrites_and_owns_before_linking(place: &[String]) {
 // Proves DI-26.
 #[test]
 fn the_default_policy_is_placed_only_where_no_policy_file_or_directory_existed() {
-    let packaging = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("packaging");
+    let packaging = packaging();
     let scripts = script_commands(&packaging.join("scripts"));
     let lines_of = |name: &str| &scripts.iter().find(|(n, _)| *n == name).unwrap().1;
 
@@ -978,7 +948,7 @@ fn the_default_policy_is_placed_only_where_no_policy_file_or_directory_existed()
 // Proves DI-27.
 #[test]
 fn the_environment_file_is_placed_once_root_0600_and_never_rewritten() {
-    let packaging = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("packaging");
+    let packaging = packaging();
     let scripts = script_commands(&packaging.join("scripts"));
     let postinst = &scripts.iter().find(|(n, _)| *n == "postinst").unwrap().1;
 
