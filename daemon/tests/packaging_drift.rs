@@ -33,9 +33,14 @@ mod maintainer_scripts;
 
 use maintainer_scripts::{
     assert_prerm_stops_and_disables_on_removal_only, assert_unit_matchers_tell_the_verbs_apart, at,
-    body, case_arms, commands, enables_a_unit, first_install_gate_end, re, read_text,
-    regular_entries, script_commands, starts_a_unit, writers, writes_to,
+    body, case_arms, commands, enables_a_unit, first_install_gate_end, regular_entries,
+    script_commands, starts_a_unit, writers, writes_to,
 };
+
+#[path = "common/repo_text.rs"]
+mod repo_text;
+
+use repo_text::{re, read};
 
 #[path = "common/source_walk.rs"]
 mod source_walk;
@@ -298,7 +303,7 @@ fn install_creates_the_policy_directory_empty_and_never_writes_into_it() {
                 continue;
             }
             checked += 1;
-            for (n, line) in read_text(&path).lines().enumerate() {
+            for (n, line) in read(&path).lines().enumerate() {
                 assert!(
                     !under.is_match(line),
                     "{}:{} names a path under the Policy directory, which the install must \
@@ -655,7 +660,7 @@ fn the_daemon_package_installs_its_unit_never_starts_it_and_enables_it_only_on_a
 
     // (a) The binary and the unit are regular files of both packages; nothing watches.
     for baseline in ["relay-daemon.deb.files", "relay-daemon.rpm.files"] {
-        let entries = regular_entries(&read_text(&packaging.join("expected").join(baseline)));
+        let entries = regular_entries(&read(&packaging.join("expected").join(baseline)));
         for want in [
             "/usr/bin/relay-daemon",
             "/usr/lib/systemd/system/relay-daemon.service",
@@ -688,7 +693,7 @@ fn the_daemon_package_installs_its_unit_never_starts_it_and_enables_it_only_on_a
             .all(|p| { !p.extension().is_some_and(|e| e == "path" || e == "timer") }),
         "packaging ships a .path or .timer unit"
     );
-    let manifest: Vec<String> = commands(&read_text(&packaging.join("nfpm/relay-daemon.yaml")))
+    let manifest: Vec<String> = commands(&read(&packaging.join("nfpm/relay-daemon.yaml")))
         .iter()
         .map(|l| l.trim_start_matches("- ").to_string())
         .collect();
@@ -779,7 +784,7 @@ fn the_daemon_package_installs_its_unit_never_starts_it_and_enables_it_only_on_a
     );
 
     // (e) The unit restarts only on failure and installs into multi-user.target.
-    let unit = read_text(&packaging.join("relay-daemon.service"));
+    let unit = read(&packaging.join("relay-daemon.service"));
     let unit_lines = commands(&unit);
     let restarts: Vec<&str> = unit_lines
         .iter()
@@ -893,10 +898,7 @@ fn the_default_policy_is_placed_only_where_no_policy_file_or_directory_existed()
     assert!(place_at > first_install_gate_end(postinst));
 
     // (c) place links and never replaces.
-    let place_fn = body(
-        &read_text(&packaging.join("scripts/postinst.sh")),
-        "place() {",
-    );
+    let place_fn = body(&read(&packaging.join("scripts/postinst.sh")), "place() {");
     assert_place_never_overwrites_and_owns_before_linking(&place_fn);
 
     // (d) Across every script, only that line writes the Policy path.
@@ -908,14 +910,14 @@ fn the_default_policy_is_placed_only_where_no_policy_file_or_directory_existed()
 
     // (e) The package owns no live Policy.
     for baseline in ["relay-daemon.deb.files", "relay-daemon.rpm.files"] {
-        let text = read_text(&packaging.join("expected").join(baseline));
+        let text = read(&packaging.join("expected").join(baseline));
         assert!(
             !text.contains("/etc/relay-daemon/policy.toml"),
             "{baseline} lists the live Policy"
         );
     }
     assert!(
-        !read_text(&packaging.join("nfpm/relay-daemon.yaml"))
+        !read(&packaging.join("nfpm/relay-daemon.yaml"))
             .contains("dst: /etc/relay-daemon/policy.toml"),
         "the manifest installs the live Policy"
     );
@@ -979,10 +981,7 @@ fn the_environment_file_is_placed_once_root_0600_and_never_rewritten() {
     at(postinst, "umask 077");
 
     // (b) place owns the file as root with its mode before it links, and never replaces.
-    let place_fn = body(
-        &read_text(&packaging.join("scripts/postinst.sh")),
-        "place() {",
-    );
+    let place_fn = body(&read(&packaging.join("scripts/postinst.sh")), "place() {");
     assert_place_never_overwrites_and_owns_before_linking(&place_fn);
 
     // (c) Across every script, only that line writes the file.
@@ -994,7 +993,7 @@ fn the_environment_file_is_placed_once_root_0600_and_never_rewritten() {
 
     // (d) The package owns no environment file.
     for baseline in ["relay-daemon.deb.files", "relay-daemon.rpm.files"] {
-        let entries = regular_entries(&read_text(&packaging.join("expected").join(baseline)));
+        let entries = regular_entries(&read(&packaging.join("expected").join(baseline)));
         assert!(
             !entries
                 .iter()

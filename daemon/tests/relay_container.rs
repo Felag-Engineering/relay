@@ -17,34 +17,13 @@
 //! is line-based and anchored on the file's indentation, so every rule is also run against
 //! mutated copies of the shipped text, each of which must be refused for the rule it breaks.
 
-use regex::Regex;
-use std::path::{Path, PathBuf};
+#[path = "common/repo_text.rs"]
+mod repo_text;
 
-fn repo() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("daemon/ has a parent")
-        .to_path_buf()
-}
-
-fn read(path: &Path) -> String {
-    std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
-}
-
-fn re(pattern: &str) -> Regex {
-    Regex::new(pattern).unwrap_or_else(|e| panic!("regex {pattern}: {e}"))
-}
+use repo_text::{code, re, read, repo};
 
 fn collapse(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-/// The text without its full-line `#` comments.
-fn code(text: &str) -> String {
-    text.lines()
-        .filter(|l| !l.trim_start().starts_with('#'))
-        .map(|l| format!("{l}\n"))
-        .collect()
 }
 
 /// `text` with the one occurrence of `from` replaced by `to`; the result always differs.

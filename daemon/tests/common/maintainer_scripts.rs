@@ -4,17 +4,11 @@
 //! enabling or writing to something cannot drift apart between the two packages' proofs.
 //!
 //! Mounted with `#[path]`, as `shell_runner.rs` is, so Cargo does not build it as a test crate
-//! of its own.
+//! of its own. It reads through `repo_text.rs`, which the mounting crate mounts beside it.
 
 use std::path::Path;
 
-pub fn re(pattern: &str) -> regex::Regex {
-    regex::Regex::new(pattern).unwrap_or_else(|e| panic!("regex {pattern}: {e}"))
-}
-
-pub fn read_text(path: &Path) -> String {
-    std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
-}
+use crate::repo_text::{re, read};
 
 /// The trimmed, non-empty lines that are not full-line comments.
 pub fn commands(text: &str) -> Vec<String> {
@@ -29,7 +23,7 @@ pub fn commands(text: &str) -> Vec<String> {
 pub fn script_commands(dir: &Path) -> Vec<(&'static str, Vec<String>)> {
     ["preinst", "postinst", "prerm", "postrm"]
         .into_iter()
-        .map(|name| (name, commands(&read_text(&dir.join(format!("{name}.sh"))))))
+        .map(|name| (name, commands(&read(&dir.join(format!("{name}.sh"))))))
         .collect()
 }
 

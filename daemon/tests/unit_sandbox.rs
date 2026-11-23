@@ -6,19 +6,12 @@
 //! systemd host. DI-5's "never shipped" half is what is proven; that the relaxing drop-in is
 //! documented is not asserted by a test.
 
-use regex::Regex;
 use std::path::{Path, PathBuf};
 
-fn repo() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("daemon/ has a parent")
-        .to_path_buf()
-}
+#[path = "common/repo_text.rs"]
+mod repo_text;
 
-fn read(path: &Path) -> String {
-    std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
-}
+use repo_text::{code, re, read, repo};
 
 /// The non-comment lines of the unit as (section, key, value).
 fn unit_directives() -> Vec<(String, String, String)> {
@@ -188,11 +181,7 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
 
 /// Non-comment lines of a maintainer script.
 fn script_code(path: &Path) -> Vec<String> {
-    read(path)
-        .lines()
-        .filter(|l| !l.trim_start().starts_with('#'))
-        .map(str::to_string)
-        .collect()
+    code(&read(path)).lines().map(str::to_string).collect()
 }
 
 // Proves DI-5.
@@ -237,7 +226,7 @@ fn no_relaxing_drop_in_is_shipped() {
     );
 
     // Package manifests.
-    let dst = Regex::new(r"^\s*-?\s*dst:\s*(\S+)").expect("regex");
+    let dst = re(r"^\s*-?\s*dst:\s*(\S+)");
     let mut dsts = Vec::new();
     for dir in ["daemon/packaging/nfpm", "relay/packaging/nfpm"] {
         for manifest in files_in(&root.join(dir), ".yaml") {
@@ -293,16 +282,12 @@ fn no_relaxing_drop_in_is_shipped() {
     }
 
     // Release attachments: the workflow stages standalone files into dist/.
-    let workflow: String = read(&root.join(".github/workflows/release.yml"))
-        .lines()
-        .filter(|l| !l.trim_start().starts_with('#'))
-        .map(|l| format!("{l}\n"))
-        .collect();
+    let workflow = code(&read(&root.join(".github/workflows/release.yml")));
     assert!(
         !workflow.contains(".service.d"),
         "the release stages a drop-in"
     );
-    let cp = Regex::new(r#"\bcp\s+\S+\s+"?dist/([^"\s]*)"?(\s|$)"#).expect("regex");
+    let cp = re(r#"\bcp\s+\S+\s+"?dist/([^"\s]*)"?(\s|$)"#);
     let staged: Vec<String> = workflow
         .lines()
         .filter_map(|l| cp.captures(l).map(|c| c[1].to_string()))

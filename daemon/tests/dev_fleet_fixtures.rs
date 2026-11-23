@@ -49,8 +49,13 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::Command;
 
+#[path = "common/repo_text.rs"]
+mod repo_text;
+
+use repo_text::{read, repo};
+
 fn fixtures_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../docker/fixtures")
+    repo().join("docker/fixtures")
 }
 
 /// Copies the committed fixtures into a scratch directory and `chmod`s them
@@ -596,10 +601,8 @@ fn policy_allow_and_template_bodies_agree_on_the_script_path() {
     const SCRIPT: &str = "/usr/local/bin/dev-fleet-service";
 
     let root = fixtures_root();
-    let policy_web =
-        std::fs::read_to_string(root.join("policy.web.toml")).expect("read policy.web.toml");
-    let catalog = std::fs::read_to_string(root.join("templates.d/relay-demo/catalog.toml"))
-        .expect("read templates.d/relay-demo/catalog.toml");
+    let policy_web = read(&root.join("policy.web.toml"));
+    let catalog = read(&root.join("templates.d/relay-demo/catalog.toml"));
 
     assert!(
         policy_web.contains(SCRIPT),
@@ -619,8 +622,7 @@ fn policy_allow_and_template_bodies_agree_on_the_script_path() {
 #[test]
 fn the_script_has_no_stop_subcommand() {
     let root = fixtures_root();
-    let script =
-        std::fs::read_to_string(root.join("dev-fleet-service")).expect("read dev-fleet-service");
+    let script = read(&root.join("dev-fleet-service"));
 
     assert!(
         !script.contains("stop)"),
@@ -639,17 +641,11 @@ fn the_script_has_no_stop_subcommand() {
 // prove properties of FILES, never of a running fleet.
 // ---------------------------------------------------------------------------
 
-fn repo_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..")
-}
-
 const DEMO_COMPOSE: &str = "deploy/demo/docker-compose.yml";
 const TEST_COMPOSE: &str = "deploy/test/docker-compose.yml";
 
 fn read_compose_lines(file: &str) -> Vec<String> {
-    let path = repo_root().join(file);
-    std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
+    read(&repo().join(file))
         .lines()
         .map(str::to_string)
         .collect()
@@ -1010,9 +1006,7 @@ fn demo_roster_matches_the_documented_fleet() {
     let lines = read_compose_lines(DEMO_COMPOSE);
     let services = parse_compose_services(&lines);
     let declared_volumes = top_level_volume_names(&lines);
-    let dockerfile_path = repo_root().join("docker/daemon.Dockerfile");
-    let dockerfile = std::fs::read_to_string(&dockerfile_path)
-        .unwrap_or_else(|e| panic!("read {}: {e}", dockerfile_path.display()));
+    let dockerfile = read(&repo().join("docker/daemon.Dockerfile"));
 
     let mut seen_state_volumes = BTreeSet::new();
 
@@ -1074,7 +1068,7 @@ fn demo_roster_matches_the_documented_fleet() {
             entry.state_volume
         );
 
-        let fixture_path = repo_root().join("docker/fixtures").join(entry.policy);
+        let fixture_path = fixtures_root().join(entry.policy);
         assert!(
             fixture_path.exists(),
             "{}'s Policy file {} does not exist under docker/fixtures/ — a compose \
@@ -1195,9 +1189,7 @@ fn a_single_node_selector_survives_at_nine_nodes() {
 /// the "must match" comment beside it into a test.
 #[test]
 fn makefile_demo_web_nodes_match_the_roster() {
-    let path = repo_root().join("Makefile");
-    let makefile =
-        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let makefile = read(&repo().join("Makefile"));
     let line = makefile
         .lines()
         .find_map(|l| l.strip_prefix("DEMO_WEB_NODES :="))
@@ -1223,9 +1215,7 @@ fn makefile_demo_web_nodes_match_the_roster() {
 /// the implementation plan, not a cheap assertion).
 #[test]
 fn docs_dev_fleet_documents_every_demo_node() {
-    let doc_path = repo_root().join("docs/operations/demo-fleet.md");
-    let doc = std::fs::read_to_string(&doc_path)
-        .unwrap_or_else(|e| panic!("read {}: {e}", doc_path.display()));
+    let doc = read(&repo().join("docs/operations/demo-fleet.md"));
 
     for n in 4..=9 {
         let needle = format!("dev-node-{n}");
