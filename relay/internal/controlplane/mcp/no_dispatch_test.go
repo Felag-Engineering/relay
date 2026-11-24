@@ -153,7 +153,108 @@ func dispatchViolations(fileName string, file *ast.File, strictCapabilityIdents 
 	violations = append(violations, astguard.ControlAuthorizationViolations(fileName, file)...)
 	violations = append(violations, astguard.RevocationViolations(fileName, file)...)
 	violations = append(violations, policyAliasViolations(fileName, file)...)
+	violations = append(violations, getJobReadViolations(fileName, file)...)
 	return append(violations, tagWriteViolations(fileName, file)...)
+}
+
+// getJobTools returns, for every AddTool call that registers the get_job tool
+// in file, its handler function literal and the function declaration that
+// holds the registration.
+func getJobTools(file *ast.File) (handlers []*ast.FuncLit, enclosing []*ast.FuncDecl) {
+	for _, decl := range file.Decls {
+		fd, ok := decl.(*ast.FuncDecl)
+		if !ok || fd.Body == nil {
+			continue
+		}
+		ast.Inspect(fd.Body, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			if !isAddToolCall(call) || !registersTool(call, "get_job") {
+				return true
+			}
+			for _, arg := range call.Args {
+				if lit, ok := arg.(*ast.FuncLit); ok {
+					handlers = append(handlers, lit)
+					enclosing = append(enclosing, fd)
+				}
+			}
+			return true
+		})
+	}
+	return handlers, enclosing
+}
+
+// isAddToolCall matches sdkmcp.AddTool(...) and a bare AddTool(...).
+func isAddToolCall(call *ast.CallExpr) bool {
+	switch fn := call.Fun.(type) {
+	case *ast.SelectorExpr:
+		return fn.Sel.Name == "AddTool"
+	case *ast.Ident:
+		return fn.Name == "AddTool"
+	}
+	return false
+}
+
+// registersTool reports whether an AddTool call's Tool literal is named name.
+func registersTool(call *ast.CallExpr, name string) bool {
+	for _, arg := range call.Args {
+		unary, ok := arg.(*ast.UnaryExpr)
+		if !ok {
+			continue
+		}
+		lit, ok := unary.X.(*ast.CompositeLit)
+		if !ok {
+			continue
+		}
+		for _, elt := range lit.Elts {
+			kv, ok := elt.(*ast.KeyValueExpr)
+			if !ok {
+				continue
+			}
+			if key, ok := kv.Key.(*ast.Ident); !ok || key.Name != "Name" {
+				continue
+			}
+			if val, ok := kv.Value.(*ast.BasicLit); ok && val.Value == `"`+name+`"` {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// getJobReadViolations is the get_job rule of dispatchViolations, unconditional
+// in every file: get_job returns Task output, so it reads a Job only through
+// ReadLane, which records the read before it answers. Its handler may not name
+// a Job reader, a read auditor or the rendering helper that reads a Job, and
+// the function that registers it may not take either seam as a parameter.
+func getJobReadViolations(fileName string, file *ast.File) []string {
+	const msg = "%s: get_job reads a Job only through ReadLane, the capability read lane; it holds no Job reader or read auditor of its own (%s)"
+	banned := map[string]bool{"JobResultReader": true, "ReadAuditor": true, "ReadEvent": true, "auditRead": true, "renderJob": true, "RenderJob": true}
+	var violations []string
+	handlers, enclosing := getJobTools(file)
+	for i, handler := range handlers {
+		ast.Inspect(handler, func(n ast.Node) bool {
+			if id, ok := n.(*ast.Ident); ok && banned[id.Name] {
+				violations = append(violations, fmt.Sprintf(msg, fileName, "the handler names "+id.Name))
+			}
+			return true
+		})
+		for _, field := range enclosing[i].Type.Params.List {
+			name := ""
+			switch t := field.Type.(type) {
+			case *ast.Ident:
+				name = t.Name
+			case *ast.SelectorExpr:
+				name = t.Sel.Name
+			}
+			if name == "JobResultReader" || name == "ReadAuditor" {
+				violations = append(violations, fmt.Sprintf(msg, fileName, "its registering function takes a "+name))
+			}
+		}
+	}
+	return violations
 }
 
 // tagWriteViolations is the tag rule of dispatchViolations, unconditional in
@@ -260,9 +361,9 @@ func nonTestGoFiles(t *testing.T) (dir string, names []string) {
 // The structural guarantee it defends is the read-only interfaces in mcp.go
 // (ReadLane / OperationLister — never Run) and their runtime narrowing in New,
 // plus the execution tools dispatching only through the injected Executor and
-// JobResultReader. This test is defense in depth that catches the mistake at
-// `go test` time with an explicit message, rather than an opaque compiler
-// error or runtime panic.
+// JobResultReader, and get_job reading a Job only through ReadLane. This test
+// is defense in depth that catches the mistake at `go test` time with an
+// explicit message, rather than an opaque compiler error or runtime panic.
 // Proves EX-1, QRY-24.
 func TestNoDispatchConstruction(t *testing.T) {
 	dir, names := nonTestGoFiles(t)
@@ -276,6 +377,25 @@ func TestNoDispatchConstruction(t *testing.T) {
 		for _, msg := range dispatchViolations(name, file, !execFiles[name]) {
 			t.Error(msg)
 		}
+	}
+}
+
+// TestGetJobRule_FindsTheRegistration proves getJobReadViolations inspects the
+// real get_job registration: a guard that finds nothing passes forever.
+func TestGetJobRule_FindsTheRegistration(t *testing.T) {
+	dir, names := nonTestGoFiles(t)
+	fset := token.NewFileSet()
+	found := 0
+	for _, name := range names {
+		file, err := parser.ParseFile(fset, filepath.Join(dir, name), nil, 0)
+		if err != nil {
+			t.Fatalf("parser.ParseFile(%s): %v", name, err)
+		}
+		handlers, _ := getJobTools(file)
+		found += len(handlers)
+	}
+	if found != 1 {
+		t.Fatalf("found %d get_job registrations, want exactly 1", found)
 	}
 }
 
@@ -600,6 +720,66 @@ type VocabReader interface {
 `,
 			strict:     true,
 			wantSubstr: "hands back a Node or a display-only snapshot with no context",
+		},
+		{
+			name: "a get_job registration whose function takes a Job reader",
+			src: `package mcp
+func registerJobTools(srv *Server, results JobResultReader) {
+	AddTool(srv, &Tool{Name: "get_job"}, func() {})
+}
+`,
+			strict:     false,
+			wantSubstr: "get_job reads a Job only through ReadLane",
+		},
+		{
+			name: "a get_job registration whose function takes a qualified Job reader",
+			src: `package mcp
+func registerJobTools(srv *Server, results mcp.JobResultReader) {
+	AddTool(srv, &Tool{Name: "get_job"}, func() {})
+}
+`,
+			strict:     false,
+			wantSubstr: "get_job reads a Job only through ReadLane",
+		},
+		{
+			name: "a get_job handler calling RenderJob",
+			src: `package mcp
+func registerJobTools(srv *Server, lane ReadLane) {
+	AddTool(srv, &Tool{Name: "get_job"}, func() { _ = x.RenderJob(nil) })
+}
+`,
+			strict:     false,
+			wantSubstr: "get_job reads a Job only through ReadLane",
+		},
+		{
+			name: "a get_job handler calling auditRead",
+			src: `package mcp
+func registerJobTools(srv *Server, lane ReadLane) {
+	AddTool(srv, &Tool{Name: "get_job"}, func() { _ = auditRead(nil, nil, "get_job", ReadEvent{}) })
+}
+`,
+			strict:     false,
+			wantSubstr: "get_job reads a Job only through ReadLane",
+		},
+		{
+			name: "a get_job handler reading through the lane",
+			src: `package mcp
+func registerJobTools(srv *Server, lane ReadLane) {
+	AddTool(srv, &Tool{Name: "get_job"}, func() { _, _ = lane.GetJob(nil, "j") })
+}
+`,
+			strict:     false,
+			wantSubstr: "",
+		},
+		{
+			name: "another tool may take a Job reader",
+			src: `package mcp
+func registerExecutionTools(srv *Server, results JobResultReader) {
+	AddTool(srv, &Tool{Name: "run_operation"}, func() { _ = renderJob })
+}
+`,
+			strict:     false,
+			wantSubstr: "",
 		},
 		{
 			name: "dot-importing registry erases the qualifier the seam check matches on",

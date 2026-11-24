@@ -141,10 +141,15 @@ type Deps struct {
 	// any more — it is the one door to the registry, which records the read
 	// before it answers (invariant 10, ADR-0025). Nil still 500s.
 	NodeReader NodeReader
+	// JobReader is the capability read lane behind GET /api/v1/jobs/{id}: the
+	// one door to a Job's stored result, which records the read before it
+	// answers (invariant 10, ADR-0025). Nil 500s.
+	JobReader JobReader
 	// Exec and Jobs back the execution routes. Exec is the SAME
 	// capability layer the MCP surface dispatches through — never a second
 	// control path (invariant 10) — and Jobs is a read-only view used to render
-	// per-Node results after a dispatch returns. Neither carries a blast cap or
+	// a dispatch's own per-Node results after it returns; the Job route does
+	// not use it. Neither carries a blast cap or
 	// any Relay configuration: the caps live inside the capability layer, above
 	// this surface's reach (invariant 11).
 	Exec Executor
@@ -155,10 +160,6 @@ type Deps struct {
 	// separate interface so this package's seams stay named after what each
 	// route needs.
 	Approvals ApprovalService
-	// Reads records read-access events for the Job read route (ADR-0025).
-	// Nil skips recording, so tests and any unwired surface work; the
-	// composition root always supplies it.
-	Reads ReadAuditor
 	// HarnessSetup renders the MCP URL, the CA certificate and the Harness
 	// blocks an API Token mint returns beside its plaintext. It carries public
 	// data only (never the CA key), and the caller's own credential is added at

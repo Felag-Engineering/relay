@@ -25,22 +25,19 @@ import (
 //
 // # Why these are on the capability layer and not on each surface
 //
-// Invariant 10: one capability layer, three thin surfaces. The MCP surface
-// and the Control API each call an AuditSink at their own door
-// (mcp/readaudit.go, api/nodes.go) — a shape this lane deliberately does not
-// copy a third time. A surface that grows its
-// own RecordRead call is a surface that can forget one, and the Admin Console
-// is a screen count that only goes up. Here, the audit write and the read are
-// the same call: there is no way to reach the registry through this lane
-// without the record, because the record is written first and its failure
-// returns before l.reg is touched.
+// Invariant 10: one capability layer, three thin surfaces. A surface that
+// grows its own RecordRead call is a surface that can forget one, and the
+// Admin Console is a screen count that only goes up. The one adapter-held read
+// record left is MCP's answered-retry re-attach (mcp/readaudit.go). Here, the
+// audit write and the read are the same call: there is no way to reach the
+// registry through this lane without the record, because the record is written
+// first and its failure returns before l.reg is touched.
 //
 // # Why the tool names are the MCP tools' names
 //
 // toolListNodes and toolDescribeNode are "list_nodes" and "describe_node" —
 // deliberately the MCP tools' names rather than a Console screen name, on the
-// precedent the Control API already set for get_job (api/jobs.go's
-// readCapabilityGetJob): ADR-0025's question is "who enumerated the fleet",
+// same terms as toolGetJob: ADR-0025's question is "who enumerated the fleet",
 // and an auditor asking it should get ONE answer across every surface instead
 // of having to know each door's spelling. Which door was used stays
 // recoverable from the verified lane, which records the Account, its auth
@@ -105,6 +102,10 @@ type ReadLane struct {
 	// aliases is the Policy alias read (policyalias.go). Nil means not wired:
 	// PolicyAliases returns ErrPolicyAliasesUnavailable, never an empty map.
 	aliases PolicyAliasSource
+
+	// jobResults is the Job-result read (readlane_jobresult.go). Nil means not
+	// wired: GetJob returns ErrQueriesUnavailable, never an empty Job.
+	jobResults JobResultSource
 }
 
 // NewReadLane returns a ReadLane over rec, reg and the two query seams. rec,

@@ -153,6 +153,13 @@ type PolicyAliasSource interface {
 	List(ctx context.Context) (map[string]string, error)
 }
 
+// JobResultSource is the read side of one Job and its Tasks, as stored. The
+// read lane's GetJob is its only reader.
+type JobResultSource interface {
+	GetJob(ctx context.Context, id string) (jobs.Job, error)
+	TasksByJob(ctx context.Context, jobID string) ([]jobs.Task, error)
+}
+
 // PolicyAliasRecorder makes a Policy alias change AND appends its audit record
 // in one transaction: nil means both landed, an error means neither did. It is
 // kept off AuditSink, exactly like IntentRecorder, so a sink that cannot make

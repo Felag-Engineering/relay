@@ -7,6 +7,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -42,7 +43,10 @@ import (
 // caller-asserted attribution and records the refusal (invariant 10, EX-7). It
 // also refuses any import of internal/revocation and any naming of its revoke
 // act (astguard.RevocationViolations): a route revokes through the capability
-// layer's Revocations, which authorizes, acts and records together.
+// layer's Revocations, which authorizes, acts and records together. It refuses
+// any read record written here (readRecordViolations): the capability read
+// lane records every read, so this surface holds no read auditor. And it refuses
+// GET /api/v1/jobs/{id} a Job reader of its own (jobRouteReadViolations).
 
 const (
 	capabilityImportPath = "github.com/Felag-Engineering/relay/relay/internal/capability"
@@ -107,10 +111,94 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 	})
 
 	violations = append(violations, policyAliasViolations(fileName, file)...)
+	violations = append(violations, readRecordViolations(fileName, file)...)
+	violations = append(violations, jobRouteReadViolations(fileName, file)...)
 	violations = append(violations, astguard.EnrollMinterViolations(fileName, file)...)
 	violations = append(violations, astguard.ControlAuthorizationViolations(fileName, file)...)
 	violations = append(violations, astguard.RevocationViolations(fileName, file)...)
 	return append(violations, tagInternalWriteViolations(fileName, file)...)
+}
+
+// readRecordViolations is the read-record rule of dispatchViolations,
+// unconditional in every file: this surface records no read itself, because
+// every read is recorded by the capability read lane (invariant 10, ADR-0025).
+// A RecordRead selector or seam method, or a type named ReadAuditor, is a
+// second place a read could be recorded or forgotten.
+func readRecordViolations(fileName string, file *ast.File) []string {
+	const msg = "%s %s — the Control API records no read itself: every read is recorded by the capability read lane (invariant 10, ADR-0025)"
+	var violations []string
+	ast.Inspect(file, func(n ast.Node) bool {
+		switch v := n.(type) {
+		case *ast.SelectorExpr:
+			if v.Sel.Name == "RecordRead" {
+				violations = append(violations, fmt.Sprintf(msg, fileName, "calls RecordRead"))
+			}
+		case *ast.TypeSpec:
+			if v.Name.Name == "ReadAuditor" {
+				violations = append(violations, fmt.Sprintf(msg, fileName, "declares ReadAuditor"))
+			}
+		case *ast.InterfaceType:
+			for _, m := range v.Methods.List {
+				for _, name := range m.Names {
+					if name.Name == "RecordRead" {
+						violations = append(violations, fmt.Sprintf(msg, fileName, "declares a seam method RecordRead"))
+					}
+				}
+			}
+		}
+		return true
+	})
+	return violations
+}
+
+// jobRouteReadViolations is the Job-route rule of dispatchViolations: inside
+// handleGetJob, a selector named Jobs or an identifier renderJob or auditRead is
+// a Job read that bypasses JobReader, the capability read lane.
+func jobRouteReadViolations(fileName string, file *ast.File) []string {
+	var violations []string
+	for _, decl := range file.Decls {
+		fd, ok := decl.(*ast.FuncDecl)
+		if !ok || fd.Name.Name != "handleGetJob" {
+			continue
+		}
+		ast.Inspect(fd, func(n ast.Node) bool {
+			var name string
+			switch v := n.(type) {
+			case *ast.SelectorExpr:
+				if v.Sel.Name == "Jobs" {
+					name = "Jobs"
+				}
+			case *ast.Ident:
+				if v.Name == "renderJob" || v.Name == "auditRead" {
+					name = v.Name
+				}
+			}
+			if name != "" {
+				violations = append(violations, fmt.Sprintf(
+					"%s: GET /api/v1/jobs/{id} reads a Job only through JobReader, the capability read lane (handleGetJob names %s)",
+					fileName, name))
+			}
+			return true
+		})
+	}
+	return violations
+}
+
+// TestJobRoute_IsHandleGetJob keeps jobRouteReadViolations pointed at the real
+// route: it matches the function by name, so renaming the handler would
+// otherwise dodge the rule.
+func TestJobRoute_IsHandleGetJob(t *testing.T) {
+	for _, r := range Routes() {
+		if r.Method != "GET" || r.Path != "/api/v1/jobs/{id}" {
+			continue
+		}
+		name := runtime.FuncForPC(reflect.ValueOf(r.Handler).Pointer()).Name()
+		if !strings.HasSuffix(name, ".handleGetJob") {
+			t.Fatalf("GET /api/v1/jobs/{id} is served by %s, want handleGetJob", name)
+		}
+		return
+	}
+	t.Fatal("no GET /api/v1/jobs/{id} route found")
 }
 
 // tagInternalWriteNames are the tag write's internal seams: the unfloored
@@ -521,6 +609,50 @@ import . ` + pvImport + `
 import . ` + nvImport + `
 `,
 			wantSubstr: "dot-imports nodevocab",
+		},
+		{
+			name: "a seam declaring RecordRead is refused",
+			src: `package api
+type Reader interface {
+	RecordRead() error
+}
+`,
+			wantSubstr: "records no read itself",
+		},
+		{
+			name: "calling RecordRead on any receiver is refused",
+			src: `package api
+func f(x D) { _ = x.sink.RecordRead() }
+`,
+			wantSubstr: "records no read itself",
+		},
+		{
+			name: "a type named ReadAuditor is refused",
+			src: `package api
+type ReadAuditor interface{}
+`,
+			wantSubstr: "records no read itself",
+		},
+		{
+			name: "a handleGetJob reading d.Jobs is refused",
+			src: `package api
+func handleGetJob(d Deps) { _ = d.Jobs }
+`,
+			wantSubstr: "reads a Job only through JobReader",
+		},
+		{
+			name: "a handleGetJob calling renderJob is refused",
+			src: `package api
+func handleGetJob(d Deps) { _ = renderJob }
+`,
+			wantSubstr: "reads a Job only through JobReader",
+		},
+		{
+			name: "a handleGetJob calling d.JobReader.GetJob does not violate",
+			src: `package api
+func handleGetJob(d Deps) { _, _ = d.JobReader.GetJob(nil, nil, "j") }
+`,
+			wantSubstr: "",
 		},
 		{
 			name: "dot-importing capability is refused outright",

@@ -49,6 +49,7 @@ type seams struct {
 	policyView PolicyViewSource
 	nodeVocab  TemplateVocabularySource
 	aliases    PolicyAliasSource
+	jobResults JobResultSource
 
 	// certWindow is the state:cert-expiring window handed to the ReadLane when
 	// settings is nil. settings, when set, is the one source the read lane and
@@ -107,9 +108,9 @@ func build(t *testing.T, s seams) *testSvc {
 	}
 	var read *ReadLane
 	if s.auditQ != nil || s.jobQ != nil {
-		read = NewReadLane(rec, s.reg, s.auditQ, s.jobQ, s.policyView, s.nodeVocab, settings, s.now, WithPolicyAliasSource(s.aliases))
+		read = NewReadLane(rec, s.reg, s.auditQ, s.jobQ, s.policyView, s.nodeVocab, settings, s.now, WithPolicyAliasSource(s.aliases), WithJobResultSource(s.jobResults))
 	} else {
-		read = newReadLane(rec, s.reg, nil, nil, s.policyView, s.nodeVocab, settings, s.now, WithPolicyAliasSource(s.aliases))
+		read = newReadLane(rec, s.reg, nil, nil, s.policyView, s.nodeVocab, settings, s.now, WithPolicyAliasSource(s.aliases), WithJobResultSource(s.jobResults))
 	}
 	aliasRec, _ := audit.(PolicyAliasRecorder)
 	aliasAdmin := newPolicyAliasAdmin(control, s.aliases, aliasRec)

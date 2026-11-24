@@ -265,9 +265,9 @@ type opvocabLister struct{}
 func (opvocabLister) Operations() []opvocab.Descriptor { return opvocab.Operations() }
 
 // jobResultReader adapts st.Jobs()/st.Tasks() to mcp.JobResultReader — the
-// tiny per-Job read surface the execution tools use to render
-// per-Node results (exit code, output, duration) and get_job's polling
-// re-read.
+// tiny per-Job read surface the execution tools use to render a dispatch's own
+// per-Node results (exit code, output, duration) — and to the capability read
+// lane's Job-result source, which backs get_job and GET /api/v1/jobs/{id}.
 type jobResultReader struct {
 	jobsRepo  jobs.JobRepository
 	tasksRepo jobs.TaskRepository
@@ -607,8 +607,12 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 	// what lets a Template Operation be dispatched at all: the capability
 	// layer resolves its fan-out and class from it (ADR-0042). Without it
 	// every Template dispatch is refused. A nil clock is the real one. The
-	// Policy alias source is the store's read-only view of the aliases.
-	readLane := capability.NewReadLane(rec, reg, queries, queries, policyCache, vocabCache, live, nil, capability.WithPolicyAliasSource(st.PolicyAliases()))
+	// Policy alias source is the store's read-only view of the aliases; the
+	// Job-result source is what get_job and the Job route read through, so
+	// without it both refuse.
+	readLane := capability.NewReadLane(rec, reg, queries, queries, policyCache, vocabCache, live, nil,
+		capability.WithPolicyAliasSource(st.PolicyAliases()),
+		capability.WithJobResultSource(jobResultReader{jobsRepo: st.Jobs(), tasksRepo: st.Tasks()}))
 
 	// The approval callout (ADR-0027), over the one Recorder and the same
 	// RoleGate as dispatch. A nil clock is the real one.
@@ -740,9 +744,10 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 			tasks:              st.Tasks(),
 			revocations:        revocations,
 			audit:              st.Audit(),
-			// The read-access sink (ADR-0025), for the MCP read tools and the
-			// Control API's Job-read route. Left nil, readAuditor's defensive
-			// `sink == nil` skip would silently disable every read-access
+			// The read-access sink (ADR-0025), for the MCP answered retry's
+			// Job-bound re-attach (readAuditor); the Control API's Job route
+			// does not read it. Left nil, readAuditor's defensive
+			// `sink == nil` skip would silently disable that read-access
 			// record. TestSurfaceDeps_AuditSinkIsWired is the regression
 			// guard, because a nil here fails silently by design.
 			auditSink: auditSink,

@@ -37,8 +37,9 @@ func MapSlice[In, Out any](in []In, f func(In) Out) []Out {
 const PlanAdvisory = "point-in-time; Policy may change between plan and apply (ADR-0011)"
 
 // JobResultReader is the read-only view over a Job's persisted Tasks that
-// RenderJob needs. Read-only by construction: no Create/Update. Each
-// surface's own reader interface has the same method set and satisfies it.
+// RenderJob needs: the dispatch's own-result read-back. Read-only by construction: no
+// Create/Update. A later re-read of a Job by id goes through the capability read lane
+// (ReadLane.GetJob).
 type JobResultReader interface {
 	GetJob(ctx context.Context, id string) (jobs.Job, error)
 	TasksByJob(ctx context.Context, jobID string) ([]jobs.Task, error)
@@ -180,8 +181,7 @@ const (
 // RenderJob re-reads jobID and renders every one of its Tasks, sorted by NodeID for a stable
 // response, with the Job's status (JobStatusRunning if any Task is not yet Resolved, else
 // JobStatusComplete), its halt, if the capability layer halted it, and its outcome audit
-// failure, if one is recorded. It is the shared path for a dispatch's own result and a later
-// polling re-read of the same Job, on both surfaces.
+// failure, if one is recorded. It is the dispatch's own-result path on both surfaces.
 func RenderJob(ctx context.Context, results JobResultReader, jobID string) (RenderedJob, error) {
 	job, err := results.GetJob(ctx, jobID)
 	if err != nil {
@@ -191,7 +191,13 @@ func RenderJob(ctx context.Context, results JobResultReader, jobID string) (Rend
 	if err != nil {
 		return RenderedJob{}, fmt.Errorf("list tasks for job %q: %w", jobID, err)
 	}
+	return RenderJobResult(job, tasks), nil
+}
 
+// RenderJobResult is RenderJob's pure half: it renders a Job and its Tasks already read, so
+// the capability read lane's Job-result read renders through the same code as a dispatch's
+// own result.
+func RenderJobResult(job jobs.Job, tasks []jobs.Task) RenderedJob {
 	status := JobStatusComplete
 	items := make([]RenderedTaskResult, 0, len(tasks))
 	for _, task := range tasks {
@@ -217,7 +223,7 @@ func RenderJob(ctx context.Context, results JobResultReader, jobID string) (Rend
 			Reason: jobs.OutcomeAuditFailureReason,
 		}
 	}
-	return out, nil
+	return out
 }
 
 // RenderPlan renders a capability.PlanResult: verdicts sorted by NodeID for a

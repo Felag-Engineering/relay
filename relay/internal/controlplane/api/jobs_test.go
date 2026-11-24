@@ -17,29 +17,107 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/capability"
 	"github.com/Felag-Engineering/relay/relay/internal/controlplane"
 	"github.com/Felag-Engineering/relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/relay/relay/internal/registry"
 )
 
 // -----------------------------------------------------------------------
 // Fakes
 // -----------------------------------------------------------------------
 
-// readRecord is one captured ReadAuditor call.
+// readRecord is one captured RecordRead call.
 type readRecord struct {
 	Principal  capability.Principal
 	Capability string
 	JobID      string
 }
 
+// fakeReadAuditor is the capability.AuditSink behind the Job route's read
+// lane: it records every RecordRead, and log (when set) interleaves it with the
+// Job source's reads so a test can assert the record came first.
 type fakeReadAuditor struct {
 	mu      sync.Mutex
 	records []readRecord
 	err     error
+	log     *eventLog
+}
+
+func (*fakeReadAuditor) Record(context.Context, capability.AuditEntry) error        { return nil }
+func (*fakeReadAuditor) RecordFreeze(context.Context, capability.FreezeEvent) error { return nil }
+func (*fakeReadAuditor) RecordCancel(context.Context, capability.Principal, string) error {
+	return nil
+}
+func (*fakeReadAuditor) RecordAccountAdmin(context.Context, capability.Principal, capability.AccountAdminEvent) error {
+	return nil
+}
+
+// eventLog is an ordered log shared by a sink and a Job source.
+type eventLog struct {
+	mu      sync.Mutex
+	entries []string
+}
+
+func (l *eventLog) add(s string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.entries = append(l.entries, s)
+}
+
+func (l *eventLog) all() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]string(nil), l.entries...)
+}
+
+// loggingJobs wraps a JobResultReader, logging each read.
+type loggingJobs struct {
+	JobResultReader
+	log *eventLog
+}
+
+func (l loggingJobs) GetJob(ctx context.Context, id string) (jobs.Job, error) {
+	l.log.add("GetJob")
+	return l.JobResultReader.GetJob(ctx, id)
+}
+
+func (l loggingJobs) TasksByJob(ctx context.Context, id string) ([]jobs.Task, error) {
+	l.log.add("TasksByJob")
+	return l.JobResultReader.TasksByJob(ctx, id)
+}
+
+// countingJobs holds a Task with output and counts every read: a route that
+// reads it around the read lane is the fallback these tests forbid.
+type countingJobs struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (c *countingJobs) GetJob(context.Context, string) (jobs.Job, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.calls++
+	return jobs.Job{ID: "job-1"}, nil
+}
+
+func (c *countingJobs) TasksByJob(context.Context, string) ([]jobs.Task, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.calls++
+	return []jobs.Task{{NodeID: "n1", Outcome: jobs.OutcomeSuccess, Stdout: []byte("SECRET-OUTPUT")}}, nil
+}
+
+func (c *countingJobs) count() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.calls
 }
 
 func (f *fakeReadAuditor) RecordRead(_ context.Context, p capability.Principal, tool, _, _, jobID string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.records = append(f.records, readRecord{Principal: p, Capability: tool, JobID: jobID})
+	if f.log != nil {
+		f.log.add("record")
+	}
 	return f.err
 }
 
@@ -49,14 +127,16 @@ func (f *fakeReadAuditor) all() []readRecord {
 	return append([]readRecord(nil), f.records...)
 }
 
-// newJobFixture mounts the routes with a chosen role, executor, job reader and
-// read auditor.
-func newJobFixture(t *testing.T, role accounts.Role, exec *fakeExecutor, jr JobResultReader, reads ReadAuditor) http.Handler {
+// newJobFixture mounts the routes with a chosen role, executor, Job reader and
+// audit sink. The Job route reads through a real capability read lane over jr
+// and reads, as the composition root wires it.
+func newJobFixture(t *testing.T, role accounts.Role, exec *fakeExecutor, jr JobResultReader, reads capability.AuditSink) http.Handler {
 	t.Helper()
 	exec.gate = authz.NewRoleGate()
+	lane := newCapService(t, capSeams{reg: registry.NewInMemory(), audit: reads, jobResults: jr}).ReadLane
 	authn := controlplane.NewAuthenticator(roleVerifier{credential: testCredential, role: role})
 	mux := http.NewServeMux()
-	Register(mux, Deps{Exec: exec, Jobs: jr, Reads: reads})
+	Register(mux, Deps{Exec: exec, Jobs: jr, JobReader: lane})
 	return authn.Middleware(mux)
 }
 
@@ -175,8 +255,8 @@ func TestGetJob_IsReadAudited(t *testing.T) {
 	if got[0].JobID != "job-1" {
 		t.Errorf("recorded job_id = %q, want job-1", got[0].JobID)
 	}
-	if got[0].Capability != readCapabilityGetJob {
-		t.Errorf("recorded capability = %q, want %q (one name across surfaces)", got[0].Capability, readCapabilityGetJob)
+	if got[0].Capability != "get_job" {
+		t.Errorf("recorded capability = %q, want %q (one name across surfaces)", got[0].Capability, "get_job")
 	}
 	if got[0].Principal.Role != string(accounts.RoleViewer) {
 		t.Errorf("recorded principal role = %q, want the authenticated caller's", got[0].Principal.Role)
@@ -215,6 +295,122 @@ func TestGetJob_FailsClosedWhenUnauditable(t *testing.T) {
 	}
 	if body := rec.Body.String(); strings.Contains(body, "SECRET-OUTPUT") {
 		t.Errorf("unauditable read leaked Job output: %s", body)
+	}
+}
+
+// A route mounted with no read lane has no sink to record into, so it refuses
+// the read rather than falling back to the Job reader it was also given.
+func TestGetJob_AMissingSinkRefusesTheRead(t *testing.T) {
+	jr := &countingJobs{}
+	exec := &fakeExecutor{gate: authz.NewRoleGate()}
+	authn := controlplane.NewAuthenticator(roleVerifier{credential: testCredential, role: accounts.RoleViewer})
+	mux := http.NewServeMux()
+	Register(mux, Deps{Exec: exec, Jobs: jr, JobReader: nil})
+	h := authn.Middleware(mux)
+
+	rec := do(t, h, http.MethodGet, "/api/v1/jobs/job-1", nil)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), "SECRET-OUTPUT") {
+		t.Errorf("a refused read leaked Job output: %s", rec.Body.String())
+	}
+	if n := jr.count(); n != 0 {
+		t.Errorf("the route read the Job store %d times around the read lane, want 0", n)
+	}
+}
+
+func TestGetJob_AFailingRecordRefusesTheRead(t *testing.T) {
+	reads := &fakeReadAuditor{err: errors.New("audit store down")}
+	jr := &countingJobs{}
+	h := newJobFixture(t, accounts.RoleViewer, &fakeExecutor{}, jr, reads)
+
+	rec := do(t, h, http.MethodGet, "/api/v1/jobs/job-1", nil)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "read audit failed") {
+		t.Errorf("body = %s, want the read audit failed problem", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "SECRET-OUTPUT") || strings.Contains(rec.Body.String(), "audit store down") {
+		t.Errorf("a refused read leaked content or the store's error: %s", rec.Body.String())
+	}
+	if n := jr.count(); n != 0 {
+		t.Errorf("the Job store was read %d times after a failed record, want 0", n)
+	}
+}
+
+func TestGetJob_RecordsOnceBeforeTheResult(t *testing.T) {
+	log := &eventLog{}
+	reads := &fakeReadAuditor{log: log}
+	created := time.Date(2026, 8, 13, 9, 30, 0, 0, time.UTC)
+	jr := loggingJobs{
+		JobResultReader: fakeJobs{
+			job:   jobs.Job{ID: "job-1", CreatedAt: created},
+			tasks: []jobs.Task{{NodeID: "n1", Outcome: jobs.OutcomeSuccess, Stdout: []byte("hello")}},
+		},
+		log: log,
+	}
+	h := newJobFixture(t, accounts.RoleViewer, &fakeExecutor{}, jr, reads)
+
+	rec := do(t, h, http.MethodGet, "/api/v1/jobs/job-1", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body %s", rec.Code, rec.Body.String())
+	}
+	if got, want := strings.Join(log.all(), ","), "record,GetJob,TasksByJob"; got != want {
+		t.Errorf("event order = %s, want %s", got, want)
+	}
+	if n := len(reads.all()); n != 1 {
+		t.Errorf("%d read records, want exactly 1", n)
+	}
+	var body struct {
+		CreatedAt string `json:"created_at"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.CreatedAt != created.Format(time.RFC3339) {
+		t.Errorf("created_at = %q, want %q", body.CreatedAt, created.Format(time.RFC3339))
+	}
+}
+
+// An id no Relay-issued Job can have is answered like any unknown Job and is
+// not recorded, so a probe cannot use the trail as storage.
+func TestGetJob_AnOverlongIdIsA404AndIsNotRecorded(t *testing.T) {
+	reads := &fakeReadAuditor{}
+	h := newJobFixture(t, accounts.RoleViewer, &fakeExecutor{}, fakeJobs{job: jobs.Job{ID: "x"}}, reads)
+
+	rec := do(t, h, http.MethodGet, "/api/v1/jobs/"+strings.Repeat("a", 129), nil)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404; body %s", rec.Code, rec.Body.String())
+	}
+	if got := reads.all(); len(got) != 0 {
+		t.Errorf("%d read records for an overlong id, want 0", len(got))
+	}
+}
+
+// A read lane built with no Job store answers the route's own legible 500 and
+// never echoes the lane's text.
+func TestGetJob_WithNoJobStoreIsALegible500(t *testing.T) {
+	reads := &fakeReadAuditor{}
+	lane := newCapService(t, capSeams{reg: registry.NewInMemory(), audit: reads}).ReadLane
+	authn := controlplane.NewAuthenticator(roleVerifier{credential: testCredential, role: accounts.RoleViewer})
+	mux := http.NewServeMux()
+	Register(mux, Deps{Exec: &fakeExecutor{gate: authz.NewRoleGate()}, JobReader: lane})
+	h := authn.Middleware(mux)
+
+	rec := do(t, h, http.MethodGet, "/api/v1/jobs/job-1", nil)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500; body %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "execution unavailable") {
+		t.Errorf("body = %s, want the execution unavailable problem", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "capability:") {
+		t.Errorf("the lane's text reached the problem detail: %s", rec.Body.String())
+	}
+	if got := reads.all(); len(got) != 0 {
+		t.Errorf("%d read records with no Job store, want 0", len(got))
 	}
 }
 
