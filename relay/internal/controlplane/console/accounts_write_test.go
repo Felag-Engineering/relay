@@ -60,9 +60,8 @@ const accountsConfirmFile = "accounts_confirm.go"
 // parseWriteHalf parses accounts_write.go, WITHOUT comments.
 //
 // Without comments deliberately, and it is load-bearing for Layer 1 below: a
-// doc comment that names a shape in order to EXPLAIN it — roleChangeCouldGrant's
-// comment names the fail-open spelling precisely so nobody writes it — is not
-// the violation. TestAccounts_NoConsoleFileNamesSecretHash takes the same
+// doc comment that names a banned shape in order to EXPLAIN it is not the
+// violation. TestAccounts_NoConsoleFileNamesSecretHash takes the same
 // position for the same reason.
 func parseWriteHalf(t *testing.T) (*token.FileSet, *ast.File) {
 	t.Helper()
@@ -239,7 +238,7 @@ func callerAuthorityIdents(scope ast.Node) map[string]bool {
 //
 // Per declaration because a file-global set is a false-positive waiting to
 // happen: one handler writing `target, pg, ok := writePrelude(...)` would make
-// `target` a caller-authority name EVERYWHERE, and roleChangeCouldGrant's
+// `target` a caller-authority name EVERYWHERE, and capability.RoleChangeCouldGrant's
 // legitimate `target.Role` — the TARGET Account's role, which this file must
 // read — would fail the guard in an unrelated function. A guard that cries
 // wolf is a guard someone deletes.
@@ -300,10 +299,9 @@ var callerRoleSpellings = []string{
 // bypass that passed both halves as they were then written.
 //
 //   - Layer 1 bans the spellings, including the two that let that bypass
-//     through. `.AtLeast(` is banned here TOO, with a COUNTED, LOCATED
-//     exception: this layer requires exactly one occurrence and Guard B
-//     requires that one to be inside roleChangeCouldGrant. A ban with a
-//     counted exception is falsifiable; a ban that was simply deleted is not.
+//     through. `.AtLeast(` is banned here TOO, totally: the role-change test
+//     is capability.RoleChangeCouldGrant's, so this file holds zero
+//     occurrences, as accounts_confirm.go does.
 //   - Layer 2 is an AST rule that does not care what the local is called: any
 //     `.Role` selector on an identifier KNOWN to hold caller authority fails,
 //     whatever its name, which catches `string(who.Role) != "admin"` — a hole
@@ -322,13 +320,9 @@ func TestAccountsWrite_NoCallerRoleComparisonLivesInTheWriteHalf(t *testing.T) {
 		}
 	}
 
-	// `.AtLeast(` is banned with one counted, located exception. Zero would
-	// mean roleChangeCouldGrant was renamed or deleted and Guard B is now
-	// asserting nothing; more than one means an occurrence slipped in.
-	if got := strings.Count(code, ".AtLeast("); got != 1 {
-		t.Errorf("%s calls AtLeast %d times, want exactly 1 (roleChangeCouldGrant's, on the "+
-			"TARGET Account's own old and new role). Zero means this guard and Guard B are "+
-			"asserting nothing; more than one means a second role comparison appeared.",
+	if got := strings.Count(code, ".AtLeast("); got != 0 {
+		t.Errorf("%s calls AtLeast %d times, want 0; it makes no role comparison, and the "+
+			"role-change test is capability.RoleChangeCouldGrant's (invariant 10)",
 			accountsWriteFile, got)
 	}
 
@@ -361,7 +355,7 @@ func TestAccountsWrite_NoCallerRoleComparisonLivesInTheWriteHalf(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Guard B — the one AtLeast call is roleChangeCouldGrant's
+// Guard B — the write half calls AtLeast nowhere
 // ---------------------------------------------------------------------------
 
 // atLeastSite is one occurrence of an AtLeast selector and the function it sits
@@ -381,7 +375,7 @@ type atLeastSite struct {
 // `var callerOutranks = func(a, b accounts.Role) bool { return a.AtLeast(b) }`
 // invisible to it — AtLeast on a caller's role, at package scope, passing
 // clean, under a failure message asserting the only comparison in the file was
-// roleChangeCouldGrant's. The third fixture below is that shape.
+// capability.RoleChangeCouldGrant's. The third fixture below is that shape.
 func atLeastCallSites(file *ast.File) []atLeastSite {
 	var sites []atLeastSite
 	var stack []ast.Node
@@ -412,14 +406,12 @@ func atLeastCallSites(file *ast.File) []atLeastSite {
 	return sites
 }
 
-// atLeastViolations reports the sites that are not roleChangeCouldGrant's,
-// each with the message its own shape deserves.
+// atLeastViolations reports every site as a violation, each with the message
+// its own shape deserves.
 func atLeastViolations(sites []atLeastSite) []string {
 	var out []string
 	for _, s := range sites {
 		switch s.enclosing {
-		case "roleChangeCouldGrant":
-			// The one permitted occurrence.
 		case "":
 			out = append(out, fmt.Sprintf(
 				"%s calls AtLeast at PACKAGE SCOPE (a var initialiser or a package-level func "+
@@ -427,27 +419,19 @@ func atLeastViolations(sites []atLeastSite) []string {
 					"how a caller-role comparison hides from it.", accountsWriteFile))
 		default:
 			out = append(out, fmt.Sprintf(
-				"%s calls AtLeast in %s — the only role comparison this file may make is "+
-					"roleChangeCouldGrant's, on the TARGET Account's own old and new role. A "+
-					"comparison anywhere else is a second opinion about authority (invariant 10).",
+				"%s calls AtLeast in %s; this file makes no role comparison, and whether a "+
+					"role change could grant is capability.RoleChangeCouldGrant's (invariant 10)",
 				accountsWriteFile, s.enclosing))
 		}
 	}
 	return out
 }
 
-func TestAccountsWrite_AtLeastIsCalledOnlyInRoleChangeCouldGrant(t *testing.T) {
+func TestAccountsWrite_NoAtLeastCallInTheWriteHalf(t *testing.T) {
 	_, file := parseWriteHalf(t)
 	sites := atLeastCallSites(file)
-
-	// The vacuity assert, in the same shape as the Reveal guard below. Zero
-	// means the function was renamed or deleted and this guard now asserts
-	// nothing; more than one means an occurrence slipped in even if it
-	// happened to sit in the right function.
-	if len(sites) != 1 {
-		t.Fatalf("%s contains %d AtLeast selectors, want exactly 1 — this guard carves ONE "+
-			"exception out of Guard A's ban, and it is only meaningful while there is exactly "+
-			"one occurrence to locate", accountsWriteFile, len(sites))
+	if len(sites) != 0 {
+		t.Errorf("%s contains %d AtLeast selectors, want 0", accountsWriteFile, len(sites))
 	}
 	for _, v := range atLeastViolations(sites) {
 		t.Error(v)
@@ -466,28 +450,25 @@ func TestAccountsWriteGuard_AtLeastFixtures(t *testing.T) {
 		wantSites  int
 	}{
 		{
-			name: "the real roleChangeCouldGrant is clean",
+			name: "a call to capability.RoleChangeCouldGrant is clean",
 			src: `package console
-import "github.com/Felag-Engineering/relay/relay/internal/accounts"
-func roleChangeCouldGrant(from, to accounts.Role) bool {
-	if !from.Valid() || !to.Valid() {
-		return true
-	}
-	return to != from && to.AtLeast(from)
-}
+import (
+	"github.com/Felag-Engineering/relay/relay/internal/accounts"
+	"github.com/Felag-Engineering/relay/relay/internal/capability"
+)
+func couldGrant(from, to accounts.Role) bool { return capability.RoleChangeCouldGrant(from, to) }
 `,
 			wantSubstr: "",
-			wantSites:  1,
+			wantSites:  0,
 		},
 		{
 			name: "a second function calling AtLeast violates",
 			src: `package console
 import "github.com/Felag-Engineering/relay/relay/internal/accounts"
-func roleChangeCouldGrant(from, to accounts.Role) bool { return to != from && to.AtLeast(from) }
 func callerOutranks(pg Page, want accounts.Role) bool { return pg.Role.AtLeast(want) }
 `,
 			wantSubstr: "calls AtLeast in callerOutranks",
-			wantSites:  2,
+			wantSites:  1,
 		},
 		{
 			// THE FIXTURE THAT FAILS AGAINST THE f.Decls SHAPE. A package-level
@@ -496,11 +477,10 @@ func callerOutranks(pg Page, want accounts.Role) bool { return pg.Role.AtLeast(w
 			name: "a package-level func literal calling AtLeast violates",
 			src: `package console
 import "github.com/Felag-Engineering/relay/relay/internal/accounts"
-func roleChangeCouldGrant(from, to accounts.Role) bool { return to != from && to.AtLeast(from) }
 var callerOutranks = func(a, b accounts.Role) bool { return a.AtLeast(b) }
 `,
 			wantSubstr: "at PACKAGE SCOPE",
-			wantSites:  2,
+			wantSites:  1,
 		},
 	}
 
@@ -610,13 +590,16 @@ func f(ctx any) bool {
 			// Against a file-global set this fixture flags "target" and fails.
 			name: "a prelude local does not taint the same name in another function",
 			src: `package console
-import "github.com/Felag-Engineering/relay/relay/internal/accounts"
+import (
+	"github.com/Felag-Engineering/relay/relay/internal/accounts"
+	"github.com/Felag-Engineering/relay/relay/internal/capability"
+)
 func handler(w any, r any) {
 	target, pg, ok := writePrelude(nil, w, r, "Accounts")
 	_, _, _ = target, pg, ok
 }
 func decide(target accounts.Account, to accounts.Role) bool {
-	return roleChangeCouldGrant(target.Role, to)
+	return capability.RoleChangeCouldGrant(target.Role, to)
 }
 `,
 			wantIDs: nil,
@@ -631,13 +614,16 @@ func f(anybody capability.Principal) string { return anybody.Role }
 		},
 		{
 			// The false-positive control: a TARGET Account's role is what
-			// roleChangeCouldGrant legitimately reads. It must not be
+			// capability.RoleChangeCouldGrant legitimately reads. It must not be
 			// mistaken for the caller's.
 			name: "a target Account's Role is not flagged",
 			src: `package console
-import "github.com/Felag-Engineering/relay/relay/internal/accounts"
+import (
+	"github.com/Felag-Engineering/relay/relay/internal/accounts"
+	"github.com/Felag-Engineering/relay/relay/internal/capability"
+)
 func f(target accounts.Account, to accounts.Role) bool {
-	return roleChangeCouldGrant(target.Role, to)
+	return capability.RoleChangeCouldGrant(target.Role, to)
 }
 `,
 			wantIDs: nil,
@@ -1363,55 +1349,6 @@ func TestAccountsWrite_AReducingActNeedsNoPassword(t *testing.T) {
 				t.Errorf("the step-up window was consulted %d times on an act that needs no step-up", x.auth.requireCalls)
 			}
 		})
-	}
-}
-
-// TestAccountsWrite_RoleChangeCouldGrantIsExhaustiveAndFailsClosed pins the
-// unit that decides a security control, directly rather than only through
-// HTTP.
-//
-// The five invalid spellings are the ones a plan reviewer used to prove the
-// property: accounts.Role.AtLeast returns false when EITHER side is invalid,
-// so the "natural" spelling (to.AtLeast(from) && to != from) is fail-OPEN in
-// every one of these cells — it would read "not a raise" on a corrupt stored
-// role and skip the password.
-func TestAccountsWrite_RoleChangeCouldGrantIsExhaustiveAndFailsClosed(t *testing.T) {
-	valid := []accounts.Role{accounts.RoleViewer, accounts.RoleOperator, accounts.RoleAdmin}
-	invalid := []accounts.Role{"", "superadmin", "Admin", "VIEWER", "root"}
-
-	// The nine ordered valid pairs, by hand so the expectation is stated and
-	// not re-derived from the implementation.
-	wantValid := map[string]bool{
-		"viewer->viewer": false, "viewer->operator": true, "viewer->admin": true,
-		"operator->viewer": false, "operator->operator": false, "operator->admin": true,
-		"admin->viewer": false, "admin->operator": false, "admin->admin": false,
-	}
-	for _, from := range valid {
-		for _, to := range valid {
-			key := string(from) + "->" + string(to)
-			if got := roleChangeCouldGrant(from, to); got != wantValid[key] {
-				t.Errorf("roleChangeCouldGrant(%q, %q) = %v, want %v", from, to, got, wantValid[key])
-			}
-		}
-	}
-
-	all := append(append([]accounts.Role{}, valid...), invalid...)
-	invalidCells := 0
-	for _, from := range all {
-		for _, to := range all {
-			if from.Valid() && to.Valid() {
-				continue
-			}
-			invalidCells++
-			if !roleChangeCouldGrant(from, to) {
-				t.Errorf("roleChangeCouldGrant(%q, %q) = false — an unknown role on either side "+
-					"must be treated as a RAISE and cost a password, or a corrupt stored role "+
-					"silently skips step-up", from, to)
-			}
-		}
-	}
-	if invalidCells != 55 {
-		t.Fatalf("the invalid-role sweep covered %d cells, want 55 — the table is not what it claims", invalidCells)
 	}
 }
 

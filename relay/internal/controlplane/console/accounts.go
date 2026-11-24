@@ -402,7 +402,7 @@ func allRoleNames() []string {
 // roleTargets splits the closed role set, minus the one held, into the roles a
 // change would RAISE to and the roles it would LOWER to. Presentation only —
 // it decides which form offers which target, and handleSetAccountRole
-// re-decides from the stored role. It reuses roleChangeCouldGrant, so an
+// re-decides from the stored role. It reuses capability.RoleChangeCouldGrant, so an
 // invalid held role fails closed: every target lands in raise and costs a
 // password.
 func roleTargets(held accounts.Role) (raise, lower []string) {
@@ -410,7 +410,7 @@ func roleTargets(held accounts.Role) (raise, lower []string) {
 		if r == string(held) {
 			continue
 		}
-		if roleChangeCouldGrant(held, accounts.Role(r)) {
+		if capability.RoleChangeCouldGrant(held, accounts.Role(r)) {
 			raise = append(raise, r)
 		} else {
 			lower = append(lower, r)
