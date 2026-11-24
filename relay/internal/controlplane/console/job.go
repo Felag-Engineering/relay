@@ -954,6 +954,15 @@ func jobRows(ctx context.Context, d Deps, caller capability.Principal, jobID str
 	return rows, nil
 }
 
+// taskDenyClass maps the Task lane's declared class onto denyText's: the class
+// is declared there, so it is never unknown.
+func taskDenyClass(withheld bool) denyClass {
+	if withheld {
+		return denyClassRead
+	}
+	return denyClassMutate
+}
+
 // newTaskRow projects one capability.TaskRow onto what the page renders.
 //
 // jobReadClass is the JOB's declared class and withheld is the TASK's: output
@@ -998,7 +1007,7 @@ func newTaskRow(t capability.TaskRow, jobReadClass bool, operation string) taskR
 		// deny group lists up to 100 of them. An unbounded rule made the ONE
 		// screen whose whole claim is boundedness the cheapest way to make the
 		// Relay render 100 MiB of HTML on a refresh.
-		rule, clipped := clip(denyText(stderr, "", withheld), maxOutputBytes)
+		rule, clipped := clip(denyText(stderr, "", taskDenyClass(withheld)), maxOutputBytes)
 		// Escaped after the clip so a cut never splits an escape sequence.
 		rule = visibletext.Block(rule)
 		row.Deny = &Deny{

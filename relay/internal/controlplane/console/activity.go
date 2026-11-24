@@ -1508,7 +1508,7 @@ func eventRowFromTrail(f trailFacts) activityRow {
 	// unrecognised OPERATION — an answer that is right for its question and
 	// meaningless as a badge on a sign-in. Labelling every row on the trail
 	// `mutate` would teach an operator to ignore the chip on the rows where it
-	// is the whole point. Same set AI-agent history draws it for.
+	// is the whole point.
 	risk := riskOf(f)
 	switch row.Kind {
 	case rowDispatch, rowRead, rowRefusal, rowApproval, rowPlan, rowCancel:
@@ -1546,7 +1546,7 @@ func summarize(f trailFacts) string {
 	case audit.KindApprovalPendingObserved:
 		return "re-drove a dispatch that is already parked"
 	case audit.KindApprovalDecided:
-		// Same discriminators as agents.go's agentCallFrom, no new vocabulary:
+		// The same discriminators approvalStateChip reads, no new vocabulary:
 		// GrantID marks a historical grant revocation (approval.md AP-84); the structured
 		// answer otherwise names which way the decision went; a
 		// decision recorded with neither falls back to the original sentence.
@@ -1572,17 +1572,10 @@ func summarize(f trailFacts) string {
 		// family: the non-dispatching tools that read the Relay's own registry
 		// and Operation catalogue.
 		//
-		// These rendered as the bare word "read" — no target, no Node, no
-		// outcome — while the very same records drove the since-retired
-		// Read-egress screen's enumeration panel. The trail had the fact and
-		// this surface, which is billed as the trail, declined to say it.
-		//
-		// readSentence (verb + readTargetOf) is reused rather than reimplemented, and that is the
-		// point: the first attempt here read ActionKind, which is empty on
-		// these records — the tool name lives in OperationName — so Activity
-		// said "the registry" while the Read-egress screen, retired
-		// 2026-10-01, said "list_nodes" about the same audit row. Two screens
-		// naming one thing two ways is how an operator stops trusting either.
+		// readSentence (verb + readTargetOf) is reused rather than
+		// reimplemented, so every surface names one audit row one way. The tool
+		// name lives in OperationName, not ActionKind, which is empty on these
+		// records.
 		return readSentence(f)
 	default:
 		return f.Kind

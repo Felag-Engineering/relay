@@ -21,7 +21,8 @@ func TestConsoleRead_ARowThatCannotTellIsNotARead(t *testing.T) {
 		"read kind, raw argv": {Kind: audit.KindRead, RawExecArgv: []string{"/bin/true"}, Verified: consoleActor},
 		"read, not console": {Kind: audit.KindRead, OperationName: "list_nodes",
 			Verified: capability.VerifiedIdentity{AccountName: "x", Method: string(capability.AuthMethodAPIToken)}},
-		"read, no method": {Kind: audit.KindRead, OperationName: "list_nodes"},
+		"read, no method":          {Kind: audit.KindRead, OperationName: "list_nodes"},
+		"parked template, console": {Kind: audit.KindApprovalRequested, OperationName: "log.tail", Verified: consoleActor},
 	} {
 		if consoleRead(row) {
 			t.Errorf("%s: treated as a Console-session read", name)

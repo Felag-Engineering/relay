@@ -33,9 +33,11 @@ const (
 //   - a read: the record kind is audit.KindRead (the non-dispatching read
 //     tools this Console's own page loads are recorded as) AND riskOf — the
 //     one inference behind the risk chip the row renders — answers read.
-//     Where the row cannot tell, the answer is "not a read" and the call
-//     stays listed: a mutate, an approval decision, a Cancel, a refusal or a
-//     Preflight is never left out, whatever its method.
+//     Only a KindRead row can be left out; riskOf's name check never makes
+//     another row a read. Where the row cannot tell, the answer is "not a
+//     read" and the call stays listed: a mutate, an approval decision, a
+//     Cancel, a refusal or a Preflight is never left out, whatever its
+//     method.
 //
 // Nothing here reads the Account registry or an Account's kind (spec 04: a
 // Kind is never read from the Account registry's current kind), and this rule
