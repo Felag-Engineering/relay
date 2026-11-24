@@ -5,6 +5,8 @@ import (
 	"fmt"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/Felag-Engineering/relay/relay/internal/controlplane"
 )
 
 // This is an EXEC file (listed in no_dispatch_test.go's execFiles — see
@@ -33,7 +35,7 @@ type getJobInput struct {
 // they finish), and get_job is the polling path — it re-reads the same Job by
 // id and reports job_status running or complete — without a second, separate
 // polling protocol.
-func registerJobTools(srv *sdkmcp.Server, exec Executor, results JobResultReader, reads ReadAuditor) {
+func registerJobTools(srv *sdkmcp.Server, exec Executor, lane ReadLane) {
 	sdkmcp.AddTool(srv, &sdkmcp.Tool{
 		Name: "cancel_job",
 		Description: "Cancel a Job's Tasks (ADR-0013): undispatched Tasks are marked cancelled without " +
@@ -66,17 +68,14 @@ func registerJobTools(srv *sdkmcp.Server, exec Executor, results JobResultReader
 			"key — outcome is the authoritative state. A Task whose daemon report the Relay refused as a " +
 			"protocol violation also has no exit_code key and is neither of those: it may well have executed.",
 	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in getJobInput) (*sdkmcp.CallToolResult, ExecutionOutput, error) {
-		// get_job returns a Job's captured per-Node stdout, so it is the
-		// sharpest case for read auditing: a caller can read back command
-		// output somebody else produced.
-		if err := auditRead(ctx, reads, "get_job", ReadEvent{JobID: in.JobID}); err != nil {
-			return nil, ExecutionOutput{}, err
-		}
-
-		out, err := renderJob(ctx, results, in.JobID)
+		// get_job returns a Job's captured per-Node stdout, so the read lane
+		// records the read before it returns the Job and refuses the call if
+		// it cannot. This tool holds no reader or auditor of its own.
+		logPrincipal(ctx, "get_job")
+		res, err := lane.GetJob(ctx, in.JobID)
 		if err != nil {
 			return nil, ExecutionOutput{}, err
 		}
-		return nil, out, nil
+		return nil, executionOutputFrom(in.JobID, controlplane.RenderJobResult(res.Job, res.Tasks)), nil
 	})
 }

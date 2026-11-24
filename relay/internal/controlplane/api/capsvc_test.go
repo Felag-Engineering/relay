@@ -19,6 +19,7 @@ type capSeams struct {
 	now        func() time.Time
 	certWindow time.Duration
 	aliases    capability.PolicyAliasSource
+	jobResults capability.JobResultSource
 
 	accountsStore capability.AccountStore
 	apiTokens     capability.APITokenStore
@@ -76,8 +77,12 @@ func newCapService(t *testing.T, s capSeams) *capLayer {
 	}
 	rec := capability.NewRecorder(s.audit, nil, nil)
 	settings := &capability.StaticOperatorSettings{S: capability.OperatorSettings{CertExpiringWithin: s.certWindow, DispatchConcurrency: capability.DefaultDispatchConcurrency}}
+	opts := []capability.ReadLaneOption{capability.WithPolicyAliasSource(s.aliases)}
+	if s.jobResults != nil {
+		opts = append(opts, capability.WithJobResultSource(s.jobResults))
+	}
 	layer := &capLayer{
-		ReadLane: capability.NewReadLane(rec, s.reg, emptyQueries{}, emptyQueries{}, nil, nil, settings, s.now, capability.WithPolicyAliasSource(s.aliases)),
+		ReadLane: capability.NewReadLane(rec, s.reg, emptyQueries{}, emptyQueries{}, nil, nil, settings, s.now, opts...),
 	}
 	if s.authz != nil {
 		layer.Control = capability.NewControl(rec, s.authz, neverFrozen{})

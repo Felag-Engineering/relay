@@ -3,12 +3,12 @@
 // execution meta-tools — run_operation, raw_exec, cancel_job, get_job — all
 // thin adapters over the same control-plane capability layer (invariant 10).
 // The read tools adapt ONE audited seam, ReadLane, and hold no
-// registry or cache of their own — every registry, Policy-view and
-// Template-vocabulary read goes through the capability read lane, which
-// records it before returning content and fails closed (QRY-28). The
-// execution tools adapt an injected Executor (Service.Start/CancelJob's exact
-// shape) and JobResultReader (per-Job Task read-back for rendering per-Node
-// results).
+// registry or cache of their own — every registry, Policy-view,
+// Template-vocabulary and Job-result read goes through the capability read
+// lane, which records it before returning content and fails closed (QRY-28).
+// The execution tools adapt an injected Executor (Service.Start/CancelJob's
+// exact shape) and JobResultReader (per-Job Task read-back for rendering a
+// dispatch's own per-Node results).
 //
 // Every file here except the execution tools (tools_execution.go,
 // tools_jobs.go, tools_approval.go, elicit.go) is a strict file: its
@@ -49,6 +49,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"time"
@@ -95,9 +96,16 @@ type NodeVocabulary struct {
 	Reported  bool
 }
 
+// JobResult is get_job's result, as ReadLane returns it: one Job and every one
+// of its Tasks, as stored.
+type JobResult struct {
+	Job   jobs.Job
+	Tasks []jobs.Task
+}
+
 // ReadLane is the ONE audited seam the read tools call (QRY-28): every
-// registry, Policy-view and Template-vocabulary read goes through it, which
-// records the read before returning content and fails closed. It is
+// registry, Policy-view, Template-vocabulary and Job-result read goes through
+// it, which records the read before returning content and fails closed. It is
 // deliberately Principal-free — capability.Principal is not on
 // capabilityReadAllowlist (no_dispatch_test.go), so this package can never
 // name it even on its strict read files — and the composition root resolves
@@ -106,6 +114,7 @@ type ReadLane interface {
 	ListNodes(ctx context.Context, selector string) (NodeListing, error)
 	DescribeNode(ctx context.Context, nodeID string) (NodeDescription, error)
 	ListOperations(ctx context.Context, nodeID string) (NodeVocabulary, error)
+	GetJob(ctx context.Context, jobID string) (JobResult, error)
 }
 
 // OperationLister is the read-only view over the FLEET-WIDE Native Operation
@@ -122,8 +131,9 @@ type OperationLister interface {
 
 // JobResultReader is the read-only view over a Job's persisted Tasks the
 // execution tools use to render per-Node results (exit code, output,
-// duration) — both run_operation/raw_exec's own result rendering and
-// get_job's polling re-read go through it (tools_execution.go's renderJob).
+// duration) — run_operation/raw_exec's own result and the answered retry's
+// re-attach go through it (tools_execution.go's renderJob). get_job does not:
+// it reads through ReadLane.
 // It is satisfied by a tiny jobs.JobRepository+TaskRepository adapter the
 // composition root builds (cmd/relay/main.go). jobs.* identifiers are not
 // gated by no_dispatch_test.go's capability/registry guard, so this
@@ -153,6 +163,17 @@ func (a readLaneAdapter) DescribeNode(ctx context.Context, nodeID string) (NodeD
 
 func (a readLaneAdapter) ListOperations(ctx context.Context, nodeID string) (NodeVocabulary, error) {
 	return a.r.ListOperations(ctx, nodeID)
+}
+
+// errNoReadLane refuses get_job on a server built without a lane: it returns
+// Task output, so it neither panics nor falls back to an unaudited read.
+var errNoReadLane = errors.New("mcp: no read lane is configured; refusing to serve an unaudited Job read")
+
+func (a readLaneAdapter) GetJob(ctx context.Context, jobID string) (JobResult, error) {
+	if a.r == nil {
+		return JobResult{}, errNoReadLane
+	}
+	return a.r.GetJob(ctx, jobID)
 }
 
 // operationListerAdapter is readLaneAdapter's sibling for OperationLister.
@@ -202,8 +223,8 @@ const serverVersion = "0.1.0"
 // A nil lane is legal only for a server whose read tools (list_nodes,
 // describe_node, list_operations) are never called — e.g. a golden-file
 // fixture exercising only the execution tools; a stray read-tool call
-// through a nil lane panics rather than failing legibly, mirroring a nil
-// ReadAuditor.
+// through a nil lane panics rather than failing legibly, except get_job,
+// which is refused.
 // Option configures a server built by New — WithClock overrides the
 // clock, WithApprovalAnswerer wires acceptance of an elicited answer,
 // WithApprovalElicitation turns on the in-band MRTR question path, and
@@ -295,7 +316,7 @@ func New(lane ReadLane, ops OperationLister, exec Executor, results JobResultRea
 	registerNodeTools(srv, lane)
 	registerOperationTools(srv, ops, lane)
 	registerExecutionTools(srv, exec, results, ask, reads, cfg.approvals, cfg.now)
-	registerJobTools(srv, exec, results, reads)
+	registerJobTools(srv, exec, lane)
 
 	// Stateless + JSON responses (MCP spec 2026-07-28): the SDK accepts
 	// the 2026-07-28 protocol only in stateless mode, and every tool here is

@@ -67,6 +67,24 @@ func TestRenderJob_CarriesTheHaltOfAHaltedJob(t *testing.T) {
 	}
 }
 
+// RenderJobResult is RenderJob's pure half: the same Job and Tasks render
+// identically whether read through the dispatch's reader or the read lane.
+func TestRenderJobResult_MatchesRenderJob(t *testing.T) {
+	h := jobs.Halt{TaskID: "task-1", NodeID: "node-1", Outcome: jobs.OutcomeTimeout, Resolved: true}
+	job := jobs.Job{ID: "job-1", Halt: h, OutcomeAuditFailedAt: time.Date(2026, 8, 13, 9, 30, 0, 0, time.UTC)}
+	tasks := []jobs.Task{
+		{ID: "task-2", NodeID: "node-2", State: jobs.DispatchStateResolved, Outcome: jobs.OutcomeCancelled},
+		{ID: "task-1", NodeID: "node-1", State: jobs.DispatchStatePending, Outcome: jobs.OutcomeTimeout},
+	}
+	want, err := RenderJob(context.Background(), fakeJobResults{job: job, tasks: tasks}, "job-1")
+	if err != nil {
+		t.Fatalf("RenderJob: %v", err)
+	}
+	if got := RenderJobResult(job, tasks); !reflect.DeepEqual(got, want) {
+		t.Errorf("RenderJobResult = %+v, want %+v", got, want)
+	}
+}
+
 func TestRenderJob_NoHaltWhenTheJobDidNotHalt(t *testing.T) {
 	reader := fakeJobResults{
 		job:   jobs.Job{ID: "job-1"},

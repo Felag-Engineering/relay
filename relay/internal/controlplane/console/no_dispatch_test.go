@@ -324,6 +324,13 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 		return false
 	}
 
+	// jobOutputMethod matches GetJob, the *capability.ReadLane read that
+	// returns a Job's Task output unstripped and records the read.
+	// Deps.Queries is wired to that concrete type, so the Console's Job reads
+	// stay QueryReader's. Consulted like approvalListingMethod: only on
+	// recovery, so declaring one is not refused.
+	jobOutputMethod := func(name string) bool { return name == "GetJob" }
+
 	// A NAMED local interface declaring one of those methods is the same door
 	// with a name on it (`type lister interface{ PendingApprovals(...) }`
 	// then `any(d.Approvals).(lister)`). Record it in aliasOf so the
@@ -339,7 +346,7 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 		}
 		for _, m := range iface.Methods.List {
 			for _, name := range m.Names {
-				if writeSurfaceMethod(name.Name) || approvalListingMethod(name.Name) {
+				if writeSurfaceMethod(name.Name) || approvalListingMethod(name.Name) || jobOutputMethod(name.Name) {
 					aliasOf[spec.Name.Name] = fmt.Sprintf(
 						"is an interface declaring %s — recovering a write or listing method from a "+
 							"narrowed seam through a named interface is the same escalation as "+
@@ -402,6 +409,11 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 							"%s: type-asserts to an anonymous interface declaring %s — the Console lists no "+
 								"pending approval (AP-80); recovering a listing read from the "+
 								"narrowed approval seam undoes that", fileName, name.Name))
+					} else if jobOutputMethod(name.Name) {
+						violations = append(violations, fmt.Sprintf(
+							"%s: type-asserts to an anonymous interface declaring %s — GetJob returns a "+
+								"Job's Task output unstripped and is not on QueryReader; the Console's "+
+								"Job reads stay on the narrowed seam", fileName, name.Name))
 					}
 				}
 			}
@@ -1094,6 +1106,43 @@ func f(q any) {
 }
 `,
 			wantSubstr: "Start",
+		},
+		{
+			name: "anonymous interface recovering GetJob from the query seam",
+			src: `package console
+import "context"
+func f(q any) {
+	_, _ = q.(interface {
+		GetJob(ctx context.Context, id string) (any, error)
+	})
+}
+`,
+			wantSubstr: "GetJob",
+		},
+		{
+			name: "named interface declaring GetJob, then asserting to it",
+			src: `package console
+import "context"
+type jobGetter interface {
+	GetJob(ctx context.Context, id string) (any, error)
+}
+func f(q any) {
+	_, _ = q.(jobGetter)
+}
+`,
+			wantSubstr: "GetJob",
+		},
+		{
+			name: "anonymous interface recovering ListJobs, a read QueryReader may declare, produces nothing",
+			src: `package console
+import "context"
+func f(q any) {
+	_, _ = q.(interface {
+		ListJobs(ctx context.Context) ([]any, error)
+	})
+}
+`,
+			wantSubstr: "",
 		},
 		{
 			name: "anonymous interface recovering Drain from the query seam",

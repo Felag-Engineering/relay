@@ -53,9 +53,9 @@ type Executor interface {
 }
 
 // JobResultReader is the read-only view over a Job's persisted Tasks the
-// execution routes use to render per-Node results after a dispatch returns.
-// Read-only by construction: no Create/Update — a route cannot write Job state
-// through it.
+// execution routes use to render a dispatch's own per-Node results after it
+// returns. Read-only by construction: no Create/Update — a route cannot write
+// Job state through it. The Job route reads through JobReader instead.
 type JobResultReader interface {
 	GetJob(ctx context.Context, id string) (jobs.Job, error)
 	TasksByJob(ctx context.Context, jobID string) ([]jobs.Task, error)
@@ -634,6 +634,12 @@ func renderJob(ctx context.Context, results JobResultReader, jobID string) (exec
 	if err != nil {
 		return executionResponse{}, err
 	}
+	return executionResponseFrom(jobID, rendered), nil
+}
+
+// executionResponseFrom shapes a rendered Job as the response; a dispatch's own
+// result and GET /api/v1/jobs/{id} share it.
+func executionResponseFrom(jobID string, rendered controlplane.RenderedJob) executionResponse {
 	return executionResponse{
 		JobID:     jobID,
 		JobStatus: rendered.Status,
@@ -641,7 +647,7 @@ func renderJob(ctx context.Context, results JobResultReader, jobID string) (exec
 		Halt:      haltResponseFrom(rendered.Halt),
 
 		OutcomeAuditFailure: outcomeAuditFailureResponseFrom(rendered.OutcomeAuditFailure),
-	}, nil
+	}
 }
 
 // perNodeResultFromTask renders one jobs.Task (controlplane.RenderTaskResult).

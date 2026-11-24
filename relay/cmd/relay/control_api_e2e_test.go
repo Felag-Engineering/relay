@@ -836,7 +836,7 @@ func TestControlAPI_JobRoutes(t *testing.T) {
 
 	t.Run("the read is audited", func(t *testing.T) {
 		// ADR-0025: reading a Job returns captured Task output, so the access
-		// must leave a trail. This also proves apiSurface.Mount wired Reads.
+		// must leave a trail. This also proves apiSurface.Mount wired JobReader.
 		records := auditByJob(t, deps.audit, jobID)
 		var reads int
 		for _, rec := range records {

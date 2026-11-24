@@ -25,24 +25,23 @@ import (
 // the result would copy the very material this decision is worried about into
 // a trail that outlives the Job (ADR-0025).
 //
-// list_nodes, describe_node and list_operations go through the capability
-// read lane (ReadLane, mcp.go): the record and the read are the same call,
-// made there rather than through this seam. This file's
-// ReadAuditor/auditRead serve only get_job (tools_jobs.go) and an
-// answered retry's Job-bound re-attach (run_operation/raw_exec, tools_execution.go),
-// which reads back a previously-dispatched Job's Task rows exactly as
-// get_job does: the tools that read back a previously-dispatched Job's own
-// Task rows rather than the registry or a display-only cache.
+// list_nodes, describe_node, list_operations and get_job go through the
+// capability read lane (ReadLane, mcp.go): the record and the read are the
+// same call, made there rather than through this seam. This file's
+// ReadAuditor/auditRead serve only an answered retry's Job-bound re-attach
+// (run_operation/raw_exec, tools_execution.go), which reads back a
+// previously-dispatched Job's own Task rows rather than the registry or a
+// display-only cache.
 
 // ReadEvent is one non-dispatching read-tool call.
 //
 // Every field is either the tool or a pointer to what it was aimed at. There
 // is deliberately no result field — see the note above.
 type ReadEvent struct {
-	// Tool is the MCP tool name, e.g. "get_job". Set by auditRead.
+	// Tool is the MCP tool name, e.g. "run_operation". Set by auditRead.
 	Tool string
 
-	// JobID is the Job a get_job call read back.
+	// JobID is the Job an answered retry re-attached to.
 	JobID string
 }
 
@@ -71,9 +70,8 @@ type ReadAuditor interface {
 // this side of the system that is the right way round (AGENTS.md: prefer the
 // more restrictive option).
 //
-// A nil auditor logs at debug only, and exists so
-// tests and any surface that has not been wired yet keep working rather than
-// failing shut on a missing dependency.
+// A nil auditor skips the record and logs at debug only: behaviour kept for the
+// answered retry's re-attach, the one caller left.
 func auditRead(ctx context.Context, a ReadAuditor, tool string, e ReadEvent) error {
 	logPrincipal(ctx, tool)
 	if a == nil {

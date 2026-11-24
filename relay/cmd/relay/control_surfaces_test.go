@@ -88,35 +88,44 @@ func TestDefaultControlSurfaces_Order(t *testing.T) {
 	}
 }
 
-// TestSurfaceDeps_AuditSinkIsWired is a regression guard for a defect found
-// while building #357: newServer assembled surfaceDeps WITHOUT setting
-// auditSink, so it was nil, and mcp's readAuditor answered its defensive
-// `sink == nil` check by skipping silently. Read-access auditing (#288,
-// ADR-0025) was therefore dead in production from the day it shipped — the
-// trail was empty and nothing anywhere said so.
-//
-// A nil sink fails silently by design (that skip is deliberate, so an unwired
-// surface still works), which is exactly why it needs a test rather than a
-// runtime check: the only way to notice is to assert the wiring.
+// TestSurfaceDeps_AuditSinkIsWired guards the wiring a Job read depends on: the
+// read lane the composition root builds carries the Job source and the real
+// Recorder, so a Job read through either surface leaves exactly one KindRead
+// record under get_job. A lane built without its Job source refuses every read
+// and one over a dead sink records nothing, and neither is visible from a
+// surface's own tests, so the only way to notice is to drive the real root.
 func TestSurfaceDeps_AuditSinkIsWired(t *testing.T) {
 	f := startRelay(t, WithControlPlane())
-
-	// Drive a read through the surface and assert the trail actually grew.
 	jobID := seedJob(t, f.Deps)
+
+	getJobReads := func() int {
+		n := 0
+		for _, rec := range auditByJob(t, f.Deps.audit, jobID) {
+			if rec.Kind == audit.KindRead && rec.OperationName == "get_job" {
+				n++
+			}
+		}
+		return n
+	}
+
 	resp := controlAPIRequest(t, f.ClientFor(""), http.MethodGet,
 		f.ControlBase+"/api/v1/jobs/"+jobID, f.Credential, nil)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("read status = %d, want 200", resp.StatusCode)
 	}
-
-	records := auditByJob(t, f.Deps.audit, jobID)
-	for _, rec := range records {
-		if rec.Kind == audit.KindRead {
-			return // the sink is wired and writing
-		}
+	if n := getJobReads(); n != 1 {
+		t.Fatalf("get_job KindRead records after the Control API read = %d, want 1 — the read lane's Job source or Recorder is not wired (ADR-0025)", n)
 	}
-	t.Fatal("no KindRead record after a Job read — surfaceDeps.auditSink is not wired, so read auditing is silently disabled (ADR-0025)")
+
+	session := relaytest.Connect(t, f.ControlBase, f.Client())
+	res := relaytest.CallTool(t, session, "get_job", map[string]any{"job_id": jobID})
+	if res.IsError {
+		t.Fatalf("get_job returned IsError; content = %+v", res.Content)
+	}
+	if n := getJobReads(); n != 2 {
+		t.Fatalf("get_job KindRead records after the MCP read = %d, want 2 (one per surface call)", n)
+	}
 }
 
 // TestConsoleSurface_MountsTheLiveReadRouteAndTheFingerprints is the wiring

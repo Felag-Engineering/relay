@@ -233,6 +233,9 @@ func (apiSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		// read before it answers and fails closed, rather than reading the
 		// registry directly.
 		NodeReader: d.readLane,
+		// The same read lane again: it records the Job read before it answers
+		// and refuses the read if it cannot, so this surface holds no auditor.
+		JobReader: d.readLane,
 		// Execution: the SAME *capability.Execution instance the MCP
 		// surface dispatches through — one capability layer, two thin surfaces
 		// (invariant 10), so Freeze/authz/blast-cap/audit and at-most-once carry
@@ -244,16 +247,6 @@ func (apiSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		// arrives, so the API endpoint and the MCP elicitation envelope both
 		// reach it through this one object.
 		Approvals: d.approvals,
-		// Read auditing for the Job read route (ADR-0025). *auditsink.Sink
-		// satisfies api.ReadAuditor directly — no adapter needed here, unlike
-		// mcp's readAuditor below, because package api may name capability
-		// types on its own routes.
-		//
-		// Assigned only when non-nil: putting a nil *Sink into the interface
-		// would make api's `Reads == nil` check false (a typed nil is a non-nil
-		// interface) and turn every audited read into a nil-receiver panic
-		// instead of the documented skip.
-		Reads: readAuditorOrNil(d.auditSink),
 	})
 }
 
@@ -384,8 +377,8 @@ func defaultControlSurfaces() []controlSurface {
 }
 
 // mcpReadLane adapts *capability.ReadLane to mcp.ReadLane (QRY-28): the
-// ONE audited seam the MCP read tools call for every registry, Policy-view
-// and Template-vocabulary read.
+// ONE audited seam the MCP read tools call for every registry, Policy-view,
+// Template-vocabulary and Job-result read.
 //
 // It lives here, beside readAuditor, for the same reason: the mcp package
 // must not name a capability type on its read path (no_dispatch_test.go), so
@@ -447,7 +440,21 @@ func (l mcpReadLane) ListOperations(ctx context.Context, nodeID string) (mcp.Nod
 	return mcp.NodeVocabulary{Templates: vocab.Templates, Reported: vocab.Reported}, nil
 }
 
-// readAuditor adapts the audit sink to mcp.ReadAuditor (ADR-0025).
+func (l mcpReadLane) GetJob(ctx context.Context, jobID string) (mcp.JobResult, error) {
+	p, err := l.principal(ctx)
+	if err != nil {
+		return mcp.JobResult{}, err
+	}
+	res, err := l.svc.GetJob(ctx, p, jobID)
+	if err != nil {
+		return mcp.JobResult{}, err
+	}
+	return mcp.JobResult{Job: res.Job, Tasks: res.Tasks}, nil
+}
+
+// readAuditor adapts the audit sink to mcp.ReadAuditor (ADR-0025). It serves
+// only the answered retry's Job-bound re-attach; every other read is recorded
+// by the capability read lane.
 //
 // It lives here, in the composition root, for the same reason every other
 // surface adapter does: the mcp package must not name a capability type on its
@@ -468,11 +475,9 @@ func (a readAuditor) RecordRead(ctx context.Context, e mcp.ReadEvent) error {
 	if !ok {
 		return errors.New("read audit: no authenticated principal in context; refusing to record an unattributed read")
 	}
-	// mcp.ReadEvent carries no Selector/NodeID (list_nodes/describe_node/
-	// list_operations are on the capability read lane, which records those
-	// itself) — this seam only ever reads back a Job's
-	// own Task rows, so the sink's selector/nodeID columns are always empty
-	// here.
+	// mcp.ReadEvent carries no Selector/NodeID: this seam only ever serves an
+	// answered retry's re-attach to a Job's own Task rows, so the sink's
+	// selector/nodeID columns are always empty here.
 	return a.sink.RecordRead(ctx, p, e.Tool, "", "", e.JobID)
 }
 
@@ -504,8 +509,7 @@ func (o toolCallObserver) ToolCall(ctx context.Context, e mcp.ToolCallEvent) {
 }
 
 // consoleEventsOrNil returns b as a console.EventReader, or an untyped nil when
-// b is nil — the same typed-nil guard readAuditorOrNil exists for, below, and
-// needed here for a sharper reason.
+// b is nil, a typed-nil guard needed for a sharp reason.
 //
 // Assigning a nil *events.Bus straight into the interface field yields a
 // NON-nil interface holding a nil pointer, so console's `d.Events == nil`
@@ -598,20 +602,6 @@ type formEnrollmentMint struct{ tokens *capability.EnrollmentTokens }
 
 func (m formEnrollmentMint) MintEnrollmentTokenFromForm(ctx context.Context, p capability.Principal, f capability.EnrollmentMintForm) (capability.MintedEnrollmentToken, error) {
 	return m.tokens.MintEnrollmentTokenFromForm(ctx, p, f)
-}
-
-// readAuditorOrNil returns s as an api.ReadAuditor, or an untyped nil when s
-// is nil.
-//
-// Go's typed-nil trap in one place: assigning a nil *auditsink.Sink straight
-// into an interface field yields a NON-nil interface holding a nil pointer, so
-// the consumer's `== nil` guard passes it through and the first method call
-// panics on the nil receiver. Returning an untyped nil keeps the guard honest.
-func readAuditorOrNil(s *auditsink.Sink) api.ReadAuditor {
-	if s == nil {
-		return nil
-	}
-	return s
 }
 
 // consoleTrustReader adapts the CA and the server certificate both listeners

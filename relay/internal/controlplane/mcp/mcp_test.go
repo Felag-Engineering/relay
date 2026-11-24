@@ -109,6 +109,18 @@ func (l testReadLane) ListOperations(ctx context.Context, nodeID string) (mcp.No
 	return mcp.NodeVocabulary{Templates: vocab.Templates, Reported: vocab.Reported}, nil
 }
 
+func (l testReadLane) GetJob(ctx context.Context, jobID string) (mcp.JobResult, error) {
+	p, err := l.principal(ctx)
+	if err != nil {
+		return mcp.JobResult{}, err
+	}
+	res, err := l.svc.GetJob(ctx, p, jobID)
+	if err != nil {
+		return mcp.JobResult{}, err
+	}
+	return mcp.JobResult{Job: res.Job, Tasks: res.Tasks}, nil
+}
+
 // testJobResultReader adapts a *store.Store's Jobs()/Tasks() to
 // mcp.JobResultReader, mirroring cmd/relay/main.go's own (unexported)
 // jobResultReader — duplicated here rather than exported solely for tests.
@@ -1305,6 +1317,7 @@ func TestMCP_ReadToolsRecordThroughTheRealLane(t *testing.T) {
 		{"describe_node", map[string]any{"node_id": tsFail.nodeA}},
 		{"list_operations", map[string]any{"node_id": tsFail.nodeA}},
 		{"list_operations", nil},
+		{"get_job", map[string]any{"job_id": "job-unknown"}},
 	} {
 		t.Run(tc.tool+" fails closed when the trail cannot be written", func(t *testing.T) {
 			res := callTool(t, sessionFail, tc.tool, tc.args)

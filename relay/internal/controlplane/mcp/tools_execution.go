@@ -38,10 +38,10 @@ import (
 // file's methods (decisionOutput, refusalOutput, dispatchError,
 // reattachError, answerStateRefusedOutput); like every file in the package
 // it names no decision identifier (no_decision_test.go). The Job-bound branch
-// (elicitedApprovedJobBound) is an AUDITED read (ADR-0025), exactly like
-// get_job's own read-back: a bound Job's captured output may belong to
-// another Account's dispatch, so it is read only after auditRead succeeds,
-// and fails closed otherwise.
+// (elicitedApprovedJobBound) is an AUDITED read (ADR-0025) through auditRead,
+// where get_job's read goes through the capability read lane: a bound Job's
+// captured output may belong to another Account's dispatch, so it is read only
+// after auditRead succeeds, and fails closed otherwise.
 
 // Executor is the narrow capability-layer entry point the execution tools
 // dispatch through — Execution.Start and Execution.CancelJob's exact shape,
@@ -155,14 +155,19 @@ func convertVerdict(v controlplane.RenderedVerdict) PerNodeVerdict {
 
 // renderJob re-reads jobID via results (the injected JobResultReader) and
 // renders every one of its Tasks as a PerNodeResult, sorted by NodeID for a
-// stable response, with the Job's status and halt (controlplane.RenderJob). It is
-// the shared rendering path for run_operation/raw_exec's own result (once
-// exec.Start returns a Job) and get_job's polling re-read of the same Job later.
+// stable response, with the Job's status and halt (controlplane.RenderJob). It renders
+// run_operation/raw_exec's own result (once exec.Start returns a Job).
 func renderJob(ctx context.Context, results JobResultReader, jobID string) (ExecutionOutput, error) {
 	rendered, err := controlplane.RenderJob(ctx, results, jobID)
 	if err != nil {
 		return ExecutionOutput{}, err
 	}
+	return executionOutputFrom(jobID, rendered), nil
+}
+
+// executionOutputFrom shapes a rendered Job as the tools' result; get_job and a
+// dispatch's own result share it.
+func executionOutputFrom(jobID string, rendered controlplane.RenderedJob) ExecutionOutput {
 	return ExecutionOutput{
 		JobID:     jobID,
 		JobStatus: rendered.Status,
@@ -170,7 +175,7 @@ func renderJob(ctx context.Context, results JobResultReader, jobID string) (Exec
 		Halt:      haltOutput(rendered.Halt),
 
 		OutcomeAuditFailure: outcomeAuditFailureOutput(rendered.OutcomeAuditFailure),
-	}, nil
+	}
 }
 
 // haltOutput is the struct conversion HaltOutput exists for: a rendered halt,

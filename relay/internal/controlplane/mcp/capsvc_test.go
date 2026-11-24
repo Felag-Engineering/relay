@@ -70,11 +70,12 @@ func newCapService(t *testing.T, s capSeams) *capLayer {
 		settings.S.DispatchConcurrency = capability.DefaultDispatchConcurrency
 	}
 	ctl := capability.NewControl(rec, s.authz, s.freeze)
-	read := capability.NewReadLane(rec, s.reg, s.auditQ, s.jobQ, s.policyView, s.nodeVocab, settings, nil, capability.WithPolicyAliasSource(s.aliases))
-
 	if s.jobsRepo == nil || s.tasksRepo == nil || s.conduit == nil {
 		t.Fatalf("newCapService: jobsRepo, tasksRepo and conduit are required")
 	}
+	read := capability.NewReadLane(rec, s.reg, s.auditQ, s.jobQ, s.policyView, s.nodeVocab, settings, nil,
+		capability.WithPolicyAliasSource(s.aliases),
+		capability.WithJobResultSource(testJobResultReader{jobsRepo: s.jobsRepo, tasksRepo: s.tasksRepo}))
 	// A gate with no rules: nothing parks, so the store and authorizer below it
 	// are unreachable on every path these tests drive.
 	gate, err := approval.NewGate(nil)
