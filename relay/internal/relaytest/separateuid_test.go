@@ -145,3 +145,62 @@ func TestProcPPid(t *testing.T) {
 		t.Fatalf("procStatusInts(self, Uid:) = %v, %v; want 4 uids starting %d", uids, err, os.Getuid())
 	}
 }
+
+// Start and Run drop to the test user through one argv: sudo's -n, then setpriv, then a
+// cleared environment holding only env, then the binary and its arguments, in that order.
+func TestAsTestUserArgv(t *testing.T) {
+	got := strings.Join(asTestUserArgv([]string{"A=1", "B=2"}, "/bin/relay", []string{"init", "--admin", "x"}), " ")
+	want := "-n setpriv --reuid=relaytest --regid=relaytest --groups=relaytest-io --inh-caps=-all " +
+		"env -i A=1 B=2 /bin/relay init --admin x"
+	if got != want {
+		t.Fatalf("asTestUserArgv = %q, want %q", got, want)
+	}
+}
+
+// The layout's file helpers take a bare name and never a path that could leave their directory.
+func TestRequireName(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		refused bool
+	}{
+		{"relay.toml", false},
+		{"..", false}, // no separator: install and ln refuse it themselves
+		{"../relay.toml", true},
+		{"sub/relay.toml", true},
+		{"/etc/passwd", true},
+	} {
+		rec := &recordingLF{}
+		requireName(rec, "WriteFile", tc.name)
+		if rec.fataled != tc.refused {
+			t.Errorf("requireName(%q): refused = %v, want %v (%s)", tc.name, rec.fataled, tc.refused, rec.msg)
+		}
+		if tc.refused && !strings.Contains(rec.msg, "WriteFile") {
+			t.Errorf("requireName(%q): message %q does not name the helper", tc.name, rec.msg)
+		}
+	}
+}
+
+// The helpers that act as the test user inside StateDir refuse any path outside it.
+func TestRequireUnderState(t *testing.T) {
+	l := &RelayLayout{stateDir: "/run/relaytest.abc/state"}
+	for _, tc := range []struct {
+		path    string
+		refused bool
+	}{
+		{"/run/relaytest.abc/state/ca/ca.crt", false},
+		{"/run/relaytest.abc/state", false},
+		{"/run/relaytest.abc/etc/relay.toml", true},
+		{"/run/relaytest.abc/state/../etc/relay.toml", true},
+		{"relative/ca.crt", true},
+		{"/etc/shadow", true},
+	} {
+		rec := &recordingLF{}
+		l.requireUnderState(rec, "CopyOut", tc.path)
+		if rec.fataled != tc.refused {
+			t.Errorf("requireUnderState(%q): refused = %v, want %v (%s)", tc.path, rec.fataled, tc.refused, rec.msg)
+		}
+		if tc.refused && !strings.Contains(rec.msg, "CopyOut") {
+			t.Errorf("requireUnderState(%q): message %q does not name the helper", tc.path, rec.msg)
+		}
+	}
+}
