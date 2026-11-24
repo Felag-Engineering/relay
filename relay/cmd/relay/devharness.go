@@ -168,7 +168,7 @@ func installDevHarness(cfg Config, deps *appDeps) (stop func(), err error) {
 	if err != nil {
 		return nil, fmt.Errorf("devharness: %w", err)
 	}
-	router, reconciler, sink := newDispatchStack(deps.tasks, violations, deps.logger)
+	router, reconciler, sink := newDispatchStack(deps.tasks, violations, deps.logger, dispatch.WithResendLimitSettlement(deps.store.Jobs(), harnessAudit))
 	// reconciler is captured by router's onConnect closure (dispatch_wiring.go)
 	// and fires on every Node registration, including reconnects — this is
 	// what makes the crash-mid-Job test's restart reconciliation happen.

@@ -492,6 +492,39 @@ func (s *Sink) RecordHaltedSettlement(ctx context.Context, task jobs.Task, res j
 	})
 }
 
+// RecordResendLimitSettlement records the outcome the Reconciler stored for a
+// Task it withheld as past the resend limit (EX-71), as a KindDispatch row: the
+// Relay's act, so no Principal, Attribution, Selector or arguments.
+func (s *Sink) RecordResendLimitSettlement(ctx context.Context, task jobs.Task, res jobs.Result) error {
+	return s.append(ctx, audit.Record{
+		Timestamp:     s.now(),
+		Kind:          audit.KindDispatch,
+		JobID:         task.JobID,
+		NodeID:        task.NodeID,
+		ActionKind:    approval.ActionKindName(task.Action.Kind),
+		OperationName: task.Action.OperationName,
+		Outcome:       res.Outcome,
+		Reason:        "not_resent=past_resend_limit task_id=" + task.ID,
+		Stderr:        res.Stderr,
+	})
+}
+
+// RecordResendLimitHalt records the halt of task's Job that the Reconciler
+// recorded when it resolved task past the resend limit, as a KindJobHalt row
+// shaped like recordJobHalt's: the Relay's act, with no Principal.
+func (s *Sink) RecordResendLimitHalt(ctx context.Context, task jobs.Task, h jobs.Halt) error {
+	if !h.Halted() || task.JobID == "" {
+		return errors.New("auditsink: a job halt entry names a halt and a Job")
+	}
+	return s.append(ctx, audit.Record{
+		Timestamp: s.now(),
+		Kind:      audit.KindJobHalt,
+		JobID:     task.JobID,
+		NodeID:    h.NodeID,
+		Reason:    jobHaltReason(h),
+	})
+}
+
 // accountAdminReason renders e's Reason string, carrying the field names
 // the trail has always used for these actions, so existing trail queries
 // and dashboards built against those strings keep working:

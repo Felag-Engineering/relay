@@ -321,3 +321,45 @@ func TestResolvedOutcomes(t *testing.T) {
 		t.Error("ResolvedOutcomes() shares its backing array between calls")
 	}
 }
+
+func TestHaltsJob_ReadNeverHaltsAndUnspecifiedFailsClosed(t *testing.T) {
+	cases := []struct {
+		class RiskClass
+		o     Outcome
+		want  bool
+	}{
+		{RiskClassRead, OutcomeFailure, false},
+		{RiskClassRead, OutcomeTimeout, false},
+		{RiskClassMutate, OutcomeFailure, true},
+		{RiskClassMutate, OutcomeTimeout, true},
+		{RiskClassMutate, OutcomeSuccess, false},
+		{RiskClassMutate, OutcomeCancelled, false},
+		{RiskClassUnspecified, OutcomeFailure, true},
+	}
+	for _, c := range cases {
+		if got := HaltsJob(c.class, c.o); got != c.want {
+			t.Errorf("HaltsJob(%s, %s) = %v, want %v", RiskClassName(c.class), OutcomeName(c.o), got, c.want)
+		}
+	}
+}
+
+// Proves EX-71.
+func TestDispatchClass_TakesTheMostRestrictiveClass(t *testing.T) {
+	task := func(c RiskClass) Task { return Task{Action: Action{RiskClass: c}} }
+	cases := []struct {
+		name  string
+		tasks []Task
+		want  RiskClass
+	}{
+		{"none fails closed", nil, RiskClassUnspecified},
+		{"all read", []Task{task(RiskClassRead), task(RiskClassRead)}, RiskClassRead},
+		{"one mutate", []Task{task(RiskClassRead), task(RiskClassMutate)}, RiskClassMutate},
+		{"unspecified beside read", []Task{task(RiskClassRead), task(RiskClassUnspecified)}, RiskClassUnspecified},
+		{"mutate beside unspecified", []Task{task(RiskClassUnspecified), task(RiskClassMutate)}, RiskClassMutate},
+	}
+	for _, c := range cases {
+		if got := DispatchClass(c.tasks); got != c.want {
+			t.Errorf("%s: DispatchClass = %v, want %v", c.name, got, c.want)
+		}
+	}
+}

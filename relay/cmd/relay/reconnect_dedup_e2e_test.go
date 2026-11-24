@@ -30,7 +30,7 @@ import (
 // confirms the daemon reconnects entirely on its own (no Relaunch) and the
 // reconciled resend resolves via the daemon's dedup path rather than a second
 // real execution.
-// Proves NC-17, EX-31, DI-16.
+// Proves NC-17, EX-71, DI-16.
 func TestFleetE2E_Invariant4_ARelayRestartNeverRunsATaskTwice(t *testing.T) {
 	relayBin, daemonBin := skipUnlessFleetBins(t)
 

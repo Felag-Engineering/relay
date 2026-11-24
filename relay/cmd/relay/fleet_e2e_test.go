@@ -639,7 +639,7 @@ func assertIntentPlusOutcomes(t *testing.T, when string, recs []map[string]any, 
 // re-run: the daemon's own dedup marker (daemon/src/dedup.rs) makes the
 // reconciled resend return the benign already-processed result, never a
 // second real execution.
-// Proves EX-31, DI-16.
+// Proves EX-71, DI-16.
 func TestFleetE2E_Invariant4_ARelayAndDaemonRestartNeverRunsATaskTwice(t *testing.T) {
 	relayBin, daemonBin := skipUnlessFleetBins(t)
 

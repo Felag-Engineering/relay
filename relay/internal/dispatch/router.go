@@ -583,9 +583,12 @@ func (r *Router) ConnectedNodes() []string {
 // serialised per task ID. The first caller whose guard does not withhold marks
 // the slot sent; a caller arriving after that never consults its guard and
 // sends (a resend of an already-sent Task, deduped by the relay-daemon by
-// task_id), so the Task resolves truthfully. On a withheld send nothing is
-// written, only this call's own waiter is removed, and jobs.ErrSendWithheld is
-// returned. A send already inside c.send is past the guard: that is the
+// task_id), so the Task resolves truthfully. Such a caller's resend bound
+// (jobs.WithResendBound, set only by the Reconciler) is evaluated instead, also
+// under the slot, so a resend never goes out later than the EX-71 limit
+// whether or not the original send is still stalled holding the slot. On a
+// withheld send nothing is written, only this call's own waiter is removed,
+// and jobs.ErrSendWithheld is returned. A send already inside c.send is past the guard: that is the
 // residual pre-send window under ADR-0013.
 //
 // Neither mu nor the slot's lock is held while the other is taken, and the
@@ -611,7 +614,13 @@ func (r *Router) Dispatch(ctx context.Context, nodeID string, t jobs.Task) (jobs
 	// Outside mu on purpose: the guard may take the Job gate's mutex, commit
 	// to the store, or read it, and mu guards map access only.
 	slot.mu.Lock()
-	if !slot.sent && jobs.SendWithheld(ctx) {
+	var withheld bool
+	if slot.sent {
+		withheld = jobs.ResendWithheld(ctx)
+	} else {
+		withheld = jobs.SendWithheld(ctx)
+	}
+	if withheld {
 		slot.mu.Unlock()
 		r.removeWaiter(t.ID, w)
 		return jobs.Result{}, jobs.ErrSendWithheld

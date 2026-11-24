@@ -155,8 +155,10 @@ func settleHaltedJobs(reconciler *dispatch.Reconciler, halted jobs.HaltedJobRepo
 // flight to it via Router's offline hook.
 //
 // violations is passed straight through to NewRouter, which requires it
-// positionally; see that doc comment for why nil is a supported mode.
-func newDispatchStack(tasks jobs.TaskRepository, violations dispatch.ViolationRecorder, logger *slog.Logger) (*dispatch.Router, *dispatch.Reconciler, taskSink) {
+// positionally; see that doc comment for why nil is a supported mode. opts
+// configure the Reconciler, whose re-sends are bounded by
+// dispatch.ResendForResultLimit (EX-71).
+func newDispatchStack(tasks jobs.TaskRepository, violations dispatch.ViolationRecorder, logger *slog.Logger, opts ...dispatch.ReconcilerOption) (*dispatch.Router, *dispatch.Reconciler, taskSink) {
 	// reconciler is filled in after router exists (it needs router as its
 	// Conduit); the onConnect closure captures the *dispatch.Reconciler
 	// variable itself, not a snapshot, so it always sees the fully-built
@@ -174,7 +176,7 @@ func newDispatchStack(tasks jobs.TaskRepository, violations dispatch.ViolationRe
 			logctx.Or(logger).Error("resolve in-flight tasks on offline failed", "node_id", nodeID, "err", err)
 		}
 	}))
-	reconciler = dispatch.NewReconciler(tasks, router)
+	reconciler = dispatch.NewReconciler(tasks, router, opts...)
 
 	return router, reconciler, routerSink{r: router}
 }

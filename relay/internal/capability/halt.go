@@ -18,10 +18,7 @@ import (
 // reports read. denied_by_policy, unsupported, unreachable, version_refused,
 // cancelled and success never halt.
 func haltsJob(class jobs.RiskClass, o jobs.Outcome) bool {
-	if class == jobs.RiskClassRead {
-		return false
-	}
-	return o == jobs.OutcomeFailure || o == jobs.OutcomeTimeout
+	return jobs.HaltsJob(class, o)
 }
 
 // halt stops jobID sending on task's outcome o: it closes the gate, so no

@@ -299,6 +299,40 @@ const (
 	RiskClassMutate
 )
 
+// HaltsJob reports whether a Task that ended in outcome o halts a Job of the
+// given dispatch class: any class but read, and only failure or timeout
+// (EX-26, EX-27). Unspecified halts, failing closed (invariant 13).
+// denied_by_policy, unsupported, unreachable, version_refused, cancelled and
+// success never halt.
+func HaltsJob(class RiskClass, o Outcome) bool {
+	if class == RiskClassRead {
+		return false
+	}
+	return o == OutcomeFailure || o == OutcomeTimeout
+}
+
+// DispatchClass is the most restrictive RiskClass among a Job's Tasks, which is
+// the class the dispatch took (invariant 13): a Template Task stores its own
+// Node's reported class and an excluded Task stores the dispatch class. Read
+// only when every Task is read, mutate when any is, and Unspecified (which
+// halts) when any is and none is mutate, or when there are no Tasks.
+func DispatchClass(tasks []Task) RiskClass {
+	if len(tasks) == 0 {
+		return RiskClassUnspecified
+	}
+	class := RiskClassRead
+	for _, t := range tasks {
+		switch t.Action.RiskClass {
+		case RiskClassMutate:
+			return RiskClassMutate
+		case RiskClassRead:
+		default:
+			class = RiskClassUnspecified
+		}
+	}
+	return class
+}
+
 // RiskClassName renders r as its lowercase wire name, "read" or "mutate".
 // The string is persisted and hashed (internal/store, internal/approval), so it
 // is contract, not presentation. RiskClassUnspecified — and any out-of-range

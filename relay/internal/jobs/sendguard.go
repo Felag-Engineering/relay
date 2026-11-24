@@ -42,3 +42,25 @@ func SendWithheld(ctx context.Context) bool {
 	f, _ := ctx.Value(sendGuardKey{}).(func() bool)
 	return f != nil && f()
 }
+
+type resendBoundKey struct{}
+
+// WithResendBound returns ctx carrying withheld, a predicate a Conduit
+// evaluates immediately before writing a Task to the Tunnel even when another
+// caller has already sent that Task. Only the dispatch Reconciler sets it, to
+// bound how late a Task is sent for its result (EX-71); a send guard, by
+// contrast, never withholds the resend of an already-sent Task. A nil withheld
+// returns ctx unchanged.
+func WithResendBound(ctx context.Context, withheld func() bool) context.Context {
+	if withheld == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, resendBoundKey{}, withheld)
+}
+
+// ResendWithheld reports whether the resend bound in ctx says the send must
+// not begin. With no bound it returns false.
+func ResendWithheld(ctx context.Context) bool {
+	f, _ := ctx.Value(resendBoundKey{}).(func() bool)
+	return f != nil && f()
+}
