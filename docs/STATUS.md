@@ -2,9 +2,10 @@
 
 What the code on `main` does today, capability by capability. Read from each capability
 specification and from the surface code on 2026-10-06 at `main` `9950ec0`; the Accounts and
-Relay configuration rows re-read on 2026-10-20. Aligned with the owner's MVP decisions of
-2026-10-23: the rows for the System Model, quarantine and the Policy Catalog are removed, and
-Notes name the ADRs that change a cell once their code lands. Cells still report the code.
+Relay configuration rows re-read on 2026-10-20; the Policy and Enrollment rows and the
+Releases section re-read on 2026-11-24 at `main` `fd306bad`. Aligned with the owner's MVP decisions of 2026-10-23:
+the rows for the System Model, quarantine and the Policy Catalog are removed, and Notes name the
+ADRs that change a cell once their code lands. Cells still report the code.
 
 This page is a dated reading, not a source of truth. Behaviour lives in
 [the capability specifications](specs/), what is in flight in the GitHub milestones, and what
@@ -41,9 +42,9 @@ A cell is also `partial` when a "Designed, not built" item on that surface is un
 | Freeze | [freeze.md](specs/freeze.md) | n/a (exception) | built | deferred | Control API `freeze/engage` and `freeze/release`. The spec names no MCP surface and no Freeze tool is registered; `n/a` here is the one cell that is not a stated design absence, and records an unnamed surface. Relay host: `SIGUSR1` engages, `SIGUSR2` releases. |
 | Query | [query.md](specs/query.md) | built | built | built | MCP `list_nodes`, `describe_node`, `list_operations` (one optional `node_id`; a Selector is QRY-25, designed). The Control API exposes only the single-Node read `GET /api/v1/nodes/{node_id}`, by design (QRY-1); enumeration, the Policy view and the vocabulary are MCP and Console only. Console Fleet, Node detail and Compare read the registry; the Template vocabulary on Node detail is `roadmap: relay/research/spec-future-work/query` (QRY-14). |
 | Audit and the read lane | [audit-and-read-lane.md](specs/audit-and-read-lane.md) | built | built | partial | Control API reads `GET /api/v1/nodes/{node_id}` and `GET /api/v1/jobs/{id}` through the lane; there is no general audit-query endpoint. Console: Activity, Job detail and the event stream. The spec also names a Console read-egress screen; it was retired deliberately on 2026-10-01 and is not mounted, so the spec is stale there. |
-| Enrollment | [enrollment.md](specs/enrollment.md) | n/a | built | built | Control API mints and revokes Enrollment Tokens. Console shows enrollment attempts and Node provenance, and an `admin` mints from Add Nodes, with a password on every mint (EN-36). Node plane: `Enrollment.Enroll` and `Renew`. Joining is `sudo relay-daemon join` with the join string pasted at its prompt (ADR-0048); a token's labels become initial tags (ADR-0050, designed). |
+| Enrollment | [enrollment.md](specs/enrollment.md) | n/a | built | built | Control API mints and revokes Enrollment Tokens. Console shows enrollment attempts and Node provenance, and an `admin` mints from Add Nodes, with a password on every mint (EN-36). Node plane: `Enrollment.Enroll` and `Renew`. Joining is `sudo relay-daemon join` with the join string pasted at its prompt (ADR-0048); a token's labels are written as initial tags when the Node joins (ADR-0050, built; EN-40, EN-41). |
 | Accounts and access | [accounts-and-access.md](specs/accounts-and-access.md) | built | built | built | MCP authenticates by API Token or OAuth and offers no administration. Control API administers Accounts and API Tokens. Console: login, Accounts, Access. Local operator: `relay init --admin` / `--recover` creates the first admin and its first token. |
-| Policy | [policy.md](specs/policy.md) | built (read-only) | partial (read-only) | built (read-only) | The evaluated Policy and its fingerprint are shown through `describe_node` and the Console Node detail; the Control API Node read carries the Policy fingerprint only, and the Policy view is MCP and Console only (QRY-1, query.md). policy.md (aspirational) says the Control API shows it too; that disagrees with the migrated query.md and is left for a human. No surface writes Policy (invariant 2). The relay-daemon reads one local Policy file (`RELAY_POLICY_PATH`, default `/etc/relay-daemon/policy.toml`), written by the customer's config management and validated offline by `relay-daemon policy check`; the spec's fragment directory is not built. |
+| Policy | [policy.md](specs/policy.md) | built (read-only) | partial (read-only) | built (read-only) | The evaluated Policy and its fingerprint are shown through `describe_node` and the Console Node detail; the Control API Node read carries the Policy fingerprint only, and the Policy view is MCP and Console only (QRY-1, query.md). policy.md (aspirational) says the Control API shows it too; that disagrees with the migrated query.md and is left for a human. No surface writes Policy (invariant 2). The relay-daemon reads its local Policy file (`RELAY_POLICY_PATH`, default `/etc/relay-daemon/policy.toml`), written by the customer's config management and validated offline by `relay-daemon policy check`. The daemon also loads the Policy directory, `policy.d` beside that file, as one Policy with one fingerprint (DI-36); the package creates it empty. policy.md (aspirational) still says the Policy file is the only one built and the directory is an MVP addition; that disagrees with the code and is left for a human. The migrated daemon-installation.md (DI-36) agrees with the code, so only the aspirational policy.md is stale. |
 | Node connection | [node-connection.md](specs/node-connection.md) | n/a | n/a | n/a | Node plane only. Connection state reads appear in the Query row. |
 | Relay configuration | [relay-configuration.md](specs/relay-configuration.md) | n/a | n/a | deferred | No settings tool, route or screen is registered. For the MVP the configuration file is the one source of settings; settings in the Console wait in roadmap: relay/settings-in-the-console. The security floor is the root-owned `relay.toml` (ADR-0043), reloaded all-or-nothing on SIGHUP; the Relay refuses to start if a retired `RELAY_*` setting is in its environment. The Control API will have no write route. |
 | Daemon installation | [daemon-installation.md](specs/daemon-installation.md) | n/a | n/a | n/a | Release artifacts and the customer's config management (invariant 14). Offline `relay-daemon` subcommands: `--version`, `policy check`, `dump-operation-schema`. |
@@ -57,9 +58,9 @@ roadmap: relay/fleet-topology and roadmap: runtime/fleet-memory), quarantine
 
 ## Releases and real hardware
 
-No version is tagged: the earlier `v0.0.9` tag was retired on 2026-10-21 so that delivery tags
-start fresh, and it never had a published GitHub Release. `main` is prepared for 0.1.0, the
-first alpha. No real-hardware run is
+`v0.1.0` (the first alpha, 2026-10-22) and `v0.2.0` (2026-11-05) are published pre-releases.
+The earlier `v0.0.9` tag was retired on 2026-10-21 and never had a published GitHub Release.
+No real-hardware run is
 recorded for any version: the sign-off table in
 [beta-hardware-validation.md](operations/beta-hardware-validation.md) is unfilled, so
 everything here is proven by the automated suites and the Docker dev fleet only.
