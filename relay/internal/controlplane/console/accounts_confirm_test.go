@@ -432,7 +432,7 @@ func TestAccountsConfirm_NoCallerRoleComparisonLivesInTheConfirmationPages(t *te
 		}
 	}
 	if got := strings.Count(code, ".AtLeast("); got != 0 {
-		t.Errorf("%s calls AtLeast %d times, want 0; roleTargets carries the one comparison", accountsConfirmFile, got)
+		t.Errorf("%s calls AtLeast %d times, want 0; capability.RoleChangeCouldGrant carries the one comparison", accountsConfirmFile, got)
 	}
 
 	_, file := parseGuardedFile(t, accountsConfirmFile)

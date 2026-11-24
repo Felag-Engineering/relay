@@ -70,8 +70,8 @@ package console
 // one. That write still goes through capability.SetAccountRole, which itself
 // reads the stored role before its own compare-and-set.
 //
-// roleChangeCouldGrant fails closed on an invalid role on either side, and a
-// FAILED read demands step-up rather than skipping it. The unchanged-role
+// capability.RoleChangeCouldGrant fails closed on an invalid role on either
+// side, and a FAILED read demands step-up rather than skipping it. The unchanged-role
 // refusal rides the same read and, like the raise/lower decision, does not
 // apply when the read fails.
 //
@@ -398,27 +398,6 @@ func editRefusal(d Deps, r *http.Request, caller capability.Principal, accountID
 	}
 }
 
-// roleChangeCouldGrant reports whether changing a role FROM from TO to could
-// increase what the target Account may do. It is the only place this package
-// decides whether a role change is a raise, and it decides it about the TARGET
-// Account's own old and new role — never about the caller's.
-//
-// accounts.go also calls it at RENDER time, to split the offered targets into
-// Raise and Lower. That is presentation only: the handler re-decides from the
-// stored role, so a tampered form cannot skip step-up.
-//
-// Written to FAIL CLOSED. accounts.Role.AtLeast returns false when EITHER side
-// is invalid, so the natural spelling — `to.AtLeast(from) && to != from` —
-// reads a corrupt or unknown stored role as "not a raise" and skips the
-// password. This spelling does the opposite: an unknown role on either side is
-// treated as a raise and costs a password.
-func roleChangeCouldGrant(from, to accounts.Role) bool {
-	if !from.Valid() || !to.Valid() {
-		return true
-	}
-	return to != from && to.AtLeast(from)
-}
-
 // accountsWriteResultView is the shell rendered for a write that did not
 // redirect — every case but success, plus mint, which never redirects.
 // Deliberately small, modelled on cancelResultView: the interesting rendering
@@ -736,7 +715,7 @@ func handleCreateAccount(d Deps) http.HandlerFunc {
 //
 // Step-up ONLY when the change could raise the role. The target's current role
 // comes from d.Accounts.Account, and the write is a compare-and-set against
-// that same role (see this file's header); roleChangeCouldGrant says why
+// that same role (see this file's header); capability.RoleChangeCouldGrant says why
 // an unknown role on either side is treated as a raise.
 //
 // A submission of the role the target already holds is refused here, writing
@@ -791,7 +770,7 @@ func handleSetAccountRole(d Deps) http.HandlerFunc {
 					"That is already this Account's role. The role was not changed.", "", "")
 				return
 			}
-			couldGrant = roleChangeCouldGrant(target.Role, role)
+			couldGrant = capability.RoleChangeCouldGrant(target.Role, role)
 		}
 		ask := accountsStepUp("The role was not changed.")
 		ask.render = refuse(false)

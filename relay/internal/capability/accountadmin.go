@@ -119,6 +119,21 @@ func SelfTargeted(p Principal, accountID string) bool {
 	return p.AccountID != "" && p.AccountID == accountID
 }
 
+// RoleChangeCouldGrant reports whether changing an Account's role from `from` to `to` could
+// increase what that Account may do. It decides about the TARGET Account's own old and new
+// role, never the caller's. Exported so a surface consumes the rule (for example to decide
+// whether a role change needs step-up) rather than re-derive it (invariant 10).
+//
+// It fails closed: an invalid role on either side counts as a grant. accounts.Role.AtLeast is
+// false when either side is invalid, so `to != from && to.AtLeast(from)` alone would read a
+// corrupt stored role as "not a raise".
+func RoleChangeCouldGrant(from, to accounts.Role) bool {
+	if !from.Valid() || !to.Valid() {
+		return true
+	}
+	return to != from && to.AtLeast(from)
+}
+
 // Accounts lists every Account. Authorized at ControlAccountRead;
 // records nothing on success (see this file's header).
 func (a *AccountAdmin) Accounts(ctx context.Context, p Principal) ([]accounts.Account, error) {
