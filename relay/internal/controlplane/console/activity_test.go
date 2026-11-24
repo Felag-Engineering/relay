@@ -1710,3 +1710,28 @@ func TestActivity_ScrolledPastEveryRecordSaysNothingOlderNotNothingRecorded(t *t
 		t.Error("a narrowed scrolled page lost \"Nothing matches.\"")
 	}
 }
+
+// TestActivity_ADeclaredReadTemplateChipsRead (#1399): the Job lane chips the
+// declared class, never the name.
+func TestActivity_ADeclaredReadTemplateChipsRead(t *testing.T) {
+	sum := capability.JobSummary{JobID: "j", ActionKind: jobs.ActionOperation, OperationName: "log.tail", Total: 1}
+	sum.RiskClass = jobs.RiskClassRead
+	if got := dispatchRowFromJob(sum).Risk; got != jobs.RiskClassName(jobs.RiskClassRead) {
+		t.Errorf("declared read: Risk = %q, want read", got)
+	}
+	sum.RiskClass = jobs.RiskClassMutate
+	if got := dispatchRowFromJob(sum).Risk; got != jobs.RiskClassName(jobs.RiskClassMutate) {
+		t.Errorf("declared mutate: Risk = %q, want mutate", got)
+	}
+}
+
+// TestActivity_AnUndeclaredTemplateTrailRowChipsMutate (#1399): a trail row has
+// no declared class, so a shipped read Template's name chips mutate.
+func TestActivity_AnUndeclaredTemplateTrailRowChipsMutate(t *testing.T) {
+	for _, kind := range []string{audit.KindApprovalRequested, audit.KindRefusal} {
+		row := eventRowFromTrail(factsOfRow(capability.AuditRow{Kind: kind, OperationName: "log.tail", Timestamp: testNow}))
+		if row.Risk != jobs.RiskClassName(jobs.RiskClassMutate) {
+			t.Errorf("%s: Risk = %q, want mutate", kind, row.Risk)
+		}
+	}
+}

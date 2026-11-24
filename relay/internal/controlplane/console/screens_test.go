@@ -823,11 +823,13 @@ func TestVocab_RiskClassInference(t *testing.T) {
 			audit.Record{Kind: audit.KindRead, ActionKind: "list_nodes"}, jobs.RiskClassRead},
 		{"an unknown Operation is treated as a mutate",
 			audit.Record{Kind: audit.KindDispatch, OperationName: "customer.template.thing"}, jobs.RiskClassMutate},
-		{"file.checksum is a read (shipped read catalog, issue #461)",
-			audit.Record{Kind: audit.KindDispatch, OperationName: "file.checksum"}, jobs.RiskClassRead},
-		{"pkg.inventory is a read (shipped read catalog, issue #461)",
-			audit.Record{Kind: audit.KindDispatch, OperationName: "pkg.inventory"}, jobs.RiskClassRead},
-		{"file.stat is a mutate: it ships nowhere in /proto or daemon/, so it is an unknown Operation, not a read",
+		{"log.tail, a shipped read Template's name, with no declared class, is a mutate",
+			audit.Record{Kind: audit.KindDispatch, OperationName: "log.tail"}, jobs.RiskClassMutate},
+		{"pkg.install is a mutate (Native)",
+			audit.Record{Kind: audit.KindDispatch, OperationName: "pkg.install"}, jobs.RiskClassMutate},
+		{"a parked service.status is a mutate",
+			audit.Record{Kind: audit.KindApprovalRequested, OperationName: "service.status"}, jobs.RiskClassMutate},
+		{"a name in no vocabulary is a mutate",
 			audit.Record{Kind: audit.KindDispatch, OperationName: "file.stat"}, jobs.RiskClassMutate},
 	}
 	for _, c := range cases {
@@ -853,9 +855,28 @@ func TestVocab_DenyExplanationDoesNotBlameTheDaemonForADeliberateOmission(t *tes
 		t.Errorf("a read-class deny does not explain WHY the rule is absent:\n%s", got)
 	}
 
-	mutateDeny := audit.Record{Kind: audit.KindDispatch, OperationName: "service.restart", Outcome: jobs.OutcomeDeniedByPolicy}
-	if got := denyExplanation(mutateDeny); !strings.Contains(got, "did not report") {
-		t.Errorf("a mutate-class deny with no stderr should say the daemon did not report it:\n%s", got)
+	rawDeny := audit.Record{Kind: audit.KindDispatch, ActionKind: "raw_exec", Outcome: jobs.OutcomeDeniedByPolicy}
+	if got := denyExplanation(rawDeny); got != "The daemon refused this Operation and did not report the deciding rule." {
+		t.Errorf("a Raw Exec deny with no stderr should say the daemon did not report it:\n%s", got)
+	}
+
+	// service.restart is a frozen Native mutate: its class is known.
+	nativeDeny := audit.Record{Kind: audit.KindDispatch, OperationName: "service.restart", Outcome: jobs.OutcomeDeniedByPolicy}
+	if got := denyExplanation(nativeDeny); !strings.Contains(got, "did not report the deciding rule.") {
+		t.Errorf("a Native mutate deny with no stderr should say the daemon did not report it:\n%s", got)
+	}
+
+	// The Console cannot know a Template's class, so it must claim neither
+	// that the daemon stayed silent nor that the trail withheld output by
+	// design (#1399).
+	for _, name := range []string{"log.tail", "disk.usage"} {
+		templateDeny := audit.Record{Kind: audit.KindDispatch, OperationName: name, Outcome: jobs.OutcomeDeniedByPolicy}
+		want := "The deciding rule is not in the trail: the daemon either did not report it, or reported it\n" +
+			"in a read-class Task's output, which the trail never retains. Query this Node's\n" +
+			"effective Policy to see the rule."
+		if got := denyExplanation(templateDeny); got != want {
+			t.Errorf("%s: an unknown-class deny with no stderr = %q, want %q", name, got, want)
+		}
 	}
 
 	verbatim := audit.Record{Kind: audit.KindDispatch, OperationName: "service.restart",
@@ -2648,22 +2669,19 @@ func sinkReadRecords(t *testing.T, tools ...string) []audit.Record {
 	return repo.recs
 }
 
-// TestConsoleCSS_NarrowViewportsStackRatherThanOverflow.
+// TestConsoleCSS_NarrowViewportsScrollTheRowRatherThanTheDocument.
 //
 // A 64-character node id is the widest unbreakable token the Console renders,
-// and at 900px the 252px account rail plus the feed could not hold one — so
-// the document scrolled sideways. The rail stacks above the feed instead.
+// and a narrow viewport could not hold one — so the document scrolled
+// sideways. Each row scrolls inside itself instead.
 //
 // The ids are deliberately neither broken nor shortened: comparing identifiers
-// is most of what this stream is for. The container moves, the identifier does
-// not — the same choice .devtable and .tablescroll make.
-func TestConsoleCSS_NarrowViewportsStackRatherThanOverflow(t *testing.T) {
+// is most of what the Activity stream is for. The identifier does not move —
+// the same choice .devtable and .tablescroll make.
+func TestConsoleCSS_NarrowViewportsScrollTheRowRatherThanTheDocument(t *testing.T) {
 	css := get(t, newTestHandler(renderableDeps(), accounts.RoleAdmin),
 		"/console/assets/console.css").Body.String()
 
-	if !strings.Contains(css, "@media (max-width: 1000px)") {
-		t.Error("no narrow-viewport rule for the agent stream")
-	}
 	if !strings.Contains(css, ".evmeta, .denyhead { min-width: 0; overflow-x: auto; }") {
 		t.Error("no overflow backstop on the rows that carry full node ids")
 	}

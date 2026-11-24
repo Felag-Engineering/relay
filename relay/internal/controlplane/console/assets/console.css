@@ -1417,48 +1417,11 @@ dl.wrapid dd code { overflow-wrap: anywhere; word-break: break-all; }
 
 .pager { display: flex; gap: var(--space-4); align-items: baseline; margin: var(--space-4) 0; font-size: var(--text-sm); }
 
-/* --- Agents --------------------------------------------------------------- */
-.agentcols { display: flex; gap: var(--space-4); align-items: flex-start; }
-.agentrail {
-  width: 252px; flex: none; background: var(--bg-surface);
-  border: 1px solid var(--border-subtle); border-radius: var(--radius-section); padding: var(--space-4);
-}
-.arow { display: grid; grid-template-columns: 10px 1fr; gap: 3px var(--space-2); padding: var(--space-2); border-radius: var(--radius-lg); color: inherit; }
-.arow:hover { background: var(--bg-elevated); text-decoration: none; }
-.arow.on { background: var(--bg-elevated); box-shadow: inset 2px 0 0 var(--color-accent); }
-.arow .dot { grid-row: 1; margin-top: 5px; }
-.astats, .asub { grid-column: 2; font-size: var(--text-xs); color: var(--text-muted); font-variant-numeric: tabular-nums; }
-.astats b { color: var(--text-primary); }
-.arole { font-size: var(--text-2xs); color: var(--text-muted); margin-left: var(--space-1); }
-.agentfeed { flex: 1; min-width: 0; }
-
-/* Below this width the 252px rail and the feed cannot both hold a 64-character
- * node id, and the id is the widest unbreakable token on the screen. The rail
- * goes above the feed rather than beside it, which hands the feed the full
- * column instead of pushing the document sideways.
- *
- * The ids themselves are NOT broken or shortened: comparing identifiers is
- * most of what this stream is for, and half an id on each of two lines is no
- * longer a token an operator can select and compare. Same reasoning as
- * .devtable and .tablescroll — the container moves, the identifier does not. */
-@media (max-width: 1000px) {
-  .agentcols { flex-direction: column; }
-  .agentrail { width: auto; align-self: stretch; }
-}
-
-/* Stacking alone made this WORSE, which is worth recording. In a row-direction
- * flex container .agentfeed's `min-width: 0` capped it on the MAIN axis, so a
- * wide row overflowed only its own box. Turning the container to a column
- * moved the main axis to vertical, min-width stopped constraining anything,
- * and the feed grew to its widest child — 1224px inside a 900px viewport, a
- * bigger sideways scroll than before. max-width is what caps a flex item on
- * the cross axis. */
-.agentfeed { max-width: 100%; }
+/* --- Event rows ----------------------------------------------------------- */
 .ev, .evbody { min-width: 0; }
 
-/* The backstop, for a viewport narrow enough that even the full column will
- * not hold a 64-character node id: the row scrolls inside itself rather than
- * pushing the document. min-width:0 is what lets a flex item shrink below its
+/* The backstop, for a viewport too narrow to hold a 64-character node id: the
+ * row scrolls inside itself rather than pushing the document. min-width:0 is what lets a flex item shrink below its
  * content at all — without it overflow-x never engages. */
 .evhead, .evmeta, .denyhead { min-width: 0; overflow-x: auto; }
 /* The record line (account_id=... api_token_id=...) breaks at the spaces between pairs; a
@@ -1710,7 +1673,7 @@ dl.kv dd { min-width: 0; }
 }
 
 /* ==========================================================================
- * Refresh controls, the Activity reload control, and the Agents screen's
+ * Refresh controls, the Activity reload control, and Activity's
  * Console-calls sentence (00-foundations.md "Refreshing a screen"; 03, 04, 14).
  * One block, appended, so nothing above it moves. Every colour is a token.
  * ========================================================================== */
@@ -1757,7 +1720,7 @@ dl.kv dd { min-width: 0; }
 .live[data-live="on"] .newqlive { display: inline; }
 .live[data-queued="yes"][data-live="on"] .wmsg[data-when="on"] { display: none; }
 
-/* The Agents screen's one sentence about reads made from this Console. It
+/* Activity's one sentence about reads made from this Console. It
  * qualifies the feed below it, so it is quiet note text, not a dashed box. */
 .consolecalls { font-size: var(--text-xs); color: var(--text-muted); }
 

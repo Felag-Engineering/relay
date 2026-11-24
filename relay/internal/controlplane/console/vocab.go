@@ -1,7 +1,8 @@
 package console
 
 // vocab.go is the ONE place this package infers an Operation's risk class from
-// an audit record, and the one place it names the read half of the catalog.
+// an audit record, and the one place it decides which Operations are Native
+// reads.
 //
 // # Why an inference is needed at all
 //
@@ -19,11 +20,12 @@ package console
 //
 // # Why the fix is here and not at each call site
 //
-// Three screens ask this question: the Activity trail lane, agent history, and
-// node detail's deny explanation. (Job detail reads the DECLARED class carried
+// Two consumers ask this question: the Activity trail lane (the risk chip, the
+// CSV risk_class column, and the Console-read filter in callfeed.go) and node
+// detail's deny explanation. (Job detail reads the DECLARED class carried
 // by capability.TaskRow/JobFilter, so it infers nothing and is not listed
 // here.)
-// Three answers is three chances to drift, and the drift would be invisible: each
+// Two answers is two chances to drift, and the drift would be invisible: each
 // screen would look right in isolation. So the inference lives in one function
 // with its limits written down, and the real fix — putting the declared class
 // on the audit record — replaces this file rather than hunting for the places
@@ -46,10 +48,10 @@ import (
 //
 // It exists because the trail reaches this package as TWO types: audit.Record,
 // for what has not migrated onto the read lane — node detail's Recent Tasks
-// panel and its node_revoke lookup, and nothing else —
-// and capability.AuditRow, for every screen that has (Activity,
-// agent history). The copy functions below — what an Operation is called,
-// what it was asked to do, who asked — must not fork along that seam. A
+// panel and its node_revoke lookup, and nothing else — and
+// capability.AuditRow, for every screen that has (Activity, Access, and the
+// Accounts last-call read). The copy functions below — what an Operation is
+// called, what it was asked to do, who asked — must not fork along that seam. A
 // second spelling of "enumerated list_nodes" is exactly how two screens come
 // to name one audit record two different ways, which is the drift
 // readTargetOf was extracted to end in the first place.
@@ -400,45 +402,19 @@ func callOutcome(f trailFacts) (outcome, state string) {
 	return "", ""
 }
 
-// readOperations is every Operation name this package can call read: the
-// native half DERIVED from opvocab, unioned with the shipped-template half
-// MIRRORED below. It is built once, at var-init, so isReadOperation stays a
-// single map lookup rather than a scan of opvocab.Operations() on every
-// rendered trail row.
+// nativeReadOperations is every Native Operation name the frozen vocabulary
+// declares read. It is built once, at var-init, so isNativeRead stays a single
+// map lookup rather than a scan of opvocab.Operations() on every rendered
+// trail row.
 //
-// The native half needs no listing of its own: it is every
-// opvocab.Operations() descriptor whose Risk is jobs.RiskClassRead. opvocab is
-// already golden-checked against the daemon's schema (ADR-0015), so a change
-// to the native vocabulary rides that chain of custody straight into this set
-// instead of requiring a second, hand-kept list to be remembered.
-//
-// The template half has no such source: there is no Go-reachable vocabulary
-// of "what does the daemon package ship", because the packaged catalog.toml
-// is a Node-side artifact the Relay does not read at runtime (see
-// vocab_contract_test.go's doc comment for why). shippedReadCatalog is
-// therefore a hand-kept MIRROR of exactly the seven templates
-// daemon/packaging/templates.d/relay-read/catalog.toml ships, all read-class,
-// and vocab_contract_test.go binds it to that file bidirectionally so the two
-// cannot silently diverge.
-//
-// A customer-authored Template Operation is in neither half and is therefore
-// treated as a mutate — the safe direction for the risk chip, since it
-// over-states blast radius rather than under-stating it. This is a change
-// from the literal it replaces: the old list also fed the
-// since-retired read-egress screen, where the same default under-counted
-// exposure. The only residual bias this set introduces is in the chip,
-// the note, and denyExplanation's fallback sentence, and it errs safe there.
-//
-// A Node-local template that REUSES one of the seven shipped names with a
-// different declared class is still misread by this inference in the
-// dangerous direction (a local mutate template named, say, `log.tail`, would
-// chip as read). The only real fix is carrying the declared class on the
-// record itself rather than inferring it here (Option 2, escalated).
-var readOperations = func() map[string]bool {
-	set := make(map[string]bool, len(shippedReadCatalog))
-	for name := range shippedReadCatalog {
-		set[name] = true
-	}
+// The set comes from opvocab, which is golden-checked against the daemon
+// schema. A Template's class is per-Node and is not on the audit record
+// (ADR-0042), so a name never proves read: a name that matches a shipped read
+// Template could be a Node-local mutate Template, and invariant 13 makes the
+// class contract that nothing may under-state. So any non-Native Operation is
+// drawn mutate.
+var nativeReadOperations = func() map[string]bool {
+	set := make(map[string]bool)
 	for _, d := range opvocab.Operations() {
 		if d.Risk == jobs.RiskClassRead {
 			set[d.Name] = true
@@ -447,22 +423,7 @@ var readOperations = func() map[string]bool {
 	return set
 }()
 
-// shippedReadCatalog names exactly the seven templates
-// daemon/packaging/templates.d/relay-read/catalog.toml ships, all read-class
-// (ADR-0021). vocab_contract_test.go hand-parses that file and asserts this
-// set against it bidirectionally, so adding, removing or reclassifying a
-// template there without updating this literal fails the Go suite.
-var shippedReadCatalog = map[string]bool{
-	"proc.list":      true,
-	"service.status": true,
-	"disk.usage":     true,
-	"net.listening":  true,
-	"pkg.inventory":  true,
-	"log.tail":       true,
-	"file.checksum":  true,
-}
-
-func isReadOperation(name string) bool { return readOperations[name] }
+func isNativeRead(name string) bool { return nativeReadOperations[name] }
 
 // riskOf infers the risk class a recorded event describes.
 //
@@ -486,12 +447,11 @@ func riskOf(f trailFacts) jobs.RiskClass {
 	if f.Kind == audit.KindRead {
 		return jobs.RiskClassRead
 	}
-	if isReadOperation(f.OperationName) {
+	if isNativeRead(f.OperationName) {
 		return jobs.RiskClassRead
 	}
-	// An unknown Operation is treated as a mutate. Over-stating blast radius is
-	// the safe direction for a chip an operator reads before deciding whether
-	// to worry.
+	// Any Operation that is not a Native read, a Template included whatever its
+	// name, is drawn mutate. Over-stating blast radius is the safe direction.
 	return jobs.RiskClassMutate
 }
 
@@ -501,7 +461,34 @@ const rawExecActionKind = "raw_exec"
 // denyExplanation renders what the Console can honestly say about WHY an
 // audited Task was denied. The Task lane calls denyText below directly.
 func denyExplanation(rec audit.Record) string {
-	return visibletext.Block(denyText(rec.Stderr, rec.Reason, riskOf(factsOfRecord(rec)) == jobs.RiskClassRead))
+	return visibletext.Block(denyText(rec.Stderr, rec.Reason, denyClassOf(factsOfRecord(rec))))
+}
+
+// denyClass is what a deny explanation knows about the refused Task's class.
+// It has three states because the audit record does not carry the class and a
+// Template's is per-Node (ADR-0042): "not a Native read" is not "mutate".
+type denyClass int
+
+const (
+	denyClassUnknown denyClass = iota
+	denyClassRead
+	denyClassMutate
+)
+
+// denyClassOf says what the record proves about the class. riskOf still draws
+// every unknown mutate for the chip; only the prose must not claim more than
+// it knows.
+func denyClassOf(f trailFacts) denyClass {
+	if len(f.RawExecArgv) > 0 || f.ActionKind == rawExecActionKind {
+		return denyClassMutate
+	}
+	if f.Kind == audit.KindRead || isNativeRead(f.OperationName) {
+		return denyClassRead
+	}
+	if _, native := opvocab.Lookup(f.OperationName); native {
+		return denyClassMutate
+	}
+	return denyClassUnknown
 }
 
 // denyText is the one explanation both lanes share — the audit trail's
@@ -523,25 +510,34 @@ func denyExplanation(rec audit.Record) string {
 //     rather than claiming the bytes do not exist anywhere.
 //   - "The daemon did not report it" for a mutate-class Task, which is the only
 //     case where that sentence is true.
+//   - "Not in the trail: either the daemon did not report it, or it reported
+//     it in a read-class Task's output" when the class is unknown, as for a
+//     Template with no declared class. Neither of the two sentences above may
+//     be claimed there.
 //
 // It exists as its own function because a second call site re-spelling the
-// last two answers is how the same refusal comes to be explained two
+// last three answers is how the same refusal comes to be explained two
 // different ways on two screens.
-func denyText(stderr []byte, reason string, readClass bool) string {
+func denyText(stderr []byte, reason string, class denyClass) string {
 	if r := trimmed(stderr); r != "" {
 		return r
 	}
 	if reason != "" {
 		return reason
 	}
-	if readClass {
-		return "The deciding rule is not recorded in the trail for a read-class Task.\n\n" +
-			"The daemon explains a refusal in the Task's output, and the audit trail never\n" +
-			"retains read output — reading is exfiltration, so what left the Node is audited\n" +
-			"and what it said is not. Query this Node's effective Policy to see\n" +
-			"the rule."
+	switch class {
+	case denyClassMutate:
+		return "The daemon refused this Operation and did not report the deciding rule."
+	case denyClassUnknown:
+		return "The deciding rule is not in the trail: the daemon either did not report it, or reported it\n" +
+			"in a read-class Task's output, which the trail never retains. Query this Node's\n" +
+			"effective Policy to see the rule."
 	}
-	return "The daemon refused this Operation and did not report the deciding rule."
+	return "The deciding rule is not recorded in the trail for a read-class Task.\n\n" +
+		"The daemon explains a refusal in the Task's output, and the audit trail never\n" +
+		"retains read output — reading is exfiltration, so what left the Node is audited\n" +
+		"and what it said is not. Query this Node's effective Policy to see\n" +
+		"the rule."
 }
 
 // argsSummary renders what was asked for: Raw Exec's argv, or an Operation's
