@@ -638,7 +638,7 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 		// dispatch and refusal is audited. This flip adds no new
 		// bypass — it only turns on the same pipeline every other surface
 		// already dispatches through.
-		router, reconciler, sink := newDispatchStack(st.Tasks(), violations, logger)
+		router, reconciler, sink := newDispatchStack(st.Tasks(), violations, logger, dispatch.WithResendLimitSettlement(st.Jobs(), auditSink))
 		// reconciler is captured by router's onConnect closure
 		// (dispatch_wiring.go) and fires on every Node (re)connect. The sweep
 		// runs here, before srv.Serve, so no Node connects and is reconciled

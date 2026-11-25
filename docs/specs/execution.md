@@ -1,6 +1,6 @@
 # Execution
 
-**Status:** designed, not built, as of `2026-11-21`.
+**Status:** current as of `2026-11-24`.
 **Claim prefix:** `EX`
 **Governed by:** ADR-0054, ADR-0001, ADR-0011, ADR-0012, ADR-0013, ADR-0014, ADR-0021, ADR-0025,
 ADR-0027, ADR-0042, ADR-0047, ADR-0049, ADR-0052; invariants 1, 4, 5, 10, 11, 12, 13, 14.
@@ -123,9 +123,8 @@ server, by rules kept there (its Policy), after everything here has passed.
   the number of Nodes; if the transaction fails, nothing is dispatched.
 - **EX-30** A Task is marked `Dispatched` in the store before it is sent, so a send error leaves
   it `Dispatched`, never resolved.
-- **EX-31** On restart the Relay re-sends each Task `Dispatched` without a result, for its
-  result, except a halted Job's (EX-28); re-sending is safe because the daemon dedups by Task ID
-  (`daemon-installation.md`).
+- **EX-71** On restart the Relay re-sends each Task `Dispatched` without a result, for its
+  result, except a halted Job's (EX-28), when the Task's Node connects, and only if the Task was marked `Dispatched` (EX-30) no more than 10 minutes earlier by the Relay's clock, a built-in constant checked immediately before each send. No Task is sent for its result later than that, whatever prompts the send. One past the limit is never sent and resolves as EX-62's does, halt included; until its Node connects it stays `Dispatched`.
 - **EX-32** No `Pending` Task survives a restart into execution, and `unreachable` and
   `version_refused` Tasks are terminal and never reconciled.
 - **EX-33** A Task for a disconnected Node is never sent, queued or retried: it resolves
@@ -220,12 +219,6 @@ differs from an outcome, where a Job ran and a Node failed; a cancel refusal lea
   cancel of a Job it did not request, or of one with no verified requester, is refused and
   audited, and the Job continues.
 
-## Designed, not built
-
-| Claim | Statement | Milestone |
-|---|---|---|
-| EX-71 | On restart the Relay re-sends each Task `Dispatched` without a result, for its result, except a halted Job's (EX-28), when the Task's Node connects, and only if the Task was marked `Dispatched` (EX-30) no more than 10 minutes earlier by the Relay's clock, a built-in constant checked immediately before each send. No Task is sent for its result later than that, whatever prompts the send. One past the limit is never sent and resolves as EX-62's does, halt included; until its Node connects it stays `Dispatched`. Replaces EX-31 when promoted. | v0.2.2 |
-
 ## Out of scope
 
 - **Policy and Raw Exec's gate**: `policy.md`; **the vocabulary and Templates**: `operations-and-templates.md`.
@@ -274,7 +267,6 @@ differs from an outcome, where a Job ran and a Node failed; a cancel refusal lea
 | EX-28 | `TestDispatchWiring_ARestartSendsNoTaskOfAHaltedJobAndCancelsEverySibling`, `TestHalt_RestartReasonNamesTheHaltAndClaimsNoLess`, `TestHalt_RestartResultIsAFailureWithNoExitStatus`, `TestNewServer_ControlEnabled_SettlesAHaltedJobBeforeServing`, `TestReconciler_SettleHaltedJobs_SendsNothingAndResolvesEveryUnsentTask`, `TestSink_RecordHaltedSettlementWritesAnOutcomeRowWithNoPrincipal` | Relay, auditsink, dispatch, jobs |
 | EX-29 | `TestAppendWithTasks_AnUnwritableIntentLeavesNoTask`, `TestAppendWithTasks_AnUnwritableTaskLeavesNoIntent`, `TestInvariant4_AFailedIntentWriteSendsNothing`, `TestInvariant4_EveryTaskIsStoredPendingWithItsIntentBeforeAnyIsSent` | capability, store |
 | EX-30 | `TestInvariant4_ASendErrorLeavesTheTaskInFlightNeverResolved`, `TestInvariant4_ATaskIsMarkedDispatchedBeforeItIsSent` | capability |
-| EX-31 | `TestFleetE2E_Invariant4_ARelayAndDaemonRestartNeverRunsATaskTwice`, `TestFleetE2E_Invariant4_ARelayRestartNeverRunsATaskTwice`, `TestInvariant4_ARestartResendsAnInFlightTaskUnderItsOwnIDForItsResult` | Relay, dispatch |
 | EX-32 | `TestDispatchWiring_ARestartSendsNoPendingUnreachableOrVersionRefusedTask`, `TestInFlightResolve`, `TestMarkUnreachable_FromPending`, `TestMarkVersionRefused_FromPending`, `TestTaskTransition_Table` | Relay, jobs, store |
 | EX-33 | `TestDispatchWiring_ARestartSendsNoPendingUnreachableOrVersionRefusedTask`, `TestEngineOfflineNodeUnreachable` | Relay, capability |
 | EX-34 | `TestDispatchWiring_AHaltClosingAfterASiblingPassedAdmitWithholdsItsSend`, `TestJobEngine_CancelAfterAdmitWithholdsThroughTheGuard`, `TestTaskTransition_Table` | Relay, capability, jobs |
@@ -310,12 +302,14 @@ differs from an outcome, where a Job ran and a Node failed; a cancel refusal lea
 | EX-67 | `TestCallShape_EmptyArgvFromAnOperatorIsUnauthorized`, `TestCallShape_EmptyRawExecArgvIsRefusedAuditedWithNoJob`, `TestControlAPI_CallShapeRefusalRendersIdenticallyOnBothSurfaces`, `TestMCP_ExecutionToolsInputSchemaConstraints`, `TestMCP_RawExec_EmptyArgvIsRefusedByTheLayer`, `TestRawExec_EmptyArgvReachesTheCapabilityLayer`, `TestStart_MalformedCallMatchingNoNodeIsRefusedAsNoNodesMatched` | API, MCP, Relay, capability |
 | EX-69 | `TestDispatch_MoreThanOneIdempotencyKeyIsABadRequest`, `TestMCP_ExecutionToolsInputSchemaConstraints`, `TestPlanMode_WaitSecondsOutsideItsRangeIsABadRequest` | API, MCP |
 | EX-70 | `TestAudit_PolicyRuleRoundTrips`, `TestDispatchWiring_APolicyDenyReachesTheAuditTrailAndTheChainVerifies`, `TestDispatch_ADeniedTaskCarriesTheDaemonsRuleReferenceToItsOutcomeRecord`, `TestDispatch_NoDecisionReadsThePolicyRule`, `TestMapping_AuditRowCarriesThePolicyRule`, `TestPolicyRuleRef_IsReadOnlyWhereItIsRecorded`, `TestRecordDispatch_ADeniedTaskRecordsTheRuleReferenceOnEveryRiskClass`, `TestRecordDispatch_NoRuleReferenceOnAnOutcomeThatIsNotAPolicyDeny`, `TestResult_APolicyDenyCarriesTheDaemonsRuleReference`, `TestResult_ARuleReferenceOnAnyOtherOutcomeIsDropped`, `TestResult_UnrecognisedPassAndSectionAreDropped`, `TestVerifyAuditChain_AStoreWithoutThePolicyRuleColumnsVerifies`, `TestVerifyAuditChain_ATrailMixingRowsWrittenBeforeAndAfterThePolicyRuleVerifies`, `TestVerifyAuditChain_AnEditedRuleReferenceIsNamed`, `allowed_unsupported_and_refused_results_carry_no_policy_rule`, `an_unresolvable_path_denial_carries_no_policy_rule`, `denied_task_result_carries_the_deciding_rule_reference`, `policy_query_verdict_matches_execution`, `resolved_path_recheck_deny_carries_the_rule_reference`, `resolved_target_recheck_denies_symlinked_deny_target` | Relay, auditquery, auditsink, capability, daemon, dispatch, jobs, store |
+| EX-71 | `TestDispatchClass_TakesTheMostRestrictiveClass`, `TestDispatchWiring_ARestartResendsInsideTheLimitAndResolvesAMutateTaskPastItWithAHalt`, `TestFleetE2E_Invariant4_ARelayAndDaemonRestartNeverRunsATaskTwice`, `TestFleetE2E_Invariant4_ARelayRestartNeverRunsATaskTwice`, `TestInvariant4_ARestartResendsAnInFlightTaskUnderItsOwnIDForItsResult`, `TestReconciler_ADispatchTimeInTheFutureIsPastTheResendLimit`, `TestReconciler_AFailedResolveOfAPastLimitTaskLeavesItDispatchedAndIsReported`, `TestReconciler_APastLimitTaskOfAMutateJobHaltsIt`, `TestReconciler_APastLimitTaskOfAReadJobDoesNotHaltIt`, `TestReconciler_APastLimitTaskOfATemplateJobHaltsOnItsMostRestrictiveClass`, `TestReconciler_APastLimitTaskWhoseNodeHasNotConnectedStaysDispatched`, `TestReconciler_AReconnectAndAReplacedStreamNeverSendAPastLimitTask`, `TestReconciler_AResendPastTheLimitIsWithheldWhileTheOriginalSendStillHoldsTheSlot`, `TestReconciler_ARestartResendsATaskDispatchedInsideTheResendLimit`, `TestReconciler_ATaskPastTheResendLimitIsResolvedAndNothingReachesTheNode`, `TestReconciler_ATaskThatCrossesTheLimitWhileQueuedIsNotSent`, `TestReconciler_ATaskWithNoDispatchTimeIsPastTheResendLimit`, `TestReconciler_AnAlreadyHaltedJobIsNotHaltedOrAuditedTwice`, `TestSink_RecordResendLimitHaltWritesAJobHaltRow`, `TestSink_RecordResendLimitSettlementWritesAnOutcomeRowWithNoPrincipal`, `TestWithinResendLimit` | Relay, auditsink, dispatch, jobs |
 
 Unproven: none.
 <!-- proof:end -->
 
 ## Retired
 
+- **EX-31** — `2026-11-24` — restart re-sends every `Dispatched` Task with no age limit; replaced by EX-71.
 - **EX-68** — `2026-11-17` — a failed outcome write after the Job ID returned is only logged; replaced by EX-66.
 - **EX-36** — `2026-11-17` — a Control API dispatch returns when every Task is resolved; replaced by EX-57.
 - **EX-63** — `2026-11-16` — a Native bad argument name refused by an adapter; replaced by EX-64.

@@ -11,6 +11,16 @@ import (
 	relayv1 "github.com/Felag-Engineering/relay/relay/internal/relay/v1"
 )
 
+// testNow is the fixed instant tests set the Reconciler's clock to; a Task
+// seeded with DispatchedAt: testNow is inside the resend limit (EX-71).
+var testNow = time.Unix(1700000000, 0).UTC()
+
+// newTestReconciler builds a Reconciler on the fixed testNow clock; a later
+// option overrides it.
+func newTestReconciler(tasks jobs.TaskRepository, conduit *Router, opts ...ReconcilerOption) *Reconciler {
+	return NewReconciler(tasks, conduit, append([]ReconcilerOption{WithReconcilerClock(func() time.Time { return testNow })}, opts...)...)
+}
+
 // fakeTaskRepository is a minimal in-memory jobs.TaskRepository fake for
 // hermetic Reconciler tests — no gRPC, no SQLite.
 type fakeTaskRepository struct {
@@ -250,12 +260,12 @@ func hasWaiter(r *Router, taskID string) bool {
 // a Task resolved (withheld by its worker on a cancel, #943) after the
 // InFlight snapshot was taken is not sent when the Reconciler reaches it.
 func TestReconciler_StaleSnapshotNeverSendsATaskResolvedSinceTheSnapshot(t *testing.T) {
-	t1 := jobs.Task{ID: "task-1", NodeID: "node-1", State: jobs.DispatchStateDispatched}
-	t2 := jobs.Task{ID: "task-2", NodeID: "node-1", State: jobs.DispatchStateDispatched}
+	t1 := jobs.Task{ID: "task-1", NodeID: "node-1", State: jobs.DispatchStateDispatched, DispatchedAt: testNow}
+	t2 := jobs.Task{ID: "task-2", NodeID: "node-1", State: jobs.DispatchStateDispatched, DispatchedAt: testNow}
 	fake := newFakeTaskRepository(t1, t2)
 	tasks := &snapshotTasks{fakeTaskRepository: fake, snapshot: []jobs.Task{t1, t2}}
 	router := NewRouter(nil, nil)
-	reconciler := NewReconciler(tasks, router)
+	reconciler := newTestReconciler(tasks, router)
 
 	send := &recordingSend{}
 	unregister := router.Register("node-1", send.send)
@@ -305,7 +315,7 @@ func TestReconciler_ResendBeforeTheWorkersGuardIsNotRecordedNeverSent(t *testing
 	task := jobs.Task{ID: "task-1", NodeID: "node-1", State: jobs.DispatchStateDispatched, DispatchedAt: dispatchedAt}
 	fake := newFakeTaskRepository(task)
 	router := NewRouter(nil, nil)
-	reconciler := NewReconciler(fake, router)
+	reconciler := newTestReconciler(fake, router, WithReconcilerClock(func() time.Time { return dispatchedAt }))
 
 	send := &recordingSend{}
 	unregister := router.Register("node-1", send.send)
@@ -371,11 +381,11 @@ func TestReconciler_ResendBeforeTheWorkersGuardIsNotRecordedNeverSent(t *testing
 // TestReconciler_StaleSnapshotResolvedTaskIsZeroSends asserts a snapshot Task
 // the store already shows Resolved is neither sent nor an error.
 func TestReconciler_StaleSnapshotResolvedTaskIsZeroSends(t *testing.T) {
-	stale := jobs.Task{ID: "task-1", NodeID: "node-1", State: jobs.DispatchStateDispatched}
+	stale := jobs.Task{ID: "task-1", NodeID: "node-1", State: jobs.DispatchStateDispatched, DispatchedAt: testNow}
 	fake := newFakeTaskRepository(jobs.Task{ID: "task-1", NodeID: "node-1", State: jobs.DispatchStateResolved, Outcome: jobs.OutcomeCancelled})
 	tasks := &snapshotTasks{fakeTaskRepository: fake, snapshot: []jobs.Task{stale}}
 	router := NewRouter(nil, nil)
-	reconciler := NewReconciler(tasks, router)
+	reconciler := newTestReconciler(tasks, router)
 
 	send := &recordingSend{}
 	unregister := router.Register("node-1", send.send)
@@ -393,12 +403,12 @@ func TestReconciler_StaleSnapshotResolvedTaskIsZeroSends(t *testing.T) {
 // fails closed: if it cannot re-read a Task's state it sends nothing, reports
 // the error, and leaves the Task Dispatched for the next reconnect.
 func TestReconciler_ReReadFailureWithholdsAndReportsError(t *testing.T) {
-	task := jobs.Task{ID: "task-1", NodeID: "node-1", State: jobs.DispatchStateDispatched}
+	task := jobs.Task{ID: "task-1", NodeID: "node-1", State: jobs.DispatchStateDispatched, DispatchedAt: testNow}
 	fake := newFakeTaskRepository(task)
 	readErr := errors.New("store unavailable")
 	tasks := &snapshotTasks{fakeTaskRepository: fake, snapshot: []jobs.Task{task}, getErr: readErr}
 	router := NewRouter(nil, nil)
-	reconciler := NewReconciler(tasks, router)
+	reconciler := newTestReconciler(tasks, router)
 
 	send := &recordingSend{}
 	unregister := router.Register("node-1", send.send)
@@ -422,12 +432,12 @@ func TestReconciler_ReReadFailureWithholdsAndReportsError(t *testing.T) {
 // On reconnect after a restart, a Dispatched Task with no result is re-sent under the same
 // Task ID, so the daemon's dedup answers it instead of running it again; its benign-or-real
 // Result is Resolved and it no longer appears in InFlight().
-// Proves EX-31.
+// Proves EX-71.
 func TestInvariant4_ARestartResendsAnInFlightTaskUnderItsOwnIDForItsResult(t *testing.T) {
-	task := jobs.Task{ID: "task-1", NodeID: "node-1", State: jobs.DispatchStateDispatched}
+	task := jobs.Task{ID: "task-1", NodeID: "node-1", State: jobs.DispatchStateDispatched, DispatchedAt: testNow}
 	tasks := newFakeTaskRepository(task)
 	router := NewRouter(nil, nil)
-	reconciler := NewReconciler(tasks, router)
+	reconciler := newTestReconciler(tasks, router)
 
 	send := &recordingSend{}
 	unregister := router.Register("node-1", send.send)
@@ -481,9 +491,9 @@ func TestInvariant4_ARestartResendsAnInFlightTaskUnderItsOwnIDForItsResult(t *te
 // tolerates a Task that a concurrent reconcile already resolved out from
 // under it: Resolve returning ErrInvalidTaskState is not an error.
 func TestReconciler_IdempotentUnderAlreadyResolved(t *testing.T) {
-	tasks := newFakeTaskRepository(jobs.Task{ID: "task-1", NodeID: "node-1", State: jobs.DispatchStateDispatched})
+	tasks := newFakeTaskRepository(jobs.Task{ID: "task-1", NodeID: "node-1", State: jobs.DispatchStateDispatched, DispatchedAt: testNow})
 	router := NewRouter(nil, nil)
-	reconciler := NewReconciler(tasks, router)
+	reconciler := newTestReconciler(tasks, router)
 
 	send := &recordingSend{}
 	unregister := router.Register("node-1", send.send)
@@ -517,11 +527,11 @@ func TestReconciler_IdempotentUnderAlreadyResolved(t *testing.T) {
 // touches in-flight Tasks for that nodeID.
 func TestReconciler_SkipsOtherNodesTasks(t *testing.T) {
 	tasks := newFakeTaskRepository(
-		jobs.Task{ID: "task-1", NodeID: "node-1", State: jobs.DispatchStateDispatched},
-		jobs.Task{ID: "task-2", NodeID: "node-2", State: jobs.DispatchStateDispatched},
+		jobs.Task{ID: "task-1", NodeID: "node-1", State: jobs.DispatchStateDispatched, DispatchedAt: testNow},
+		jobs.Task{ID: "task-2", NodeID: "node-2", State: jobs.DispatchStateDispatched, DispatchedAt: testNow},
 	)
 	router := NewRouter(nil, nil)
-	reconciler := NewReconciler(tasks, router)
+	reconciler := newTestReconciler(tasks, router)
 
 	sendA := &recordingSend{}
 	unregA := router.Register("node-1", sendA.send)
@@ -556,9 +566,9 @@ func TestReconciler_SkipsOtherNodesTasks(t *testing.T) {
 // both resend the same in-flight Task (the second must be a no-op, not a
 // second waiter overwriting the first's in Router's flat waiters map).
 func TestReconciler_PerNodeGuardPreventsDoubleDispatch(t *testing.T) {
-	tasks := newFakeTaskRepository(jobs.Task{ID: "task-1", NodeID: "node-1", State: jobs.DispatchStateDispatched})
+	tasks := newFakeTaskRepository(jobs.Task{ID: "task-1", NodeID: "node-1", State: jobs.DispatchStateDispatched, DispatchedAt: testNow})
 	router := NewRouter(nil, nil)
-	reconciler := NewReconciler(tasks, router)
+	reconciler := newTestReconciler(tasks, router)
 
 	send := &recordingSend{}
 	unregister := router.Register("node-1", send.send)
@@ -601,10 +611,10 @@ func TestReconciler_PerNodeGuardPreventsDoubleDispatch(t *testing.T) {
 // compromised Node a second chance to answer, which a fix scoped only to
 // capability.jobEngine.dispatchOne would miss entirely.
 func TestReconciler_ForgedRelayOnlyOutcomeResolvesAsProtocolViolation(t *testing.T) {
-	task := jobs.Task{ID: "task-1", NodeID: "node-1", State: jobs.DispatchStateDispatched}
+	task := jobs.Task{ID: "task-1", NodeID: "node-1", State: jobs.DispatchStateDispatched, DispatchedAt: testNow}
 	tasks := newFakeTaskRepository(task)
 	router := NewRouter(nil, nil)
-	reconciler := NewReconciler(tasks, router)
+	reconciler := newTestReconciler(tasks, router)
 
 	send := &recordingSend{}
 	unregister := router.Register("node-1", send.send)
@@ -654,11 +664,11 @@ func TestReconciler_ForgedRelayOnlyOutcomeResolvesAsProtocolViolation(t *testing
 // same recorder that closes the live-path gap closes this one too, with no
 // audit sink on the Reconciler itself.
 func TestReconciler_AForgedOutcomeOnReconnectIsRecorded(t *testing.T) {
-	task := jobs.Task{ID: "task-1", JobID: "job-1", NodeID: "node-1", State: jobs.DispatchStateDispatched}
+	task := jobs.Task{ID: "task-1", JobID: "job-1", NodeID: "node-1", State: jobs.DispatchStateDispatched, DispatchedAt: testNow}
 	tasks := newFakeTaskRepository(task)
 	fake := &fakeViolationRecorder{}
 	router := NewRouter(nil, fake)
-	reconciler := NewReconciler(tasks, router)
+	reconciler := newTestReconciler(tasks, router)
 
 	send := &recordingSend{}
 	unregister := router.Register("node-1", send.send)
@@ -708,7 +718,7 @@ func TestReconciler_AForgedOutcomeOnReconnectIsRecorded(t *testing.T) {
 func TestReconciler_NoInFlightTasksIsANoOp(t *testing.T) {
 	tasks := newFakeTaskRepository()
 	router := NewRouter(nil, nil)
-	reconciler := NewReconciler(tasks, router)
+	reconciler := newTestReconciler(tasks, router)
 
 	send := &recordingSend{}
 	unregister := router.Register("node-1", send.send)
@@ -729,10 +739,10 @@ func TestReconciler_NoInFlightTasksIsANoOp(t *testing.T) {
 // the Reconciler holds says Resolved: without the check the Task would be
 // resolved from a stale snapshot, with it nothing is written.
 func TestReconcileTask_RefusedTransitionIsTolerated(t *testing.T) {
-	stored := jobs.Task{ID: "task-1", NodeID: "node-1", State: jobs.DispatchStateDispatched}
+	stored := jobs.Task{ID: "task-1", NodeID: "node-1", State: jobs.DispatchStateDispatched, DispatchedAt: testNow}
 	tasks := newFakeTaskRepository(stored)
 	router := NewRouter(nil, nil)
-	reconciler := NewReconciler(tasks, router)
+	reconciler := newTestReconciler(tasks, router)
 
 	send := &recordingSend{}
 	unregister := router.Register("node-1", send.send)
@@ -766,11 +776,11 @@ func TestReconcileTask_RefusedTransitionIsTolerated(t *testing.T) {
 
 func TestReconciler_ResolveOffline_ResolvesOnlyThatNodesInFlightTasks(t *testing.T) {
 	tasks := newFakeTaskRepository(
-		jobs.Task{ID: "a-dispatched", NodeID: "node-a", State: jobs.DispatchStateDispatched},
-		jobs.Task{ID: "b-dispatched", NodeID: "node-b", State: jobs.DispatchStateDispatched},
+		jobs.Task{ID: "a-dispatched", NodeID: "node-a", State: jobs.DispatchStateDispatched, DispatchedAt: testNow},
+		jobs.Task{ID: "b-dispatched", NodeID: "node-b", State: jobs.DispatchStateDispatched, DispatchedAt: testNow},
 		jobs.Task{ID: "a-pending", NodeID: "node-a", State: jobs.DispatchStatePending},
 	)
-	reconciler := NewReconciler(tasks, NewRouter(nil, nil))
+	reconciler := newTestReconciler(tasks, NewRouter(nil, nil))
 
 	if err := reconciler.ResolveOffline(context.Background(), "node-a", nil); err != nil {
 		t.Fatalf("ResolveOffline: %v", err)
@@ -793,10 +803,10 @@ func TestReconciler_ResolveOffline_ResolvesOnlyThatNodesInFlightTasks(t *testing
 // is that call's to resolve, with the real result.
 func TestReconciler_ResolveOffline_LeavesTasksWhoseResultAlreadyArrived(t *testing.T) {
 	tasks := newFakeTaskRepository(
-		jobs.Task{ID: "delivered", NodeID: "node-a", State: jobs.DispatchStateDispatched},
-		jobs.Task{ID: "silent", NodeID: "node-a", State: jobs.DispatchStateDispatched},
+		jobs.Task{ID: "delivered", NodeID: "node-a", State: jobs.DispatchStateDispatched, DispatchedAt: testNow},
+		jobs.Task{ID: "silent", NodeID: "node-a", State: jobs.DispatchStateDispatched, DispatchedAt: testNow},
 	)
-	reconciler := NewReconciler(tasks, NewRouter(nil, nil))
+	reconciler := newTestReconciler(tasks, NewRouter(nil, nil))
 
 	skip := map[string]struct{}{"delivered": {}}
 	if err := reconciler.ResolveOffline(context.Background(), "node-a", skip); err != nil {
@@ -815,9 +825,9 @@ func TestReconciler_ResolveOffline_LeavesTasksWhoseResultAlreadyArrived(t *testi
 // connect of the Node sends nothing.
 // Proves EX-62.
 func TestReconciler_TaskResolvedOnOfflineIsNeverResentOnReconnect(t *testing.T) {
-	tasks := newFakeTaskRepository(jobs.Task{ID: "task-1", NodeID: "node-1", State: jobs.DispatchStateDispatched})
+	tasks := newFakeTaskRepository(jobs.Task{ID: "task-1", NodeID: "node-1", State: jobs.DispatchStateDispatched, DispatchedAt: testNow})
 	router := NewRouter(nil, nil)
-	reconciler := NewReconciler(tasks, router)
+	reconciler := newTestReconciler(tasks, router)
 
 	if err := reconciler.ResolveOffline(context.Background(), "node-1", nil); err != nil {
 		t.Fatalf("ResolveOffline: %v", err)
@@ -835,7 +845,7 @@ func TestReconciler_TaskResolvedOnOfflineIsNeverResentOnReconnect(t *testing.T) 
 }
 
 func TestReconciler_ResolveOffline_ToleratesAlreadyResolved(t *testing.T) {
-	stored := jobs.Task{ID: "task-1", NodeID: "node-1", State: jobs.DispatchStateDispatched}
+	stored := jobs.Task{ID: "task-1", NodeID: "node-1", State: jobs.DispatchStateDispatched, DispatchedAt: testNow}
 	repo := newFakeTaskRepository(stored)
 	// The in-flight snapshot still says Dispatched, but a worker resolved the
 	// Task with its real result before the sweep's write.
@@ -843,7 +853,7 @@ func TestReconciler_ResolveOffline_ToleratesAlreadyResolved(t *testing.T) {
 	if err := repo.Resolve(context.Background(), "task-1", jobs.Result{Outcome: jobs.OutcomeSuccess}); err != nil {
 		t.Fatalf("Resolve (setup): %v", err)
 	}
-	reconciler := NewReconciler(tasks, NewRouter(nil, nil))
+	reconciler := newTestReconciler(tasks, NewRouter(nil, nil))
 
 	if err := reconciler.ResolveOffline(context.Background(), "node-1", nil); err != nil {
 		t.Fatalf("ResolveOffline: %v, want nil for an already-resolved Task", err)
@@ -856,10 +866,10 @@ func TestReconciler_ResolveOffline_ToleratesAlreadyResolved(t *testing.T) {
 // A Node that drops while the Reconciler is re-sending for a result has its
 // Task resolved offline; the reconcile that was waiting on it is not a failure.
 func TestReconcileTask_DispatchErrorAfterOfflineResolveIsNotAnError(t *testing.T) {
-	task := jobs.Task{ID: "task-1", NodeID: "node-1", State: jobs.DispatchStateDispatched}
+	task := jobs.Task{ID: "task-1", NodeID: "node-1", State: jobs.DispatchStateDispatched, DispatchedAt: testNow}
 	tasks := newFakeTaskRepository(task)
 	router := NewRouter(nil, nil)
-	reconciler := NewReconciler(tasks, router)
+	reconciler := newTestReconciler(tasks, router)
 
 	send := &recordingSend{}
 	unregister := router.Register("node-1", send.send)
@@ -904,7 +914,7 @@ func (h *holdRealResult) Resolve(ctx context.Context, taskID string, r jobs.Resu
 // for as long as its own Resolve has not committed. The Node's stream ends
 // while that write is held up, and the sweep leaves the Task for the write.
 func TestReconciler_DeliveredResultSurvivesTeardownWhileItsResolveIsPending(t *testing.T) {
-	task := jobs.Task{ID: "task-1", NodeID: "node-1", State: jobs.DispatchStateDispatched}
+	task := jobs.Task{ID: "task-1", NodeID: "node-1", State: jobs.DispatchStateDispatched, DispatchedAt: testNow}
 	tasks := &holdRealResult{
 		fakeTaskRepository: newFakeTaskRepository(task),
 		entered:            make(chan struct{}, 1),
@@ -916,7 +926,7 @@ func TestReconciler_DeliveredResultSurvivesTeardownWhileItsResolveIsPending(t *t
 			t.Errorf("ResolveOffline: %v", err)
 		}
 	}))
-	reconciler = NewReconciler(tasks, router)
+	reconciler = newTestReconciler(tasks, router)
 
 	send := &recordingSend{}
 	unregister := router.Register("node-1", send.send)
@@ -942,10 +952,10 @@ func TestReconciler_DeliveredResultSurvivesTeardownWhileItsResolveIsPending(t *t
 // Once the Reconciler's Resolve has returned, the protection its delivered
 // result was held under is released.
 func TestReconciler_SettlesADeliveredResultAfterItsResolve(t *testing.T) {
-	task := jobs.Task{ID: "task-1", NodeID: "node-1", State: jobs.DispatchStateDispatched}
+	task := jobs.Task{ID: "task-1", NodeID: "node-1", State: jobs.DispatchStateDispatched, DispatchedAt: testNow}
 	tasks := newFakeTaskRepository(task)
 	router := NewRouter(nil, nil)
-	reconciler := NewReconciler(tasks, router)
+	reconciler := newTestReconciler(tasks, router)
 
 	send := &recordingSend{}
 	unregister := router.Register("node-1", send.send)

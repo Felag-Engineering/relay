@@ -731,6 +731,55 @@ func TestSink_RecordHaltedSettlementWritesAnOutcomeRowWithNoPrincipal(t *testing
 	}
 }
 
+// A Task withheld past the resend limit is recorded as an outcome row with no
+// Principal.
+// Proves EX-71.
+func TestSink_RecordResendLimitSettlementWritesAnOutcomeRowWithNoPrincipal(t *testing.T) {
+	_, repo, _ := openSinkStore(t)
+	sink := New(repo, WithNewID(sequentialIDs("audit-")), WithClock(fixedClock(time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC))))
+
+	task := jobs.Task{ID: "task-1", JobID: "job-1", NodeID: "node-2", Action: jobs.Action{Kind: jobs.ActionOperation, OperationName: "service.restart"}}
+	if err := sink.RecordResendLimitSettlement(context.Background(), task, jobs.NodeOfflineResult()); err != nil {
+		t.Fatalf("RecordResendLimitSettlement: %v", err)
+	}
+	records, err := repo.ByNode(context.Background(), "node-2")
+	if err != nil || len(records) != 1 {
+		t.Fatalf("ByNode(node-2) = %d records, %v; want 1", len(records), err)
+	}
+	rec := records[0]
+	if rec.Kind != audit.KindDispatch || rec.Outcome != jobs.OutcomeFailure || rec.JobID != "job-1" ||
+		rec.Principal != "" || string(rec.Stderr) != jobs.NodeOfflineMessage ||
+		rec.Reason != "not_resent=past_resend_limit task_id=task-1" {
+		t.Errorf("record = %+v, want a principal-less dispatch/failure row for job-1 naming the task", rec)
+	}
+}
+
+// The halt a past-limit Task caused is recorded as a job_halt row with no
+// Principal.
+// Proves EX-71.
+func TestSink_RecordResendLimitHaltWritesAJobHaltRow(t *testing.T) {
+	_, repo, _ := openSinkStore(t)
+	sink := New(repo, WithNewID(sequentialIDs("audit-")), WithClock(fixedClock(time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC))))
+
+	task := jobs.Task{ID: "task-1", JobID: "job-1", NodeID: "node-2"}
+	h := jobs.Halt{TaskID: "task-1", NodeID: "node-2", Outcome: jobs.OutcomeFailure, Resolved: true}
+	if err := sink.RecordResendLimitHalt(context.Background(), task, h); err != nil {
+		t.Fatalf("RecordResendLimitHalt: %v", err)
+	}
+	records, err := repo.ByNode(context.Background(), "node-2")
+	if err != nil || len(records) != 1 {
+		t.Fatalf("ByNode(node-2) = %d records, %v; want 1", len(records), err)
+	}
+	rec := records[0]
+	if rec.Kind != audit.KindJobHalt || rec.JobID != "job-1" || rec.Principal != "" ||
+		rec.Reason != "halting_task_id=task-1 halting_outcome=failure halting_task_resolved=true" {
+		t.Errorf("record = %+v, want a principal-less job_halt row for job-1", rec)
+	}
+	if err := sink.RecordResendLimitHalt(context.Background(), task, jobs.Halt{}); err == nil {
+		t.Error("RecordResendLimitHalt with no halt = nil, want an error")
+	}
+}
+
 // TestProtocolViolationReason_Fields pins the exact
 // "rule=... reported_outcome=... task_id=..." rendering (a stable,
 // greppable contract), and the "unnamed" fallback for an empty

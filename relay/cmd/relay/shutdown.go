@@ -52,7 +52,8 @@ func notifyStop() (<-chan os.Signal, func()) {
 // still-running Task as node-offline, an outcome the Node never reported for a
 // Task it may still be running. Left to the process exit, the Task stays in
 // flight in the store, and the next start re-sends it under its own ID for its
-// result (EX-31, invariant 4). The shutdown sends, cancels and resolves
+// result if its Node connects within ten minutes of its dispatch (EX-71,
+// invariant 4). The shutdown sends, cancels and resolves
 // nothing.
 //
 // Once the grace or the bound expires, main returns and the store closes, so a
@@ -98,7 +99,7 @@ func shutdownRelay(deps *appDeps, bound time.Duration, log *slog.Logger) {
 // Tasks all resolved but whose accounting was still writing at the bound is not
 // listed, though the summary line still records that the bound was reached.
 // The listing is store-wide: it can include a Job carried over from an earlier
-// run that the next start re-sends (EX-31).
+// run that the next start re-sends (EX-71).
 func logRunningJobs(deps *appDeps, bound time.Duration, log *slog.Logger) {
 	if deps.store == nil {
 		return
