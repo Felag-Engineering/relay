@@ -6,110 +6,10 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
-	"io"
-	"net/http"
 	"strings"
 	"testing"
 )
-
-// rawToolCall dials /mcp directly with raw JSON-RPC and calls run_operation,
-// declaring the Tasks extension in the per-request `_meta` when capable is
-// true.
-//
-// It bypasses the SDK client on purpose: speaking raw JSON-RPC is the only way
-// to assert what actually goes over the wire, which is the claim being tested.
-func rawToolCall(t *testing.T, f *relayFixture, credential string, capable bool, args map[string]any) map[string]any {
-	t.Helper()
-
-	meta := map[string]any{
-		"io.modelcontextprotocol/protocolVersion": "2026-07-28",
-		"io.modelcontextprotocol/clientInfo":      map[string]any{"name": "raw-test-client", "version": "0.0.1"},
-	}
-	caps := map[string]any{}
-	if capable {
-		caps["extensions"] = map[string]any{"io.modelcontextprotocol/tasks": map[string]any{}}
-	}
-	meta["io.modelcontextprotocol/clientCapabilities"] = caps
-
-	body, err := json.Marshal(map[string]any{
-		"jsonrpc": "2.0", "id": 7, "method": "tools/call",
-		"params": map[string]any{"_meta": meta, "name": "run_operation", "arguments": args},
-	})
-	if err != nil {
-		t.Fatalf("marshal request: %v", err)
-	}
-
-	req, err := http.NewRequest(http.MethodPost, f.ControlBase+"/mcp", bytes.NewReader(body))
-	if err != nil {
-		t.Fatalf("new request: %v", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json, text/event-stream")
-	req.Header.Set("MCP-Protocol-Version", "2026-07-28")
-	// Required from 2026-07-28 onward: the method is echoed in a header so a
-	// proxy can route without parsing the body.
-	req.Header.Set("Mcp-Method", "tools/call")
-	req.Header.Set("Mcp-Name", "run_operation")
-	req.Header.Set("Authorization", "Bearer "+credential)
-
-	resp, err := f.ClientFor(credential).Do(req)
-	if err != nil {
-		t.Fatalf("POST /mcp: %v", err)
-	}
-	defer resp.Body.Close()
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("read response: %v", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d; body = %s", resp.StatusCode, raw)
-	}
-
-	var out map[string]any
-	if err := json.Unmarshal(raw, &out); err != nil {
-		t.Fatalf("decode response: %v; body = %s", err, raw)
-	}
-	if _, isErr := out["error"]; isErr {
-		t.Fatalf("JSON-RPC error: %s", raw)
-	}
-	return out
-}
-
-func restartArgs() map[string]any {
-	return map[string]any{"selector": e2eFleetSelector, "operation": "service.restart", "args": map[string]string{"unit": "nginx"}}
-}
-
-// rawMethodCall POSTs one raw JSON-RPC request for method with params and
-// returns the HTTP status and body, never failing the test on a non-200 status:
-// an unserved method may be refused at either layer.
-func rawMethodCall(t *testing.T, f *relayFixture, credential, method string, params map[string]any) (int, []byte) {
-	t.Helper()
-	body, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 7, "method": method, "params": params})
-	if err != nil {
-		t.Fatalf("marshal request: %v", err)
-	}
-	req, err := http.NewRequest(http.MethodPost, f.ControlBase+"/mcp", bytes.NewReader(body))
-	if err != nil {
-		t.Fatalf("new request: %v", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json, text/event-stream")
-	req.Header.Set("MCP-Protocol-Version", "2026-07-28")
-	req.Header.Set("Mcp-Method", method)
-	req.Header.Set("Authorization", "Bearer "+credential)
-	resp, err := f.ClientFor(credential).Do(req)
-	if err != nil {
-		t.Fatalf("POST /mcp: %v", err)
-	}
-	defer resp.Body.Close()
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("read response: %v", err)
-	}
-	return resp.StatusCode, raw
-}
 
 // TestMCP_TasksDeclaringParkThatAsksNobodyIsPendingApproval (AP-85): through
 // the composed Relay, a gated run_operation from a client that declares the
@@ -118,7 +18,7 @@ func rawMethodCall(t *testing.T, f *relayFixture, credential, method string, par
 func TestMCP_TasksDeclaringParkThatAsksNobodyIsPendingApproval(t *testing.T) {
 	f := startGatedRelay(t, gateAllMutates)
 
-	out := rawToolCall(t, f, f.Credential, true, restartArgs())
+	out := rawToolCall(t, f, f.Credential, true, restartNginxArgs())
 	raw, err := json.Marshal(out)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -163,14 +63,10 @@ func TestMCP_NoTasksMethodIsServed(t *testing.T) {
 	for _, method := range []string{"tasks/get", "tasks/cancel", "tasks/update"} {
 		t.Run(method, func(t *testing.T) {
 			params := map[string]any{
-				"_meta": map[string]any{
-					"io.modelcontextprotocol/protocolVersion":    "2026-07-28",
-					"io.modelcontextprotocol/clientInfo":         map[string]any{"name": "raw-test-client", "version": "0.0.1"},
-					"io.modelcontextprotocol/clientCapabilities": map[string]any{"extensions": map[string]any{"io.modelcontextprotocol/tasks": map[string]any{}}},
-				},
+				"_meta":  rawClientMeta("raw-test-client", map[string]any{"extensions": tasksCapability()}),
 				"taskId": "task-anything",
 			}
-			status, raw := rawMethodCall(t, f, f.Credential, method, params)
+			status, _, raw := postRawMCP(t, f, f.Credential, rawMCPProtocolVersion, method, "", params)
 
 			var resp struct {
 				Result json.RawMessage `json:"result"`
