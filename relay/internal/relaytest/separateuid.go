@@ -212,26 +212,8 @@ func NewRelayLayout(t *testing.T, gate string) *RelayLayout {
 		t.Skipf("the Relay cannot run as a separate uid here (%s)", reason)
 	}
 
-	base := strings.TrimSpace(string(sudo(t, "mktemp", "-d", layoutParent+"/relaytest.XXXXXXXX")))
-	if filepath.Dir(base) != layoutParent || !strings.HasPrefix(filepath.Base(base), "relaytest.") {
-		t.Fatalf("sudo mktemp returned an unexpected path %q", base)
-	}
-	t.Cleanup(func() {
-		if out, err := exec.Command("sudo", "-n", "rm", "-rf", "--", base).CombinedOutput(); err != nil {
-			t.Errorf("remove the separate-uid layout %s: %v: %s", base, err, out)
-		}
-	})
-	sudo(t, "chmod", "0755", base)
-	binDir := strings.TrimSpace(string(sudo(t, "mktemp", "-d", binParent+"/relaytest-bin.XXXXXXXX")))
-	if filepath.Dir(binDir) != binParent || !strings.HasPrefix(filepath.Base(binDir), "relaytest-bin.") {
-		t.Fatalf("sudo mktemp returned an unexpected path %q", binDir)
-	}
-	t.Cleanup(func() {
-		if out, err := exec.Command("sudo", "-n", "rm", "-rf", "--", binDir).CombinedOutput(); err != nil {
-			t.Errorf("remove the separate-uid bin directory %s: %v: %s", binDir, err, out)
-		}
-	})
-	sudo(t, "chmod", "0755", binDir)
+	base := rootTempDir(t, layoutParent, "relaytest", "layout")
+	binDir := rootTempDir(t, binParent, "relaytest-bin", "bin directory")
 	l := &RelayLayout{
 		sep:      sep,
 		confDir:  filepath.Join(base, "etc"),
@@ -244,6 +226,49 @@ func NewRelayLayout(t *testing.T, gate string) *RelayLayout {
 	sudo(t, "install", "-d", "-o", TestUser, "-g", TestUser, "-m", "0700", l.stateDir)
 	sudo(t, "install", "-d", "-o", TestUser, "-g", TestIOGroup, "-m", "2770", l.ioDir)
 	return l
+}
+
+// rootTempDir makes a fresh root:root 0755 directory named <prefix>.XXXXXXXX directly under
+// parent and removes it when the test ends. A path mktemp returns anywhere else fails the test,
+// so the cleanup's `rm -rf` as root can only ever reach a directory this harness made. what
+// names the directory in a cleanup failure.
+func rootTempDir(t *testing.T, parent, prefix, what string) string {
+	t.Helper()
+	dir := strings.TrimSpace(string(sudo(t, "mktemp", "-d", parent+"/"+prefix+".XXXXXXXX")))
+	if filepath.Dir(dir) != parent || !strings.HasPrefix(filepath.Base(dir), prefix+".") {
+		t.Fatalf("sudo mktemp returned an unexpected path %q", dir)
+	}
+	t.Cleanup(func() {
+		if out, err := exec.Command("sudo", "-n", "rm", "-rf", "--", dir).CombinedOutput(); err != nil {
+			t.Errorf("remove the separate-uid %s %s: %v: %s", what, dir, err, out)
+		}
+	})
+	sudo(t, "chmod", "0755", dir)
+	return dir
+}
+
+// requireName fails the test unless name is a bare file name: the layout's helpers place files
+// only directly inside their own directory, so a name can never climb out of it.
+func requireName(t logFataler, op, name string) {
+	t.Helper()
+	if strings.Contains(name, "/") {
+		t.Fatalf("%s %q: a name, not a path", op, name)
+	}
+}
+
+// requireUnderState fails the test unless path is under StateDir: the helpers that act as
+// TestUser there must never be pointed anywhere else.
+func (l *RelayLayout) requireUnderState(t logFataler, op, path string) {
+	t.Helper()
+	if rel, err := filepath.Rel(l.stateDir, path); err != nil || strings.HasPrefix(rel, "..") {
+		t.Fatalf("%s %s: not under the state directory %s", op, path, l.stateDir)
+	}
+}
+
+// killSudo sends SIGKILL to pid, a sudo the test started, as root: sudo runs as root, which
+// the test may not signal itself. Best effort: it may already have exited.
+func killSudo(pid int) {
+	_ = exec.Command("sudo", "-n", "kill", "-s", "9", strconv.Itoa(pid)).Run()
 }
 
 // sudo runs `sudo -n <args>` and returns its stdout, failing the test on any error.
@@ -308,9 +333,7 @@ func (l *RelayLayout) WriteConfig(t *testing.T, body string) string {
 // start-time check must refuse.
 func (l *RelayLayout) WriteFile(t *testing.T, name, body, owner, group, mode string) string {
 	t.Helper()
-	if strings.Contains(name, "/") {
-		t.Fatalf("WriteFile %q: a name, not a path", name)
-	}
+	requireName(t, "WriteFile", name)
 	src := filepath.Join(t.TempDir(), name)
 	if err := os.WriteFile(src, []byte(body), 0o600); err != nil {
 		t.Fatalf("write %s: %v", src, err)
@@ -323,9 +346,7 @@ func (l *RelayLayout) WriteFile(t *testing.T, name, body, owner, group, mode str
 // Symlink makes name in ConfigDir a symbolic link to target, as root, and returns its path.
 func (l *RelayLayout) Symlink(t *testing.T, target, name string) string {
 	t.Helper()
-	if strings.Contains(name, "/") {
-		t.Fatalf("Symlink %q: a name, not a path", name)
-	}
+	requireName(t, "Symlink", name)
 	link := filepath.Join(l.confDir, name)
 	sudo(t, "ln", "-s", "--", target, link)
 	return link
@@ -335,9 +356,7 @@ func (l *RelayLayout) Symlink(t *testing.T, target, name string) string {
 // returns its path: how a test hands the Relay a state location it must refuse.
 func (l *RelayLayout) MakeStateDir(t *testing.T, name, mode string) string {
 	t.Helper()
-	if strings.Contains(name, "/") {
-		t.Fatalf("MakeStateDir %q: a name, not a path", name)
-	}
+	requireName(t, "MakeStateDir", name)
 	dir := filepath.Join(l.stateDir, name)
 	sudo(t, "install", "-d", "-o", TestUser, "-g", TestUser, "-m", mode, dir)
 	return dir
@@ -347,9 +366,7 @@ func (l *RelayLayout) MakeStateDir(t *testing.T, name, mode string) string {
 // nothing the Relay planted there can redirect root).
 func (l *RelayLayout) ChmodState(t *testing.T, path, mode string) {
 	t.Helper()
-	if rel, err := filepath.Rel(l.stateDir, path); err != nil || strings.HasPrefix(rel, "..") {
-		t.Fatalf("ChmodState %s: not under the state directory %s", path, l.stateDir)
-	}
+	l.requireUnderState(t, "ChmodState", path)
 	sudo(t, "-u", TestUser, "chmod", mode, "--", path)
 }
 
@@ -358,9 +375,7 @@ func (l *RelayLayout) ChmodState(t *testing.T, path, mode string) {
 // Relay plants in its own directory (a symlink) can make root read for it.
 func (l *RelayLayout) CopyOut(t *testing.T, path string) string {
 	t.Helper()
-	if rel, err := filepath.Rel(l.stateDir, path); err != nil || strings.HasPrefix(rel, "..") {
-		t.Fatalf("CopyOut %s: not under the state directory %s", path, l.stateDir)
-	}
+	l.requireUnderState(t, "CopyOut", path)
 	out := filepath.Join(t.TempDir(), filepath.Base(path))
 	if err := os.WriteFile(out, sudo(t, "-u", TestUser, "cat", "--", path), 0o600); err != nil {
 		t.Fatalf("write %s: %v", out, err)
@@ -378,7 +393,7 @@ func (l *RelayLayout) CopyOutStore(t *testing.T, dbPath string) string {
 	out := ""
 	for _, suffix := range []string{"", "-wal", "-shm"} {
 		src := dbPath + suffix
-		if suffix != "" && exec.Command("sudo", "-n", "-u", TestUser, "test", "-e", src).Run() != nil {
+		if suffix != "" && !l.ExistsInState(t, src) {
 			continue
 		}
 		dst := l.CopyOut(t, src)
@@ -422,12 +437,7 @@ func (l *RelayLayout) Start(t *testing.T, bin string, env []string, args ...stri
 	if err != nil {
 		return nil, fmt.Errorf("create the Relay's log in %s: %w", l.ioDir, err)
 	}
-	argv := append([]string{"-n"}, setprivArgs()...)
-	argv = append(argv, "env", "-i")
-	argv = append(argv, env...)
-	argv = append(argv, bin)
-	argv = append(argv, args...)
-	cmd := exec.Command("sudo", argv...)
+	cmd := exec.Command("sudo", asTestUserArgv(env, bin, args)...)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	err = cmd.Start()
@@ -445,8 +455,7 @@ func (l *RelayLayout) Start(t *testing.T, bin string, env []string, args ...stri
 
 	pid, err := p.findRelayPID()
 	if err != nil {
-		// sudo runs as root, which the test may not signal itself.
-		_ = exec.Command("sudo", "-n", "kill", "-s", "9", strconv.Itoa(cmd.Process.Pid)).Run() // it may already have exited
+		killSudo(cmd.Process.Pid)
 		select {
 		case <-p.done:
 		case <-time.After(5 * time.Second):
@@ -474,19 +483,25 @@ const runTimeout = 60 * time.Second
 // how a test runs a one-shot Relay command such as `relay init`.
 func (l *RelayLayout) Run(t *testing.T, bin string, env []string, stdin string, args ...string) (stdout, stderr string, code int) {
 	t.Helper()
-	argv := append([]string{"-n"}, setprivArgs()...)
-	return runToCompletion(t, append(argv, l.envArgv(env, bin, args)...), stdin)
+	return runToCompletion(t, asTestUserArgv(env, bin, args), stdin)
 }
 
 // RunAsRoot is Run as root rather than TestUser: how a test shows the Relay's start-time check
 // refuses to run as root. Nothing else in the harness runs a Relay binary as root.
 func (l *RelayLayout) RunAsRoot(t *testing.T, bin string, env []string, stdin string, args ...string) (stdout, stderr string, code int) {
 	t.Helper()
-	return runToCompletion(t, append([]string{"-n"}, l.envArgv(env, bin, args)...), stdin)
+	return runToCompletion(t, append([]string{"-n"}, envArgv(env, bin, args)...), stdin)
+}
+
+// asTestUserArgv is sudo's argv for running bin as TestUser: `-n setpriv … env -i <env> bin
+// <args>`. Start and Run share it, so a long-running Relay and a one-shot command drop to
+// exactly the same uid, groups and capabilities.
+func asTestUserArgv(env []string, bin string, args []string) []string {
+	return append(append([]string{"-n"}, setprivArgs()...), envArgv(env, bin, args)...)
 }
 
 // envArgv is `env -i <env> bin <args>`.
-func (l *RelayLayout) envArgv(env []string, bin string, args []string) []string {
+func envArgv(env []string, bin string, args []string) []string {
 	argv := append([]string{"env", "-i"}, env...)
 	argv = append(argv, bin)
 	return append(argv, args...)
@@ -510,8 +525,7 @@ func runToCompletion(t *testing.T, argv []string, stdin string) (string, string,
 	select {
 	case err = <-done:
 	case <-time.After(runTimeout):
-		// sudo runs as root, which the test may not signal itself.
-		_ = exec.Command("sudo", "-n", "kill", "-s", "9", strconv.Itoa(cmd.Process.Pid)).Run()
+		killSudo(cmd.Process.Pid)
 		<-done
 		t.Fatalf("sudo %s did not finish within %v\nstderr: %s", strings.Join(argv, " "), runTimeout, errOut.String())
 	}
@@ -530,9 +544,7 @@ func runToCompletion(t *testing.T, argv []string, stdin string) (string, string,
 // may not traverse the state directory itself.
 func (l *RelayLayout) ExistsInState(t *testing.T, path string) bool {
 	t.Helper()
-	if rel, err := filepath.Rel(l.stateDir, path); err != nil || strings.HasPrefix(rel, "..") {
-		t.Fatalf("ExistsInState %s: not under the state directory %s", path, l.stateDir)
-	}
+	l.requireUnderState(t, "ExistsInState", path)
 	err := exec.Command("sudo", "-n", "-u", TestUser, "test", "-e", path).Run()
 	var exitErr *exec.ExitError
 	switch {
