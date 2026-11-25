@@ -17,9 +17,10 @@
 // Reuses this package's existing fixtures and helpers rather than building
 // new ones: startElicitingRelay/startElicitingRelayWith, startOAuthElicitingRelay
 // (oauth_idp_e2e_test.go), connectEliciting, askApproval, answerAsResponder,
-// decisionRecordsFor, fetchApproval, allJobs, postRawToolCall, restartNginxArgs,
+// decisionRecordsFor, fetchApproval, allJobs, restartNginxArgs,
 // sshdRestartArgs, askQuestionE2E, auditLen, assertMachineSelfDecisionRefused
-// (mcp_elicitation_refusals_e2e_test.go), mintAccount (approval_e2e_test.go).
+// (mcp_elicitation_refusals_e2e_test.go), postRawToolCall
+// (mcp_raw_jsonrpc_test.go), mintAccount (approval_e2e_test.go).
 package main
 
 import (

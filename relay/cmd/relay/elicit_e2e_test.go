@@ -11,7 +11,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -145,7 +144,7 @@ func TestElicit_AskableParkFromMRTRClientGetsAQuestion(t *testing.T) {
 // TestElicit_ElicitedParkEmitsNoTaskEnvelope_E2E is AP-85's e2e reinforcement:
 // the SDK client cannot hand-advertise the Tasks extension's
 // clientCapabilities (there is no ClientOptions knob for it —
-// see mcp_no_task_handle_e2e_test.go's rawToolCall, mirrored below), so this drives
+// see mcp_raw_jsonrpc_test.go), so this drives
 // raw JSON-RPC through the real composition root with a client advertising
 // BOTH elicitation and the Tasks extension: the question, and no task
 // envelope. TestElicit_ElicitedParkEmitsNoTaskEnvelope (elicit_test.go)
@@ -154,50 +153,13 @@ func TestElicit_AskableParkFromMRTRClientGetsAQuestion(t *testing.T) {
 func TestElicit_ElicitedParkEmitsNoTaskEnvelope_E2E(t *testing.T) {
 	f := startGatedRelay(t, gateAllMutates, WithMCPServerOptions(mcp.WithApprovalElicitation()))
 
-	body, err := json.Marshal(map[string]any{
-		"jsonrpc": "2.0", "id": 9, "method": "tools/call",
-		"params": map[string]any{
-			"_meta": map[string]any{
-				"io.modelcontextprotocol/protocolVersion": "2026-07-28",
-				"io.modelcontextprotocol/clientInfo":      map[string]any{"name": "gleipnir", "version": "0.0.1"},
-				"io.modelcontextprotocol/clientCapabilities": map[string]any{
-					"elicitation": map[string]any{"form": map[string]any{}},
-					"extensions":  map[string]any{"io.modelcontextprotocol/tasks": map[string]any{}},
-				},
-			},
-			"name":      "run_operation",
-			"arguments": restartNginxArgs(),
-		},
+	meta := rawClientMeta("gleipnir", map[string]any{
+		"elicitation": map[string]any{"form": map[string]any{}},
+		"extensions":  tasksCapability(),
 	})
-	if err != nil {
-		t.Fatalf("marshal request: %v", err)
-	}
-
-	req, err := http.NewRequest(http.MethodPost, f.ControlBase+"/mcp", bytes.NewReader(body))
-	if err != nil {
-		t.Fatalf("new request: %v", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json, text/event-stream")
-	req.Header.Set("MCP-Protocol-Version", "2026-07-28")
-	// Required from 2026-07-28 onward (mcp_no_task_handle_e2e_test.go's rawToolCall):
-	// the method is echoed in a header so a proxy can route without parsing
-	// the body.
-	req.Header.Set("Mcp-Method", "tools/call")
-	req.Header.Set("Mcp-Name", "run_operation")
-	req.Header.Set("Authorization", "Bearer "+f.Credential)
-
-	resp, err := f.Client().Do(req)
-	if err != nil {
-		t.Fatalf("POST /mcp: %v", err)
-	}
-	defer resp.Body.Close()
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("read body: %v", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d; body = %s", resp.StatusCode, respBody)
+	status, _, respBody := postRawToolCall(t, f, f.Credential, rawMCPProtocolVersion, meta, "run_operation", restartNginxArgs())
+	if status != http.StatusOK {
+		t.Fatalf("status = %d; body = %s", status, respBody)
 	}
 
 	var decoded struct {

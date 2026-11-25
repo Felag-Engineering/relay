@@ -15,7 +15,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -239,46 +238,6 @@ func assertAnswerRefusedNothingRecorded(t *testing.T, f *relayFixture, res *sdkm
 	if got := decisionRecordsFor(t, f, requestID); len(got) != 0 {
 		t.Errorf("decision records = %+v, want none", got)
 	}
-}
-
-// postRawToolCall hand-builds a JSON-RPC tools/call POST, mirroring
-// TestElicit_ElicitedParkEmitsNoTaskEnvelope_E2E's build (elicit_e2e_test.go),
-// but generalized over header/meta/tool/args and — unlike mcp_no_task_handle_e2e_test.go's
-// rawToolCall — never failing the test on a non-200 status: this file's
-// legacy-header rows are refused with a 400 by the SDK transport itself.
-func postRawToolCall(t *testing.T, f *relayFixture, token, header string, meta map[string]any, tool string, args map[string]any) (status int, contentType string, respBody []byte) {
-	t.Helper()
-	reqBody, err := json.Marshal(map[string]any{
-		"jsonrpc": "2.0", "id": 9, "method": "tools/call",
-		"params": map[string]any{"_meta": meta, "name": tool, "arguments": args},
-	})
-	if err != nil {
-		t.Fatalf("marshal request: %v", err)
-	}
-
-	req, err := http.NewRequest(http.MethodPost, f.ControlBase+"/mcp", bytes.NewReader(reqBody))
-	if err != nil {
-		t.Fatalf("new request: %v", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json, text/event-stream")
-	if header != "" {
-		req.Header.Set("MCP-Protocol-Version", header)
-	}
-	req.Header.Set("Mcp-Method", "tools/call")
-	req.Header.Set("Mcp-Name", tool)
-	req.Header.Set("Authorization", "Bearer "+token)
-
-	resp, err := f.ClientFor(token).Do(req)
-	if err != nil {
-		t.Fatalf("POST /mcp: %v", err)
-	}
-	defer resp.Body.Close()
-	respBody, err = io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("read body: %v", err)
-	}
-	return resp.StatusCode, resp.Header.Get("Content-Type"), respBody
 }
 
 // sealUnderAnotherKey mints a SECOND requeststate.Sealer — a different
@@ -822,15 +781,11 @@ func TestMCPElicitation_RedriveOfAPendingRequestAsksNobody(t *testing.T) {
 func TestMCPElicitation_ElicitedParkEmitsNoTaskEnvelope(t *testing.T) {
 	f, token, _ := startElicitingRelay(t)
 
-	meta := map[string]any{
-		"io.modelcontextprotocol/protocolVersion": "2026-07-28",
-		"io.modelcontextprotocol/clientInfo":      map[string]any{"name": "gleipnir", "version": "0.0.1"},
-		"io.modelcontextprotocol/clientCapabilities": map[string]any{
-			"elicitation": map[string]any{"form": map[string]any{}},
-			"extensions":  map[string]any{"io.modelcontextprotocol/tasks": map[string]any{}},
-		},
-	}
-	status, _, body := postRawToolCall(t, f, token, "2026-07-28", meta, "run_operation", restartNginxArgs())
+	meta := rawClientMeta("gleipnir", map[string]any{
+		"elicitation": map[string]any{"form": map[string]any{}},
+		"extensions":  tasksCapability(),
+	})
+	status, _, body := postRawToolCall(t, f, token, rawMCPProtocolVersion, meta, "run_operation", restartNginxArgs())
 	if status != http.StatusOK {
 		t.Fatalf("status = %d; body = %s", status, body)
 	}
