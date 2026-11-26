@@ -42,7 +42,6 @@
 mod common;
 
 use common::TempDir;
-use regex::Regex;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 use std::os::unix::fs::PermissionsExt;
@@ -52,7 +51,7 @@ use std::process::Command;
 #[path = "common/repo_text.rs"]
 mod repo_text;
 
-use repo_text::{read, repo};
+use repo_text::{re, read, repo};
 
 fn fixtures_root() -> PathBuf {
     repo().join("docker/fixtures")
@@ -651,9 +650,9 @@ fn read_compose_lines(file: &str) -> Vec<String> {
         .collect()
 }
 
-/// Finds the body span of a top-level (0-indent) mapping key: the header
-/// line `<key>:` must sit at column 0. Returns the half-open range of line
-/// indices strictly between the header and the next top-level key (or EOF).
+/// The body span of the top-level block whose header is line `header`: the
+/// half-open range of line indices strictly between the header and the next
+/// top-level key (or EOF).
 ///
 /// Two clauses in the span-end rule are easy to get wrong, and both are
 /// load-bearing against the real file (#452 review findings N1/N2):
@@ -669,34 +668,36 @@ fn read_compose_lines(file: &str) -> Vec<String> {
 ///
 /// The terminator is therefore the first line whose first character is
 /// neither whitespace nor `#`.
+fn block_after(lines: &[String], header: usize) -> Range<usize> {
+    let body_start = header + 1;
+    let body_end = lines[body_start..]
+        .iter()
+        .position(|line| {
+            line.chars()
+                .next()
+                .is_some_and(|c| !c.is_whitespace() && c != '#')
+        })
+        .map_or(lines.len(), |offset| body_start + offset);
+    body_start..body_end
+}
+
+/// Finds the body span of a top-level (0-indent) mapping key: the header
+/// line `<key>:` must sit at column 0. The span ends as `block_after` says.
 fn top_level_span(lines: &[String], key: &str) -> Range<usize> {
     let header = format!("{key}:");
     let start = lines
         .iter()
         .position(|l| l.trim_end() == header)
         .unwrap_or_else(|| panic!("a compose file has no top-level `{header}` key"));
-    let body_start = start + 1;
-    let mut body_end = lines.len();
-    for (offset, line) in lines[body_start..].iter().enumerate() {
-        match line.chars().next() {
-            None => continue,                         // blank line — not a terminator (N2)
-            Some(c) if c.is_whitespace() => continue, // nested content
-            Some('#') => continue,                    // 0-indent comment — not a terminator (N2)
-            Some(_) => {
-                body_end = body_start + offset;
-                break;
-            }
-        }
-    }
-    body_start..body_end
+    block_after(lines, start)
 }
 
 /// Finds the body span of the `x-daemon-base:` anchor (#452 review S3): the
 /// same span-scoped approach as `top_level_span`, but the anchor's header
 /// line carries trailing content (`x-daemon-base: &daemon-base`), never a
-/// bare `<key>:`, so it needs its own start match rather than reusing
-/// `top_level_span` directly. The anchor sits ABOVE `services:` in the file
-/// (#452 review S3: `test_fleet_is_the_demo_fleets_first_three_nodes` and
+/// bare `<key>:`, so it needs its own start match. The anchor sits ABOVE
+/// `services:` in the file (#452 review S3:
+/// `test_fleet_is_the_demo_fleets_first_three_nodes` and
 /// `demo_roster_matches_the_documented_fleet` both scan only the `services:`
 /// span, so a `ports:` or `profiles:` line placed here — sharing YAML merge
 /// key `<<` with every daemon service — is invisible to both).
@@ -705,20 +706,41 @@ fn x_daemon_base_span(lines: &[String]) -> Range<usize> {
         .iter()
         .position(|l| l.starts_with("x-daemon-base:"))
         .expect("a compose file has no `x-daemon-base:` anchor");
-    let body_start = start + 1;
-    let mut body_end = lines.len();
-    for (offset, line) in lines[body_start..].iter().enumerate() {
-        match line.chars().next() {
-            None => continue,
-            Some(c) if c.is_whitespace() => continue,
-            Some('#') => continue,
-            Some(_) => {
-                body_end = body_start + offset;
-                break;
-            }
-        }
-    }
-    body_start..body_end
+    block_after(lines, start)
+}
+
+/// The keys declared directly under a top-level block (2-indent), each with
+/// its line index, in file order. Uses EXACTLY the key shape
+/// `^  ([A-Za-z0-9._-]+):\s*$` — never an ignore list (#452 5.6: an ignore
+/// list would let a service escape the test-versus-demo comparison).
+///
+/// The `^  [^ #]` scan below is not merely how keys are found — it is also
+/// the guard against reintroducing review finding N1: a comment TRAILING a
+/// key line (e.g. `  daemon-8:  # the narrow bastion Node`) would sit at
+/// 2-indent and start with a non-space, non-`#` character, so it is caught
+/// here as a candidate — and then FAILS to match the strict key shape
+/// (trailing content after the `:` that isn't all whitespace), which is
+/// treated as a hard error rather than silently skipped. A comment must sit
+/// on its own line ABOVE the key it annotates (matching `daemon-1`'s
+/// existing style) or this panics. `what` names the key in that panic.
+fn second_level_keys(lines: &[String], span: Range<usize>, what: &str) -> Vec<(String, usize)> {
+    let candidate_re = re(r"^  [^ #]");
+    let key_re = re(r"^  ([A-Za-z0-9._-]+):\s*$");
+
+    span.filter(|&i| candidate_re.is_match(&lines[i]))
+        .map(|i| {
+            let line = &lines[i];
+            let caps = key_re.captures(line).unwrap_or_else(|| {
+                panic!(
+                    "compose file line {}: unrecognised {what} shape: {line:?} — \
+                     a comment must sit on its own line ABOVE the key, \
+                     never trailing on it (#452 review N1)",
+                    i + 1
+                )
+            });
+            (caps[1].to_string(), i)
+        })
+        .collect()
 }
 
 struct ComposeService {
@@ -726,47 +748,18 @@ struct ComposeService {
     body: Range<usize>,
 }
 
-/// Splits the `services:` span into named blocks, using EXACTLY the header
-/// shape `^  ([A-Za-z0-9._-]+):\s*$` — never an ignore list (#452 5.6: an
-/// ignore list would let a service escape the test-versus-demo comparison).
-///
-/// The `^  [^ #]` scan below is not merely how headers are found — it is
-/// also the guard against reintroducing review finding N1: a comment
-/// TRAILING a header line (e.g. `  daemon-8:  # the narrow bastion Node`)
-/// would sit at 2-indent and start with a non-space, non-`#` character, so
-/// it is caught here as a candidate header — and then FAILS to match the
-/// strict header shape (trailing content after the `:` that isn't all
-/// whitespace), which is treated as a hard error rather than silently
-/// skipped. A comment must sit on its own line ABOVE the header it
-/// annotates (matching `daemon-1`'s existing style) or this panics.
+/// Splits the `services:` span into named blocks at each service header
+/// `second_level_keys` finds; the last block runs to the span's end.
 fn parse_compose_services(lines: &[String]) -> Vec<ComposeService> {
     let span = top_level_span(lines, "services");
-    let candidate_re = Regex::new(r"^  [^ #]").unwrap();
-    let header_re = Regex::new(r"^  ([A-Za-z0-9._-]+):\s*$").unwrap();
-
-    let mut headers: Vec<(String, usize)> = Vec::new();
-    for i in span.clone() {
-        let line = &lines[i];
-        if !candidate_re.is_match(line) {
-            continue;
-        }
-        match header_re.captures(line) {
-            Some(caps) => headers.push((caps[1].to_string(), i)),
-            None => panic!(
-                "compose file line {}: unrecognised service-header shape: {line:?} — \
-                 a per-service comment must sit on its own line ABOVE the header, \
-                 never trailing on it (#452 review N1)",
-                i + 1
-            ),
-        }
-    }
+    let headers = second_level_keys(lines, span.clone(), "service-header");
 
     headers
         .iter()
         .enumerate()
         .map(|(idx, (name, header_line))| {
             let body_start = header_line + 1;
-            let body_end = headers.get(idx + 1).map(|(_, l)| *l).unwrap_or(span.end);
+            let body_end = headers.get(idx + 1).map_or(span.end, |(_, l)| *l);
             ComposeService {
                 name: name.clone(),
                 body: body_start..body_end,
@@ -781,24 +774,9 @@ fn parse_compose_services(lines: &[String]) -> Vec<ComposeService> {
 /// treatment 5.7 needs, not a weaker one).
 fn top_level_volume_names(lines: &[String]) -> BTreeSet<String> {
     let span = top_level_span(lines, "volumes");
-    let candidate_re = Regex::new(r"^  [^ #]").unwrap();
-    let header_re = Regex::new(r"^  ([A-Za-z0-9._-]+):\s*$").unwrap();
-
-    lines[span]
-        .iter()
-        .enumerate()
-        .filter(|(_, l)| candidate_re.is_match(l))
-        .map(|(i, l)| {
-            header_re
-                .captures(l)
-                .unwrap_or_else(|| {
-                    panic!("compose file: unrecognised volume-key shape at line {i}: {l:?}")
-                })
-                .get(1)
-                .unwrap()
-                .as_str()
-                .to_string()
-        })
+    second_level_keys(lines, span, "volume-key")
+        .into_iter()
+        .map(|(name, _)| name)
         .collect()
 }
 
@@ -1228,4 +1206,86 @@ fn docs_dev_fleet_documents_every_demo_node() {
         doc.contains("policy.bastion.toml"),
         "docs/operations/demo-fleet.md never mentions policy.bastion.toml"
     );
+}
+
+// ---------------------------------------------------------------------------
+// The compose scanners above, on synthetic input. The tests over the real files only see the
+// shapes those files hold today; these pin the terminator and header rules the scanners'
+// doc comments state, so a shape the real files do not yet contain is still decided.
+// ---------------------------------------------------------------------------
+
+fn lines_of(text: &str) -> Vec<String> {
+    text.lines().map(str::to_string).collect()
+}
+
+const SYNTHETIC_COMPOSE: &str = "\
+x-daemon-base: &daemon-base
+  image: relay-daemon
+
+# a 0-indent comment between blocks
+services:
+  relay:
+    image: relay
+
+# a 0-indent comment inside the span
+  daemon-1:
+    <<: *daemon-base
+volumes:
+  daemon1-state:
+  relay-state: {}
+";
+
+#[test]
+fn top_level_spans_end_only_at_the_next_top_level_key() {
+    let lines = lines_of(SYNTHETIC_COMPOSE);
+    assert_eq!(x_daemon_base_span(&lines), 1..4);
+    assert_eq!(top_level_span(&lines, "services"), 5..11);
+    assert_eq!(top_level_span(&lines, "volumes"), 12..14);
+}
+
+#[test]
+#[should_panic(expected = "no top-level `networks:` key")]
+fn top_level_span_panics_on_a_missing_key() {
+    top_level_span(&lines_of(SYNTHETIC_COMPOSE), "networks");
+}
+
+#[test]
+fn services_are_split_at_each_header_and_the_last_runs_to_the_span_end() {
+    let lines = lines_of(SYNTHETIC_COMPOSE);
+    let services: Vec<(String, Range<usize>)> = parse_compose_services(&lines)
+        .into_iter()
+        .map(|s| (s.name, s.body))
+        .collect();
+    assert_eq!(
+        services,
+        [
+            ("relay".to_string(), 6..9),
+            ("daemon-1".to_string(), 10..11)
+        ]
+    );
+}
+
+#[test]
+#[should_panic(expected = "unrecognised")]
+fn a_comment_trailing_a_service_header_panics() {
+    parse_compose_services(&lines_of(
+        "services:\n  daemon-8:  # the bastion\n    image: x\n",
+    ));
+}
+
+#[test]
+fn volume_names_are_the_keys_directly_under_volumes() {
+    let names = top_level_volume_names(&lines_of(
+        "volumes:\n  daemon1-state:\n  relay-state:\n\n# note\n",
+    ));
+    assert_eq!(
+        names,
+        BTreeSet::from(["daemon1-state".to_string(), "relay-state".to_string()])
+    );
+}
+
+#[test]
+#[should_panic(expected = "unrecognised")]
+fn a_volume_key_with_trailing_content_panics() {
+    top_level_volume_names(&lines_of("volumes:\n  relay-state: {}\n"));
 }
