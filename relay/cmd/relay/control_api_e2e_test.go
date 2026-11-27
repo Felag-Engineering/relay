@@ -155,19 +155,7 @@ func TestControlAPI_MintEnrollmentToken_ReturnsJoinString(t *testing.T) {
 		t.Errorf("plaintext appears %d times in the response body, want 1", n)
 	}
 
-	enrollConn := dialTLS(t, f.Bufconn, &tls.Config{RootCAs: relaytest.CertPool(t, f.Deps.ca.Bundle())})
-	csrPEM, _ := relaytest.NewCSR(t, "ignored-cn")
-	enrollResp, err := relayv1.NewEnrollmentClient(enrollConn).Enroll(ctx, &relayv1.EnrollRequest{
-		EnrollmentToken: js.EnrollmentToken(),
-		Csr:             csrPEM,
-		Facts:           &relayv1.Facts{Hostname: "host-join-string", Os: "linux"},
-	})
-	if err != nil {
-		t.Fatalf("Enroll with the join string's token: %v", err)
-	}
-	if enrollResp.GetNodeId() == "" {
-		t.Fatal("Enroll: node_id is empty")
-	}
+	enrollNode(ctx, t, f.Bufconn, f.Deps, js.EnrollmentToken(), "host-join-string")
 
 	records := auditList(t, f.Deps.audit)
 	secret := minted.Token[strings.Index(minted.Token, ".")+1:]
@@ -219,19 +207,7 @@ func TestControlAPI_EnrollmentTokenLifecycle(t *testing.T) {
 
 	// A daemon enrolls with the minted plaintext over the node-plane gRPC
 	// listener: enrollment must succeed while the token is live.
-	enrollConn := dialTLS(t, nodeLis, &tls.Config{RootCAs: relaytest.CertPool(t, deps.ca.Bundle())})
-	csrPEM, _ := relaytest.NewCSR(t, "ignored-cn")
-	enrollResp, err := relayv1.NewEnrollmentClient(enrollConn).Enroll(ctx, &relayv1.EnrollRequest{
-		EnrollmentToken: minted.Token,
-		Csr:             csrPEM,
-		Facts:           &relayv1.Facts{Hostname: "host-control-api", Os: "linux"},
-	})
-	if err != nil {
-		t.Fatalf("Enroll with freshly minted token: %v", err)
-	}
-	if enrollResp.GetNodeId() == "" {
-		t.Fatal("Enroll: node_id is empty")
-	}
+	enrollNode(ctx, t, nodeLis, deps, minted.Token, "host-control-api")
 
 	revokeResp := controlAPIRequest(t, client, http.MethodDelete,
 		base+"/api/v1/enrollment-tokens/"+minted.ID, credential, nil)
@@ -241,13 +217,7 @@ func TestControlAPI_EnrollmentTokenLifecycle(t *testing.T) {
 	}
 
 	// The same plaintext must no longer enroll a second Node.
-	enrollConn2 := dialTLS(t, nodeLis, &tls.Config{RootCAs: relaytest.CertPool(t, deps.ca.Bundle())})
-	csr2PEM, _ := relaytest.NewCSR(t, "ignored-cn-2")
-	_, err = relayv1.NewEnrollmentClient(enrollConn2).Enroll(ctx, &relayv1.EnrollRequest{
-		EnrollmentToken: minted.Token,
-		Csr:             csr2PEM,
-		Facts:           &relayv1.Facts{Hostname: "host-control-api-2", Os: "linux"},
-	})
+	_, _, err := tryEnroll(ctx, t, nodeLis, deps, minted.Token, "host-control-api-2")
 	if err == nil {
 		t.Fatal("expected Enroll to fail with a revoked token, got nil error")
 	}
@@ -266,25 +236,9 @@ func TestControlAPI_NodeRevoke(t *testing.T) {
 
 	// Seed an Enrollment Token via the test-only deps.tokens path (mirrors
 	// lifecycle_e2e_test.go) — this test's focus is node revoke, not mint.
-	_, plaintext, err := deps.tokens.Create(ctx, nil, time.Hour)
-	if err != nil {
-		t.Fatalf("seed Enrollment Token: %v", err)
-	}
-
-	enrollConn := dialTLS(t, nodeLis, &tls.Config{RootCAs: relaytest.CertPool(t, deps.ca.Bundle())})
-	csrPEM, leafKey := relaytest.NewCSR(t, "ignored-cn")
-	enrollResp, err := relayv1.NewEnrollmentClient(enrollConn).Enroll(ctx, &relayv1.EnrollRequest{
-		EnrollmentToken: plaintext,
-		Csr:             csrPEM,
-		Facts:           &relayv1.Facts{Hostname: "host-node-revoke", Os: "linux"},
-	})
-	if err != nil {
-		t.Fatalf("Enroll: %v", err)
-	}
-	nodeID := enrollResp.GetNodeId()
-
-	clientCert := relaytest.AssembleClientCert(t, enrollResp.GetCertificate(), leafKey)
-	pool := relaytest.CertPool(t, deps.ca.Bundle())
+	_, plaintext := seedToken(ctx, t, deps, nil)
+	node := enrollNode(ctx, t, nodeLis, deps, plaintext, "host-node-revoke")
+	nodeID, clientCert, pool := node.ID, node.Cert, node.Pool
 	mtlsConn := dialTLS(t, nodeLis, &tls.Config{Certificates: []tls.Certificate{clientCert}, RootCAs: pool})
 	stream, err := relayv1.NewTunnelClient(mtlsConn).Open(ctx)
 	if err != nil {

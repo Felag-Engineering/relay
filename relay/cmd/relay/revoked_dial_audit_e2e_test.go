@@ -12,7 +12,6 @@ import (
 
 	"github.com/Felag-Engineering/relay/relay/internal/audit"
 	relayv1 "github.com/Felag-Engineering/relay/relay/internal/relay/v1"
-	"github.com/Felag-Engineering/relay/relay/internal/relaytest"
 	"google.golang.org/grpc/test/bufconn"
 )
 
@@ -77,23 +76,9 @@ func TestRevokedNode_DialAuditedThenThrottled(t *testing.T) {
 	f := startRelay(t, WithRevokedDialClock(clk.Now))
 	deps, lis := f.Deps, f.Bufconn
 
-	_, plaintext, err := deps.tokens.Create(ctx, nil, time.Hour)
-	if err != nil {
-		t.Fatalf("seed Enrollment Token: %v", err)
-	}
-	pool := relaytest.CertPool(t, deps.ca.Bundle())
-	enrollConn := dialTLS(t, lis, &tls.Config{RootCAs: pool})
-	csrPEM, leafKey := relaytest.NewCSR(t, "ignored-cn")
-	enrollResp, err := relayv1.NewEnrollmentClient(enrollConn).Enroll(ctx, &relayv1.EnrollRequest{
-		EnrollmentToken: plaintext,
-		Csr:             csrPEM,
-		Facts:           &relayv1.Facts{Hostname: "host-1005", Os: "linux"},
-	})
-	if err != nil {
-		t.Fatalf("Enroll: %v", err)
-	}
-	nodeID := enrollResp.GetNodeId()
-	clientCert := relaytest.AssembleClientCert(t, enrollResp.GetCertificate(), leafKey)
+	_, plaintext := seedToken(ctx, t, deps, nil)
+	node := enrollNode(ctx, t, lis, deps, plaintext, "host-1005")
+	nodeID, clientCert, pool := node.ID, node.Cert, node.Pool
 
 	// Ping is the sync point that the registry row exists before the revoke.
 	mtlsConn := dialTLS(t, lis, &tls.Config{Certificates: []tls.Certificate{clientCert}, RootCAs: pool})

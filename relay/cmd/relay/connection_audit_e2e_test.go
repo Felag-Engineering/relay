@@ -20,21 +20,9 @@ import (
 // CA pool.
 func connAuditEnroll(ctx context.Context, t *testing.T, f *relayFixture) (string, tls.Certificate, *x509.CertPool) {
 	t.Helper()
-	_, plaintext, err := f.Deps.tokens.Create(ctx, nil, time.Hour)
-	if err != nil {
-		t.Fatalf("seed Enrollment Token: %v", err)
-	}
-	pool := relaytest.CertPool(t, f.Deps.ca.Bundle())
-	csrPEM, key := relaytest.NewCSR(t, "ignored-cn")
-	resp, err := relayv1.NewEnrollmentClient(dialTLS(t, f.Bufconn, &tls.Config{RootCAs: pool})).Enroll(ctx, &relayv1.EnrollRequest{
-		EnrollmentToken: plaintext,
-		Csr:             csrPEM,
-		Facts:           &relayv1.Facts{Hostname: "host-1298", Os: "linux"},
-	})
-	if err != nil {
-		t.Fatalf("Enroll: %v", err)
-	}
-	return resp.GetNodeId(), relaytest.AssembleClientCert(t, resp.GetCertificate(), key), pool
+	_, plaintext := seedToken(ctx, t, f.Deps, nil)
+	n := enrollNode(ctx, t, f.Bufconn, f.Deps, plaintext, "host-1298")
+	return n.ID, n.Cert, n.Pool
 }
 
 // connAuditRenew renews over an mTLS connection presenting cert and returns

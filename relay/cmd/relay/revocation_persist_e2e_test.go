@@ -22,7 +22,6 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/nodestate"
 	"github.com/Felag-Engineering/relay/relay/internal/registry"
 	relayv1 "github.com/Felag-Engineering/relay/relay/internal/relay/v1"
-	"github.com/Felag-Engineering/relay/relay/internal/relaytest"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/test/bufconn"
 )
@@ -77,23 +76,9 @@ func TestRevokedNode_RefusedAfterRestart(t *testing.T) {
 	lis, deps, srv := bootServer(t, cfg)
 
 	// Enroll: seed a token, then Enroll certless to obtain the Node identity cert.
-	_, plaintext, err := deps.tokens.Create(ctx, nil, time.Hour)
-	if err != nil {
-		t.Fatalf("seed Enrollment Token: %v", err)
-	}
-	enrollConn := dialTLS(t, lis, &tls.Config{RootCAs: relaytest.CertPool(t, deps.ca.Bundle())})
-	csrPEM, leafKey := relaytest.NewCSR(t, "ignored-cn")
-	enrollResp, err := relayv1.NewEnrollmentClient(enrollConn).Enroll(ctx, &relayv1.EnrollRequest{
-		EnrollmentToken: plaintext,
-		Csr:             csrPEM,
-		Facts:           &relayv1.Facts{Hostname: "host-133", Os: "linux"},
-	})
-	if err != nil {
-		t.Fatalf("Enroll: %v", err)
-	}
-	nodeID := enrollResp.GetNodeId()
-	clientCert := relaytest.AssembleClientCert(t, enrollResp.GetCertificate(), leafKey)
-	pool := relaytest.CertPool(t, deps.ca.Bundle())
+	_, plaintext := seedToken(ctx, t, deps, nil)
+	node := enrollNode(ctx, t, lis, deps, plaintext, "host-133")
+	nodeID, clientCert, pool := node.ID, node.Cert, node.Pool
 
 	// Open a Tunnel and send Hello; Ping is the sync point that the registry
 	// Upsert (which creates the row SetRevoked will persist against) is complete.
@@ -152,10 +137,7 @@ func TestRevokedToken_EnrollRefusedAfterRestart(t *testing.T) {
 	cfg := persistTestConfig(t)
 	lis, deps, srv := bootServer(t, cfg)
 
-	tok, plaintext, err := deps.tokens.Create(ctx, nil, time.Hour)
-	if err != nil {
-		t.Fatalf("seed Enrollment Token: %v", err)
-	}
+	tok, plaintext := seedToken(ctx, t, deps, nil)
 
 	// Revoke the token (cascade over an empty registry just kills the token).
 	// This test's registry is empty, so the cascade records nothing through
@@ -167,14 +149,7 @@ func TestRevokedToken_EnrollRefusedAfterRestart(t *testing.T) {
 	}
 
 	// Sanity: before restart the token already fails to enroll.
-	caBundle := deps.ca.Bundle()
-	enrollConn := dialTLS(t, lis, &tls.Config{RootCAs: relaytest.CertPool(t, caBundle)})
-	csrPEM, _ := relaytest.NewCSR(t, "ignored-cn")
-	if _, err := relayv1.NewEnrollmentClient(enrollConn).Enroll(ctx, &relayv1.EnrollRequest{
-		EnrollmentToken: plaintext,
-		Csr:             csrPEM,
-		Facts:           &relayv1.Facts{Hostname: "host-133", Os: "linux"},
-	}); err == nil {
+	if _, _, err := tryEnroll(ctx, t, lis, deps, plaintext, "host-133"); err == nil {
 		t.Fatal("expected Enroll with revoked token to fail before restart, got nil")
 	}
 
@@ -190,13 +165,7 @@ func TestRevokedToken_EnrollRefusedAfterRestart(t *testing.T) {
 
 	// After restart the revoked token must STILL be refused — the store is the
 	// authority, not volatile memory.
-	enrollConn2 := dialTLS(t, lis2, &tls.Config{RootCAs: relaytest.CertPool(t, deps2.ca.Bundle())})
-	csr2PEM, _ := relaytest.NewCSR(t, "ignored-cn")
-	if _, err := relayv1.NewEnrollmentClient(enrollConn2).Enroll(ctx, &relayv1.EnrollRequest{
-		EnrollmentToken: plaintext,
-		Csr:             csr2PEM,
-		Facts:           &relayv1.Facts{Hostname: "host-133", Os: "linux"},
-	}); err == nil {
+	if _, _, err := tryEnroll(ctx, t, lis2, deps2, plaintext, "host-133"); err == nil {
 		t.Fatal("expected Enroll with revoked token to fail after restart, got nil")
 	}
 }
@@ -219,10 +188,7 @@ func TestRevokedTokenCascade_NodeRevocationsPersistAcrossRestart(t *testing.T) {
 	cfg := persistTestConfig(t)
 	_, deps, srv := bootServer(t, cfg)
 
-	tok, _, err := deps.tokens.Create(ctx, nil, time.Hour)
-	if err != nil {
-		t.Fatalf("seed Enrollment Token: %v", err)
-	}
+	tok, _ := seedToken(ctx, t, deps, nil)
 
 	nodeIDs := []string{"casc-node-1", "casc-node-2", "casc-node-3"}
 	for _, id := range nodeIDs {

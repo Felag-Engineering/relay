@@ -15,28 +15,15 @@ import (
 	"google.golang.org/grpc/credentials"
 
 	relayv1 "github.com/Felag-Engineering/relay/relay/internal/relay/v1"
-	"github.com/Felag-Engineering/relay/relay/internal/relaytest"
 )
 
 // nodeConnectionEnroll enrolls a Node through a token that names initialTags
 // and returns its ID, client certificate and the CA pool.
 func nodeConnectionEnroll(ctx context.Context, t *testing.T, f *relayFixture, initialTags []string) (string, tls.Certificate, *x509.CertPool) {
 	t.Helper()
-	_, plaintext, err := f.Deps.tokens.Create(ctx, initialTags, time.Hour, testHumanMinter)
-	if err != nil {
-		t.Fatalf("seed Enrollment Token: %v", err)
-	}
-	pool := relaytest.CertPool(t, f.Deps.ca.Bundle())
-	csrPEM, key := relaytest.NewCSR(t, "ignored-cn")
-	resp, err := relayv1.NewEnrollmentClient(dialTLS(t, f.Bufconn, &tls.Config{RootCAs: pool})).Enroll(ctx, &relayv1.EnrollRequest{
-		EnrollmentToken: plaintext,
-		Csr:             csrPEM,
-		Facts:           &relayv1.Facts{Hostname: "enrolled-host", Os: "linux"},
-	})
-	if err != nil {
-		t.Fatalf("Enroll: %v", err)
-	}
-	return resp.GetNodeId(), relaytest.AssembleClientCert(t, resp.GetCertificate(), key), pool
+	_, plaintext := seedToken(ctx, t, f.Deps, initialTags, testHumanMinter)
+	n := enrollNode(ctx, t, f.Bufconn, f.Deps, plaintext, "enrolled-host")
+	return n.ID, n.Cert, n.Pool
 }
 
 // The Node is the one the verified certificate names. A Hello that names a
