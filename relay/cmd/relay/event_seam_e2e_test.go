@@ -16,7 +16,6 @@ import (
 
 	"github.com/Felag-Engineering/relay/relay/internal/events"
 	relayv1 "github.com/Felag-Engineering/relay/relay/internal/relay/v1"
-	"github.com/Felag-Engineering/relay/relay/internal/relaytest"
 )
 
 // recvRegistryEvent reads the next KindRegistry event off sub or fails the test.
@@ -46,25 +45,9 @@ func TestEventSeam_RealDaemonConnectDisconnect(t *testing.T) {
 
 	lis, deps := startRealServer(t)
 
-	_, plaintext, err := deps.tokens.Create(ctx, nil, time.Hour)
-	if err != nil {
-		t.Fatalf("seed Enrollment Token: %v", err)
-	}
-
-	enrollConn := dialTLS(t, lis, &tls.Config{RootCAs: relaytest.CertPool(t, deps.ca.Bundle())})
-	csrPEM, leafKey := relaytest.NewCSR(t, "ignored-cn")
-	enrollResp, err := relayv1.NewEnrollmentClient(enrollConn).Enroll(ctx, &relayv1.EnrollRequest{
-		EnrollmentToken: plaintext,
-		Csr:             csrPEM,
-		Facts:           &relayv1.Facts{Hostname: "host-event-seam", Os: "linux"},
-	})
-	if err != nil {
-		t.Fatalf("Enroll: %v", err)
-	}
-	nodeID := enrollResp.GetNodeId()
-	if nodeID == "" {
-		t.Fatal("Enroll: node_id is empty")
-	}
+	_, plaintext := seedToken(ctx, t, deps, nil)
+	node := enrollNode(ctx, t, lis, deps, plaintext, "host-event-seam")
+	nodeID := node.ID
 
 	// Subscribed AFTER Enroll completes: Enroll's own SetRelayLabels call
 	// (handler.go step k) publishes a TransitionLabelsChanged this test is
@@ -73,10 +56,7 @@ func TestEventSeam_RealDaemonConnectDisconnect(t *testing.T) {
 	sub := deps.events.Subscribe([]events.Kind{events.KindRegistry}, "")
 	defer sub.Close()
 
-	clientCert := relaytest.AssembleClientCert(t, enrollResp.GetCertificate(), leafKey)
-	pool := relaytest.CertPool(t, deps.ca.Bundle())
-
-	mtlsConn := dialTLS(t, lis, &tls.Config{Certificates: []tls.Certificate{clientCert}, RootCAs: pool})
+	mtlsConn := dialTLS(t, lis, &tls.Config{Certificates: []tls.Certificate{node.Cert}, RootCAs: node.Pool})
 	stream, err := relayv1.NewTunnelClient(mtlsConn).Open(ctx)
 	if err != nil {
 		t.Fatalf("Tunnel Open: %v", err)

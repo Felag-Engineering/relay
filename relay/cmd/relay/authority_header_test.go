@@ -211,10 +211,7 @@ func TestNodePlane_MissingAuthorityRejectedEarly_RelayStaysUp(t *testing.T) {
 	// The Relay still serves a normal certless RPC on a fresh connection.
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_, plaintext, err := f.Deps.tokens.Create(ctx, nil, time.Hour)
-	if err != nil {
-		t.Fatalf("seed Enrollment Token: %v", err)
-	}
+	_, plaintext := seedToken(ctx, t, f.Deps, nil)
 	cc, err := grpc.NewClient(f.NodeAddr, grpc.WithTransportCredentials(
 		credentials.NewTLS(&tls.Config{RootCAs: roots, ServerName: "localhost"})))
 	if err != nil {

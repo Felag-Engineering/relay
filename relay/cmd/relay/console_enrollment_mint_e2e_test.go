@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"net/http"
 	"net/url"
@@ -14,8 +13,6 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/relay/relay/internal/audit"
 	"github.com/Felag-Engineering/relay/relay/internal/enroll"
-	relayv1 "github.com/Felag-Engineering/relay/relay/internal/relay/v1"
-	"github.com/Felag-Engineering/relay/relay/internal/relaytest"
 )
 
 var (
@@ -113,20 +110,12 @@ func TestConsoleEnrollmentMint_AnAdminMintsThroughTheRealCapabilityLayer(t *test
 	}
 
 	// A Node enrolls with it, and the Console shows where the Node came from.
-	enrollConn := dialTLS(t, f.Bufconn, &tls.Config{RootCAs: relaytest.CertPool(t, f.Deps.ca.Bundle())})
-	csrPEM, _ := relaytest.NewCSR(t, "ignored-cn")
-	enrolled, err := relayv1.NewEnrollmentClient(enrollConn).Enroll(ctx, &relayv1.EnrollRequest{
-		EnrollmentToken: js.EnrollmentToken(), Csr: csrPEM,
-		Facts: &relayv1.Facts{Hostname: "host-console-mint", Os: "linux"},
-	})
-	if err != nil {
-		t.Fatalf("Enroll with the revealed join string: %v", err)
-	}
-	node, ok := f.Deps.registry.Get(enrolled.GetNodeId())
+	enrolled := enrollNode(ctx, t, f.Bufconn, f.Deps, js.EnrollmentToken(), "host-console-mint")
+	node, ok := f.Deps.registry.Get(enrolled.ID)
 	if !ok || node.EnrollingTokenID != tokenID || node.TagLabels["env"] != "prod" {
 		t.Fatalf("enrolled Node = %+v (found %v), want token %s and tag env=prod", node, ok, tokenID)
 	}
-	if code, nodePage := getPage("/console/nodes/" + enrolled.GetNodeId()); code != http.StatusOK || !strings.Contains(nodePage, "<code>"+tokenID+"</code>") {
+	if code, nodePage := getPage("/console/nodes/" + enrolled.ID); code != http.StatusOK || !strings.Contains(nodePage, "<code>"+tokenID+"</code>") {
 		t.Errorf("the Node page = %d and does not show the token %s as provenance", code, tokenID)
 	}
 

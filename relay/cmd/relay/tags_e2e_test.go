@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -13,7 +12,6 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/audit"
 	"github.com/Felag-Engineering/relay/relay/internal/controlplane/mcp"
 	"github.com/Felag-Engineering/relay/relay/internal/registry"
-	relayv1 "github.com/Felag-Engineering/relay/relay/internal/relay/v1"
 	"github.com/Felag-Engineering/relay/relay/internal/relaytest"
 )
 
@@ -140,17 +138,7 @@ func TestControlAPI_InitialTagsAreOrdinaryTags(t *testing.T) {
 		t.Fatalf("decode mint response: %v", err)
 	}
 
-	enrollConn := dialTLS(t, f.Bufconn, &tls.Config{RootCAs: relaytest.CertPool(t, f.Deps.ca.Bundle())})
-	csrPEM, _ := relaytest.NewCSR(t, "ignored-cn")
-	enrolled, err := relayv1.NewEnrollmentClient(enrollConn).Enroll(ctx, &relayv1.EnrollRequest{
-		EnrollmentToken: minted.Token,
-		Csr:             csrPEM,
-		Facts:           &relayv1.Facts{Hostname: "host-initial-tags", Os: "linux"},
-	})
-	if err != nil {
-		t.Fatalf("Enroll: %v", err)
-	}
-	nodeID := enrolled.GetNodeId()
+	nodeID := enrollNode(ctx, t, f.Bufconn, f.Deps, minted.Token, "host-initial-tags").ID
 
 	// The Node read shows the tag in its own map and relay:node-id alone.
 	get := controlAPIRequest(t, client, http.MethodGet, f.ControlBase+"/api/v1/nodes/"+nodeID, f.Credential, nil)

@@ -91,10 +91,7 @@ func TestLifecycle_SeedEnrollMTLSRenewRevoke(t *testing.T) {
 	//     Two initial tags to verify both are written at Enroll, as ordinary tags.
 	// -------------------------------------------------------------------------
 	initialTags := []string{"tag:env=prod", "tag:role=web"}
-	_, plaintext, err := deps.tokens.Create(ctx, initialTags, time.Hour, testHumanMinter)
-	if err != nil {
-		t.Fatalf("seed Enrollment Token: %v", err)
-	}
+	_, plaintext := seedToken(ctx, t, deps, initialTags, testHumanMinter)
 
 	// -------------------------------------------------------------------------
 	// (b) Enroll: certless server-auth TLS (no client cert).
