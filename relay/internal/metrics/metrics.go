@@ -363,11 +363,7 @@ func New(src GaugeSources) *Metrics {
 
 // IncDispatch records one Task's outcome (capability.MetricsSink).
 func (m *Metrics) IncDispatch(o jobs.Outcome) {
-	idx := int(o)
-	if idx < 0 || idx >= nOutcomes {
-		idx = int(jobs.OutcomeUnspecified)
-	}
-	m.dispatches[idx].Add(1)
+	m.dispatches[slot(o, nOutcomes, jobs.OutcomeUnspecified)].Add(1)
 }
 
 // IncRefusal records one dispatch refusal by kind (capability.MetricsSink).
@@ -397,11 +393,7 @@ func (m *Metrics) IncEnrollment() {
 // advancing is how an operator sees rotation stop; the certificate's remaining
 // lifetime after that is their warning window.
 func (m *Metrics) IncServerCertRotation(l ServerCertListener) {
-	idx := int(l)
-	if idx < 0 || idx >= nServerCertListeners {
-		idx = int(ListenerNodePlane)
-	}
-	m.certRotation[idx].Add(1)
+	m.certRotation[slot(l, nServerCertListeners, ListenerNodePlane)].Add(1)
 }
 
 // IncProtocolViolation records one relay-daemon report refused at the wire
@@ -430,26 +422,29 @@ func (m *Metrics) IncProtocolViolationUnrecorded() {
 // on capability.MetricsSink: the authenticator calls it through a narrow
 // interface.
 func (m *Metrics) IncAuthRefusal(s AuthSurface, credentialPresented bool) {
-	idx := int(s)
-	if idx < 0 || idx >= nAuthSurfaces {
-		idx = int(AuthSurfaceOther)
-	}
 	reason := authReasonNoCredential
 	if credentialPresented {
 		reason = authReasonRejected
 	}
-	m.authRefusals[idx][reason].Add(1)
+	m.authRefusals[slot(s, nAuthSurfaces, AuthSurfaceOther)][reason].Add(1)
 }
 
 // IncConsoleAuthFailure records one Console password failure. An unrecognised
 // kind falls back to ConsoleSignInFailed, the most alarming kind: that
 // over-counts rather than hides. It always renders with surface="console".
 func (m *Metrics) IncConsoleAuthFailure(f ConsoleAuthFailure) {
-	idx := int(f)
-	if idx < 0 || idx >= nConsoleAuthFailures {
-		idx = int(ConsoleSignInFailed)
+	m.consoleAuthFailures[slot(f, nConsoleAuthFailures, ConsoleSignInFailed)].Add(1)
+}
+
+// slot is k's index into a counter array of n slots. A value outside [0, n)
+// lands in fallback's slot, so a malformed or future enum value is still
+// counted somewhere rendered instead of panicking on the index or growing a
+// series. fallback must itself be in range.
+func slot[K ~int](k K, n int, fallback K) int {
+	if idx := int(k); idx >= 0 && idx < n {
+		return idx
 	}
-	m.consoleAuthFailures[idx].Add(1)
+	return int(fallback)
 }
 
 // Handler returns the http.Handler that serves the Prometheus text
