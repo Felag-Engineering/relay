@@ -23,6 +23,27 @@ func scrape(t *testing.T, m *Metrics) (string, string) {
 	return rec.Header().Get("Content-Type"), rec.Body.String()
 }
 
+// assertHas fails t for each want that body does not contain.
+func assertHas(t *testing.T, body string, wants ...string) {
+	t.Helper()
+	for _, want := range wants {
+		if !strings.Contains(body, want) {
+			t.Errorf("body missing %q; body = %s", want, body)
+		}
+	}
+}
+
+// assertLacks fails t for each fragment that body contains: a series or family
+// that must be omitted, not rendered at zero.
+func assertLacks(t *testing.T, body string, fragments ...string) {
+	t.Helper()
+	for _, f := range fragments {
+		if strings.Contains(body, f) {
+			t.Errorf("body contains %q; want it omitted. body = %s", f, body)
+		}
+	}
+}
+
 func TestHandler_ContentType(t *testing.T) {
 	m := New(GaugeSources{})
 	contentType, _ := scrape(t, m)
@@ -39,7 +60,7 @@ func TestHandler_GaugesFromSources(t *testing.T) {
 	})
 	_, body := scrape(t, m)
 
-	wantLines := []string{
+	assertHas(t, body,
 		"# TYPE relay_nodes_connected gauge",
 		"relay_nodes_connected 3",
 		"# TYPE relay_nodes_enrolled gauge",
@@ -48,20 +69,13 @@ func TestHandler_GaugesFromSources(t *testing.T) {
 		"relay_nodes_revoked 2",
 		"# TYPE relay_freeze_engaged gauge",
 		"relay_freeze_engaged 1",
-	}
-	for _, want := range wantLines {
-		if !strings.Contains(body, want) {
-			t.Errorf("body missing line %q; body = %s", want, body)
-		}
-	}
+	)
 }
 
 func TestHandler_FreezeNotEngaged(t *testing.T) {
 	m := New(GaugeSources{Frozen: func() (bool, error) { return false, nil }})
 	_, body := scrape(t, m)
-	if !strings.Contains(body, "relay_freeze_engaged 0") {
-		t.Errorf("body missing relay_freeze_engaged 0; body = %s", body)
-	}
+	assertHas(t, body, "relay_freeze_engaged 0")
 }
 
 // TestHandler_NilSamplerOmitsGaugeLine is the DoD-adjacent case: a nil
@@ -71,18 +85,14 @@ func TestHandler_NilSamplerOmitsGaugeLine(t *testing.T) {
 	m := New(GaugeSources{})
 	_, body := scrape(t, m)
 
-	for _, name := range []string{
+	assertLacks(t, body,
 		"relay_nodes_connected",
 		"relay_nodes_enrolled",
 		"relay_nodes_revoked",
 		"relay_freeze_engaged",
 		"relay_approvals_waiting",
 		"relay_certificate_remaining_seconds",
-	} {
-		if strings.Contains(body, name) {
-			t.Errorf("body contains %q with all samplers nil; want it omitted. body = %s", name, body)
-		}
-	}
+	)
 }
 
 // TestHandler_SamplerErrorOmitsGaugeLine: a sampler error omits that gauge's
@@ -94,11 +104,7 @@ func TestHandler_SamplerErrorOmitsGaugeLine(t *testing.T) {
 	})
 	_, body := scrape(t, m)
 
-	for _, name := range []string{"relay_nodes_enrolled", "relay_nodes_revoked", "relay_freeze_engaged"} {
-		if strings.Contains(body, name) {
-			t.Errorf("body contains %q despite a sampler error; want it omitted. body = %s", name, body)
-		}
-	}
+	assertLacks(t, body, "relay_nodes_enrolled", "relay_nodes_revoked", "relay_freeze_engaged")
 }
 
 // TestHandler_LabelsDeclinedSeries asserts both relay_labels_declined_total
@@ -110,17 +116,11 @@ func TestHandler_LabelsDeclinedSeries(t *testing.T) {
 	})
 	_, body := scrape(t, m)
 
-	if !strings.Contains(body, "# TYPE relay_labels_declined_total counter") {
-		t.Errorf("body missing counter TYPE line; body = %s", body)
-	}
-	for _, want := range []string{
+	assertHas(t, body,
+		"# TYPE relay_labels_declined_total counter",
 		`relay_labels_declined_total{namespace="node"} 3`,
 		`relay_labels_declined_total{namespace="relay"} 5`,
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("body missing %q; body = %s", want, body)
-		}
-	}
+	)
 }
 
 // TestHandler_NilLabelsDeclinedOmitsSeries mirrors
@@ -130,9 +130,7 @@ func TestHandler_NilLabelsDeclinedOmitsSeries(t *testing.T) {
 	m := New(GaugeSources{})
 	_, body := scrape(t, m)
 
-	if strings.Contains(body, "relay_labels_declined_total") {
-		t.Errorf("body contains relay_labels_declined_total with LabelsDeclined nil; want it omitted. body = %s", body)
-	}
+	assertLacks(t, body, "relay_labels_declined_total")
 }
 
 // TestIncDispatch_EveryOutcome drives IncDispatch across every jobs.Outcome
@@ -156,14 +154,9 @@ func TestIncDispatch_EveryOutcome(t *testing.T) {
 	}
 
 	_, body := scrape(t, m)
-	if !strings.Contains(body, `# TYPE relay_dispatches_total counter`) {
-		t.Errorf("body missing relay_dispatches_total TYPE line; body = %s", body)
-	}
+	assertHas(t, body, `# TYPE relay_dispatches_total counter`)
 	for _, o := range outcomes {
-		want := `relay_dispatches_total{outcome="` + o.label + `"} 1`
-		if !strings.Contains(body, want) {
-			t.Errorf("body missing %q; body = %s", want, body)
-		}
+		assertHas(t, body, `relay_dispatches_total{outcome="`+o.label+`"} 1`)
 	}
 }
 
@@ -176,9 +169,7 @@ func TestIncDispatch_OutOfRangeFallsBackToUnspecified(t *testing.T) {
 	m.IncDispatch(jobs.OutcomeUnspecified)
 
 	_, body := scrape(t, m)
-	if !strings.Contains(body, `relay_dispatches_total{outcome="unspecified"} 2`) {
-		t.Errorf(`body missing relay_dispatches_total{outcome="unspecified"} 2; body = %s`, body)
-	}
+	assertHas(t, body, `relay_dispatches_total{outcome="unspecified"} 2`)
 }
 
 // TestIncRefusal_EveryKind drives IncRefusal across every capability.RefusalKind.
@@ -202,14 +193,9 @@ func TestIncRefusal_EveryKind(t *testing.T) {
 	}
 
 	_, body := scrape(t, m)
-	if !strings.Contains(body, `# TYPE relay_refusals_total counter`) {
-		t.Errorf("body missing relay_refusals_total TYPE line; body = %s", body)
-	}
+	assertHas(t, body, `# TYPE relay_refusals_total counter`)
 	for _, k := range kinds {
-		want := `relay_refusals_total{reason="` + k.label + `"} 1`
-		if !strings.Contains(body, want) {
-			t.Errorf("body missing %q; body = %s", want, body)
-		}
+		assertHas(t, body, `relay_refusals_total{reason="`+k.label+`"} 1`)
 	}
 }
 
@@ -222,10 +208,7 @@ func TestIncRefusal_PendingApprovalStillCountsAsInternal(t *testing.T) {
 	m.IncRefusal(capability.RefusalPendingApproval)
 
 	_, body := scrape(t, m)
-	want := `relay_refusals_total{reason="internal"} 1`
-	if !strings.Contains(body, want) {
-		t.Errorf("body missing %q; body = %s", want, body)
-	}
+	assertHas(t, body, `relay_refusals_total{reason="internal"} 1`)
 }
 
 // TestMetrics_ProtocolViolationSeries drives IncProtocolViolation across
@@ -245,20 +228,14 @@ func TestMetrics_ProtocolViolationSeries(t *testing.T) {
 	m.IncProtocolViolation(jobs.ViolationRule(999))
 
 	_, body := scrape(t, m)
-	if !strings.Contains(body, `# TYPE relay_protocol_violations_total counter`) {
-		t.Errorf("body missing relay_protocol_violations_total TYPE line; body = %s", body)
-	}
-	for _, want := range []string{
+	assertHas(t, body,
+		`# TYPE relay_protocol_violations_total counter`,
 		`relay_protocol_violations_total{rule="relay_only_outcome"} 1`,
 		`relay_protocol_violations_total{rule="unresolved_outcome"} 2`,
 		`relay_protocol_violations_total{rule="unknown_outcome"} 1`,
 		`relay_protocol_violations_total{rule="unsolicited_result"} 2`,
 		`relay_protocol_violations_total{rule="other"} 1`,
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("body missing %q; body = %s", want, body)
-		}
-	}
+	)
 	if strings.Contains(body, `rule="none"`) {
 		t.Errorf("body renders a rule=\"none\" series — a real violation must never be countable under a label meaning \"no violation\"; body = %s", body)
 	}
@@ -272,17 +249,13 @@ func TestMetrics_ProtocolViolationUnrecordedSeries(t *testing.T) {
 	m := New(GaugeSources{})
 
 	_, body := scrape(t, m)
-	if !strings.Contains(body, "relay_protocol_violations_unrecorded_total 0") {
-		t.Errorf("body missing relay_protocol_violations_unrecorded_total 0 before any increment; body = %s", body)
-	}
+	assertHas(t, body, "relay_protocol_violations_unrecorded_total 0")
 
 	m.IncProtocolViolationUnrecorded()
 	m.IncProtocolViolationUnrecorded()
 
 	_, body = scrape(t, m)
-	if !strings.Contains(body, "relay_protocol_violations_unrecorded_total 2") {
-		t.Errorf("body missing relay_protocol_violations_unrecorded_total 2; body = %s", body)
-	}
+	assertHas(t, body, "relay_protocol_violations_unrecorded_total 2")
 }
 
 func TestIncEnrollment(t *testing.T) {
@@ -292,12 +265,7 @@ func TestIncEnrollment(t *testing.T) {
 	m.IncEnrollment()
 
 	_, body := scrape(t, m)
-	if !strings.Contains(body, "# TYPE relay_enrollments_total counter") {
-		t.Errorf("body missing relay_enrollments_total TYPE line; body = %s", body)
-	}
-	if !strings.Contains(body, "relay_enrollments_total 3") {
-		t.Errorf("body missing relay_enrollments_total 3; body = %s", body)
-	}
+	assertHas(t, body, "# TYPE relay_enrollments_total counter", "relay_enrollments_total 3")
 }
 
 // TestIncServerCertRotation_EveryListener drives the server-certificate
@@ -311,28 +279,18 @@ func TestIncServerCertRotation_EveryListener(t *testing.T) {
 	m.IncServerCertRotation(ListenerControlPlane)
 
 	_, body := scrape(t, m)
-	if !strings.Contains(body, "# TYPE relay_server_cert_rotations_total counter") {
-		t.Errorf("body missing relay_server_cert_rotations_total TYPE line; body = %s", body)
-	}
-	for _, want := range []string{
+	assertHas(t, body,
+		"# TYPE relay_server_cert_rotations_total counter",
 		`relay_server_cert_rotations_total{listener="node_plane"} 2`,
 		`relay_server_cert_rotations_total{listener="control_plane"} 1`,
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("body missing %s; body = %s", want, body)
-		}
-	}
+	)
 
 	// Never incremented: both series still render, at zero.
 	_, fresh := scrape(t, New(GaugeSources{}))
-	for _, want := range []string{
+	assertHas(t, fresh,
 		`relay_server_cert_rotations_total{listener="node_plane"} 0`,
 		`relay_server_cert_rotations_total{listener="control_plane"} 0`,
-	} {
-		if !strings.Contains(fresh, want) {
-			t.Errorf("fresh body missing %s; body = %s", want, fresh)
-		}
-	}
+	)
 }
 
 func TestIncServerCertRotation_OutOfRangeFallsBackToNodePlane(t *testing.T) {
@@ -340,9 +298,7 @@ func TestIncServerCertRotation_OutOfRangeFallsBackToNodePlane(t *testing.T) {
 	m.IncServerCertRotation(ServerCertListener(99))
 
 	_, body := scrape(t, m)
-	if !strings.Contains(body, `relay_server_cert_rotations_total{listener="node_plane"} 1`) {
-		t.Errorf("out-of-range listener did not fall back to node_plane; body = %s", body)
-	}
+	assertHas(t, body, `relay_server_cert_rotations_total{listener="node_plane"} 1`)
 }
 
 // --------------------------------------------------------------------------
@@ -355,15 +311,10 @@ func TestHandler_BuildInfo(t *testing.T) {
 	})
 	_, body := scrape(t, m)
 
-	wantLines := []string{
+	assertHas(t, body,
 		"# TYPE relay_build_info gauge",
 		`relay_build_info{version="0.0.9-0.dev+g0a0f22f03dcf",commit="0a0f22f03dcf",build_date="2026-07-24"} 1`,
-	}
-	for _, want := range wantLines {
-		if !strings.Contains(body, want) {
-			t.Errorf("body missing line %q; body = %s", want, body)
-		}
-	}
+	)
 	// Exactly one series: build info is per-process, not per-anything-else.
 	if got := strings.Count(body, "relay_build_info{"); got != 1 {
 		t.Errorf("relay_build_info series count = %d, want 1; body = %s", got, body)
@@ -374,9 +325,7 @@ func TestHandler_BuildInfo(t *testing.T) {
 // stamp — the same skip-when-absent rule the gauge closures follow.
 func TestHandler_BuildInfoOmittedWhenUnset(t *testing.T) {
 	_, body := scrape(t, New(GaugeSources{}))
-	if strings.Contains(body, "relay_build_info") {
-		t.Errorf("body must omit relay_build_info when Build is unset; body = %s", body)
-	}
+	assertLacks(t, body, "relay_build_info")
 }
 
 // TestHandler_FullExposition pins the complete scrape body byte for byte, so a
@@ -495,19 +444,13 @@ relay_labels_declined_total{namespace="relay"} 5
 func TestHandler_ApprovalsWaiting(t *testing.T) {
 	m := New(GaugeSources{ApprovalsWaiting: func() (int, error) { return 2, nil }})
 	_, body := scrape(t, m)
-	for _, want := range []string{"# TYPE relay_approvals_waiting gauge", "relay_approvals_waiting 2"} {
-		if !strings.Contains(body, want) {
-			t.Errorf("body missing %q; body = %s", want, body)
-		}
-	}
+	assertHas(t, body, "# TYPE relay_approvals_waiting gauge", "relay_approvals_waiting 2")
 }
 
 func TestHandler_ApprovalsWaitingErrorOmitsGauge(t *testing.T) {
 	m := New(GaugeSources{ApprovalsWaiting: func() (int, error) { return 0, errors.New("store unavailable") }})
 	_, body := scrape(t, m)
-	if strings.Contains(body, "relay_approvals_waiting") {
-		t.Errorf("body contains relay_approvals_waiting despite a source error; body = %s", body)
-	}
+	assertLacks(t, body, "relay_approvals_waiting")
 }
 
 func TestHandler_CertificateRemaining(t *testing.T) {
@@ -517,21 +460,16 @@ func TestHandler_CertificateRemaining(t *testing.T) {
 	}
 	m := New(GaugeSources{CertificateRemaining: func(c Certificate) (time.Duration, bool) { return remaining[c], true }})
 	_, body := scrape(t, m)
-	for _, want := range []string{
+	assertHas(t, body,
 		"# TYPE relay_certificate_remaining_seconds gauge",
 		`relay_certificate_remaining_seconds{certificate="relay_ca"} 315360000`,
 		`relay_certificate_remaining_seconds{certificate="server"} 5400`, // truncated, not rounded
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("body missing %q; body = %s", want, body)
-		}
-	}
+	)
 
+	// An expired certificate renders negative.
 	remaining[CertificateServer] = -30 * time.Second
 	_, body = scrape(t, m)
-	if want := `relay_certificate_remaining_seconds{certificate="server"} -30`; !strings.Contains(body, want) {
-		t.Errorf("an expired certificate must render negative; missing %q in %s", want, body)
-	}
+	assertHas(t, body, `relay_certificate_remaining_seconds{certificate="server"} -30`)
 }
 
 func TestHandler_CertificateRemainingOmitsUnreadable(t *testing.T) {
@@ -539,18 +477,12 @@ func TestHandler_CertificateRemainingOmitsUnreadable(t *testing.T) {
 		return time.Hour, c == CertificateRelayCA
 	}})
 	_, body := scrape(t, onlyCA)
-	if !strings.Contains(body, `certificate="relay_ca"`) {
-		t.Errorf("body missing the relay_ca series; body = %s", body)
-	}
-	if strings.Contains(body, `certificate="server"`) {
-		t.Errorf("body carries a server series the source could not read; body = %s", body)
-	}
+	assertHas(t, body, `certificate="relay_ca"`)
+	assertLacks(t, body, `certificate="server"`)
 
 	neither := New(GaugeSources{CertificateRemaining: func(Certificate) (time.Duration, bool) { return 0, false }})
 	_, body = scrape(t, neither)
-	if strings.Contains(body, "relay_certificate_remaining_seconds") {
-		t.Errorf("body carries the family with no readable certificate; body = %s", body)
-	}
+	assertLacks(t, body, "relay_certificate_remaining_seconds")
 }
 
 func TestIncAuthRefusal_EverySurface(t *testing.T) {
@@ -575,10 +507,7 @@ func TestIncAuthRefusal_EverySurface(t *testing.T) {
 			wantNo = "2"
 		}
 		for reason, want := range map[string]string{"no_credential": wantNo, "rejected": wantRej} {
-			line := `relay_auth_failures_total{surface="` + name + `",reason="` + reason + `"} ` + want + "\n"
-			if !strings.Contains(body, line) {
-				t.Errorf("body missing %q; body = %s", line, body)
-			}
+			assertHas(t, body, `relay_auth_failures_total{surface="`+name+`",reason="`+reason+`"} `+want+"\n")
 		}
 	}
 }
@@ -612,10 +541,7 @@ func TestIncConsoleAuthFailure_EveryKind(t *testing.T) {
 		if name == "sign_in_failed" {
 			want = "2"
 		}
-		line := `relay_auth_failures_total{surface="console",reason="` + name + `"} ` + want + "\n"
-		if !strings.Contains(body, line) {
-			t.Errorf("body missing %q; body = %s", line, body)
-		}
+		assertHas(t, body, `relay_auth_failures_total{surface="console",reason="`+name+`"} `+want+"\n")
 	}
 }
 
@@ -696,4 +622,26 @@ func TestHandler_SeriesAreAFixedSet(t *testing.T) {
 			}
 		}
 	}
+}
+
+// TestSlot pins the fallback every Inc method relies on: in range is the value
+// itself, and either side of [0, n) is the fallback's slot.
+func TestSlot(t *testing.T) {
+	for _, c := range []struct {
+		k, want int
+	}{
+		{0, 0}, {3, 3}, {-1, 2}, {4, 2}, {999, 2},
+	} {
+		if got := slot(c.k, 4, 2); got != c.want {
+			t.Errorf("slot(%d, 4, 2) = %d, want %d", c.k, got, c.want)
+		}
+	}
+	m := New(GaugeSources{})
+	m.IncDispatch(jobs.Outcome(-1))
+	m.IncConsoleAuthFailure(ConsoleAuthFailure(-1))
+	_, body := scrape(t, m)
+	assertHas(t, body,
+		`relay_dispatches_total{outcome="unspecified"} 1`,
+		`relay_auth_failures_total{surface="console",reason="sign_in_failed"} 1`,
+	)
 }
